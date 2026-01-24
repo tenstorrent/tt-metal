@@ -253,11 +253,13 @@ struct ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, false> {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    uint8_t unsent_messages;
     // no ack_counter
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
         completion_counter.reset();
+        unsent_messages = 0;
     }
 };
 

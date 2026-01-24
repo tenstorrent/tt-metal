@@ -610,8 +610,11 @@ FORCE_INLINE void send_next_data(
     // update the remote reg
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
+
+    // Determine target stream ID based on sender channel (handles multi-register case)
+    constexpr uint32_t target_stream_id = get_sender_target_stream_id<sender_channel_index, to_receiver_pkts_sent_id>();
     const uint32_t packets_to_forward = build_packet_forward_value<sender_channel_index, to_receiver_pkts_sent_id>();
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
+    remote_update_ptr_val<target_stream_id, sender_txq_id>(static_cast<int32_t>(packets_to_forward));
 }
 
 /////////////////////////////////////////////
@@ -1637,7 +1640,7 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
     if (completions_since_last_check) {
-        // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
+        WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
@@ -1719,11 +1722,11 @@ FORCE_INLINE
         constexpr size_t PACKED_STREAM_ID_IDX = 0;
         return run_sender_channel_step_impl<
             sender_channel_index,
-            enable_first_level_ack
-                ?
-                // for first level ack, the src_id is actually interpreted as the receiver channel index
+            //   enable_first_level_ack  ?
+            //     // for first level ack, the src_id is actually interpreted as the receiver channel index
                 to_sender_packets_completed_streams[VC_RECEIVER_CHANNEL]
-                : to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+                // : to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL]
+            ,
             sender_ch_live_check_skip[sender_channel_index],
             enable_first_level_ack>(
             local_sender_channels.template get<sender_channel_index>(),
@@ -1749,7 +1752,9 @@ template <
     typename ReceiverChannelPointersT,
     typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename ReceiverPacketCreditsViewT = ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id>,
+    typename ReceiverPacketCreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id>>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
@@ -1759,19 +1764,32 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
-    LocalTelemetryT& local_fabric_telemetry) {
+    LocalTelemetryT& local_fabric_telemetry,
+    ReceiverPacketCreditsViewT& credits_view,
+    ReceiverPacketCreditsUpdaterT& credits_updater) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
     uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH with enable_first_level_ack: Packed credits - read from shared stream register
-        uint32_t packed_num_packets_raw = get_ptr_val(to_sender_packets_completed_streams[0]);
+        // WH with enable_first_level_ack: Packed credits - read from shared stream register(s)
+        // Type resolved at compile-time from template parameter (single vs multi-register)
+        auto packed_num_packets = credits_view.get_packed();  // Returns PackedCreditContainer
+
         // Track newly received packets that need first-level acks
-        if (packed_num_packets_raw != 0) {
-            receiver_channel_pointers.m.unsent_first_level_acks += packed_num_packets_raw;
-            receiver_channel_pointers.m.unsent_messages += accumulate_receiver_channel_credits(packed_num_packets_raw);
-            increment_local_update_ptr_val(to_sender_packets_completed_streams[0], -packed_num_packets_raw);
+        if (packed_num_packets != 0) {
+            // Get raw value for accumulation (still packed, but as scalar)
+            auto packed_num_packets_raw = packed_num_packets.get();
+
+            if constexpr (enable_first_level_ack) {
+                receiver_channel_pointers.m.unsent_first_level_acks += packed_num_packets_raw;
+            }
+            // Use the credit view's optimized sum instead of helper function
+            receiver_channel_pointers.m.unsent_messages += credits_view.get_total();
+
+            // Clear the register(s) by decrementing with the packed value
+            // The updater handles single vs multi-register splitting automatically
+            credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
@@ -1787,6 +1805,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     receiver_forward_timer.open();
 
     if (unwritten_packets) {
+        WATCHER_RING_BUFFER_PUSH(0x00002222);
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -1928,7 +1947,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
         }
-        // WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
+        WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
         // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
         receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
             receiver_channel_response_credit_sender, src_ch_id);
@@ -1966,9 +1985,15 @@ FORCE_INLINE bool run_receiver_channel_step(
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+
+        // Instantiate zero-size credits view and updater
+        constexpr size_t to_receiver_pkts_sent_id = to_sender_packets_completed_streams[receiver_channel];
+        ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id> credits_view;
+        ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id> credits_updater;
+
         return run_receiver_channel_step_impl<
             receiver_channel,
-            to_receiver_packets_sent_streams[receiver_channel],
+            to_receiver_pkts_sent_id,
             enable_first_level_ack,
             DOWNSTREAM_EDM_SIZE,  // Pass size explicitly
             WriteTridTracker,
@@ -1984,7 +2009,9 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel],
             routing_table,
-            local_fabric_telemetry);
+            local_fabric_telemetry,
+            credits_view,
+            credits_updater);
     }
     return false;
 }

@@ -22,9 +22,9 @@
 // - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK_VC0 is true
 // - BH (multi_txq_enabled): Uses counter-based mechanism regardless of ENABLE_FIRST_LEVEL_ACK_VC0
 //
-constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;      // && !multi_txq_enabled;
-constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;  // && !multi_txq_enabled;
-constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;   // && !multi_txq_enabled;
+constexpr bool USE_PACKED_PACKET_SENT_CREDITS = true;//ENABLE_FIRST_LEVEL_ACK_VC0;      // && !multi_txq_enabled;
+constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = true;  // && !multi_txq_enabled;
+constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = true;//ENABLE_FIRST_LEVEL_ACK_VC0;   // && !multi_txq_enabled;
 
 // Validation: If VC1 enables first-level ack, VC0 must also have it enabled
 // because the packing policy (USE_PACKED_*) is derived from VC0's setting.
@@ -36,36 +36,26 @@ static_assert(
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
-        completion_counters_base_ptr(
+        completion_counters_base_l1_ptr(
             reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
-        ack_counters_base_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
+        ack_counters_base_l1_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
         completion_counters({}),
         ack_counters({}) {
+        // Initialize unpacked completion counters
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             completion_counters[i] = 0;
+        }
+        // Initialize packed ack counters
+        for (size_t i = 0; i < ACK_PACKED_WORDS; i++) {
             ack_counters[i] = 0;
         }
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-            size_t store_word_index = src_id >> 2;
-            size_t offset_in_word = src_id & 0x3;
-
-            size_t shift = offset_in_word * 8;
-            size_t mask = 0xFF << shift;
-            auto old_completion_counter_value = completion_counters[store_word_index];
-            completion_counters[store_word_index] = (old_completion_counter_value & ~mask) |
-                                                    (((old_completion_counter_value & mask) + (1 << shift)) & mask);
-
-            // completion_counters[store_word_index] += 1 << (offset_in_word * 8);
-            completion_counters_base_ptr[store_word_index] = completion_counters[store_word_index];
-            update_sender_side_credits();
-        } else {
-            completion_counters[src_id]++;
-            completion_counters_base_ptr[src_id] = completion_counters[src_id];
-            update_sender_side_credits();
-        }
+        // Increment unpacked local counter (fast local memory, handles wraparound)
+        completion_counters[src_id]++;
+        completion_counters_base_l1_ptr[src_id] = completion_counters[src_id];
+        update_sender_side_credits();
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
@@ -76,40 +66,45 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 auto partial0_2 = ((ack_counters[1] & 0xFF00FF) + packed_count) & 0xFF00FF;
                 auto partial1_3 = ((ack_counters[1] & 0xFF00FF00) + packed_count) & 0xFF00FF00;
                 ack_counters[1] = partial1_3 | partial0_2;
-                ack_counters_base_ptr[1] = ack_counters[1];
+                ack_counters_base_l1_ptr[1] = ack_counters[1];
                 update_sender_side_credits();
             }
-            if constexpr (NUM_SENDER_CHANNELS > 2) {
+            else if constexpr (NUM_SENDER_CHANNELS > 2) {
                 auto partial0_2 = ((ack_counters[0] & 0xFF00FF) + packed_count) & 0xFF00FF;
                 auto partial1_3 = ((ack_counters[0] & 0xFF00FF00) + packed_count) & 0xFF00FF00;
                 ack_counters[0] = partial1_3 | partial0_2;
-                ack_counters_base_ptr[0] = ack_counters[0];
+                ack_counters_base_l1_ptr[0] = ack_counters[0];
                 update_sender_side_credits();
 
             } else if constexpr (NUM_SENDER_CHANNELS > 1) {
                 auto partial0 = ((ack_counters[0] & 0xFF) + packed_count) & 0xFF;
                 auto partial1 = ((ack_counters[0] & 0xFF00) + packed_count) & 0xFF00;
                 ack_counters[0] = partial1 | partial0;
-                ack_counters_base_ptr[0] = ack_counters[0];
+                ack_counters_base_l1_ptr[0] = ack_counters[0];
                 update_sender_side_credits();
 
             } else {
                 ack_counters[0] += packed_count;
-                ack_counters_base_ptr[0] = ack_counters[0];
+                ack_counters_base_l1_ptr[0] = ack_counters[0];
                 update_sender_side_credits();
             }
         } else {
             ack_counters[src_id] += packed_count;
-            ack_counters_base_ptr[src_id] = ack_counters[src_id];
+            ack_counters_base_l1_ptr[src_id] = ack_counters[src_id];
             update_sender_side_credits();
         }
     }
 
-    volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
-    volatile tt_l1_ptr uint32_t* ack_counters_base_ptr;
-    // Local memory copy to save an L1 load
+    volatile uint32_t* tt_l1_ptr completion_counters_base_l1_ptr;
+    volatile uint32_t* tt_l1_ptr ack_counters_base_l1_ptr;
+
+    // Completion counters: unpacked, one per channel (fast local memory)
     std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
-    std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
+
+    // Ack counters: packed storage (4 credits per word, matching original behavior)
+    // 1 word for ≤4 channels, 2 words for 5-8 channels
+    static constexpr size_t ACK_PACKED_WORDS = (NUM_SENDER_CHANNELS + 3) / 4;
+    std::array<uint32_t, ACK_PACKED_WORDS> ack_counters;
 
 private:
     FORCE_INLINE void update_sender_side_credits() const {
@@ -254,12 +249,16 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     // register 0 for packed credits. Otherwise, each uses its own register.
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
         to_sender_packets_acked_stream(
-            enable_first_level_ack
-                ? to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
-                : to_sender_packets_acked_streams[sender_channel_index]),
+            // enable_first_level_ack
+                // ? 
+                to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
+                // : to_sender_packets_acked_streams[sender_channel_index]
+            ),
         to_sender_packets_completed_stream(
-            enable_first_level_ack ? to_receiver_packets_sent_streams[0]
-                                   : to_sender_packets_completed_streams[sender_channel_index]) {}
+            // enable_first_level_ack ? 
+            to_receiver_packets_sent_streams[0]
+                                //    : to_sender_packets_completed_streams[sender_channel_index]
+            ) {}
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
@@ -383,12 +382,12 @@ FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
             return (packed_acks >> (sender_channel_index * 8)) & 0xFF;
         } else {
             // WH: Stream register with packing - need to extract this channel's credits
-            auto packed_acks_named =
-                tt::tt_fabric::PackedCreditValue<NUM_SENDER_CHANNELS, tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS>{packed_acks};
-            return tt::tt_fabric::PackedCredits<
+            using PackedCreditsType = tt::tt_fabric::PackedCredits<
                 NUM_SENDER_CHANNELS,
                 tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
-                to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
+                to_sender_packets_acked_streams[0]>;
+            auto packed_acks_named = typename PackedCreditsType::PackedCreditValueType{packed_acks};
+            return PackedCreditsType::template get_value<sender_channel_index>(packed_acks_named);
         }
     } else {
         // BH or !enable_first_level_ack: Counter-based, already unpacked (one counter per channel)
@@ -419,24 +418,147 @@ FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
     }
 }
 
+// ============================================================================
+// Receiver Packet Credits - Configuration
+// ============================================================================
+
+/**
+ * Determine credit width for receiver packet credits (matching legacy PackedCredits behavior)
+ */
+namespace receiver_credits_config {
+    constexpr bool credits_are_byte_aligned = NUM_SENDER_CHANNELS <= 3;
+    constexpr uint32_t MIN_BITS = tt::tt_fabric::log2_ceil(tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS + 1);
+    constexpr uint8_t CREDIT_WIDTH = credits_are_byte_aligned ? 8 : MIN_BITS;
+    constexpr uint32_t TOTAL_BITS = NUM_SENDER_CHANNELS * CREDIT_WIDTH;
+    constexpr bool NEEDS_MULTI_REGISTER = TOTAL_BITS > 24;
+    constexpr size_t PACKED_WORDS_COUNT = NEEDS_MULTI_REGISTER ? 2 : 1;
+}
+
+/**
+ * Determine which stream register ID to write to for a given sender channel.
+ * In multi-register cases (4-5 channels):
+ * - Channels 0-1 → reg0 (base stream ID)
+ * - Channels 2-4 → reg1 (base stream ID + 1)
+ * In single-register cases (1-3 channels): always base stream ID
+ */
+template <uint8_t sender_channel_index, uint32_t base_stream_id>
+constexpr uint32_t get_sender_target_stream_id() {
+    if constexpr (receiver_credits_config::NEEDS_MULTI_REGISTER) {
+        // Multi-register layout: reg0 has channels 0-1, reg1 has channels 2-4
+        constexpr uint8_t CHANNELS_IN_REG0 = 2;
+        if constexpr (sender_channel_index < CHANNELS_IN_REG0) {
+            return base_stream_id;
+        } else {
+            return base_stream_id + 1;
+        }
+    } else {
+        // Single register: all channels use base stream ID
+        return base_stream_id;
+    }
+}
+
 /**
  * Build packet forward increment value for sender channel.
- * WH: Pack into register position. BH: Always 1 (no packing).
+ * WH: Pack into register position (supports channels 0-4 at appropriate offsets).
+ * BH: Always 1 (no packing).
+ *
+ * For packed credits, this packs a value of 1 at the bit offset corresponding to
+ * sender_channel_index (0-4). In multi-register cases (4-5 channels), this returns
+ * only the portion relevant to the register this channel maps to:
+ * - Channels 0-1 → write to reg0 (to_receiver_pkts_sent_id)
+ * - Channels 2-4 → write to reg1 (to_receiver_pkts_sent_id + 1)
  */
 template <uint8_t sender_channel_index, uint32_t to_receiver_pkts_sent_id>
 FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH: Pack 1 credit into this channel's position
-        return tt::tt_fabric::PackedCredits<
-                   NUM_SENDER_CHANNELS,
-                   tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
-                   to_receiver_pkts_sent_id>::template pack_value<sender_channel_index>(1)
-            .get();
+        // WH: Pack 1 credit into this channel's position using generic credit packing
+        using Packing = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, receiver_credits_config::CREDIT_WIDTH>;
+        static_assert(sender_channel_index < NUM_SENDER_CHANNELS, "Sender channel index out of bounds");
+
+        // Pack value of 1 at the bit offset for sender_channel_index
+        auto packed = Packing::template pack_channel<sender_channel_index>(1);
+
+        // For multi-register case, extract only the relevant register's portion
+        if constexpr (receiver_credits_config::NEEDS_MULTI_REGISTER) {
+            // Multi-register layout: reg0 has channels 0-1, reg1 has channels 2-4
+            constexpr uint8_t CHANNELS_IN_REG0 = 2;
+            constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * receiver_credits_config::CREDIT_WIDTH;
+
+            if constexpr (sender_channel_index < CHANNELS_IN_REG0) {
+                // Channels 0-1: extract lower 16 bits for reg0
+                return static_cast<uint32_t>(packed.get() & ((1ULL << reg1_shift) - 1));
+            } else {
+                // Channels 2-4: extract and shift down upper bits for reg1
+                return static_cast<uint32_t>(packed.get() >> reg1_shift);
+            }
+        } else {
+            // Single register case: return the full packed value
+            return static_cast<uint32_t>(packed.get());
+        }
     } else {
         // BH or !enable_first_level_ack: Always 1 (counter-based, no packing needed)
         return 1;
     }
 }
+
+// ============================================================================
+// Receiver Packet Credits - Generic Type Definitions
+// ============================================================================
+
+/**
+ * Template helper to resolve receiver packet credit view type based on stream ID(s).
+ * Automatically selects single or multi-register storage based on total bits needed.
+ *
+ * Usage:
+ *   using MyCredits = ReceiverPacketCreditsViewFor<my_stream_id>;
+ *   MyCredits credits;
+ */
+template <size_t stream_id_0, size_t stream_id_1 = stream_id_0 + 1>
+using ReceiverPacketCreditsViewFor = std::conditional_t<
+    receiver_credits_config::NEEDS_MULTI_REGISTER,
+    // Multi-register case (>24 bits): 4-5 channels with 8-bit packing
+    tt::tt_fabric::MultiOverlayRegCreditView<
+        NUM_SENDER_CHANNELS,
+        receiver_credits_config::CREDIT_WIDTH,
+        stream_id_0,
+        stream_id_1>,
+    // Single-register case (≤24 bits): 1-3 channels, or 4 channels with tight packing
+    tt::tt_fabric::OverlayRegCreditView<
+        NUM_SENDER_CHANNELS,
+        receiver_credits_config::CREDIT_WIDTH,
+        stream_id_0>>;
+
+/**
+ * Template helper to resolve receiver packet credit updater type based on stream ID(s).
+ * Provides write operations including decrement_packed() for clearing credits.
+ *
+ * Usage:
+ *   using MyCreditsUpdater = ReceiverPacketCreditsUpdaterFor<my_stream_id>;
+ *   MyCreditsUpdater updater;
+ *   updater.decrement_packed(value);
+ */
+template <size_t stream_id_0, size_t stream_id_1 = stream_id_0 + 1>
+using ReceiverPacketCreditsUpdaterFor = std::conditional_t<
+    receiver_credits_config::NEEDS_MULTI_REGISTER,
+    // Multi-register case (>24 bits): 4-5 channels with 8-bit packing
+    tt::tt_fabric::MultiOverlayRegCreditUpdater<
+        NUM_SENDER_CHANNELS,
+        receiver_credits_config::CREDIT_WIDTH,
+        stream_id_0,
+        stream_id_1>,
+    // Single-register case (≤24 bits): 1-3 channels, or 4 channels with tight packing
+    tt::tt_fabric::OverlayRegCreditUpdater<
+        NUM_SENDER_CHANNELS,
+        receiver_credits_config::CREDIT_WIDTH,
+        stream_id_0>>;
+
+/**
+ * Default receiver packet credit view type using to_sender_packets_completed_streams.
+ * For legacy compatibility.
+ */
+using ReceiverPacketCreditsView = ReceiverPacketCreditsViewFor<
+    to_sender_packets_completed_streams[0],
+    to_sender_packets_completed_streams[1]>;
 
 /**
  * Accumulate receiver channel credits from packed value.
@@ -444,12 +566,10 @@ FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
  */
 FORCE_INLINE uint32_t accumulate_receiver_channel_credits(uint32_t packed_value) {
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH: Unpack and sum across all sender channels
-        using PC = tt::tt_fabric::PackedCredits<
-            NUM_SENDER_CHANNELS,
-            tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
-            to_sender_packets_completed_streams[0]>;
-        return PC::get_sum(typename PC::PackedCreditValueType(packed_value));
+        // WH: Unpack and sum across all sender channels using generic packing layer
+        using Packing = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, receiver_credits_config::CREDIT_WIDTH>;
+        typename Packing::PackedValueType packed{packed_value};
+        return Packing::sum_all_channels(packed);
     } else {
         // BH or !enable_first_level_ack: Already unpacked (direct count)
         return packed_value;
