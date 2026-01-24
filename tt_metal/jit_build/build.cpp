@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -15,6 +14,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -38,7 +38,6 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.hpp>
-#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -639,11 +638,6 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
         obj_paths.reserve(this->objs_.size());
         for (const auto& obj : this->objs_) {
             obj_paths.push_back(out_dir + obj);
-            for (const auto& obj_path : obj_paths) {
-                for (auto ch : obj_path) {
-                    TT_FATAL(std::isprint(ch), "Unprintable character found in object file path: {}", obj_path);
-                }
-            }
         }
         jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
