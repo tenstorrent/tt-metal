@@ -34,7 +34,14 @@ void py_module(nb::module_& mod) {
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
-        .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode);
+        .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
+        .def("__repr__", [](const SDPAProgramConfig& config) {
+            return fmt::format(
+                "SDPAProgramConfig(compute_with_storage_grid_size={}, q_chunk_size={}, k_chunk_size={})",
+                config.compute_with_storage_grid_size,
+                config.q_chunk_size,
+                config.k_chunk_size);
+        });
 
     bind_attention_softmax(mod);
     bind_concatenate_heads(mod);

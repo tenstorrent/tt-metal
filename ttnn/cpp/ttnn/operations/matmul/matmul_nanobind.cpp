@@ -92,6 +92,17 @@ void py_module(nb::module_& mod) {
         Larger values mean fewer cores are used but each core does more work.
         Must be chosen such that (total_N / per_core_N) cores are available.
     )doc");
+    matmul_multi_core_reuse_program_config.def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) {
+        return fmt::format(
+            "MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, out_subblock_h={}, "
+            "out_subblock_w={}, per_core_M={}, per_core_N={})",
+            config.compute_with_storage_grid_size,
+            config.in0_block_w,
+            config.out_subblock_h,
+            config.out_subblock_w,
+            config.per_core_M,
+            config.per_core_N);
+    });
 
     auto matmul_multi_core_reuse_multicast_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(
@@ -244,6 +255,19 @@ void py_module(nb::module_& mod) {
 
         Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def(
+        "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
+                "out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, fuse_batch={})",
+                config.compute_with_storage_grid_size,
+                config.in0_block_w,
+                config.out_subblock_h,
+                config.out_subblock_w,
+                config.per_core_M,
+                config.per_core_N,
+                config.fuse_batch);
+        });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(
@@ -410,7 +434,20 @@ void py_module(nb::module_& mod) {
             When true, the output is converted from tiled layout to row-major layout during
             the operation. This can be useful when the subsequent operation expects row-major
             data and can eliminate a separate untilization pass. Defaults to false.
-        )doc");
+        )doc")
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
+                "out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, fuse_batch={}, mcast_in0={})",
+                config.compute_with_storage_grid_size,
+                config.in0_block_w,
+                config.out_subblock_h,
+                config.out_subblock_w,
+                config.per_core_M,
+                config.per_core_N,
+                config.fuse_batch,
+                config.mcast_in0);
+        });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -454,7 +491,14 @@ void py_module(nb::module_& mod) {
             If specified, the activation function is applied directly during the DRAM-sharded
             matmul operation. This can provide significant performance benefits by avoiding
             additional memory round-trips in DRAM-based operations.
-        )doc");
+        )doc")
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={})",
+                config.in0_block_w,
+                config.per_core_M,
+                config.per_core_N);
+        });
 
     ttnn::bind_function(
         mod,
