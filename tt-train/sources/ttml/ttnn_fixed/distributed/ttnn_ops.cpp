@@ -12,7 +12,7 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -20,24 +20,20 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, /* cluster_axis */ cluster_axis);
-
-    // Use cluster_axis overload for 2D mesh
+        *mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::all_gather_async(
         tensor,
-        /* persistent_output_buffer */ std::nullopt,
         dim,
         ccl_resources.get_all_gather_semaphore(),
         num_links,
         /* memory_config */ std::nullopt,
         ttnn::ccl::Topology::Linear,
         /* subdevice_id */ std::nullopt,
-        cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
-tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -55,42 +51,24 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optiona
     auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
 
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, /* cluster_axis */ cluster_axis);
-
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            cluster_axis,
-            *mesh_device,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            ttnn::ccl::Topology::Linear,
-            std::optional<size_t>(num_links),
-            /* worker_subdevice_id_opt */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            num_devices,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            /* topology */ ttnn::ccl::Topology::Linear,
-            /* num_preferred_links */ num_links);
-    }
+        *mesh_device, /* cluster_axis */ std::nullopt);
+    return ttnn::experimental::all_reduce_async(
+        tensor,
+        num_devices,
+        all_reduce_barrier_semaphores,
+        reduce_scatter_semaphores,
+        all_gather_semaphores,
+        ttnn::operations::reduction::ReduceType::Sum,
+        /* memory_config */ std::nullopt,
+        /* topology */ ttnn::ccl::Topology::Linear,
+        /* num_preferred_links */ num_links);
 }
 
-tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        mesh_device, /* cluster_axis */ cluster_axis);
+        mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
@@ -100,9 +78,7 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim,
         num_links,
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        /* subdevice_id */ std::nullopt,
-        /* cluster_axis */ cluster_axis);
+        ttnn::ccl::Topology::Linear);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed
