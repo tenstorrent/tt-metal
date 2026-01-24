@@ -592,9 +592,25 @@ def run_all_gather_matmul_galaxy_impl(
 
     # Only allocate allreduce buffers if using local_matmul_allreduce mode
     tt_allreduce_buffers = []
+    allreduce_sharded_mem_config_for_buffers = None
     if op_mode == "local_matmul_allreduce":
         # Buffer tensors for all_reduce (used by local_matmul_allreduce path)
+        # all_reduce_async requires WIDTH_SHARDED memory
         # Output shape is [8, 4, M, N] - the result of matmul before reduce
+        allreduce_num_cores = 24
+        allreduce_N_per_shard = round_up(math.ceil(N / allreduce_num_cores), ttnn.TILE_SIZE)
+        allreduce_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 3))}  # 6x4 = 24 cores
+        )
+        allreduce_sharded_mem_config_for_buffers = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                allreduce_core_range_set,
+                [M, allreduce_N_per_shard],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
         allreduce_buffer_shape = [*cluster_shape, M, N]
         allreduce_buffer_tensor = torch.zeros(allreduce_buffer_shape)
         for i in range(num_buffers):
@@ -603,7 +619,7 @@ def run_all_gather_matmul_galaxy_impl(
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=output_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=allreduce_sharded_mem_config_for_buffers,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
             tt_allreduce_buffers.append(tt_allreduce_buffer)
@@ -758,29 +774,46 @@ def run_all_gather_matmul_galaxy_impl(
         - Memory efficient for large K
         """
         outs = []
-        dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
+
+        # all_reduce_async requires WIDTH_SHARDED input
+        # Create sharded memory config for matmul output and all_reduce
+        allreduce_num_cores = 24  # Use same core count as output
+        allreduce_N_per_shard = round_up(math.ceil(N / allreduce_num_cores), ttnn.TILE_SIZE)
+        allreduce_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 3))}  # 6x4 = 24 cores
+        )
+        allreduce_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                allreduce_core_range_set,
+                [M, allreduce_N_per_shard],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         for i in range(n_iters):
             # Step 1: Local matmul - each device computes partial result
-            # input per device: [32, 3584], weight chunk per device: [3584, 2048]
+            # input per device: [M, K_per_device], weight chunk per device: [K_per_device, N]
+            # Output to WIDTH_SHARDED for all_reduce_async compatibility
             partial_out = ttnn.linear(
                 tt_input_tensor,  # [M, K_per_device] = [32, 3584] per device
                 tt_in1_chunked_tensor,  # Chunked weight [K_per_device, N] = [3584, 2048] per device
-                memory_config=dram_interleaved,
+                memory_config=allreduce_sharded_mem_config,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
-                core_grid=ttnn.CoreGrid(y=7, x=10),
+                core_grid=ttnn.CoreGrid(y=4, x=6),  # Match sharded config (6x4)
             )
 
             # Step 2: AllReduce to sum partial results across devices
-            # all_reduce_async requires: input, buffer_tensor, cluster_axis, mesh_device, semaphore
+            # all_reduce_async requires WIDTH_SHARDED input
             mm_out = ttnn.experimental.all_reduce_async(
                 partial_out,
                 tt_allreduce_buffers[i % num_buffers],  # buffer tensor required
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=dram_interleaved,
+                memory_config=allreduce_sharded_mem_config,
                 topology=all_gather_topology,
                 num_links=num_links,
             )
