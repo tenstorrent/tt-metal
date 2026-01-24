@@ -164,23 +164,6 @@ inline void open_direction_connections_async(
         if (directions[i]) {
             MuxConnectionArgs<MuxNumBuffersPerChannel, MuxChannelBufferSize, MuxStatusAddress> args(rt_args_idx);
 
-            // DPRINT << "args.fabric_mux_x: " << (uint32_t) args.fabric_mux_x <<
-            //                 " args.fabric_mux_y: " << (uint32_t) args.fabric_mux_y <<
-            //                 " args.fabric_mux_channel_id: " <<(uint32_t) args.fabric_mux_channel_id <<
-            //                 " args.fabric_mux_num_buffers_per_channel: " <<(uint32_t)
-            //                 args.fabric_mux_num_buffers_per_channel<< " args.fabric_mux_channel_buffer_size_bytes: "
-            //                 <<(uint32_t) args.fabric_mux_channel_buffer_size_bytes<< "
-            //                 args.fabric_mux_channel_base_address: " <<(uint32_t) args.fabric_mux_channel_base_address
-            //                 << " args.fabric_mux_connection_info_address: " <<(uint32_t)
-            //                 args.fabric_mux_connection_info_address<< " args.fabric_mux_connection_handshake_address:
-            //                 " <<(uint32_t) args.fabric_mux_connection_handshake_address<< "
-            //                 args.fabric_mux_flow_control_address: "<< (uint32_t)
-            //                 args.fabric_mux_flow_control_address<< " args.fabric_mux_buffer_index_address:
-            //                 "<<(uint32_t) args.fabric_mux_buffer_index_address<< " args.local_flow_control_address:
-            //                 "<<(uint32_t) args.local_flow_control_address << " args.local_teardown_address: "
-            //                 <<(uint32_t) args.local_teardown_address<< " args.local_buffer_index_address: "
-            //                 <<(uint32_t) args.local_buffer_index_address<<"\n";
-
             connections[i] = tt::tt_fabric::build_connection_to_fabric_endpoint<MuxNumBuffersPerChannel>(
                 args.fabric_mux_x,
                 args.fabric_mux_y,

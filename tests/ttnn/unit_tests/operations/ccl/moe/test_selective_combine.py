@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+
+from loguru import logger
 import math
 import pdb
 
@@ -20,7 +26,9 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 )
 
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from tracy import signpost
 
 torch.set_printoptions(threshold=float("inf"))
 
@@ -235,7 +243,11 @@ def gen_tensors(
 NUM_DEVICES = 8
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("batch", [16])
 @pytest.mark.parametrize("experts", [16])
@@ -381,38 +393,71 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
                 ), f"Equal check failed for {t=}, {k=} with {tt_out_agg[t,k, :]=} and {output_ref[t,k, :]=}"
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("batch", [16])
-@pytest.mark.parametrize("experts", [16])
-@pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize("seq", [1])
-@pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("devices", [NUM_DEVICES])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [1])
-@pytest.mark.parametrize("num_data_parallel_cores", [4])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
-@pytest.mark.parametrize("num_iters", [1])
-def test_decode(
-    mesh_device,
+def _run_op_with_trace(num_iters, op_func, mesh_device, profiler):
+    # compile run:
+    logger.info("Compiling model")
+    tt_out = tt_scores_out_list = op_func(1)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Capturing Warmup")
+
+    logger.info(f"Capturing Warmup iterations")
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_out = op_func(num_iters // 4)
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Warmup done")
+
+    logger.info("Capturing Trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_out = op_func(num_iters)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info("Starting Trace perf test...")
+    profiler.start("selective-reduce-combine-trace-warmup")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("selective-reduce-combine-trace-warmup")
+
+    signpost("start")
+    profiler.start("selective-reduce-combine-trace")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("selective-reduce-combine-trace")
+    signpost("stop")
+
+    time_taken = profiler.get_duration("selective-reduce-combine-trace") - profiler.get_duration(
+        "selective-reduce-combine-trace-warmup"
+    )
+    logger.info(f"Time taken e2e: {time_taken} s")
+
+    return tt_out
+
+
+def _run_test(
     batch,
     experts,
     select_experts_k,
     hidden_size,
     seq,
     cluster_axis,
-    devices,
-    worker_core_range,
-    num_token_parallel_cores,
+    worker_cores,
     num_data_parallel_cores,
+    num_token_parallel_cores,
     num_links,
-    mux_core_range,
-    num_iters,
+    mux_cores,
+    mesh_device,
+    num_test_iters,
+    trace_mode,
+    profiler=None,
 ):
     mesh_shape = tuple(mesh_device.shape)
+    devices = math.prod(mesh_shape)
+    assert experts % devices == 0
+    experts_per_device = experts // devices
 
     (
         dense_metadata_tensor,
@@ -423,13 +468,6 @@ def test_decode(
     ) = gen_tensors(
         batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="random"
     )
-    assert experts % devices == 0
-    experts_per_device = experts // devices
-
-    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
-    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
-
-    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
 
     tt_dense_contribs = _get_tt_sharded_dense_input(
         dense_contribs_tensor,
@@ -447,35 +485,152 @@ def test_decode(
         ttnn.create_global_semaphore(mesh_device, worker_cores, max_active_token_count)
         for _ in range(experts_per_device)
     ]
-    # print(f"{dense_metadata_tensor=}")
-    # print(f"{dense_contribs_tensor=}")
-    # print(f"{output_ref=}")
 
-    tt_out = ttnn.from_torch(
-        torch.zeros([batch // mesh_shape[cluster_axis], select_experts_k, hidden_size]),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    def _run_op(num_iters):
+        for _ in range(num_iters):
+            tt_out = ttnn.selective_reduce_combine(
+                tt_dense_contribs,
+                tt_dense_metadata,
+                hidden_size,
+                batch,
+                seq,
+                select_experts_k,
+                experts,
+                cluster_axis,
+                topology=ttnn.Topology.Linear,
+                num_links=num_links,
+                num_token_parallel_cores=num_token_parallel_cores,
+                num_data_parallel_cores=num_data_parallel_cores,
+                worker_core_range_set=worker_cores,
+                mux_core_range_set=mux_cores,
+                active_token_count_semaphores=active_token_semaphores,
+            )
+        return tt_out
 
-    tt_out = ttnn.selective_reduce_combine(
-        tt_dense_contribs,
-        tt_dense_metadata,
-        hidden_size,
-        batch,
-        seq,
-        select_experts_k,
-        experts,
-        cluster_axis,
-        topology=ttnn.Topology.Linear,
-        num_links=num_links,
-        num_token_parallel_cores=num_token_parallel_cores,
-        num_data_parallel_cores=num_data_parallel_cores,
-        worker_core_range_set=worker_cores,
-        mux_core_range_set=mux_cores,
-        active_token_count_semaphores=active_token_semaphores,
-        output_tensor=tt_out,
-    )
+    if trace_mode:
+        tt_out = _run_op_with_trace(num_test_iters, _run_op, mesh_device, profiler)
+
+    else:
+        tt_out = _run_op(num_test_iters)
+        ttnn.synchronize_device(mesh_device)
 
     _check_ref(tt_out, output_ref, output_data_map, mesh_device, cluster_axis)
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("batch", [16])
+@pytest.mark.parametrize("experts", [16])
+@pytest.mark.parametrize("select_experts_k", [4])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [1])
+@pytest.mark.parametrize("num_data_parallel_cores", [4])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
+@pytest.mark.parametrize("num_test_iters", [1])
+@pytest.mark.parametrize("num_inner_iters", [1])
+def test_decode(
+    mesh_device,
+    batch,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq,
+    cluster_axis,
+    worker_core_range,
+    num_token_parallel_cores,
+    num_data_parallel_cores,
+    num_links,
+    mux_core_range,
+    num_test_iters,
+    num_inner_iters,
+):
+    mesh_device.disable_and_clear_program_cache()
+
+    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+
+    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
+
+    for i in range(num_test_iters):
+        _run_test(
+            batch,
+            experts,
+            select_experts_k,
+            hidden_size,
+            seq,
+            cluster_axis,
+            worker_cores,
+            num_data_parallel_cores,
+            num_token_parallel_cores,
+            num_links,
+            mux_cores,
+            mesh_device,
+            num_inner_iters,
+            False,
+        )
+        logger.info(f"Decode iter: {i} success")
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("batch", [16])
+@pytest.mark.parametrize("experts", [16])
+@pytest.mark.parametrize("select_experts_k", [4])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [1])
+@pytest.mark.parametrize("num_data_parallel_cores", [4])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
+@pytest.mark.parametrize("num_outer_test_iters", [1])
+@pytest.mark.parametrize("num_test_iters", [4])
+def test_decode_trace(
+    mesh_device,
+    batch,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq,
+    cluster_axis,
+    worker_core_range,
+    num_token_parallel_cores,
+    num_data_parallel_cores,
+    num_links,
+    mux_core_range,
+    num_outer_test_iters,
+    num_test_iters,
+):
+    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+
+    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
+
+    profiler = BenchmarkProfiler()
+
+    for i in range(num_outer_test_iters):
+        _run_test(
+            batch,
+            experts,
+            select_experts_k,
+            hidden_size,
+            seq,
+            cluster_axis,
+            worker_cores,
+            num_data_parallel_cores,
+            num_token_parallel_cores,
+            num_links,
+            mux_cores,
+            mesh_device,
+            num_test_iters,
+            trace_mode=True,
+            profiler=profiler,
+        )
+        logger.info(f"Decode iter: {i} success")
