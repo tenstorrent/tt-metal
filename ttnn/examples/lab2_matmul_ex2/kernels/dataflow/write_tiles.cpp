@@ -21,7 +21,7 @@ void kernel_main() {
     // M_block_tiles = 3, N_block_tiles = 3
     // tile_offset_row = 6, tile_offset_col = 3
     // starting index = 6 * 6 + 3 = 39
-    // As we iterate over the tiles, index can't be simply incrmeneted.
+    // As we iterate over the tiles, index can't be simply incremented.
     // Here's a simple method:
     // effective_row = tile_offset_row + block_row
     // effective_col = tile_offset_col + block_col
@@ -58,7 +58,7 @@ void kernel_main() {
             uint32_t cb_out0_addr = get_read_ptr(cb_out0);
             // Write the tile to device memory. This is a non-blocking call.
             noc_async_write_tile(tile_index, out0_addr_gen, cb_out0_addr);
-            
+
             // Wait until the write is done. This is a blocking call.
             noc_async_write_barrier();
             // Mark the tile in the circular buffer as consumed, freeing up space for the next tile.
