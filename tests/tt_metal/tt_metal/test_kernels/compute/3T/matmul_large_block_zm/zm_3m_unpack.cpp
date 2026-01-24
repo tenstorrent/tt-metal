@@ -63,7 +63,11 @@ inline __attribute__((always_inline)) void reblock_and_untilize(
         llk_unpack_untilize_init(reblock_cb_id);
         llk_unpack_untilize_<true>(reblock_cb_id, out_block_w);
         llk_unpack_untilize_<false>(reblock_cb_id, out_block_w);
+#ifdef ARCH_BLACKHOLE
         llk_unpack_untilize_uninit(reblock_cb_id);
+#else
+        llk_unpack_untilize_uninit();
+#endif
 
         llk_pop_tiles(reblock_cb_id, out_block_w);
 

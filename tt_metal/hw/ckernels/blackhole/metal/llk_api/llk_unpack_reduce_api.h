@@ -27,17 +27,7 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
             ((((std::uint32_t)unpack_dst_format[unpA_operand_id] >> 2) & 0x1) ? (std::uint32_t)DataFormat::Float16_b
                                                                               : (std::uint32_t)DataFormat::Float16);
 
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpB_dst_format);
-
-    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpB_dst_format);
-
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-    TTI_NOP;
-    TTI_NOP;
-
-    _llk_unpack_reduce_init_<type, dim>(within_face_16x16_transpose);
+    _llk_unpack_reduce_init_<type, dim>(unpB_src_format, unpB_dst_format, within_face_16x16_transpose);
 }
 
 template <PoolType type, ReduceDim dim>
