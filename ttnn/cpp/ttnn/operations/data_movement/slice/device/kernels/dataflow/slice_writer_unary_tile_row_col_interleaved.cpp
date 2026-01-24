@@ -11,8 +11,8 @@ void kernel_main() {
     constexpr uint32_t num_dims = get_compile_time_arg_val(4);
     constexpr uint32_t size_tile = get_compile_time_arg_val(5);
 
-    constexpr auto out_addr = get_arg_val<uint32_t>(0);
-    uint32_t out_block_id = get_arg_val<uint32_t>(1);
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t out_block_id_start = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks = get_arg_val<uint32_t>(2);
 
     tt_l1_ptr uint32_t* shape_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
@@ -35,9 +35,11 @@ void kernel_main() {
             id += id_step;
         }
 
-        noc_async_write_flushed();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id, num_tiles);
     };
+
+    uint32_t out_block_id = out_block_id_start;
 
     for (uint32_t i = 0; i < num_blocks; i++) {
         write_block(num_tiles_per_block, out_block_id, tile_id_stride, size_tile);
