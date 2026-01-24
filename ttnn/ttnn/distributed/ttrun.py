@@ -193,6 +193,15 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     return config
 
 
+# Environment variable prefixes that should be automatically passed through to MPI processes
+ENV_PASSTHROUGH_PREFIXES = (
+    "TT_",  # TT-Metal/TTNN variables
+    "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
+    "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
+    "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+)
+
+
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
@@ -220,20 +229,34 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Apply consistent rank suffix pattern to both user-provided and default paths
     cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
 
-    env = {
-        "TT_METAL_CACHE": cache_path,
-        "TT_MESH_ID": str(binding.mesh_id),
-        "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
-        "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
-        "TT_METAL_RUNTIME_ROOT": os.environ.get(
-            "TT_METAL_RUNTIME_ROOT", os.environ.get("TT_METAL_HOME", str(Path.home()))
-        ),
-        "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
-        # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
-        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
-        # Pass the original CWD to subprocesses so they can resolve relative paths correctly
-        "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
-    }
+    # Start with automatic pass-through of TT-related environment variables
+    # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
+    env = {}
+    for key, value in os.environ.items():
+        if key.startswith(ENV_PASSTHROUGH_PREFIXES):
+            env[key] = value
+
+    # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
+    # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
+    default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
+
+    # Set/override core tt-run managed variables
+    env.update(
+        {
+            "TT_METAL_CACHE": cache_path,
+            "TT_MESH_ID": str(binding.mesh_id),
+            "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+            "TT_METAL_HOME": default_tt_metal_home,
+            "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
+            # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
+            "LD_LIBRARY_PATH": os.environ.get(
+                "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))
+            ),
+            # Pass the original CWD to subprocesses so they can resolve relative paths correctly
+            "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
+        }
+    )
 
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
@@ -445,10 +468,25 @@ def main(
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+
         Default values for the following environment variables will be used if not set when calling tt-run:
-        - TT_METAL_HOME: User's home directory
-        - PYTHONPATH: User's home directory
-        - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
+        - TT_METAL_HOME: Launch directory (where tt-run was invoked)
+        - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
+        - PYTHONPATH: Launch directory
+        - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
+
+        This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
+        cluster nodes, which is the common setup for SLURM environments.
+
+        Additionally, all environment variables with the following prefixes are automatically
+        passed through to MPI processes:
+        - TT_*: TT-Metal/TTNN variables
+        - ARCH_*: Architecture variables (e.g., ARCH_NAME)
+        - WH_*: Wormhole-specific variables (e.g., WH_ARCH_YAML)
+        - TTNN_*: TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+
+        You can also specify additional environment variables in the rank binding YAML using
+        the `global_env` field (for all ranks) or `env_overrides` field (per-rank).
 
     \b
     Path Resolution (SLURM/sbatch compatibility):
