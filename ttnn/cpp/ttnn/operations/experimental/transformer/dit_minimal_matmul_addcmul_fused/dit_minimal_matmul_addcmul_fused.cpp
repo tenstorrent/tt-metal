@@ -26,9 +26,10 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
 
     // Call minimal_matmul with all parameters including fused ternary
     // Note: Parameter mapping for addcmul semantics:
-    // addcmul(input_c, matmul_out, input_a, value=scalar) → input_c + (scalar * matmul_out * input_a)
-    // So: fused_ternary_input_a = addcmul_input_tensor2 (gate/multiplier)
-    //     fused_ternary_input_c = addcmul_input_tensor1 (residual/base)
+    // Desired formula: output = addcmul_input_tensor1 + (scalar * matmul_out * addcmul_input_tensor2)
+    // In dataflow/compute: output = ternary_a + (scalar * matmul_out * ternary_b)
+    // So: fused_ternary_input_a = addcmul_input_tensor1 (residual/base)
+    //     fused_ternary_input_c = addcmul_input_tensor2 (gate/multiplier)
     auto outputs = ttnn::prim::minimal_matmul(
         matmul_input_tensor,
         matmul_weight_tensor,
@@ -41,8 +42,8 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
         1,                       // no splitting
         -1,                      // dim
         scalar,                  // fused_ternary_scalar
-        addcmul_input_tensor2,   // fused_ternary_input_a (gate/multiplier)
-        addcmul_input_tensor1);  // fused_ternary_input_c (residual/base)
+        addcmul_input_tensor1,   // fused_ternary_input_a (residual/base)
+        addcmul_input_tensor2);  // fused_ternary_input_c (gate/multiplier)
 
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
     return outputs[0];
