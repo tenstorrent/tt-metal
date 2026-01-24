@@ -66,9 +66,8 @@ void MAIN {
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;          // 2 * 5 / 2 = 5
-    const uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT_A[ring_core_id];
-    // (num_w2_tiles_w/2) * w2_blocks_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
+    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -107,7 +106,7 @@ void MAIN {
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
         //---------------------------------------------------------------------
-        for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        for (uint32_t tile_id = 0; tile_id < num_elt_tiles; ++tile_id) {
             uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
 
             tile_regs_acquire();
@@ -132,23 +131,23 @@ void MAIN {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            // silu_tile_init();
-            // silu_tile(0);
+            silu_tile_init();
+            silu_tile(0);
 
-            // mul_binary_tile_init();
-            // mul_binary_tile(0, 1, 0);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
 
             tile_regs_commit();
             tile_regs_wait();
 
-            PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
-            PACK(silu_tile_init());
-            PACK(silu_tile(0));
+            // PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
+            // PACK(silu_tile_init());
+            // PACK(silu_tile(0));
 
-            PACK(mul_binary_tile_init());
-            PACK(mul_binary_tile(0, 1, 0));
+            // PACK(mul_binary_tile_init());
+            // PACK(mul_binary_tile(0, 1, 0));
 
-            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/i);
+            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             tile_regs_release();
         }
 
@@ -157,13 +156,13 @@ void MAIN {
         cb_push_back(cb_c2w_rdy, 1);
 
         //---------------------------------------------------------------------
-        // Compute in2 @ W2 (in pairs of 2)
+        // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
         uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
-        for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
+        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            if (i == 0) {
+            if (iter == 0) {
                 cb_wait_front(cb_w2c_rdy, 1);
             }
 
@@ -171,20 +170,20 @@ void MAIN {
 
             tile_regs_acquire();
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_two_mm2_tile; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
-                for (uint32_t k = 0; k < w2_tiles_per_block; k += 2) {
-                    // The last block has only 16 tiles of interest, so we exit early.
-                    if ((block_id == (w2_blocks_per_two_mm2_tile - 1)) && (k == 16)) {
-                        if (i == 0) {
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    // The last block has only 4 tiles of interest, so we exit early.
+                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+                        if (iter == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                         }
                         break;
                     }
 
                     if (dm1_tiles_remaining == 0) {
-                        if (i == 0) {
+                        if (iter == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
                         }
@@ -201,7 +200,7 @@ void MAIN {
                         /*in1_index=*/k,
                         /*idst=*/0,
                         /*transpose=*/false,
-                        /*ct_dim=*/2,
+                        /*ct_dim=*/4,
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
@@ -214,6 +213,8 @@ void MAIN {
             // Pack this in-place for now.
             pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
             pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
             tile_regs_release();
         }
     }  // end for (expert_id)
