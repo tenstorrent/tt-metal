@@ -38,12 +38,24 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              A2D,
+              DST_ACCUM_MODE,
+              BroadcastType::NONE,
+              false,
+              false,
+              UnpackToDestEn>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
         UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              A2D,
+              DST_ACCUM_MODE,
+              BroadcastType::NONE,
+              false,
+              false,
+              false /*unpack to dest*/>(icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -67,11 +79,23 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
     if (is_int32) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              A2D,
+              DST_ACCUM_MODE,
+              BroadcastType::NONE,
+              false,
+              false,
+              UnpackToDestEn>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<
+              A2D,
+              DST_ACCUM_MODE,
+              BroadcastType::NONE,
+              false,
+              false,
+              false /*unpack to dest*/>(icb)));
     }
 
 #endif

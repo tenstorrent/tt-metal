@@ -97,10 +97,10 @@ inline void llk_unpack_AB_reduce_init(
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
     // TODO NC: Move to TRISC1 tt-metal#36411
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
+    // if constexpr (enforce_fp32_accumulation) {
+    //     // Set necessary config regs for MOVB2D hi16/lo16 to work
+    //     _llk_unpack_dbg_feature_disable_();
+    // }
 
     _llk_unpack_AB_reduce_init_<dim, BType, enforce_fp32_accumulation>(
         face_r_dim, num_faces, narrow_tile, transpose, within_face_16x16_transpose);

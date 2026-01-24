@@ -111,7 +111,13 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          UnpackToDestEn,
+          false,
+          UnpackToDestEn>(icb)));
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }
 
