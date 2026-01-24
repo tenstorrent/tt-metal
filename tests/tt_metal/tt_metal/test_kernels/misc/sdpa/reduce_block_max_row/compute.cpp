@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce_custom.h"
+#include "compute_kernel_api/binary_max_min.h"
 
 void kernel_main() {
     constexpr uint32_t qk_im_cb = get_compile_time_arg_val(0);
