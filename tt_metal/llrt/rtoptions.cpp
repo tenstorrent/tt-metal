@@ -164,6 +164,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
     TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
     TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
+    TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
     TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
     TT_METAL_DPRINT_FILE,                      // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
@@ -1178,6 +1179,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_DPRINT_NODES
+        // Specifies fabric node IDs for debug printing. Supports 'all' or comma-separated list of node IDs.
+        // Cannot specify both TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_CHIPS.
+        // Default: all nodes (same as TT_METAL_DPRINT_CHIPS)
+        // Usage: export TT_METAL_DRPINT_CHIPS="(M0,D0),(M1,D1)"
+        case EnvVarID::TT_METAL_DPRINT_NODES:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
         // TT_METAL_DPRINT_RISCVS
         // Specifies RISC-V processors for debug printing. Complex processor selection syntax.
         // Default: all RISC-V processors
@@ -1458,7 +1468,13 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
-    ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
+    if (!ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS")) {
+        // Check if nodes are specified
+        ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
+    } else if (ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES")) {
+        // Cannot specify both chips and nodes
+        TT_THROW("Cannot specify both TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES");
+    }
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
@@ -1546,9 +1562,10 @@ void RunTimeOptions::ParseFeatureCoreRange(
     feature_targets[feature].cores[core_type] = cores;
 }
 
-void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
+bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
     std::vector<int> chips;
     char* env_var_str = std::getenv(env_var.c_str());
+    bool specified = env_var_str != nullptr;
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
@@ -1573,6 +1590,45 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
+
+    return specified;
+}
+
+bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std::string& env_var) {
+    // Map node IDs back to chip IDs
+    // Supports formats: (M0, D0),(M1,D1) or (M0, D0) or "(M0, D0)"
+    char* env_var_str = std::getenv(env_var.c_str());
+    bool specified = env_var_str != nullptr;
+    while (env_var_str != nullptr && *env_var_str != '\0') {
+        while (*env_var_str == ' ' || *env_var_str == '"') {
+            env_var_str++;
+        }
+        if (*env_var_str == '\0') {
+            break;
+        }
+        // Can also have "all"
+        if (strncmp(env_var_str, "all", 3) == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
+        uint32_t mesh_id, chip_id;
+        // Parse format: (M<n>, D<n>) with optional spaces, e.g. (M0, D1)
+        if (sscanf(env_var_str, "(M%u , D%u)", &mesh_id, &chip_id) != 2 &&
+            sscanf(env_var_str, "(M%u, D%u)", &mesh_id, &chip_id) != 2 &&
+            sscanf(env_var_str, "(M%u,D%u)", &mesh_id, &chip_id) != 2) {
+            TT_THROW("Invalid {}", env_var_str);
+        }
+
+        feature_targets[feature].node_ids.push_back(tt_fabric::FabricNodeId(tt_fabric::MeshId{mesh_id}, chip_id));
+        env_var_str = strchr(env_var_str, ')');
+        if (env_var_str != nullptr) {
+            env_var_str++;  // Skip ')'
+            while (*env_var_str == ',' || *env_var_str == ' ' || *env_var_str == '"') {
+                env_var_str++;
+            }
+        }
+    }
+    return specified;
 }
 
 void RunTimeOptions::ParseFeatureRiscvMask(

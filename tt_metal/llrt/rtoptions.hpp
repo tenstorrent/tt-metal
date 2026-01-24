@@ -66,6 +66,7 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -687,7 +688,10 @@ private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    bool ParseFeatureChipIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if chips are specified
+    bool ParseFeatureNodeIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if nodes are specified
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
