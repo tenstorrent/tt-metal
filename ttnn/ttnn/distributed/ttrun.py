@@ -24,6 +24,10 @@ DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
+# Store the original working directory at module load time to preserve it
+# across mpirun process launches (critical for SLURM/sbatch environments)
+ORIGINAL_CWD = Path.cwd().resolve()
+
 
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
@@ -60,19 +64,109 @@ class TTRunConfig(BaseModel):
 
     @field_validator("mesh_graph_desc_path")
     def validate_mesh_graph_exists(cls, path: str) -> str:
-        """Ensure mesh graph descriptor file exists"""
-        mesh_path = Path(path).expanduser().resolve()
-        if not mesh_path.is_file():
-            raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
-        return str(mesh_path)
+        """Ensure mesh graph descriptor file exists.
+
+        Resolves relative paths against multiple locations in order:
+        1. ORIGINAL_CWD (launch directory - critical for SLURM/sbatch)
+        2. TT_METAL_HOME environment variable
+        3. Current working directory (fallback)
+        """
+        expanded_path = Path(path).expanduser()
+
+        # If already absolute, just validate it exists
+        if expanded_path.is_absolute():
+            if not expanded_path.is_file():
+                raise ValueError(f"Mesh graph descriptor not found: {expanded_path}")
+            return str(expanded_path)
+
+        # For relative paths, try multiple resolution strategies
+        search_paths = [
+            ORIGINAL_CWD,  # Launch directory (most important for SLURM)
+            Path(os.environ.get("TT_METAL_HOME", "")).expanduser() if os.environ.get("TT_METAL_HOME") else None,
+            Path.cwd(),  # Current working directory as fallback
+        ]
+
+        for base_path in search_paths:
+            if base_path is None:
+                continue
+            candidate = (base_path / expanded_path).resolve()
+            if candidate.is_file():
+                logger.debug(f"{TT_RUN_PREFIX} Resolved mesh_graph_desc_path: {path} -> {candidate}")
+                return str(candidate)
+
+        # Provide helpful error message with all searched locations
+        searched = [str(p) for p in search_paths if p is not None]
+        raise ValueError(
+            f"Mesh graph descriptor not found: {path}\n"
+            f"Searched in: {searched}\n"
+            f"Tip: Use an absolute path or ensure the file exists relative to the launch directory."
+        )
+
+
+def resolve_path_from_search_locations(path: Path, description: str = "file", must_exist: bool = True) -> Path:
+    """Resolve a path by searching multiple locations.
+
+    For relative paths, searches in order:
+    1. ORIGINAL_CWD (launch directory - critical for SLURM/sbatch)
+    2. TT_METAL_HOME environment variable
+    3. Current working directory (fallback)
+
+    Args:
+        path: The path to resolve (can be relative or absolute)
+        description: Description for error messages
+        must_exist: Whether to raise an error if the path doesn't exist
+
+    Returns:
+        Resolved absolute path
+    """
+    expanded_path = Path(path).expanduser()
+
+    # If already absolute, return as-is (optionally validate existence)
+    if expanded_path.is_absolute():
+        if must_exist and not expanded_path.exists():
+            raise ValueError(f"{description} not found: {expanded_path}")
+        return expanded_path.resolve()
+
+    # For relative paths, try multiple resolution strategies
+    search_paths = [
+        ORIGINAL_CWD,  # Launch directory (most important for SLURM)
+        Path(os.environ.get("TT_METAL_HOME", "")).expanduser() if os.environ.get("TT_METAL_HOME") else None,
+        Path.cwd(),  # Current working directory as fallback
+    ]
+
+    for base_path in search_paths:
+        if base_path is None:
+            continue
+        candidate = (base_path / expanded_path).resolve()
+        if candidate.exists():
+            logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
+            return candidate
+
+    if must_exist:
+        searched = [str(p) for p in search_paths if p is not None]
+        raise ValueError(
+            f"{description} not found: {path}\n"
+            f"Searched in: {searched}\n"
+            f"Tip: Use an absolute path or ensure the file exists relative to the launch directory."
+        )
+
+    # Return best-effort resolution if existence check is not required
+    return (ORIGINAL_CWD / expanded_path).resolve()
 
 
 def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
-    """Parse YAML configuration file with schema validation."""
-    if not yaml_path.exists():
-        raise ValueError(f"Configuration file not found: {yaml_path}")
+    """Parse YAML configuration file with schema validation.
 
-    with open(yaml_path, "r") as f:
+    Resolves all relative paths in the configuration against the launch directory
+    to ensure proper operation in SLURM/sbatch environments.
+    """
+    # Resolve the yaml_path first
+    resolved_yaml_path = resolve_path_from_search_locations(yaml_path, "Configuration file")
+
+    logger.debug(f"{TT_RUN_PREFIX} Loading configuration from: {resolved_yaml_path}")
+    logger.debug(f"{TT_RUN_PREFIX} Original CWD: {ORIGINAL_CWD}")
+
+    with open(resolved_yaml_path, "r") as f:
         data = yaml.safe_load(f)
 
     try:
@@ -82,15 +176,19 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
 
     # Parse mock cluster rank binding configuration
     if mock_cluster_rank_binding:
-        with open(mock_cluster_rank_binding, "r") as f:
+        resolved_mock_path = resolve_path_from_search_locations(
+            mock_cluster_rank_binding, "Mock cluster rank binding configuration"
+        )
+        with open(resolved_mock_path, "r") as f:
             mock_data = yaml.safe_load(f)
 
-        # Validate mock cluster rank binding configuration
+        # Validate and resolve mock cluster rank binding configuration paths
+        resolved_mock_bindings = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            if not Path(path).expanduser().resolve().is_file():
-                raise ValueError(f"Mock cluster rank binding configuration file not found: {path}")
+            resolved_path = resolve_path_from_search_locations(Path(path), f"Mock cluster descriptor for rank {rank}")
+            resolved_mock_bindings[rank] = resolved_path
 
-        config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
+        config.mock_cluster_rank_binding = resolved_mock_bindings
 
     return config
 
@@ -133,6 +231,8 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         "PYTHONPATH": os.environ.get("PYTHONPATH", str(Path.home())),
         # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(Path.home()))),
+        # Pass the original CWD to subprocesses so they can resolve relative paths correctly
+        "TT_RUN_ORIGINAL_CWD": str(ORIGINAL_CWD),
     }
 
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
@@ -256,9 +356,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 )
 @click.option(
     "--rank-binding",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     required=True,
-    help="Rank binding configuration file (YAML)",
+    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -271,8 +371,8 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--mock-cluster-rank-binding",
     required=False,
-    type=click.Path(exists=True, path_type=Path),
-    help="Mock cluster rank binding configuration file (YAML)",
+    type=click.Path(path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
@@ -344,10 +444,32 @@ def main(
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
         Default values for the following environment variables will be used if not set when calling tt-run:
         - TT_METAL_HOME: User's home directory
         - PYTHONPATH: User's home directory
         - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
+
+    \b
+    Path Resolution (SLURM/sbatch compatibility):
+        Relative paths for --rank-binding, --mock-cluster-rank-binding, and mesh_graph_desc_path
+        are resolved by searching multiple locations in order:
+
+        1. Launch directory - The directory where tt-run was originally invoked. This is
+           captured at module load time and is critical for SLURM/sbatch environments where
+           mpirun may change the working directory when spawning processes on remote nodes.
+        2. TT_METAL_HOME - If the environment variable is set, it is searched next.
+        3. Current working directory - Fallback to the current directory at resolution time.
+
+        The first location where the file is found will be used. If the file is not found
+        in any location, an error is raised listing all searched paths.
+
+        This behavior ensures that commands like:
+            tt-run --rank-binding tests/config/bindings.yaml ./my_app
+        work correctly when launched from a tt-metal directory on an NFS mount, even when
+        mpirun spawns processes on remote cluster nodes with different working directories.
+
+        Use --verbose to see path resolution diagnostics.
 
     \b
     Debugging with --debug-gdbserver:
@@ -403,10 +525,27 @@ def main(
         Section 2.4: Distributed Process Launch with tt-run
     """
     program = ctx.args
+
+    # Log diagnostic information for path resolution debugging
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
+        logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
+        logger.info(f"{TT_RUN_PREFIX}   Current CWD: {Path.cwd()}")
+        logger.info(f"{TT_RUN_PREFIX}   rank-binding input: {rank_binding}")
+        logger.info(f"{TT_RUN_PREFIX}   TT_METAL_HOME env: {os.environ.get('TT_METAL_HOME', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   PYTHONPATH env: {os.environ.get('PYTHONPATH', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   LD_LIBRARY_PATH env: {os.environ.get('LD_LIBRARY_PATH', '<not set>')}")
+        if os.environ.get("SLURM_JOB_ID"):
+            logger.info(f"{TT_RUN_PREFIX}   SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
+            logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
+
     try:
         config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
+
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX}   Resolved mesh_graph_desc_path: {config.mesh_graph_desc_path}")
 
     if not program:
         raise click.ClickException("No program specified. Please provide a program to run.")
