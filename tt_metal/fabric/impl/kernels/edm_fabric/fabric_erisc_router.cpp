@@ -3455,6 +3455,9 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+
+    DPRINT << "EDM Running main loop \n";
+
     run_fabric_edm_main_loop<
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
