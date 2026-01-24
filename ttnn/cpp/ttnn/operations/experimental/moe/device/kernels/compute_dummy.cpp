@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "moe_ring_common.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
-#include "moe_ring_common.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -63,9 +63,8 @@ void MAIN {
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;          // 2 * 5 / 2 = 5
-    const uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT_A[ring_core_id];
-    // (num_w2_tiles_w/2) * w2_blocks_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
+    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -89,7 +88,7 @@ void MAIN {
     //-------------------------------------------------------------------------
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        for (uint32_t tile_id = 0; tile_id < num_elt_tiles; ++tile_id) {
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_elt_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
@@ -101,30 +100,28 @@ void MAIN {
         cb_push_back(cb_c2w_rdy, 1);
 
         // Read W2 from DRAM into CB
-        for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
+        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            if (i == 0) {
+            if (iter == 0) {
                 cb_wait_front(cb_w2c_rdy, 1);
             }
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_two_mm2_tile; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
-                for (uint32_t k = 0; k < w2_tiles_per_block; k += 2) {
-                    // For cores which have only 18 mm2 tiles, we need to drain the pipeline for the last 2 and just
-                    // exit.
-                    if ((block_id == (w2_blocks_per_two_mm2_tile - 1)) && (k == 16)) {
-                        if (i == 0) {
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    // The last block has only 4 tiles of interest, so we exit early.
+                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+                        if (iter == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                         }
                         break;
                     }
+
                     if (dm1_tiles_remaining == 0) {
-                        if (i == 0) {
+                        if (iter == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
-                        }
-                        if (i == 0) {
                             cb_wait_front(cb_w2c_rdy, 1);
                         }
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
