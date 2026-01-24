@@ -1405,6 +1405,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs(
         ttnn.Shape([96, 128]),
         ttnn.Shape([1, 96, 128]),
         ttnn.Shape([2, 96, 128]),
+        # ttnn.Shape([64, 128]),
     ],
 )
 @pytest.mark.parametrize(
