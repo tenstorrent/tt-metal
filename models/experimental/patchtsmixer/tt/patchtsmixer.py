@@ -179,17 +179,21 @@ class TtPatchTSMixerMLP:
         self.b2 = parameters[f"{self.base}.fc2.bias"]
 
     def __call__(self, x):
-        # x shape: (B, C, Np, D)
-        B, C = x.shape[0], x.shape[1]
+        # x shape: (B, C, Np, D) or (B, C, D, Np) depending on mixer
+        B, C, dim3, dim4 = x.shape
 
-        # First linear with GELU: (B, C, Np, D) @ (D, expansion*D)
-        # Use core_grid for parallel processing across B*C dimension
+        # Calculate effective M dimension for matmul parallelization
+        # For patch mixing: (B,C,D,Np) → M_eff = B*C*D
+        # For feature mixing: (B,C,Np,D) → M_eff = B*C*Np
+        M_eff = B * C * dim3
+
+        # First linear with GELU: Use proper M dimension for core grid
         x = ttnn.linear(
             x,
             self.w1,
             bias=self.b1,
             activation="gelu",
-            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            core_grid=ttnn.CoreGrid(y=min(M_eff, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -198,12 +202,12 @@ class TtPatchTSMixerMLP:
             ),
         )
 
-        # Second linear: (B, C, Np, expansion*D) @ (expansion*D, D)
+        # Second linear: Use same M_eff for consistent parallelization
         x_out = ttnn.linear(
             x,
             self.w2,
             bias=self.b2,
-            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            core_grid=ttnn.CoreGrid(y=min(M_eff, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -270,7 +274,6 @@ class TtFeatureMixerBlock:
             x = self.gate(x)
         out = ttnn.add(x, residual)
         ttnn.deallocate(x)
-        ttnn.deallocate(residual)
         return out
 
 
@@ -342,7 +345,6 @@ class TtPatchMixerBlock:
 
         out = ttnn.add(x_perm, residual)
         ttnn.deallocate(x_perm)
-        ttnn.deallocate(residual)
         return out
 
 
@@ -408,7 +410,6 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
 
         out = ttnn.add(x_perm, residual)
         ttnn.deallocate(x_perm)
-        ttnn.deallocate(residual)
         return out
 
 
@@ -783,6 +784,7 @@ class TtPatchTSMixerPatchify:
 
         # Gather - let TTNN manage memory (output consumed by embedding)
         y = ttnn.gather(x, dim=2, index=idx4)
+        ttnn.deallocate(x)  # Free huge repeated tensor immediately
 
         # Final permute - let TTNN manage memory
         y = ttnn.permute(y, (0, 3, 1, 2))
@@ -834,13 +836,13 @@ class TtPatchTSMixerEmbedding:
 
         # Linear projection: (B, C, Np, patch_length) @ (patch_length, d_model)
         # Use multi-core parallelization for input embedding
-        B = patches_tt.shape[0]
-        C = patches_tt.shape[1]
+        B, C, Np, P = patches_tt.shape
+        M_eff = B * C * Np  # Effective batch dimension for parallelization
         out = ttnn.linear(
             patches_tt,
             self.weight,
             bias=self.bias,
-            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            core_grid=ttnn.CoreGrid(y=min(M_eff, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
