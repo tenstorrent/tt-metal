@@ -47,8 +47,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
               A2D,
               DST_ACCUM_MODE,
               bcast_type,
-              true /*enable 32bit dst*/,
-              false,
+              false /*is_int_fpu_en*/,
+              false /*tilize*/,
               true>(icb)));
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
