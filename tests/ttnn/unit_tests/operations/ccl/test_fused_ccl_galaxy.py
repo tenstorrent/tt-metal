@@ -429,9 +429,21 @@ def run_all_gather_matmul_galaxy_impl(
     tt_in1_tensor_non_fused = tt_in1_tensor
 
     # Chunked weight tensor for local_matmul_allreduce approach:
-    # Each device gets a K_per_device slice of the weight, sharded along K dimension
+    # Each device column i needs weight rows [i*K_per_device : (i+1)*K_per_device]
     # This allows matmul without all_gather by doing local matmul + all_reduce
-    in1_chunked_tensor = torch.randn(in1_chunked_shape)
+    # Math: A0@W0 + A1@W1 + A2@W2 + A3@W3 = [A0|A1|A2|A3] @ [W0;W1;W2;W3]
+    #
+    # Create weight slices such that device column i gets W[i*K_per_device:(i+1)*K_per_device, :]
+    # The tensor shape is [8, 4, K_per_device, N] where dim 1 (size 4) corresponds to column devices
+    num_col_devices = cluster_shape[cluster_axis]  # 4
+    in1_chunked_tensor = torch.zeros(in1_chunked_shape)
+    for col_idx in range(num_col_devices):
+        k_start = col_idx * K_per_device
+        k_end = (col_idx + 1) * K_per_device
+        # Each row device gets the same K slice (replicated along rows)
+        # in1_tensor shape: [8, 4, K, N] - but all devices have same data due to mesh mapper
+        # We need to slice along K dimension and assign to the correct column
+        in1_chunked_tensor[:, col_idx, :, :] = in1_tensor[:, col_idx, k_start:k_end, :]
     tt_in1_chunked_tensor = ttnn.from_torch(
         in1_chunked_tensor,
         device=mesh_device,
