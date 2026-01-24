@@ -607,7 +607,8 @@ Steps
 #. Size circular buffers based on the blocking variables, keeping in mind the following:
 
    - Input CBs need to store ``A_slab`` and ``B_slab`` and should use double buffering.
-   - Output CB needs to store ``C_block``, and should use double buffering.
+   - Output CB needs to store ``C_block``, and should not use double buffering.
+     Since each core computes a whole ``C_block``, there is no need to double buffer.
    - Intermediate CB needs to store the partial results, whose size is the same as ``C_block``.
      Since the same kernel will both produce and consume the partial results, no double buffering
      is needed.

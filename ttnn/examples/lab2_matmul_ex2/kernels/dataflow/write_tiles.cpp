@@ -58,7 +58,6 @@ void kernel_main() {
             uint32_t cb_out0_addr = get_read_ptr(cb_out0);
             // Write the tile to device memory. This is a non-blocking call.
             noc_async_write_tile(tile_index, out0_addr_gen, cb_out0_addr);
-            tile_index++;
             
             // Wait until the write is done. This is a blocking call.
             noc_async_write_barrier();
