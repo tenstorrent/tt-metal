@@ -85,6 +85,8 @@ void update_paged_dram_read(
 void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_t>& data, uint32_t data_size_bytes) {
     uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
     CQDispatchCmd expected_cmd{};
+    // Zero-initialize entire structure to avoid uninitialized padding bytes
+    std::memset(&expected_cmd, 0, sizeof(expected_cmd));
     expected_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
     // Include cmd in transfer
     expected_cmd.write_linear_host.length = data_size_bytes + sizeof(CQDispatchCmd);

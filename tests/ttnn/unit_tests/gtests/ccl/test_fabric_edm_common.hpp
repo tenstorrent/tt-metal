@@ -207,15 +207,15 @@ public:
         }
     }
 
-    MeshFabric1DFixture() { this->SetupDevices(); }
+    MeshFabric1DFixture() { MeshFabric1DFixture::SetupDevices(); }
 
     MeshFabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
-        this->SetupDevices();
+        MeshFabric1DFixture::SetupDevices();
     }
 
     ~MeshFabric1DFixture() override {
         if (device_open) {
-            TearDown();
+            MeshFabric1DFixture::TearDown();
         }
     }
 };

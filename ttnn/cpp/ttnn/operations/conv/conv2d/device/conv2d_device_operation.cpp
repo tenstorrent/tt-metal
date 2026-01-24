@@ -125,9 +125,9 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
             if (args.memory_config.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
-                out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.y);
+                per_core_out_matrix_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.y);
             } else {
-                out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
+                per_core_out_matrix_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
         }
         TT_FATAL(

@@ -43,9 +43,10 @@ TEST(OptionalReferenceTest, ImplicitConversionToConst) {
     EXPECT_TRUE(ref.has_value());
     EXPECT_EQ(*ref, 42);
 
-    // Modify original value
+    // Modify original value and verify reference sees the change
+    EXPECT_EQ(*ref, 42);  // Reference should see the change
     value = 100;
-    EXPECT_EQ(*ref, 100);  // Reference should see the change
+    EXPECT_EQ(*ref, 100);
 }
 
 TEST(OptionalReferenceTest, OptionalConstruction) {
@@ -90,7 +91,7 @@ TEST(OptionalReferenceTest, MoveConstruction) {
     EXPECT_TRUE(ref2.has_value());
     EXPECT_EQ(*ref2, 42);
     // Note: ref1 should still be valid after move (it's just a pointer copy)
-    // NOLINTNEXTLINE(bugprone-use-after-move)
+    // NOLINTNEXTLINE(bugprone-use-after-move,cplusplus.Move)
     EXPECT_TRUE(ref1.has_value());
 }
 

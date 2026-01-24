@@ -126,6 +126,8 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
     auto program_and_shared_variables = std::visit(
         [&](auto&& factory) -> std::pair<Program, SliceSharedVariables> {
+            // Note: tensor_return_value is an output parameter that factory.create() initializes
+            // NOLINTNEXTLINE(core.CallAndMessage)
             auto cached_program = factory.create(slice_attrs, slice_tensor_args, tensor_return_value);
             return {std::move(cached_program.program), std::move(cached_program.shared_variables)};
         },

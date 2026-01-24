@@ -96,11 +96,12 @@ int main(int argc, char **argv) {
     vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
     std::visit(
         [&](auto &&arg) {
+            using ArgType = std::decay_t<decltype(arg)>;
             if constexpr (requires { arg.vocab_size; }) {
                 arg.vocab_size = vocab_size;
             } else {
                 throw std::runtime_error(
-                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+                    "Unsupported transformer configuration type: " + std::string(typeid(ArgType).name()));
             }
         },
         config.transformer_config);
