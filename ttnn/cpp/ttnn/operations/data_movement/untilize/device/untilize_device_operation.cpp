@@ -17,6 +17,7 @@
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
+#include <tt-metalium/buffer_distribution_spec.hpp>
 
 using namespace tt::tt_metal;
 
@@ -26,15 +27,15 @@ bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt
     if (tensor_shape.volume() == 0) {
         return false;
     }
-    // In ND sharding, the tensor and shards may not have the same rank.
-    TT_FATAL(
-        tensor_shape.rank() >= shard_shape.rank(),
-        "Tensor rank ({}) must be greater than or equal to shard rank ({})",
-        tensor_shape.rank(),
-        shard_shape.rank());
-    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
-        TT_FATAL(shard_shape[dim] != 0, "Shard dimension cannot be zero");
-        if (tensor_shape[dim] % shard_shape[dim] != 0) {
+    // In ND sharding, the tensor and shards may not have the same rank. We may have to adjust the tensor shape before
+    // determining if it is unevenly sharded.
+    auto [squeezed_tensor_shape, squeezed_shard_shape] =
+        tt::tt_metal::detail::squeeze_shape_ranks(tensor_shape, shard_shape);
+    TT_FATAL(squeezed_tensor_shape.rank() == squeezed_shard_shape.rank(), "Squeezed tensor and shard ranks must match");
+
+    for (size_t dim = 0; dim < squeezed_shard_shape.rank(); ++dim) {
+        TT_FATAL(squeezed_shard_shape[dim] != 0, "Shard dimension cannot be zero");
+        if (squeezed_tensor_shape[dim] % squeezed_shard_shape[dim] != 0) {
             return true;
         }
     }
