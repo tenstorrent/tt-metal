@@ -61,7 +61,8 @@ class RMSNorm(nn.Module):
                 cluster_axis=1,
                 mesh_device=self.mesh_device,
                 memory_config=tt_gathered_stats_memory_config,
-                topology=ttnn.Topology.Linear,
+                # topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
             )
             ttnn.deallocate(tt_stats)
 
