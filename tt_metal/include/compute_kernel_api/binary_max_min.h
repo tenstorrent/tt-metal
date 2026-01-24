@@ -53,8 +53,9 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst)));
+ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    MATH(
+        (llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst, vector_mode)));
 }
 
 /**
@@ -104,8 +105,9 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst)));
+ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    MATH(
+        (llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst, vector_mode)));
 }
 
 /**

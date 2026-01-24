@@ -6,10 +6,11 @@
 
 #include "device/cross_entropy_bw_device_operation.hpp"
 
-namespace ttml::metal::ops::cross_entropy_bw {
+namespace ttml::metal {
 
-ttnn::Tensor CrossEntropyBackwardOperation::invoke(
+ttnn::Tensor cross_entropy_bw(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor, const ttnn::Tensor& grad, float scaler) {
     return ttnn::multiply(ttnn::prim::ttml_cross_entropy_bw(input_tensor, target_tensor, scaler), grad);
 }
-}  // namespace ttml::metal::ops::cross_entropy_bw
+
+}  // namespace ttml::metal

@@ -74,16 +74,20 @@ if is_wormhole_b0():
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
-    "dtype, layout",
+    "dtype",
     (
-        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
-        (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.int32, ttnn.TILE_LAYOUT),
+        ttnn.bfloat4_b,
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
+        ttnn.int32,
     ),
-    ids=["BFLOAT8_B-TILE", "BFLOAT16-RM", "BFLOAT16-TILE", "INT32-RM", "INT32-TILE"],
+    ids=["BFLOAT4_B", "BFLOAT8_B", "BFLOAT16", "FLOAT32", "UINT8", "UINT16", "UINT32", "INT32"],
 )
+@pytest.mark.parametrize("layout", (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), ids=["TILE", "RM"])
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("test_id", (0, 1), ids=["overlap", "non_overlap"])
 def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device):
@@ -92,7 +96,10 @@ def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_confi
     run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32],
+)
 def test_move_op_with_program_cache(dtype, device):
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     layout = ttnn.TILE_LAYOUT
