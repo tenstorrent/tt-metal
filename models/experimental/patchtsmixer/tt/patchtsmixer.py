@@ -10,24 +10,20 @@ class TtPatchTSMixerGatedAttention:
         self.device = device
         self.base_address = base_address
 
-        # Store weights in L1
-        self.weight = ttnn.to_memory_config(parameters[f"{base_address}.attn_layer.weight"], ttnn.L1_MEMORY_CONFIG)
+        # Keep weights in DRAM (hardware multicasts to cores)
+        self.weight = parameters[f"{base_address}.attn_layer.weight"]
         self.bias = parameters[f"{base_address}.attn_layer.bias"]
-
-        # L1 output config
-        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
         # x shape: (B, C, Np, D)
         B = x.shape[0]
         C = x.shape[1]
 
-        # Linear with L1 output and multi-core parallelization
+        # Linear with multi-core parallelization
         y = ttnn.linear(
             x,
             self.weight,
             bias=self.bias,
-            memory_config=self.l1_mem_config,
             core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -36,11 +32,11 @@ class TtPatchTSMixerGatedAttention:
                 packer_l1_acc=False,
             ),
         )
-        # Softmax in L1
-        w = ttnn.softmax(y, dim=-1, memory_config=self.l1_mem_config)
+        # Softmax (let TTNN manage memory)
+        w = ttnn.softmax(y, dim=-1)
         ttnn.deallocate(y)
-        # Multiply in L1
-        out = ttnn.multiply(x, w, memory_config=self.l1_mem_config)
+        # Multiply (let TTNN manage memory)
+        out = ttnn.multiply(x, w)
         ttnn.deallocate(w)
         return out
 
@@ -123,16 +119,13 @@ class TtPatchTSMixerLayerNorm:
         self.base = base_address
         self.eps = eps
 
-        # Store params in L1
+        # Store params in L1 (tiny, safe)
         self.gamma = ttnn.to_memory_config(parameters[f"{self.base}.norm.weight"], ttnn.L1_MEMORY_CONFIG)
         self.beta = ttnn.to_memory_config(parameters[f"{self.base}.norm.bias"], ttnn.L1_MEMORY_CONFIG)
 
-        # L1 output config
-        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
-
     def __call__(self, x):
-        # Layer norm with L1 output
-        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps, memory_config=self.l1_mem_config)
+        # Layer norm - let TTNN manage output memory
+        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
 
 
 class TtPatchTSMixerLayerNormDispatcher:
@@ -179,17 +172,11 @@ class TtPatchTSMixerMLP:
         self.device = device
         self.base = base_address
 
-        # Store weights in L1 for fast access
-        self.w1 = ttnn.to_memory_config(parameters[f"{self.base}.fc1.weight"], ttnn.L1_MEMORY_CONFIG)
+        # Keep weights in DRAM (hardware multicasts to cores during matmul)
+        self.w1 = parameters[f"{self.base}.fc1.weight"]
         self.b1 = parameters[f"{self.base}.fc1.bias"]
-        self.w2 = ttnn.to_memory_config(parameters[f"{self.base}.fc2.weight"], ttnn.L1_MEMORY_CONFIG)
+        self.w2 = parameters[f"{self.base}.fc2.weight"]
         self.b2 = parameters[f"{self.base}.fc2.bias"]
-
-        # L1 memory config for outputs
-        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
-
-        # Core grid for parallelization
-        self.core_grid = ttnn.CoreGrid(y=8, x=8)
 
     def __call__(self, x):
         # x shape: (B, C, Np, D)
@@ -202,7 +189,6 @@ class TtPatchTSMixerMLP:
             self.w1,
             bias=self.b1,
             activation="gelu",
-            memory_config=self.l1_mem_config,
             core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -217,7 +203,6 @@ class TtPatchTSMixerMLP:
             x,
             self.w2,
             bias=self.b2,
-            memory_config=self.l1_mem_config,
             core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -557,26 +542,23 @@ class TtPatchTSMixerForecastHead:
         self.base = base_address
         self.H = prediction_length
 
-        # Store weight in L1
-        self.weight = ttnn.to_memory_config(parameters[f"{self.base}.proj.weight"], ttnn.L1_MEMORY_CONFIG)
+        # Keep weights in DRAM (can be large for forecasting)
+        self.weight = parameters[f"{self.base}.proj.weight"]
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
-
-        # L1 output config
-        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
         B, C, Np, D = x.shape
 
-        # Flatten in L1
-        x_flat = ttnn.reshape(x, (B, C, 1, Np * D), memory_config=self.l1_mem_config)
+        # Flatten - let TTNN manage (can materialize, can be large)
+        x_flat = ttnn.reshape(x, (B, C, 1, Np * D))
         ttnn.deallocate(x)
 
-        # Linear with L1 output
-        y = ttnn.linear(x_flat, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        # Linear - let TTNN manage
+        y = ttnn.linear(x_flat, self.weight, bias=self.bias)
         ttnn.deallocate(x_flat)
 
-        # Permute in L1
-        out = ttnn.permute(y, (0, 3, 2, 1), memory_config=self.l1_mem_config)
+        # Permute - let TTNN manage
+        out = ttnn.permute(y, (0, 3, 2, 1))
         ttnn.deallocate(y)
         return out
 
@@ -763,8 +745,9 @@ class TtPatchTSMixerPatchify:
         P = self.patch_length
 
         # Build idx4: (1, Np, P, 1) -> (B, Np, P, C)
+        # Let TTNN manage memory for idx4 (can be moderate size)
         idx4 = ttnn.reshape(self.idx2, (1, Np, P, 1))
-        idx4 = ttnn.repeat(idx4, (B, 1, 1, C), memory_config=self.l1_mem_config)
+        idx4 = ttnn.repeat(idx4, (B, 1, 1, C))
 
         self._idx4_cache[key] = idx4
         return idx4
@@ -798,12 +781,11 @@ class TtPatchTSMixerPatchify:
         # Use cached idx4 to avoid repeated expansion
         idx4 = self._get_or_create_idx4(B, C)
 
-        # Gather output is small → L1 for fast access by next layer
-        # Output: (B, Np, P, C) - consumed immediately by embedding
-        y = ttnn.gather(x, dim=2, index=idx4, memory_config=self.l1_mem_config)
+        # Gather - let TTNN manage memory (output consumed by embedding)
+        y = ttnn.gather(x, dim=2, index=idx4)
 
-        # Final permute: keep in L1 for embedding layer
-        y = ttnn.permute(y, (0, 3, 1, 2), memory_config=self.l1_mem_config)
+        # Final permute - let TTNN manage memory
+        y = ttnn.permute(y, (0, 3, 1, 2))
         return y
 
 
@@ -833,12 +815,9 @@ class TtPatchTSMixerEmbedding:
             device=device,
         )
 
-        # Store projection weight in L1
-        self.weight = ttnn.to_memory_config(parameters[f"{self.base}.proj.weight"], ttnn.L1_MEMORY_CONFIG)
+        # Keep weight in DRAM (embedding projection can be moderate-large)
+        self.weight = parameters[f"{self.base}.proj.weight"]
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
-
-        # L1 output config
-        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
@@ -846,10 +825,10 @@ class TtPatchTSMixerEmbedding:
         returns: TTNN tensor (B, C, Np, d_model)
         """
 
-        # Permute in L1
-        x_lc = ttnn.permute(x, (0, 2, 1), memory_config=self.l1_mem_config)
+        # Permute - let TTNN manage memory
+        x_lc = ttnn.permute(x, (0, 2, 1))
 
-        # Patchify (already optimized with L1)
+        # Patchify
         patches_tt = self.patchify(x_lc)
         ttnn.deallocate(x_lc)
 
@@ -861,7 +840,6 @@ class TtPatchTSMixerEmbedding:
             patches_tt,
             self.weight,
             bias=self.bias,
-            memory_config=self.l1_mem_config,
             core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
