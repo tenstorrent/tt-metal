@@ -34,39 +34,6 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-struct WorkerMemMap {
-    uint32_t source_l1_buffer_address;
-    uint32_t packet_payload_size_bytes;
-    uint32_t test_results_address;
-    uint32_t target_address;
-    uint32_t notification_mailbox_address;
-    uint32_t test_results_size_bytes;
-};
-
-// Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
-    constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
-    constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
-    constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-
-    uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
-    uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
-    uint32_t target_address = source_l1_buffer_address;
-    uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
-
-    uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
-
-    return {
-        source_l1_buffer_address,
-        packet_payload_size_bytes,
-        test_results_address,
-        target_address,
-        notification_mailbox_address,
-        TEST_RESULTS_SIZE_BYTES};
-}
-
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -104,7 +71,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto edm_port = *eth_chans.begin();
 
     // Simple test parameters for smoke test
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 5;  // Small number for smoke test
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);

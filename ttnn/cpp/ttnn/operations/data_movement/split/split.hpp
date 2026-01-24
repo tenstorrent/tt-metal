@@ -4,27 +4,24 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "ttnn/types.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct SplitOperation {
-    static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<int64_t>& split_sizes,
-        int64_t dim,
-        const std::optional<MemoryConfig>& memory_config_arg);
+std::vector<ttnn::Tensor> split(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int64_t>& split_sizes,
+    int64_t dim = 0,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
-    static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor,
-        int64_t split_size,
-        int64_t dim,
-        const std::optional<MemoryConfig>& memory_config_arg);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto split = ttnn::register_operation<"ttnn::split", ttnn::operations::data_movement::SplitOperation>();
+std::vector<ttnn::Tensor> split(
+    const ttnn::Tensor& input_tensor,
+    int64_t split_size,
+    int64_t dim = 0,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn

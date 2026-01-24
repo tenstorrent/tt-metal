@@ -1479,8 +1479,11 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        # Use ring on a T3K or 6U galaxy or P300x2 or P150x4/8 submesh
+        if ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.P300_X2,
+            ttnn.cluster.ClusterType.P150_X4,
+            ttnn.cluster.ClusterType.P150_X8,
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
@@ -1686,9 +1689,19 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        self.use_sliding_window = text_config.get("use_sliding_window", None)
+        if (
+            self.sliding_window is not None
+            and self.rope_theta_local is None
+            and (self.use_sliding_window == True or self.use_sliding_window is None)
+        ):  # For interleaved attention
+            self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
@@ -1699,9 +1712,6 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
-        # Sliding window attention
-        self.sliding_window = text_config.get("sliding_window", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
