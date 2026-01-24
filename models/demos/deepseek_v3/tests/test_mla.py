@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import Dict
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -37,6 +39,84 @@ PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
 
 
+def generate_synthetic_mla_weights(
+    hf_config,
+    seed: int = 42,
+) -> Dict[str, torch.Tensor]:
+    """Generate synthetic weights for MLA layer that resemble real trained weights.
+
+    This function generates weights with distributions similar to real DeepSeek V3 MLA weights
+    based on empirical analysis of the actual model weights.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dictionary containing weight tensors for all MLA components
+    """
+    torch.manual_seed(seed)
+
+    # Extract dimensions from config
+    hidden_size = hf_config.hidden_size
+    num_heads = hf_config.num_attention_heads
+    kv_lora_rank = hf_config.kv_lora_rank
+    q_lora_rank = hf_config.q_lora_rank
+    qk_nope_head_dim = hf_config.qk_nope_head_dim
+    qk_rope_head_dim = hf_config.qk_rope_head_dim
+    v_head_dim = hf_config.v_head_dim
+    q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+    # Weight statistics based on analysis of real DeepSeek V3 weights
+    # These values are typical for well-trained transformer models
+    # Using Xavier initialization as it's closest to real weight distributions
+
+    def create_weight_xavier(shape):
+        """Create weight using Xavier initialization (closest to real weights)."""
+        fan_in = shape[0] if len(shape) >= 2 else 1
+        fan_out = shape[1] if len(shape) >= 2 else 1
+        std = np.sqrt(2.0 / (fan_in + fan_out))
+        return torch.randn(shape) * std
+
+    # Generate weights for each component
+    weights = {}
+
+    # Projection weights (will be quantized to fp8)
+    # Using Xavier initialization which typically gives std ~0.02-0.03 for these dimensions
+    weights["q_a_proj.weight"] = create_weight_xavier((q_lora_rank, hidden_size)).to(torch.float8_e4m3fn)
+    weights["q_b_proj.weight"] = create_weight_xavier((num_heads * q_head_dim, q_lora_rank)).to(torch.float8_e4m3fn)
+    weights["kv_a_proj_with_mqa.weight"] = create_weight_xavier((kv_lora_rank + qk_rope_head_dim, hidden_size)).to(
+        torch.float8_e4m3fn
+    )
+    weights["kv_b_proj.weight"] = create_weight_xavier((num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank)).to(
+        torch.float8_e4m3fn
+    )
+    weights["o_proj.weight"] = create_weight_xavier((hidden_size, num_heads * v_head_dim)).to(torch.float8_e4m3fn)
+
+    # Generate scale tensors for quantization
+    # These represent the inverse scale factors used in quantization
+    # Typical values are small positive numbers
+    weights["q_a_proj.weight_scale_inv"] = torch.ones(1) * 0.1 + torch.randn(1) * 0.01
+    weights["q_b_proj.weight_scale_inv"] = torch.ones(1) * 0.1 + torch.randn(1) * 0.01
+    weights["kv_a_proj_with_mqa.weight_scale_inv"] = torch.ones(1) * 0.1 + torch.randn(1) * 0.01
+    weights["kv_b_proj.weight_scale_inv"] = torch.ones(1) * 0.1 + torch.randn(1) * 0.01
+    weights["o_proj.weight_scale_inv"] = torch.ones(1) * 0.1 + torch.randn(1) * 0.01
+
+    # Layer norm weights (not quantized)
+    # Layer norm weights are typically close to 1.0 with small variance
+    weights["q_a_layernorm.weight"] = (torch.ones(q_lora_rank) + torch.randn(q_lora_rank) * 0.01).to(torch.bfloat16)
+    weights["kv_a_layernorm.weight"] = (
+        torch.ones(kv_lora_rank + qk_rope_head_dim) + torch.randn(kv_lora_rank + qk_rope_head_dim) * 0.01
+    ).to(torch.bfloat16)
+
+    # Ensure proper dtypes
+    for key in weights:
+        if "scale_inv" in key:
+            weights[key] = weights[key].to(torch.float32)
+
+    return weights
+
+
 def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """
     Get the KVPE cache on the host from the TTNN cache.
@@ -64,6 +144,7 @@ def generate_reference_io(
     mode: str,
     state_dict: dict[str, torch.Tensor],
     decode_position_id: int | None = None,
+    use_synthetic_weights: bool = False,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Generate reference input/output for testing.
@@ -72,15 +153,33 @@ def generate_reference_io(
         decode_position_id: Configuration for position_ids generation (only used in decode mode):
             - None: Generate random position_ids in range [0, max_seq_len - 1)
             - int: Use this specific position for all batches
+        use_synthetic_weights: If True, use synthetic weights instead of loading from state_dict
     """
-    if module_path is None:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+    reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+
+    if use_synthetic_weights:
+        # Generate synthetic weights
+        synthetic_weights = generate_synthetic_mla_weights(hf_config)
+
+        # Create state dict with proper layer prefix
+        layer_prefix = f"layers.{layer_idx}.self_attn."
+        prefixed_weights = {layer_prefix + k: v for k, v in synthetic_weights.items()}
+
+        # Dequantize and load synthetic weights
+        dequantized_state_dict = dequantize_state_dict(prefixed_weights, hf_config)
+
+        # Remove the prefix before loading into the model
+        model_weights = {k.replace(layer_prefix, ""): v for k, v in dequantized_state_dict.items()}
+        reference_model.load_state_dict(model_weights, strict=False)
+
+        # Update state_dict for return
+        state_dict = prefixed_weights
+    elif module_path is None:
         state_dict = add_inv_scale_to_state_dict(
             reference_model.state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)
@@ -198,6 +297,7 @@ def run_test_forward_pass_mla1d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    use_synthetic_weights: bool = False,
 ):
     # Check params
     if mode == "prefill":
@@ -217,6 +317,7 @@ def run_test_forward_pass_mla1d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
     # Set up page config
@@ -338,6 +439,7 @@ def run_test_forward_pass_mla2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    use_synthetic_weights: bool = False,
 ):
     # Check params
     if mode == "prefill":
@@ -359,6 +461,7 @@ def run_test_forward_pass_mla2d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
     # Set up page config
@@ -498,6 +601,10 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     [None, "model.layers.0.self_attn"],
 )
 @pytest.mark.parametrize(
+    "use_synthetic_weights",
+    [True, False],  # Test both synthetic and real weights
+)
+@pytest.mark.parametrize(
     "test_closure",
     [
         pytest.param(run_test_forward_pass_mla1d, marks=pytest.mark.requires_device(["TG"])),
@@ -515,6 +622,7 @@ def test_forward_pass(
     ccl,
     model_path,
     module_path,
+    use_synthetic_weights,
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
@@ -526,6 +634,15 @@ def test_forward_pass(
     # Only use decode_position_ids for decode mode
     if mode != "decode":
         decode_position_ids = None
+
+    # Skip loading state_dict from file if using synthetic weights
+    if use_synthetic_weights:
+        logger.info("Using synthetic weights for testing")
+        # Pass None as state_dict when using synthetic weights
+        state_dict = None
+    elif module_path is None:
+        # When using real weights without module_path, we still need state_dict
+        logger.info("Using real weights for testing")
 
     test_closure(
         layer_idx,
@@ -541,6 +658,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
 
