@@ -200,7 +200,7 @@ void matmul_multi_core(
     const uint32_t Nt = N / TILE_WIDTH;
 
     // Assume fixed grid size
-    CoreCoord core_grid = {5, 5};
+    CoreCoord core_grid = {10, 10};
     CoreCoord max_core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
     log_info(tt::LogAlways, "Using core grid size of ({} x {}) out of available core grid size of ({} x {})", core_grid.x, core_grid.y, max_core_grid.x, max_core_grid.y);
     TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size.");

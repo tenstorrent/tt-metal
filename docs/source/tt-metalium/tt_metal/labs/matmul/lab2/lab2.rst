@@ -270,8 +270,8 @@ Any cores without kernels created on them will remain idle for that program. In 
 
 To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then
 create CBs and kernels on all cores in ``all_cores``, passing appropriate runtime arguments to the kernels.
-To use fewer cores, you can modify core grid by selecting only a subset of cores. For example, to use only half the cores, you could simply
-selecting only the first half of the cores in the ``y`` dimension and pass that modified core grid to the work-splitting helper.
+To use fewer cores, you can modify core grid to select only a subset of cores simply by modifying the
+``x`` and ``y`` dimensions of the core grid before passing it to the work-splitting helper.
 The rest of the code can usually remain the same, because the work-splitting helper automatically distributes the work evenly among
 the smaller set of cores.
 As a result, the same total number of output tiles ends up spread across this reduced set of cores, with each tile still computed exactly once.
@@ -288,12 +288,10 @@ In this exercise, you will:
 #. Verify correctness by comparing the result against the CPU reference implementation.
 #. Run the same workload using:
 
+   * Work distributed over a ``5x5`` core grid
+   * Work distributed over a ``10x10`` core grid
    * Work distributed over **all** available compute cores.
-   * Work distributed over **half** of the available compute cores.
-   * Work distributed over **one fifth** of the available compute cores.
-   
-   Note that depending on device type, you may not be able to use precisely one fifth of the cores.
-   If the number of cores is not divisible by 5, simply round down to the nearest integer.
+
 #. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
 #. Plot a speedup plot comparing the performance of the three runs relative to the single core implementation from Lab 1.
 
@@ -666,210 +664,85 @@ Steps
 #. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels.
    Note that in this case it is not required to use the ``split_work_to_cores`` function,
    because we are making a simplifying assumption that number of tiles divides evenly into the
-   number of cores in the appropriate dimension.
+   number of cores in the appropriate dimension. You can simply iterate over the ``x`` and ``y``
+   dimensions of the core grid, construct ``CoreCoord`` for each coordinate and set the runtime
+   arguments for the corresponding core.
 
-There are two distinct ways in which Tenstorrent architecture allows storing partial results in on-chip memory:
+#. **Verify correctness**
 
-* Using a **circular buffer** in on-chip SRAM.
-  As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used as
-  temporary storage for partial results.
-* Using **destination registers** in Tensix cores.
-  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-  While previously we only used a single tile in the destination register array, the TT-Metalium
-  programming model exposes the array holding up to 8 tiles of data.
-  In blocked matrix multiplication, we will use the destination register array to hold
-  a subset of partial results.
-
-
-
-
-
-An optimized multi-core matmul can reduce this overhead by:
-
-* Grouping tiles into **blocks** and **subblocks**.
-
-* Keeping partial results for a subblock in an **intermediate circular buffer** in L1.
-
-* Reloading and updating those partial results while iterating over blocks along the inner dimension.
-
-In this section, we briefly outline these ideas so that you can implement a data reuse optimization in Exercise 2.
-
-
-Blocks, Subblocks, and Parameter Utilities
-==========================================
-
-So far, we have thought in terms of tiles only.
-For data reuse, it is useful to introduce two higher-level concepts:
-
-* A **block**, which groups multiple tiles together for a portion of the matmul.
-
-* A **subblock**, which further partitions a block into smaller regions that map conveniently to the core grid and to circular buffer capacity.
-
-Helper utilities (for example, in a ``bmm_op`` header) can compute an efficient block and subblock layout based on:
-
-* The number of tiles in the output matrix (``Mt`` and ``Nt``).
-
-* The number of cores in each dimension of the compute grid.
-
-* A chosen block width along the inner dimension.
-
-A function such as
-
-.. code-block:: cpp
-
-   auto matmul_params =
-       bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
-
-can return values such as:
-
-* The number of output tiles per core in each dimension.
-
-* The height and width of each output subblock (in tiles).
-
-* The number of tiles in each subblock and the number of blocks along the inner dimension.
-
-You can then choose subblock shapes from a small set of well-performing choices, or let the helper select appropriate shapes for you.
-The goal is to ensure that each core:
-
-* Owns a well-defined region (in terms of subblocks) of the output tensor.
-
-* Processes that region by iterating over blocks along the inner dimension, reusing input tiles and partial results as much as possible.
-
-
-Intermediate Circular Buffer for Partial Results
-================================================
-
-The central idea in the data reuse optimization is to maintain **partial results** on-chip while processing multiple blocks along the inner dimension.
-To do this, you introduce an additional circular buffer in L1 that serves as an **intermediate results buffer**.
-
-The configuration is as follows:
-
-* Both the final output circular buffer (for example, indexed by ``c_16``) and the intermediate buffer
-  (for example, indexed by another index such as ``c_24``) are created on all participating cores.
-
-* Each buffer uses the same data format and tile size, and the capacity is chosen to hold all tiles needed
-  for one subblock of partial or final results.
-
-During computation, the compute kernel uses this intermediate buffer in three phases:
-
-1. When a subblock of output tiles is processed for the **first** block along ``K``,
-   partial results are computed with ``matmul_tiles`` and stored into the intermediate
-   circular buffer using ``pack_tile`` and ``cb_push_back``.
-
-2. For subsequent blocks along ``K``, the kernel reloads those partial results from the intermediate buffer
-   using ``cb_wait_front`` and ``copy_tile``, and then continues to accumulate additional contributions
-   using ``matmul_tiles``.
-
-3. After all blocks for that subblock have been processed, the final results are either written from the intermediate buffer to the output buffer or packed directly from the destination registers into the output buffer, and the space in the intermediate buffer is freed using ``cb_pop_front``.
-
-A Boolean flag in the compute kernel can control whether partial results are reloaded and reused.
-This approach avoids repeatedly writing intermediate results to device memory and reading them back, relying instead on circular buffers in L1 to hold partial sums.
-
-
-Kernel Structure with Data Reuse
-================================
-
-A multi-core matmul with data reuse typically uses three kinds of kernels, as before:
-
-* A **reader kernel** that reads tiles of ``A`` and ``B`` from device memory into L1 based on block and subblock parameters.
-  Its runtime arguments encode tensor device addresses (obtained from ``Tensor`` objects on the host), starting tile indices, strides, and block sizes.
-
-* A **writer kernel** that writes tiles from L1 to the output tensor in device memory for the appropriate subblocks of the output matrix, also using tensor addresses and stride information supplied at runtime.
-
-* A **compute kernel** that initializes the matmul engine, uses an intermediate circular buffer to reload and update partial results, and calls ``matmul_tiles`` for each pair of input tiles in a block/subblock.
-
-On the host side, compile-time arguments for the compute kernel specify block and subblock sizes and counts, while runtime arguments for reader and writer kernels specify concrete tensor addresses, strides, and output regions.
-The device-side behavior still follows the reader-compute-writer pattern from Lab 1, but now each core:
-
-* Owns a region of the output tensor defined in terms of blocks and subblocks.
-
-* Iterates over blocks in the inner dimension, reusing partial results stored in the intermediate buffer.
-
-
-Exercise 2: Multi Core Matrix Multiplication with Data Reuse
-============================================================
-
-In this exercise, you will implement a multi-core matrix multiplication that uses **data reuse** on the device, based on the block/subblock and intermediate-buffer ideas described above.
-You will use **all available compute cores** and compare performance to the best multi-core implementation from Exercise 1.
-As before, device data for ``A``, ``B``, and ``C`` should be represented with the ``Tensor`` class; you should not introduce low-level raw buffer objects on the host.
-
-Steps
------
-
-1. **Create a new program for data reuse**
-
-   Starting from your multi-core matmul host program from Exercise 1, create a new directory (for example, ``lab2_matmul_multicore_reuse``) and copy your code into it under a new executable name.
-   You will extend this program to add block/subblock structure and an intermediate circular buffer.
-
-2. **Reuse matrix dimensions and tensors**
-
-   Use the same matrix sizes as in Exercise 1 so that you can compare performance directly.
-   Continue to construct ``Tensor`` objects for ``A``, ``B``, and ``C`` in tiled layout from host vectors, and compute a CPU golden result.
-
-3. **Introduce blocks and subblocks**
-
-   Integrate a parameter utility that, given ``Mt``, ``Nt``, and the number of cores in each dimension, computes:
-
-   * The number of output tiles per core.
-
-   * The subblock height and width (in tiles).
-
-   * The number of tiles in each subblock and the number of blocks along the inner dimension.
-
-   Adjust your core assignment so that each core is responsible for a set of output subblocks rather than individual tiles.
-
-4. **Configure circular buffers, including an intermediate buffer**
-
-   On all participating cores, create circular buffers for:
-
-   * Input tiles of ``A`` and ``B``.
-
-   * Output tiles of ``C``.
-
-   * An **intermediate** circular buffer for partial results, with capacity sufficient for all tiles in a subblock.
-
-   Ensure that the data format and tile size of the intermediate buffer match those of the output buffer.
-
-5. **Implement kernels with data reuse**
-
-   Modify or replace your reader, compute, and writer kernels so that:
-
-   * The reader kernel reads tiles of ``A`` and ``B`` according to block and subblock parameters and places them into circular buffers.
-
-   * The compute kernel:
-
-     - For the first block along the inner dimension, computes partial results for a subblock with ``matmul_tiles``
-       and writes them into the intermediate buffer.
-
-     - For subsequent blocks, reloads partial results from the intermediate buffer, adds new contributions with
-       ``matmul_tiles``, and writes updated partial results back into the intermediate buffer.
-
-     - After processing the last block for a subblock, writes final results into the output circular buffer.
-
-   * The writer kernel writes tiles from the output circular buffer into the correct region of the output tensor in device memory.
-
-   Use compile-time arguments for the compute kernel to specify block and subblock properties, and runtime arguments (including tensor addresses) for reader and writer kernels to specify where the data resides and where results should go.
-
-6. **Verify correctness**
-
-   Run your data reuse implementation and compare the output tensor to the CPU golden matrix multiplication.
-   Read the result tensor back into a host vector, untilize it, and confirm that differences are within the expected range for computations using ``bfloat16`` and 32-bit accumulation.
+   Run your data reuse implementation and compare the output tensor to the reference implementation
+   to ensure that the results are correct.
 
 7. **Profile and compare performance**
 
-   Finally, profile your data reuse implementation using the device profiler:
+   Finally, profile your data reuse implementation using the device profiler for the follwoing cases:
 
-   * Build in Release mode, with DPRINT disabled.
+   * ``5x5`` core grid
+   * ``10x10`` core grid
 
-   * Run your program with the profiler enabled and compute the total firmware time from the log, as in Lab 1 and Exercise 1.
+   Compare the firmware time of the data reuse implementation against the basic multi-core implementation
+   with equivalent core grid sizes from Exercise 1.
 
-   Compare the firmware time of the data reuse implementation against:
+**Important Note**
 
-   * The all-cores SPMD implementation from Exercise 1.
+If you are working on a device with fewer than 100 Tensix cores, adjust the core grid sizes and/or matrix sizes
+accordingly to ensure that the number of tiles divides evenly into the number of cores in the appropriate dimension.
 
-   * (Optionally) the half-cores SPMD implementation.
 
-   Comment on how much performance improvement, if any, you observe from data reuse, and relate this to the reduction in device memory traffic and the additional complexity of managing blocks, subblocks, intermediate buffers, and per-core parameters.
+Potential Additional Optimizations
+==================================
+
+In this lab you explored basic optimizations to implement data reuse in a multi-core matrix multiplication program.
+There are many other ways in which the code could be further optimized. Here we list some examples:
+
+#. **Use multiple destination registers in the destination register array.**
+  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
+  While previously we only used a single tile in the destination register array, the TT-Metalium
+  programming model exposes the array holding up to 8 tiles of data.
+  We could leverage this extra storage to keep multiple output tiles active at once.
+  By doing this, you can amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
+  data is packed into CBs. Conceptually,  instead of computing a single output tile, packing it, and then moving on
+  to the next, you compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
+  corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
+  you pack all of its tiles out together in a batch.
+  This better matches the hardware's vectorization and register file structure and typically provides a throughput improvement.
+
+#. **Subblocking the Output**
+   On top of using multiple destination registers, you can go further by introducing subblocking:
+   instead of treating everything a core is responsible for as one big output region, you break
+   that region into smaller rectangular patches. The main motivation for this is reduction in on-chip memory usage.
+   A smaller patch means fewer output tiles need to live in registers at once and fewer partial results need to be
+   stored in the intermediate buffer. That makes it easier to keep the active data set within on-chip memory limits,
+   allowing more aggressive blocking along the inner dimension, and often enables larger overall matrix sizes without
+   exceeding on-chip memory limits. 
+   
+   Mechanically, subblocking just adds one more level of tiling around the loops you already have.
+   Rather than sweeping the entire per-core output area in a single nested loop, you first step over patches,
+   and inside each patch you iterate over its local tile coordinates. For each patch you reload its partial
+   results into the destination registers, run the inner dimension accumulation for that patch, and then
+   store updated results back to the appropriate buffer. The overall pattern of blocking along the inner dimension,
+   using an intermediate buffer for partial results, and exploiting multiple destination registers stays the same.
+   Subblocking simply applies it to a smaller output region at a time so the live data footprint is more tightly controlled.
+
+#. **Sharing Memory for Output and Intermediate CBs**
+   Given that the amount of on-chip SRAM is limited, TT-Metalium CBs support sharing the same memory region for multiple CBs.
+   We can exploit this by observing that partial results and output results are never "live" at the same time;
+   we always finish consuming one before we start writing the other. 
+   dedicating a separate region for partial results means less room for inputs or larger tiles.
+
+   In practice, this is done by configuring a single circular buffer allocation and exposing it through two logical views
+   (two different CB indices) that point into the same physical memory. The kernel then enforces a strict ordering:
+   wait for all tiles in a given range to be written out, reuse that range as intermediate storage for partials,
+   and only after those partials are fully consumed reuse it again for final output. 
+
+#. **Batching Tile Reads and Writes**
+   Another possible optimization is to read multiple tiles that are contiguous in memory, instead of one tile at a time.
+   In the exercises so far, each tile for ``A`` or ``B`` is fetched with its own DRAM read, which is simple but incurs a
+   lot of small transfers and per-read overhead. Because the matrices are stored in tiled layout, with tiles stored in row-major order,
+   the tiles needed for a contiguous segment of a row are also contiguous in memory.
+   That means a core can reserve space for multiple tiles (e.g. an entire row slice of a K-block) in its circular buffer and then
+   read all those tiles at once, reducing the number of DRAM transactions, which usually improves effective bandwidth,
+   and lowers the per-tile cost of getting data into on-chip SRAM.
 
 
 Conclusion
@@ -878,12 +751,14 @@ Conclusion
 In this lab you extended your understanding of matrix multiplication on Tenstorrent devices beyond a single core.
 You saw how:
 
-* The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully distributing output tiles among cores, while continuing to use high-level ``Tensor`` objects to represent device-resident matrices.
+* The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully
+distributing output tiles among cores.
 
-* TT-Metalium's static parallelism model requires you to **explicitly choose which cores participate** and how many tiles each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.
+* TT-Metalium's static parallelism model requires you to **explicitly choose which cores participate** and how many tiles
+  each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.
 
-* Introducing **data reuse** through blocks, subblocks, and intermediate circular buffers allows partial results to remain on-chip across multiple passes over the inner dimension, reducing traffic to device memory and often improving performance.
+* Introducing **data reuse** through blocking and intermediate CBs allows partial results to remain on-chip across multiple passes
+  over the inner dimension, reducing traffic to device memory and often improving performance.
 
 The concepts introduced here, multi-core work distribution and data reuse, are fundamental when scaling workloads on Tenstorrent devices.
-They also provide a foundation for more advanced topics such as data multicast and fused kernels.
-For further details and advanced examples, you can refer to the TT-Metalium documentation and associated programming examples in the TT-Metalium repository.
+They also provide a foundation for more advanced topics.
