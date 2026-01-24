@@ -497,7 +497,7 @@ public:
     }
 
     /**
-     * Pack a single channel's credit value into a container
+     * Pack a single channel's credit value into a new container
      */
     FORCE_INLINE static PackedValueType pack_channel(uint8_t channel_id, uint32_t value) {
         return PackedValueType{static_cast<storage_type>(value) << bit_offset(channel_id)};
@@ -506,6 +506,21 @@ public:
     template <uint8_t CHANNEL>
     FORCE_INLINE static PackedValueType pack_channel(uint32_t value) {
         return pack_channel(CHANNEL, value);
+    }
+
+    /**
+     * Pack a single channel's credit value into an existing container
+     * Returns the modified container
+     */
+    FORCE_INLINE static PackedValueType pack_channel(PackedValueType& packed, uint8_t channel_id, uint32_t value) {
+        packed.value |= static_cast<storage_type>(value) << bit_offset(channel_id);
+        return packed;
+    }
+
+    template <uint8_t CHANNEL>
+    FORCE_INLINE static PackedValueType pack_channel(PackedValueType& packed, uint32_t value) {
+        packed.value |= static_cast<storage_type>(value) << bit_offset(CHANNEL);
+        return packed;
     }
 
     /**
