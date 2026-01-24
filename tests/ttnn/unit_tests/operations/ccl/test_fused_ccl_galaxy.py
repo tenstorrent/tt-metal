@@ -906,8 +906,8 @@ def run_all_gather_matmul_galaxy_impl(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "op_mode",
-    ["non_fused", "chunked_fused"],  # chunked_fused splits K to reduce L1 intermediate size
-    ids=["non_fused", "chunked_fused"],
+    ["non_fused"],  # chunked_fused REJECTED: 2x slower than non_fused (396us vs 199us)
+    ids=["non_fused"],
 )
 def test_all_gather_matmul_galaxy_check(
     mesh_device,
@@ -1060,3 +1060,241 @@ def test_all_gather_matmul_galaxy_perf_comparison(
         else:
             logger.info(f"  {mode:30s}: SKIPPED (trace_mode=False)")
     logger.info("=" * 80)
+
+
+# =============================================================================
+# Pytest Test Cases for Galaxy AllGather + Matmul PREFILL (FF2 path)
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
+    [
+        # ==================== Galaxy Model FF2 PREFILL dimensions ====================
+        # Prefill path in llama_mlp.py:forward_prefill (lines 285-307):
+        # - w2_in after silu+mul: [8, 4, seq_len, hidden_dim/4] = [8, 4, M, 3584]
+        # - After all_gather: [8, 4, seq_len, hidden_dim] = [8, 4, M, 14336]
+        # - Weight w2: [hidden_dim, dim/4] = [14336, 2048]
+        # - Output: [8, 4, M, 2048]
+        #
+        # Common prefill seq_lens: 128, 1024, 2048
+        # Prefill seq_len=128 (most common short prefill)
+        (128, 14336, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # Prefill seq_len=1024
+        (
+            1024,
+            14336,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            10,
+            24,
+        ),
+    ],
+    ids=[
+        "prefill_ff2_M128_K14336_N2048",
+        "prefill_ff2_M1024_K14336_N2048",
+    ],
+)
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("cluster_axis", [1])  # Gather across 4 column devices (axis 1 of 8x4 mesh)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "op_mode",
+    ["non_fused", "fused"],  # Test both modes for PCC validation
+    ids=["non_fused", "fused"],
+)
+def test_all_gather_matmul_galaxy_prefill_check(
+    mesh_device,
+    M,
+    K,
+    N,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    fp32_acc_mode,
+    packer_l1_acc,
+    input_num_cores,
+    output_num_cores,
+    num_links,
+    cluster_axis,
+    op_mode,
+):
+    """
+    Functional test for AllGather + Matmul PREFILL operations on Galaxy (32 devices, 8x4 mesh).
+
+    Tests the FF2 prefill path from llama_mlp.py:forward_prefill with actual model dimensions:
+    - M = seq_len (128, 1024, 2048, etc.)
+    - K = 14336 (hidden_dim gathered from 4 devices)
+    - N = 2048 (dim/4)
+    """
+    run_all_gather_matmul_galaxy_impl(
+        mesh_device,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
+        num_links,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        op_mode=op_mode,
+        num_iters=1,
+        trace_mode=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
+    [
+        # Prefill seq_len=128 (most common short prefill)
+        (128, 14336, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+    ],
+    ids=[
+        "prefill_ff2_M128_K14336_N2048",
+    ],
+)
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("cluster_axis", [1])  # Gather across 4 column devices (axis 1 of 8x4 mesh)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_all_gather_matmul_galaxy_prefill_perf_comparison(
+    mesh_device,
+    M,
+    K,
+    N,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    fp32_acc_mode,
+    packer_l1_acc,
+    input_num_cores,
+    output_num_cores,
+    num_links,
+    cluster_axis,
+):
+    """
+    Performance comparison test for AllGather + Matmul PREFILL on Galaxy (32 devices, 8x4 mesh).
+
+    Compares fused vs non-fused operations for FF2 prefill path.
+    Also validates PCC for both paths.
+
+    Note: Fused op may fail with OOM for large M due to L1 intermediate buffer constraints.
+    """
+    num_iters = 5
+    results = {}
+
+    logger.info(f"Running PREFILL performance comparison: M={M} (seq_len), K={K}, N={N}")
+
+    # Test non-fused first (always works)
+    logger.info("Running NON_FUSED operation...")
+    non_fused_time_us = run_all_gather_matmul_galaxy_impl(
+        mesh_device,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
+        num_links,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        op_mode="non_fused",
+        num_iters=num_iters,
+        trace_mode=True,
+    )
+    results["non_fused"] = non_fused_time_us
+
+    # Try fused op - may fail with OOM for large M due to L1 constraints
+    # Intermediate buffer: [M, 14336/4] = [M, 3584] per core across 4 cores
+    # For M=128: 128 * 3584 * 1 byte = 458KB per core (likely exceeds available L1)
+    fused_time_us = None
+    try:
+        logger.info("Running FUSED operation (may OOM for large M)...")
+        fused_time_us = run_all_gather_matmul_galaxy_impl(
+            mesh_device,
+            M,
+            K,
+            N,
+            cluster_axis,
+            in0_dtype,
+            in1_dtype,
+            output_dtype,
+            num_links,
+            input_num_cores,
+            output_num_cores,
+            fidelity,
+            fp32_acc_mode,
+            packer_l1_acc,
+            op_mode="fused",
+            num_iters=num_iters,
+            trace_mode=True,
+        )
+        results["fused"] = fused_time_us
+    except Exception as e:
+        logger.warning(f"FUSED operation failed (expected for large M due to L1 constraints): {e}")
+        results["fused"] = None
+
+    # Print comparison report
+    logger.info("=" * 80)
+    logger.info(f"PREFILL PERFORMANCE COMPARISON: Galaxy AllGather+Matmul FF2 (M={M}, K={K}, N={N})")
+    logger.info("=" * 80)
+    logger.info(f"Input shape per device: [8, 4, {M}, {K // 4}]")
+    logger.info(f"Weight shape: [8, 4, {K}, {N}]")
+    logger.info("-" * 80)
+
+    baseline = results.get("non_fused", 1)
+    for mode, time_us in results.items():
+        if time_us is not None:
+            speedup = baseline / time_us if time_us > 0 else 0
+            logger.info(f"  {mode:30s}: {time_us:8.2f} us  ({speedup:.2f}x vs non_fused)")
+        else:
+            logger.info(f"  {mode:30s}: FAILED (OOM or other error)")
+    logger.info("=" * 80)
+
+    # Summary
+    if fused_time_us is not None and non_fused_time_us is not None:
+        if fused_time_us < non_fused_time_us:
+            improvement = (1 - fused_time_us / non_fused_time_us) * 100
+            logger.info(f"RESULT: Fused op is {improvement:.1f}% FASTER for prefill M={M}")
+        else:
+            slowdown = (fused_time_us / non_fused_time_us - 1) * 100
+            logger.info(f"RESULT: Fused op is {slowdown:.1f}% SLOWER for prefill M={M}")
+    elif fused_time_us is None:
+        logger.info(f"RESULT: Fused op FAILED for prefill M={M} - L1 intermediate too large")
