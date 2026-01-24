@@ -786,9 +786,10 @@ def run_all_gather_matmul_galaxy_impl(
         - Memory efficient for large K
         """
         outs = []
+        dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
 
         # all_reduce_async requires WIDTH_SHARDED input
-        # Create sharded memory config for matmul output and all_reduce
+        # Create sharded memory config for all_reduce
         allreduce_num_cores = 24  # Use same core count as output
         allreduce_N_per_shard = round_up(math.ceil(N / allreduce_num_cores), ttnn.TILE_SIZE)
         allreduce_core_range_set = ttnn.CoreRangeSet(
@@ -807,17 +808,20 @@ def run_all_gather_matmul_galaxy_impl(
         for i in range(n_iters):
             # Step 1: Local matmul - each device computes partial result
             # input per device: [M, K_per_device], weight chunk per device: [K_per_device, N]
-            # Output to WIDTH_SHARDED for all_reduce_async compatibility
-            partial_out = ttnn.linear(
+            # Output to DRAM first (input tensor has different shard grid)
+            partial_out_dram = ttnn.linear(
                 tt_input_tensor,  # [M, K_per_device] = [32, 3584] per device
                 tt_in1_chunked_tensor,  # Chunked weight [K_per_device, N] = [3584, 2048] per device
-                memory_config=allreduce_sharded_mem_config,
+                memory_config=dram_interleaved,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
-                core_grid=ttnn.CoreGrid(y=4, x=6),  # Match sharded config (6x4)
+                core_grid=ttnn.CoreGrid(y=7, x=10),  # Full grid for DRAM output
             )
 
-            # Step 2: AllReduce to sum partial results across devices
+            # Step 2: Reshard to WIDTH_SHARDED for all_reduce_async
+            partial_out = ttnn.to_memory_config(partial_out_dram, allreduce_sharded_mem_config)
+
+            # Step 3: AllReduce to sum partial results across devices
             # all_reduce_async requires WIDTH_SHARDED input
             mm_out = ttnn.experimental.all_reduce_async(
                 partial_out,
