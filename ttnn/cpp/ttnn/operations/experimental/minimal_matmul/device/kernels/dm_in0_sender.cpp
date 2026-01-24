@@ -319,21 +319,43 @@ void kernel_main() {
 
 #ifdef FUSE_TERNARY
             if constexpr (!is_output_writer) {
-                // TODO: Add fused addcmul tensor reading support
+                // Read ternary tensors for the current M x N output block
                 cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
                 cb_reserve_back(cb_id_ternary_b, out_block_num_tiles);
 
                 uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
                 uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
 
-                // Iterate on M and N dimensions of current block
-                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_tile(n_tile_id, ternary_a_reader, l1_write_addr_ternary_a);
-                    noc_async_read_tile(n_tile_id, ternary_b_reader, l1_write_addr_ternary_b);
-                    l1_write_addr_ternary_a += ternary_a_tile_size;
-                    l1_write_addr_ternary_b += ternary_b_tile_size;
-                }
-                noc_async_read_barrier();
+                // Iterate over M and N dimensions of current block
+                // for (uint32_t m_tile_id = m_tile; m_tile_id < m_tile_end; m_tile_id++) {
+                //     for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
+                //         uint32_t tile_id = m_tile_id * N_tiles + n_tile_id;
+                //         noc_async_read_tile(tile_id, ternary_a_reader, l1_write_addr_ternary_a);
+                //         noc_async_read_tile(tile_id, ternary_b_reader, l1_write_addr_ternary_b);
+                //         l1_write_addr_ternary_a += ternary_a_tile_size;
+                //         l1_write_addr_ternary_b += ternary_b_tile_size;
+                //     }
+                // }
+                // noc_async_read_barrier();
+
+                read_ternary_block_sync<M_block_tiles, N_block_tiles>(
+                    ternary_a_reader,
+                    out_shape,
+                    l1_write_addr_ternary_a,
+                    ternary_a_tile_size,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
+                read_ternary_block_sync<M_block_tiles, N_block_tiles>(
+                    ternary_b_reader,
+                    out_shape,
+                    l1_write_addr_ternary_b,
+                    ternary_b_tile_size,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
 
                 cb_push_back(cb_id_ternary_a, out_block_num_tiles);
                 cb_push_back(cb_id_ternary_b, out_block_num_tiles);

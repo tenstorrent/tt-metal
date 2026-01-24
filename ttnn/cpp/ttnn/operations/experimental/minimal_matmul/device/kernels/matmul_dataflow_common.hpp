@@ -165,6 +165,38 @@ void read_in1_block_sync(
     noc_async_read_barrier();
 }
 
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_ternary_block_sync(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t write_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            if (j >= shape.logical_d1) {
+                write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            } else {
+                fill_zeros_async(write_ptr, tile_size_bytes);
+            }
+            write_ptr += tile_size_bytes;
+        }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
+        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    noc_async_read_barrier();
+}
+
 /**
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N
