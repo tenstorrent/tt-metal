@@ -51,7 +51,7 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     fi
 
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI_new"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="DUAL"
 
     local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
