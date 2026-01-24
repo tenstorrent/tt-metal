@@ -14,7 +14,7 @@ from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
@@ -75,6 +75,60 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
     reshaped = input_tensor.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
     transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
     return transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
+
+
+@pytest.mark.parametrize("nhw", [(3, 64, 64)])
+# @pytest.mark.parametrize("channels", [3, 32, 268, 320])
+@pytest.mark.parametrize("channels", [256, 288])
+@pytest.mark.parametrize("stride", [(16, 16)])
+@pytest.mark.parametrize("padding", [(0, 0)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32])
+def test_fold_with_permute_for_dram_tensor_fp32(device, nhw, channels, stride, padding, input_layout, input_dtype):
+    batch_size, height, width = nhw
+    stride_h, stride_w = stride
+
+    if input_dtype == ttnn.bfloat8_b and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b with row major layout is not supported")
+    # Handle both symmetric and asymmetric padding
+    if len(padding) == 2:
+        # Symmetric padding: [pad_h, pad_w]
+        padded_h = height + 2 * padding[0]
+        padded_w = width + 2 * padding[1]
+        has_padding = padding[0] > 0 or padding[1] > 0
+    elif len(padding) == 4:
+        # Asymmetric padding: [top, bottom, left, right]
+        padded_h = height + padding[0] + padding[1]
+        padded_w = width + padding[2] + padding[3]
+        has_padding = any(p > 0 for p in padding)
+    else:
+        pytest.skip(f"Invalid padding format: {padding}")
+
+    # Skip invalid combinations where padding makes dimensions not divisible by stride
+    if has_padding and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("ttnn::pad with tile layout does not support front padding yet")
+    if padded_h % stride_h != 0 or padded_w % stride_w != 0:
+        pytest.skip(
+            f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
+        )
+
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.float32)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+
+    torch_output_tensor = fold_torch(torch_input_tensor_nhwc, stride_h, stride_w, padding=padding)
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_nhwc, input_dtype, layout=input_layout, device=device, memory_config=input_memory_config
+    )
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=list(padding),
+    )
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])

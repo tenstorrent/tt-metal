@@ -112,6 +112,11 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
+        std::cout << "Using slow untilize in "
+                     "untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp"
+                  << std::endl;
+        std::cout << "num_tiles_per_block: " << num_tiles_per_block << std::endl;
+        std::cout << "a.dtype(): " << a.dtype() << std::endl;
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =

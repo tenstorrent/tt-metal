@@ -187,6 +187,8 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
                 (uint32_t)src0_cb_index,           // src_cb_id
                 (uint32_t)output_cb_index          // out_cb_id
             };
+            std::cout << "Using slow untilize in upsample_program_factory_multicore_interleaved.cpp" << std::endl;
+            std::cout << "!!!in group core 1" << std::endl;
 
             tt::tt_metal::CreateKernel(
                 program,
@@ -203,7 +205,8 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
                 (uint32_t)src0_cb_index,           // src_cb_id
                 (uint32_t)output_cb_index          // out_cb_id
             };
-
+            std::cout << "Using slow untilize in upsample_program_factory_multicore_interleaved.cpp" << std::endl;
+            std::cout << "!!!in group core 2" << std::endl;
             tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
