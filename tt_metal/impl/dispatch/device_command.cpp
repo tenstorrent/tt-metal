@@ -538,7 +538,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged_with_custom_inline_
     uint32_t pages,
     uint32_t inline_data_sizeB,
     const void* data) {
-    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? inline_data_sizeB : 0);
+    // When using custom inline size, always account for inline data in payload (e.g., alignment prefix bytes)
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + inline_data_sizeB;
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
     auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
