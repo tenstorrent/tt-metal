@@ -64,8 +64,14 @@ void add_bias_and_addcmul_block(
     uint32_t out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
+    // Initialize based on whether bias is fused
+#ifdef FUSE_BIAS
     add_bcast_rows_init_short(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
+#else
+    unary_op_init_common(in_cb, out_cb);
+    copy_tile_to_dst_init_short(in_cb);
+#endif
     pack_reconfig_data_format(out_cb);
     constexpr uint32_t fused_act_dst_id = 0;
 
@@ -77,9 +83,23 @@ void add_bias_and_addcmul_block(
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             acquire_dst();
 
+#ifdef FUSE_TERNARY
+            // Read ternary tensors into destination registers
+            reconfig_data_format_srca(ternary_a_cb);
+            copy_tile_init(ternary_a_cb);
+            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
+
+            reconfig_data_format_srca(ternary_b_cb);
+            copy_tile_init(ternary_b_cb);
+            copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
+#endif  // FUSE_TERNARY
+
 #ifdef FUSE_BIAS
+            reconfig_data_format(in_cb, bias_cb);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #else
+            reconfig_data_format_srca(in_cb);
+            copy_tile_init(in_cb);
             copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
 #endif
 
@@ -88,14 +108,21 @@ void add_bias_and_addcmul_block(
 #endif
 
 #ifdef FUSE_TERNARY
-            // TO-CHECK: may require reconfig of ternary_a_cb and ternary_b_cb
-            // First version: Use SFPU addcmul
-            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
-            copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
+            // Reconfigure data format for reading ternary tensors
+            // reconfig_data_format(ternary_a_cb, ternary_b_cb);
 
+            // fill_tile_init();
+            // fill_tile(ternary_b_dst_id, 5.f);
+            // fill_tile(ternary_a_dst_id, 4.f);
+
+            // Perform addcmul: output = ternary_a + (scalar * matmul_result * ternary_b)
             addcmul_tile_init();
             addcmul_tile<DataFormat::Float16_b>(
-                fused_act_dst_id, ternary_a_dst_id, ternary_b_dst_id, fused_act_dst_id, scalar_value);
+                ternary_a_dst_id,  // idst0: base value (from ternary_a)
+                fused_act_dst_id,  // idst1: matmul+bias result
+                ternary_b_dst_id,  // idst2: multiplier (from ternary_b)
+                fused_act_dst_id,  // odst: output destination
+                scalar_value);     // value: scalar multiplier
 #endif
 
             pack_tile(fused_act_dst_id, out_cb);
@@ -179,6 +206,11 @@ void kernel_main() {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+
+    // const uint32_t num_tiles = (M_end_tile - M_start_tile) * (N_end_tile - N_start_tile);
+    // DPRINT_MATH(
+    //     DPRINT << "num_tiles = " << num_tiles << ENDL();
+    // );
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
