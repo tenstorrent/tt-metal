@@ -528,7 +528,6 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
 }
 
 template <bool hugepage_write>
-template <bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_paged_with_custom_inline_size(
     bool flush_prefetch,
     uint8_t is_dram,
@@ -560,13 +559,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged_with_custom_inline_
         initialize_write_cmd(write_cmd_dst);
     }
 
-    if (inline_data) {
-        TT_ASSERT(data != nullptr);  // compiled out?
-        this->add_data(data, inline_data_sizeB, inline_data_sizeB);
-        // Increment wr offset to aligned address only if data is inline. Out-of-line data will
-        // follow right after the command, so defer alignment to after it.
-        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
-    }
+    TT_ASSERT(data != nullptr);
+    this->add_data(data, inline_data_sizeB, inline_data_sizeB);
+    // Increment wr offset to aligned address only if data is inline. Out-of-line data will
+    // follow right after the command, so defer alignment to after it.
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 
 template <bool hugepage_write>
@@ -1146,11 +1143,6 @@ template void DeviceCommand<true>::add_dispatch_write_paged<false>(bool, uint8_t
 template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
-
-template void DeviceCommand<true>::add_dispatch_write_paged_with_custom_inline_size<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
-template void DeviceCommand<true>::add_dispatch_write_paged_with_custom_inline_size<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
-template void DeviceCommand<false>::add_dispatch_write_paged_with_custom_inline_size<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
-template void DeviceCommand<false>::add_dispatch_write_paged_with_custom_inline_size<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
 
 template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
 template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);

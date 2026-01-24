@@ -531,7 +531,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         const uint64_t alignment_prefix_bytes = relay_alignment - alignment_offset;
         TT_ASSERT(alignment_prefix_bytes < buffer.page_size(), "Alignment prefix exceeds page size");
         
-        command_sequence.add_dispatch_write_paged_with_custom_inline_size<true>(
+        command_sequence.add_dispatch_write_paged_with_custom_inline_size(
             flush_prefetch,
             is_dram,
             start_page,
@@ -691,7 +691,7 @@ void issue_buffer_dispatch_command_sequence(
     } else {
         if (needs_alignment_prefix) {
             // Use custom inline size variant to account for alignment prefix bytes
-            calculator.add_dispatch_write_paged_with_custom_inline_size<true>(0, 0, alignment_prefix_bytes);
+            calculator.add_dispatch_write_paged_with_custom_inline_size(0, 0, alignment_prefix_bytes);
         } else {
             calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
         }
