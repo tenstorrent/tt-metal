@@ -121,14 +121,10 @@ void kernel_main() {
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
                 // Chunked means that we have paged attention
-                const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
                 cb_reserve_back(cb_id_page_table, 1);
-                uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-                uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(nb);
-                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-                noc_async_read_barrier();
+                page_table_ptr = read_page_table_for_batch(
+                    cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
                 cb_push_back(cb_id_page_table, 1);
-                page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
             }
 
             // Calculate mask batch offset based on broadcasting:
@@ -252,8 +248,8 @@ void kernel_main() {
                             // Q-range = [q_low, q_high)
                             // K-range = [k_low, k_high)
                             // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                            // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional
-                            // check Read mask chunk When a mask is provided, there will be no padding on q or kv.
+                            // Due to loop bounds, we should never have k_low >= q_high.
+                            // When a mask is provided, there will be no padding on q or kv.
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             barrier_count = 0;
