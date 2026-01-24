@@ -1017,17 +1017,19 @@ def test_all_gather_matmul_galaxy_perf_comparison(
     """
     Performance comparison test for AllGather + Matmul on Galaxy (32 devices, 8x4 mesh).
 
-    Compares operation modes:
-    - non_fused: all_gather_async + ttnn.linear (standard approach)
-    - chunked_fused: K split into chunks, all_gather + matmul per chunk, accumulate results
+    Compares fused (llama_all_gather_matmul_async) vs non_fused for DECODE (M=32).
 
-    Note: "fused" mode (llama_all_gather_matmul_async) skipped - requires too much L1 for 70B dims.
+    L1 intermediate buffer size for fused op: [M, 3584] per core across 4 cores
+    - For M=32: 32 * 3584 = 112KB + overhead ≈ 119KB (fits in ~376KB available)
+    - For M=128+: Too large for L1 (prefill cannot use fused)
+
+    Note: chunked_fused is 2x SLOWER than non_fused (396us vs 199us) - REJECTED
     """
     num_iters = 5
     results = {}
 
-    # Test all modes that work with model dimensions
-    modes_to_test = ["non_fused", "chunked_fused"]
+    # Test fused vs non_fused for decode (M=32 fits in L1)
+    modes_to_test = ["non_fused", "fused"]
 
     for mode in modes_to_test:
         logger.info(f"Running {mode.upper()} operation...")
