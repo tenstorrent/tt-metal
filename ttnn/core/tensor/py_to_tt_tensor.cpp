@@ -142,10 +142,9 @@ Tensor create_tt_tensor_from_host_data(
         // from_span do first copy of the data to pass to from_vector
         // than from_vecotr allocation another vector to change layout, in that use case we don't need first
         // allocation.
-        if constexpr (std::is_same_v<T, bfloat16>) {
-            if (layout == Layout::TILE) {
-                return Tensor::from_buffer(host_buffer.view_as<T>(), tensor_spec, static_cast<T>(pad_value));
-            }
+        if (!logical_matches_physical(tensor_spec)) {
+            auto res = Tensor::from_buffer(host_buffer.view_as<T>(), tensor_spec, static_cast<T>(pad_value));
+            return to_dtype(res, tensor_spec.data_type());
         }
 
         return Tensor::from_span(

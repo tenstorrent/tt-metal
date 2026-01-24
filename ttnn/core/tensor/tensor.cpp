@@ -210,9 +210,11 @@ Tensor Tensor::from_buffer(std::span<T> buffer, const TensorSpec& spec, T pad_va
     ZoneScopedN("ttnn::Tensor::from_buffer");
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+
     size_t volume = spec.logical_shape().volume();
 
-    TT_FATAL(spec.data_type() == buffer_dtype, "spec data type doesn't match the buffer data type");
     TT_FATAL(
         !logical_matches_physical(spec),
         "Logical matches physical, don't support that case, use Tensor::from_span instead!");
@@ -224,8 +226,11 @@ Tensor Tensor::from_buffer(std::span<T> buffer, const TensorSpec& spec, T pad_va
     }
 
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
-    return Tensor(std::move(host_buffer), spec);
+
+    auto res = Tensor(std::move(host_buffer), buffer_spec);
+    return to_dtype(res, spec.data_type());
 }
+
 template Tensor Tensor::from_buffer<bfloat16>(
     tt::stl::Span<bfloat16> buffer, const TensorSpec& spec, bfloat16 pad_value);
 
