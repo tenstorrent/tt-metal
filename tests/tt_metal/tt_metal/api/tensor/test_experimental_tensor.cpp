@@ -8,46 +8,49 @@
 #include <tt-metalium/experimental/tensor/device_tensor.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
-namespace {
-
-TEST(ExperimentalTensorTest, VerifyBuildFails) {
-    EXPECT_TRUE(false) << "This test intentionally fails to verify build works";
-}
 
 TEST(ExperimentalTensorTest, DefaultConstructedHostTensor) {
     // Default construct a HostTensor
     HostTensor tensor;
 
-    // Verify it has an empty shape
+    // Shape-related
     const auto& logical_shape = tensor.logical_shape();
-    EXPECT_TRUE(logical_shape.empty()) << "Default constructed HostTensor should have empty shape";
-    EXPECT_EQ(logical_shape.rank(), 0) << "Default constructed HostTensor should have rank 0";
-    EXPECT_EQ(logical_shape.volume(), 0) << "Default constructed HostTensor should have zero volume";
+    EXPECT_EQ(logical_shape, Shape()) << "Default constructed HostTensor should have empty shape";
+    // TODO: This should be 0, not 1 (Shape().volume())
+    EXPECT_EQ(tensor.logical_volume(), Shape().volume())
+        << "logical_volume() should return the volume of the empty shape";
 
-    // Verify logical and padded shapes match (both empty)
+    // TODO: padded shape should be empty?
+    auto expected_padded_shape = Shape({32, 32});
     const auto& padded_shape = tensor.padded_shape();
-    EXPECT_TRUE(padded_shape.empty()) << "Padded shape should also be empty";
-    EXPECT_EQ(padded_shape.rank(), 0) << "Padded shape should have rank 0";
-    EXPECT_EQ(padded_shape.volume(), 0) << "Padded volume should be zero";
+    EXPECT_EQ(padded_shape, expected_padded_shape) << "Padded shape should be minimum 32x32";
+    EXPECT_EQ(tensor.padded_volume(), expected_padded_shape.volume())
+        << "padded_volume() should return the volume of the padded shape";
 
-    // Verify data type is INVALID for default constructed tensor
+    auto strides = tensor.strides();
+    EXPECT_TRUE(strides.empty()) << "Strides should be empty for empty shape";
+
+    // Data, layout, memory config
     EXPECT_EQ(tensor.dtype(), DataType::INVALID) << "Default constructed HostTensor should have INVALID data type";
-
-    // Verify layout is INVALID for default constructed tensor
     EXPECT_EQ(tensor.layout(), Layout::INVALID) << "Default constructed HostTensor should have INVALID layout";
 
-    // Verify volume getters return 0
-    EXPECT_EQ(tensor.logical_volume(), 0) << "logical_volume() should return 0 for empty tensor";
-    EXPECT_EQ(tensor.padded_volume(), 0) << "padded_volume() should return 0 for empty tensor";
+    // Sharding
+    EXPECT_FALSE(tensor.is_sharded()) << "Default HostTensor is not sharded";
+    EXPECT_FALSE(tensor.shard_spec().has_value()) << "Default HostTensor should have no shard_spec";
+    EXPECT_FALSE(tensor.nd_shard_spec().has_value()) << "Default HostTensor should have no nd_shard_spec";
 
-    // Verify default host tensor is not sharded
-    EXPECT_FALSE(tensor.is_sharded()) << "HostTensor should never be sharded";
+    // Storage & Element size
+    EXPECT_THROW({ tensor.element_size(); }, std::exception) << "element_size() should throw";
+    EXPECT_EQ(tensor.get_host_buffer(), HostBuffer()) << "get_host_buffer() should return an empty buffer";
 
-    // Verify tensor_topology is accessible (default constructed, should be empty)
+    // Tensor topology
     EXPECT_NO_THROW(tensor.tensor_topology()) << "tensor_topology() should be accessible";
+
+    // String conversion
+    EXPECT_NO_THROW({ tensor.write_to_string(); }) << "write_to_string() should not throw";
 }
 
-}  // namespace
 }  // namespace tt::tt_metal

@@ -29,9 +29,8 @@ HostTensor::HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology
     impl(std::make_unique<TensorAttributes>(Storage(HostStorage(buffer)), std::move(spec), std::move(topology))) {}
 
 // The default tensor spec for an empty Tensor
-// TODO: revisit?
-TensorSpec DEFAULT_TENSOR_SPEC(
-    Shape(), TensorLayout(DataType::INVALID, PageConfig(RowMajorPageConfig()), MemoryConfig()));
+// TODO: PageConfig(Layout::INVALID) is not valid, need to fix.
+TensorSpec DEFAULT_TENSOR_SPEC(Shape(), TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig()));
 
 // TODO: when and if we need to check whether a host tensor is empty
 HostTensor::HostTensor() : HostTensor(HostBuffer(), DEFAULT_TENSOR_SPEC, TensorTopology{}) {}

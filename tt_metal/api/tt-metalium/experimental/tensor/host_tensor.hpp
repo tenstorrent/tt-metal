@@ -123,7 +123,7 @@ public:
 
     // TODO(River): understand what is sharding better
     bool is_sharded() const;
-    // what's the difference between this and logical volum?
+    // Get the dataum's size in bytes
     std::size_t element_size() const;
 
     // "other getters"
