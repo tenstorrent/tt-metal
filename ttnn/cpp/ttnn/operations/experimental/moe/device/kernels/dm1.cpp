@@ -91,8 +91,8 @@ void kernel_main() {
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
     // Precompute buffer offsets
-    uint32_t LOCAL_BUFFER_OFFSET[12];
-    for (uint32_t i = 0; i < 12; ++i) {
+    uint32_t LOCAL_BUFFER_OFFSET[num_a2a_steps_per_iter];
+    for (uint32_t i = 0; i < num_a2a_steps_per_iter; ++i) {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
     uint32_t semaphore_value = 0;
@@ -123,7 +123,8 @@ void kernel_main() {
             // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
             // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
             const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
-            const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
+            const uint64_t neighbor_dst_addr =
+                LOCAL_BUFFER_OFFSET[(step == (num_a2a_steps_per_iter - 1)) ? 0 : (step + 1)];
 
             noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
             noc_async_write_one_packet_with_state</*posted=*/true>(

@@ -33,6 +33,8 @@ constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W2_TILES_PER_TXN = 14;
 
+constexpr uint32_t W2_BLOCKS_PER_EXPERT = 50;
+
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables (generated at compile time)
 // Use these if you prefer lookup over runtime computation
@@ -154,36 +156,6 @@ constexpr uint32_t W0_W1_BLOCKS_PER_EXPERT_B[NUM_CORES] = {
     80,
 };
 
-constexpr uint32_t W2_BLOCKS_PER_EXPERT_A[NUM_CORES] = {
-    50,
-    50,
-    45,
-    45,
-    45,
-    45,
-    45,
-    45,
-    50,
-    50,
-    45,
-    45,
-};
-
-constexpr uint32_t W2_BLOCKS_PER_EXPERT_B[NUM_CORES] = {
-    50,
-    45,
-    45,
-    50,
-    45,
-    45,
-    50,
-    45,
-    45,
-    50,
-    45,
-    80,
-};
-
 constexpr uint32_t IN2_TILES_PER_STEP_A = *std::max_element(
     W0_W1_TILES_PER_CORE_PER_STEP_A[0], W0_W1_TILES_PER_CORE_PER_STEP_A[0] + NUM_CORES, [](uint32_t a, uint32_t b) {
         return a < b;
@@ -198,12 +170,12 @@ constexpr uint32_t NUM_A2A_ITERS_A = *std::max_element(
                                          W2_TILES_PER_CORE_A,
                                          W2_TILES_PER_CORE_A + NUM_CORES,
                                          [](uint32_t a, uint32_t b) { return (a / 2) < (b / 2); }) /
-                                     2;
+                                     4;
 
 constexpr uint32_t NUM_A2A_ITERS_B = *std::max_element(
                                          W2_TILES_PER_CORE_B,
                                          W2_TILES_PER_CORE_B + NUM_CORES,
                                          [](uint32_t a, uint32_t b) { return (a / 2) < (b / 2); }) /
-                                     2;
+                                     4;
 
 }  // namespace moe_ring
