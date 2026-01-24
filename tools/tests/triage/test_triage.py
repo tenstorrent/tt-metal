@@ -29,7 +29,6 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
-triage.progress_disabled = True
 
 triage.progress_disabled = True  # Disable progress bars for tests
 
