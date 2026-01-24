@@ -166,9 +166,6 @@ void kernel_main() {
     cb_reserve_back(data_cb_id, global_num_tokens);
     const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
 
-    // if(linearized_mesh_coord==1)
-    // tt::data_movement::common::print_bf16_pages(src_data_l1_base_addr,num_local_experts*global_num_tokens*source_token_segment_size_bytes/2,1);
-
     cb_wait_front(metadata_cb_id, 1);
     const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
     auto * metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
@@ -186,6 +183,7 @@ void kernel_main() {
         noc_semaphore_set_multicast(
             init_semaphore_addr, semaphore_mc_addr, num_token_parallel_cores * num_data_parallel_cores - 1);
         noc_async_write_barrier();
+        noc_async_atomic_barrier();
     } else {
         noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
     }
@@ -220,18 +218,6 @@ void kernel_main() {
                     mesh_rows,
                     mesh_cols,
                     replicate_axis>(st);
-
-                // DPRINT<<"dt: "<<dt<<" edt: "<<edt[e]<<" st: "<<st<<" e: "<<e<<" dest_device_idx:"
-                // <<dest_device_idx<<" output_page_idx:"<<" k: "<<k<<" output_page_idx:"<<output_page_idx<<"\n";
-                // tt::data_movement::common::print_bf16_pages(src_data_l1_addr,source_token_segment_size_bytes/2,1);
-
-                // if(linearized_mesh_coord==1){
-                //                     DPRINT<<"dt: "<<dt<<" edt: "<<edt[e]<<" st: "<<st<<" e: "<<e<<" dest_device_idx:
-                //                     "<<dest_device_idx<<" output_page_idx:"<<" k: "<<k<<" output_page_idx:
-                //                     "<<output_page_idx<<"\n";
-                //                     tt::data_movement::common::print_bf16_pages(src_data_l1_addr,
-                //                     source_token_segment_size_bytes/2,1);
-                //                 }
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     const uint64_t output_noc_addr =
@@ -289,7 +275,7 @@ void kernel_main() {
     if (needs_barrier) {
         noc_async_write_barrier();
     }
-    cb_push_back(data_cb_id, 1);
+    cb_push_back(data_cb_id, global_num_tokens);
     DPRINT << "PASSED PAYLOAD LOOP \n";
 
     if (sync_args.is_sync_core) {
@@ -298,6 +284,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
         noc_semaphore_wait(termination_sync_semaphore_ptr, (num_token_parallel_cores * num_data_parallel_cores) - 1);
+        noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         DPRINT << "TERMINATION MASTER WAITING FOR SENDING DEVICE SEMAPHORES \n";
 
@@ -348,6 +335,12 @@ void kernel_main() {
         DPRINT << "TERMINATION MASTER DONE \n";
     } else {
         // get sync core semaphore noc address
+
+        close_direction_connections<
+            Num_Directions,
+            fabric_mux_num_buffers_per_channel,
+            fabric_mux_termination_signal_address>(directions, fabric_connections, false);
+
         DPRINT << "termination_master_noc_x: " << sync_args.termination_master_noc_x
                << " termination_master_noc_y: " << sync_args.termination_master_noc_y << "\n";
         uint64_t safe_termination_sync_address = safe_get_noc_addr(
@@ -356,10 +349,7 @@ void kernel_main() {
             sync_args.termination_sync_address,
             0);
         noc_semaphore_inc(safe_termination_sync_address, 1);
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address>(directions, fabric_connections, false);
+
         noc_async_write_barrier();
         noc_async_atomic_barrier();
     }

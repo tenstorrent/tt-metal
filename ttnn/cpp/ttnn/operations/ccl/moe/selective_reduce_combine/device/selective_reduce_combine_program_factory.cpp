@@ -401,6 +401,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         const bool is_termination_master = (sender_core == termination_master_core);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
+            const auto link_idx = core_map_iter - mux_neigbor_core_maps.cbegin();
+            std::cout << "Device index: " << flat_mesh_idx << " Worker core: " << sender_core.x << ", " << sender_core.y
+                      << " mux core: " << mux_virtual_core.x << ", " << mux_virtual_core.y
+                      << " link worker: " << link_worker_idx << " link_idx: " << link_idx << std::endl;
+
             ttnn::ccl::fabric_mux_connection_rt_args(
                 true,
                 is_termination_master,
@@ -448,7 +453,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
 void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -460,16 +465,21 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
         const auto& cores = shared_variables.cores;
 
+        const auto& active_token_count_semaphores = operation_attributes.active_token_count_semaphores;
+
         for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-            reader_runtime_args.at(1) = tensor_args.dense_metadata_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.dense_input_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.dense_metadata_tensor.buffer()->address();
+
+            for (uint32_t i = 0; i < active_token_count_semaphores.size(); ++i) {
+                reader_runtime_args.at(i + 2) = active_token_count_semaphores.at(i).address();
+            }
 
             writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-            writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(3) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(4) = (uint32_t)shared_variables.cross_device_semaphore.address();
         }
     }
 }
