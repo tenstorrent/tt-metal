@@ -1024,12 +1024,16 @@ def test_all_gather_matmul_galaxy_perf_comparison(
     - For M=128+: Too large for L1 (prefill cannot use fused)
 
     Note: chunked_fused is 2x SLOWER than non_fused (396us vs 199us) - REJECTED
+    Note: fused op has HARDCODED 60-core L1 allocation in C++ - OOMs with model dims
     """
     num_iters = 5
     results = {}
 
-    # Test fused vs non_fused for decode (M=32 fits in L1)
-    modes_to_test = ["non_fused", "fused"]
+    # Test approaches:
+    # - non_fused: all_gather + matmul (baseline)
+    # - local_matmul_allreduce: local matmul + all_reduce (no large intermediate!)
+    # - fused: HARDCODED 60-core L1 allocation - will OOM
+    modes_to_test = ["non_fused", "local_matmul_allreduce"]
 
     for mode in modes_to_test:
         logger.info(f"Running {mode.upper()} operation...")
@@ -1251,35 +1255,30 @@ def test_all_gather_matmul_galaxy_prefill_perf_comparison(
     )
     results["non_fused"] = non_fused_time_us
 
-    # Try fused op - may fail with OOM for large M due to L1 constraints
-    # Intermediate buffer: [M, 14336/4] = [M, 3584] per core across 4 cores
-    # For M=128: 128 * 3584 * 1 byte = 458KB per core (likely exceeds available L1)
-    fused_time_us = None
-    try:
-        logger.info("Running FUSED operation (may OOM for large M)...")
-        fused_time_us = run_all_gather_matmul_galaxy_impl(
-            mesh_device,
-            M,
-            K,
-            N,
-            cluster_axis,
-            in0_dtype,
-            in1_dtype,
-            output_dtype,
-            num_links,
-            input_num_cores,
-            output_num_cores,
-            fidelity,
-            fp32_acc_mode,
-            packer_l1_acc,
-            op_mode="fused",
-            num_iters=num_iters,
-            trace_mode=True,
-        )
-        results["fused"] = fused_time_us
-    except Exception as e:
-        logger.warning(f"FUSED operation failed (expected for large M due to L1 constraints): {e}")
-        results["fused"] = None
+    # Try local_matmul_allreduce - avoids large intermediate by doing local matmul + all_reduce
+    # Math: [A0|A1|A2|A3] × [W0;W1;W2;W3] = A0×W0 + A1×W1 + A2×W2 + A3×W3
+    # Each device does local matmul, then all_reduce sums partial results
+    logger.info("Running LOCAL_MATMUL_ALLREDUCE operation...")
+    local_matmul_time_us = run_all_gather_matmul_galaxy_impl(
+        mesh_device,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
+        num_links,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        op_mode="local_matmul_allreduce",
+        num_iters=num_iters,
+        trace_mode=True,
+    )
+    results["local_matmul_allreduce"] = local_matmul_time_us
 
     # Print comparison report
     logger.info("=" * 80)
@@ -1299,12 +1298,10 @@ def test_all_gather_matmul_galaxy_prefill_perf_comparison(
     logger.info("=" * 80)
 
     # Summary
-    if fused_time_us is not None and non_fused_time_us is not None:
-        if fused_time_us < non_fused_time_us:
-            improvement = (1 - fused_time_us / non_fused_time_us) * 100
-            logger.info(f"RESULT: Fused op is {improvement:.1f}% FASTER for prefill M={M}")
+    if local_matmul_time_us is not None and non_fused_time_us is not None:
+        if local_matmul_time_us < non_fused_time_us:
+            improvement = (1 - local_matmul_time_us / non_fused_time_us) * 100
+            logger.info(f"RESULT: local_matmul_allreduce is {improvement:.1f}% FASTER for prefill M={M}")
         else:
-            slowdown = (fused_time_us / non_fused_time_us - 1) * 100
-            logger.info(f"RESULT: Fused op is {slowdown:.1f}% SLOWER for prefill M={M}")
-    elif fused_time_us is None:
-        logger.info(f"RESULT: Fused op FAILED for prefill M={M} - L1 intermediate too large")
+            slowdown = (local_matmul_time_us / non_fused_time_us - 1) * 100
+            logger.info(f"RESULT: local_matmul_allreduce is {slowdown:.1f}% SLOWER for prefill M={M}")
