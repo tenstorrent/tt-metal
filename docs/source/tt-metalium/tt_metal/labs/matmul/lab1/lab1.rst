@@ -361,7 +361,7 @@ Exercise 2: Running the Example Program
 If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
 
 .. code-block:: bash
-git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
+   git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 
 Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
 
