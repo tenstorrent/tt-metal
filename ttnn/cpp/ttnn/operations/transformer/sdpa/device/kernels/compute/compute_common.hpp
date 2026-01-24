@@ -410,11 +410,11 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         cb_pop_front(in1_cb, rows);
     } else {
 #ifdef DHT_GRANULARITY
-        uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
-        uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+        constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
 #else
-        uint32_t dst_tiles = 1;
-        uint32_t granularity = cols;
+        constexpr uint32_t dst_tiles = 1;
+        constexpr uint32_t granularity = cols;
 #endif
         PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
         if (!pack_accumulate) {
@@ -462,11 +462,11 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t num_tiles = rows * cols;
 
 #ifdef DHT_GRANULARITY
-    uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
-    uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+    constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
 #else
-    uint32_t dst_tiles = 1;
-    uint32_t granularity = cols;
+    constexpr uint32_t dst_tiles = 1;
+    constexpr uint32_t granularity = cols;
 #endif
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
