@@ -204,8 +204,8 @@ void matmul_multi_core(
     CoreCoord max_core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
     log_info(tt::LogAlways, "Using core grid size of ({} x {}) out of available core grid size of ({} x {})", core_grid.x, core_grid.y, max_core_grid.x, max_core_grid.y);
     TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size.");
-    TT_FATAL((Mt % core_grid.x == 0) && (Nt % core_grid.y == 0), "MT and Nt must be divisible by core grid size.");
-    
+    TT_FATAL((Mt % core_grid.x == 0) && (Nt % core_grid.y == 0), "Mt and Nt must be divisible by core grid size.");
+
     const uint32_t M_block_tiles = Mt / core_grid.x;
     const uint32_t N_block_tiles = Nt / core_grid.y;
     // This needs to be chosen so that all the data fits into on-chip SRAM.
@@ -263,7 +263,7 @@ void matmul_multi_core(
 
     // Use c_24 (arbitrarily chosen) for the intermediate buffer.
     create_cb(prog_state.program, all_cores, tiles_cb_interm, tt::CBIndex::c_24);
-    
+
     // Get MeshBuffer pointers from tensors. Mesh buffers hold info about how tensor data is distributed
     // across physical DRAM banks (at least for our case when data is stored in DRAM).
     // Programmer doesn't need to understand the internals, but needs to pass this info to the kernels.
@@ -413,8 +413,7 @@ int main() {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
-            float relative_error = (expected == 0.0f) ? std::abs(actual) 
-                : std::abs(actual - expected) / expected;
+            float relative_error = (expected == 0.0f) ? std::abs(actual) : std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
                 log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
                 log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
