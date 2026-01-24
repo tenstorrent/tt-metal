@@ -66,6 +66,10 @@ def test_gather(device, width_per_core, gather_core, gather_grid, noc):
             f"Truncating gather_core.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
         )
         gather_core = ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, gather_core.y)
+    if gather_grid.end.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating gather_grid.end.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         gather_grid = ttnn.CoreRange(
             gather_grid.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, gather_grid.end.y)
         )
