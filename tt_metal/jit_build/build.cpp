@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -489,19 +490,14 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 size_t JitBuildState::compile(
-    const string& out_dir,
-    const JitBuildSettings* settings,
-    vector_cache_aligned<std::string>& objs,
-    std::vector<jit_build::utils::FileRenamer>& obj_files) const {
+    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (need_compile(out_dir, objs[i])) {
-            obj_files.emplace_back(out_dir + objs[i]);
+        if (need_compile(out_dir, this->objs_[i])) {
             launch_build_step(
-                [this, &out_dir, &objs, settings, i, obj_path = obj_files.back().path()]() {
-                    this->compile_one(out_dir, settings, this->srcs_[i], objs[i], obj_path);
-                    objs[i] = obj_path;
+                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
+                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
                 },
                 events);
         } else {
@@ -522,7 +518,7 @@ bool JitBuildState::need_link(const string& out_dir) const {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
+void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
@@ -558,10 +554,6 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
 
     // Append common args provided by the build state
     cmd += lflags;
-    // must use the temp paths for obj files because they are renamed after linking
-    for (const auto& obj : objs) {
-        cmd += obj + " ";
-    }
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
@@ -582,16 +574,6 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
         // Don't leave incomplete hash file
         std::filesystem::remove(dephash_file.path());
     }
-}
-
-void JitBuildState::link(
-    const string& out_dir, const vector_cache_aligned<std::string>& objs, const JitBuildSettings* settings) const {
-    string link_objs;
-    for (const auto& obj : objs) {
-        link_objs += obj + " ";
-    }
-    link_objs += this->extra_link_objs_;
-    link_impl(out_dir, settings, link_objs);
 }
 
 // Given this elf (A) and a later elf (B):
@@ -653,12 +635,21 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     fs::create_directories(out_dir);
     {
         // object files will be created at unique names and renamed after linking
-        vector_cache_aligned<std::string> objs = this->objs_;
-        std::vector<jit_build::utils::FileRenamer> obj_files;
-        obj_files.reserve(objs.size());  // lets preallocate and avoid invalidating objects while things are running
+        std::vector<std::string> obj_paths;
+        obj_paths.reserve(this->objs_.size());
+        for (const auto& obj : this->objs_) {
+            obj_paths.push_back(out_dir + obj);
+            for (const auto& obj_path : obj_paths) {
+                for (auto ch : obj_path) {
+                    TT_FATAL(std::isprint(ch), "Unprintable character found in object file path: {}", obj_path);
+                }
+            }
+        }
+        jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
-        if (compile(out_dir, settings, objs, obj_files) > 0 || need_link(out_dir)) {
-            link(out_dir, objs, settings);
+        if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
+            string link_objs = fmt::format("{} {}", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
+            link(out_dir, settings, link_objs);
             if (this->is_fw_) {
                 weaken(out_dir);
             }
@@ -701,7 +692,7 @@ void JitBuildState::link_to_processor(
         link_objs += this->env_.root_ + obj + " ";
     }
 
-    link_impl(out_dir, settings, link_objs);
+    link(out_dir, settings, link_objs);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {

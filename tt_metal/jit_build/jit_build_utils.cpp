@@ -68,6 +68,9 @@ FileRenamer::FileRenamer(const std::string& target_path) : target_path_(target_p
 
 FileRenamer::~FileRenamer() {
     std::error_code ec;
+    if (target_path_.empty()) {
+        return;
+    }
     std::filesystem::rename(temp_path_, target_path_, ec);
     if (ec) {
         log_error(

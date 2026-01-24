@@ -19,8 +19,7 @@
 
 namespace tt::jit_build::utils {
 
-class FileRenamer;
-
+class FileGroupRenamer;
 }
 
 namespace tt::tt_metal {
@@ -132,8 +131,7 @@ protected:
     size_t compile(
         const std::string& out_dir,
         const JitBuildSettings* settings,
-        vector_cache_aligned<std::string>& objs,
-        std::vector<jit_build::utils::FileRenamer>& obj_files) const;
+        jit_build::utils::FileGroupRenamer& renamer) const;
     void compile_one(
         const std::string& out_dir,
         const JitBuildSettings* settings,
@@ -141,11 +139,7 @@ protected:
         const std::string& obj,
         const std::string& obj_temp_path) const;
     bool need_link(const std::string& out_dir) const;
-    void link(
-        const std::string& out_dir,
-        const vector_cache_aligned<std::string>& objs,
-        const JitBuildSettings* settings) const;
-    void link_impl(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
+    void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
     std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
