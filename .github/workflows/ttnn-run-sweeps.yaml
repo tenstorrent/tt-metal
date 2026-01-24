@@ -718,79 +718,31 @@ jobs:
           # Build query to reconstruct the JSON structure
           mesh_filter = os.environ.get('MESH_FILTER', '')
 
+          # For now, just extract full_config_json which has the original format
+          # This is simpler and guaranteed to match the expected JSON structure
           query = """
           WITH filtered_configs AS (
-              SELECT DISTINCT c.config_hash
+              SELECT DISTINCT c.ttnn_configuration_id
               FROM ttnn_ops.ttnn_configuration c
-              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.config_hash = cm.configuration_hash
-              JOIN ttnn_ops.ttnn_mesh_config mc ON cm.mesh_config_id = mc.id
+              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.ttnn_configuration_id = cm.configuration_id
+              JOIN ttnn_ops.ttnn_mesh_config mc ON cm.mesh_config_id = mc.ttnn_mesh_config_id
               WHERE 1=1
           """
 
           if mesh_filter:
               rows, cols = mesh_filter.split('x')
-              query += f" AND mc.mesh_rows = {rows} AND mc.mesh_cols = {cols}"
+              query += f" AND mc.mesh_shape[1] = {rows} AND mc.mesh_shape[2] = {cols}"
 
           query += """
           )
           SELECT
-              op.name as operation_name,
-              jsonb_agg(
-                  jsonb_build_object(
-                      'tensor_placements', (
-                          SELECT jsonb_agg(
-                              jsonb_build_object(
-                                  'mesh_rows', mc2.mesh_rows,
-                                  'mesh_cols', mc2.mesh_cols,
-                                  'placement', mc2.placement
-                              )
-                          )
-                          FROM ttnn_ops.ttnn_configuration_mesh cm2
-                          JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
-                          WHERE cm2.configuration_hash = c.config_hash
-                      ),
-                      'arguments', (
-                          SELECT jsonb_agg(
-                              jsonb_build_object(
-                                  'name', a.name,
-                                  'value', a.value,
-                                  'value_type', a.value_type
-                              ) ORDER BY a.name
-                          )
-                          FROM ttnn_ops.ttnn_argument a
-                          WHERE a.configuration_hash = c.config_hash
-                      ),
-                      'machine_info', jsonb_build_object(
-                          'arch', hw.arch,
-                          'chip_ids', hw.chip_ids,
-                          'tensor_placements', (
-                              SELECT jsonb_agg(
-                                  jsonb_build_object(
-                                      'mesh_rows', mc2.mesh_rows,
-                                      'mesh_cols', mc2.mesh_cols,
-                                      'placement', mc2.placement
-                                  )
-                              )
-                              FROM ttnn_ops.ttnn_configuration_mesh cm2
-                              JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
-                              WHERE cm2.configuration_hash = c.config_hash
-                          )
-                      ),
-                      'models', (
-                          SELECT jsonb_agg(DISTINCT m.name)
-                          FROM ttnn_ops.ttnn_configuration_model conf_m
-                          JOIN ttnn_ops.ttnn_model m ON conf_m.model_id = m.id
-                          WHERE conf_m.configuration_hash = c.config_hash
-                      ),
-                      'config_hash', c.config_hash
-                  )
-              ) as configs
+              op.operation_name,
+              jsonb_agg(c.full_config_json) as configs
           FROM ttnn_ops.ttnn_configuration c
-          JOIN ttnn_ops.ttnn_operation op ON c.operation_id = op.id
-          JOIN ttnn_ops.ttnn_hardware hw ON c.hardware_id = hw.id
-          WHERE c.config_hash IN (SELECT config_hash FROM filtered_configs)
-          GROUP BY op.name
-          ORDER BY op.name;
+          JOIN ttnn_ops.ttnn_operation op ON c.operation_id = op.ttnn_operation_id
+          WHERE c.ttnn_configuration_id IN (SELECT ttnn_configuration_id FROM filtered_configs)
+          GROUP BY op.operation_name
+          ORDER BY op.operation_name;
           """
 
           cursor = conn.cursor()
