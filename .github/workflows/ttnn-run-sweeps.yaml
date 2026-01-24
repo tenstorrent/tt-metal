@@ -720,9 +720,9 @@ jobs:
 
           query = """
           WITH filtered_configs AS (
-              SELECT DISTINCT c.id
+              SELECT DISTINCT c.config_hash
               FROM ttnn_ops.ttnn_configuration c
-              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.id = cm.configuration_id
+              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.config_hash = cm.configuration_hash
               JOIN ttnn_ops.ttnn_mesh_config mc ON cm.mesh_config_id = mc.id
               WHERE 1=1
           """
@@ -747,7 +747,7 @@ jobs:
                           )
                           FROM ttnn_ops.ttnn_configuration_mesh cm2
                           JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
-                          WHERE cm2.configuration_id = c.id
+                          WHERE cm2.configuration_hash = c.config_hash
                       ),
                       'arguments', (
                           SELECT jsonb_agg(
@@ -758,7 +758,7 @@ jobs:
                               ) ORDER BY a.name
                           )
                           FROM ttnn_ops.ttnn_argument a
-                          WHERE a.configuration_id = c.id
+                          WHERE a.configuration_hash = c.config_hash
                       ),
                       'machine_info', jsonb_build_object(
                           'arch', hw.arch,
@@ -773,14 +773,14 @@ jobs:
                               )
                               FROM ttnn_ops.ttnn_configuration_mesh cm2
                               JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
-                              WHERE cm2.configuration_id = c.id
+                              WHERE cm2.configuration_hash = c.config_hash
                           )
                       ),
                       'models', (
                           SELECT jsonb_agg(DISTINCT m.name)
                           FROM ttnn_ops.ttnn_configuration_model conf_m
                           JOIN ttnn_ops.ttnn_model m ON conf_m.model_id = m.id
-                          WHERE conf_m.configuration_id = c.id
+                          WHERE conf_m.configuration_hash = c.config_hash
                       ),
                       'config_hash', c.config_hash
                   )
@@ -788,7 +788,7 @@ jobs:
           FROM ttnn_ops.ttnn_configuration c
           JOIN ttnn_ops.ttnn_operation op ON c.operation_id = op.id
           JOIN ttnn_ops.ttnn_hardware hw ON c.hardware_id = hw.id
-          WHERE c.id IN (SELECT id FROM filtered_configs)
+          WHERE c.config_hash IN (SELECT config_hash FROM filtered_configs)
           GROUP BY op.name
           ORDER BY op.name;
           """
