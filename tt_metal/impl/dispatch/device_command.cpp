@@ -529,6 +529,47 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
 
 template <bool hugepage_write>
 template <bool inline_data>
+void DeviceCommand<hugepage_write>::add_dispatch_write_paged_with_custom_inline_size(
+    bool flush_prefetch,
+    uint8_t is_dram,
+    uint16_t start_page,
+    uint32_t base_addr,
+    uint32_t page_size,
+    uint32_t pages,
+    uint32_t inline_data_sizeB,
+    const void* data) {
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? inline_data_sizeB : 0);
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+    auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
+        write_cmd->write_paged.is_dram = is_dram;
+        write_cmd->write_paged.start_page = start_page;
+        write_cmd->write_paged.base_addr = base_addr;
+        write_cmd->write_paged.page_size = page_size;
+        write_cmd->write_paged.pages = pages;
+    };
+    CQDispatchCmd* write_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd{};
+        initialize_write_cmd(&write_cmd);
+        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_write_cmd(write_cmd_dst);
+    }
+
+    if (inline_data) {
+        TT_ASSERT(data != nullptr);  // compiled out?
+        this->add_data(data, inline_data_sizeB, inline_data_sizeB);
+        // Increment wr offset to aligned address only if data is inline. Out-of-line data will
+        // follow right after the command, so defer alignment to after it.
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+}
+
+template <bool hugepage_write>
+template <bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_host(
     bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data) {
     uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
@@ -1104,6 +1145,11 @@ template void DeviceCommand<true>::add_dispatch_write_paged<false>(bool, uint8_t
 template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
+
+template void DeviceCommand<true>::add_dispatch_write_paged_with_custom_inline_size<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
+template void DeviceCommand<true>::add_dispatch_write_paged_with_custom_inline_size<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
+template void DeviceCommand<false>::add_dispatch_write_paged_with_custom_inline_size<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
+template void DeviceCommand<false>::add_dispatch_write_paged_with_custom_inline_size<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, const void*);
 
 template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
 template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);

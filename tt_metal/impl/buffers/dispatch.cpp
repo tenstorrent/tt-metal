@@ -515,17 +515,40 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
+    
+    // Check if pinned source address is 64-byte aligned (required for add_prefetch_relay_paged)
+    constexpr uint64_t relay_alignment = 64;
+    const uint64_t alignment_offset = use_pinned_transfer ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
+    const bool needs_alignment_prefix = (alignment_offset != 0);
+    
     // If we're not using pinned transfer the data will be inline with the dispatch write in a single prefetch command
     // so we need to flush the prefetch. With pinned memory the data will come in a separate command and we shouldn't
     // flush between them.
     const bool flush_prefetch = !use_pinned_transfer;
-    command_sequence.add_dispatch_write_paged(
-        flush_prefetch,
-        is_dram,
-        start_page,
-        dispatch_params.address,
-        dispatch_params.page_size_to_write,
-        use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
+    
+    if (needs_alignment_prefix) {
+        // Pass the unaligned prefix bytes inline to reach alignment
+        const uint64_t alignment_prefix_bytes = relay_alignment - alignment_offset;
+        TT_ASSERT(alignment_prefix_bytes < buffer.page_size(), "Alignment prefix exceeds page size");
+        
+        command_sequence.add_dispatch_write_paged_with_custom_inline_size<true>(
+            flush_prefetch,
+            is_dram,
+            start_page,
+            dispatch_params.address,
+            dispatch_params.page_size_to_write,
+            dispatch_params.total_pages_to_write,
+            alignment_prefix_bytes,
+            static_cast<const char*>(src));
+    } else {
+        command_sequence.add_dispatch_write_paged(
+            flush_prefetch,
+            is_dram,
+            start_page,
+            dispatch_params.address,
+            dispatch_params.page_size_to_write,
+            use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
+    }
 
     if (not use_pinned_transfer) {
         const uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
@@ -651,6 +674,12 @@ void issue_buffer_dispatch_command_sequence(
         use_pinned_memory ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn;
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
+    // Check if pinned source address needs alignment prefix
+    constexpr uint64_t relay_alignment = 64;
+    const uint64_t alignment_offset = use_pinned_memory ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
+    const bool needs_alignment_prefix = (alignment_offset != 0);
+    const uint64_t alignment_prefix_bytes = needs_alignment_prefix ? (relay_alignment - alignment_offset) : 0;
+
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
@@ -660,7 +689,12 @@ void issue_buffer_dispatch_command_sequence(
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
         calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
     } else {
-        calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+        if (needs_alignment_prefix) {
+            // Use custom inline size variant to account for alignment prefix bytes
+            calculator.add_dispatch_write_paged_with_custom_inline_size<true>(0, 0, alignment_prefix_bytes);
+        } else {
+            calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+        }
     }
     if (use_pinned_memory) {
         // What follows is a command (which must be aligned), not data.
@@ -704,6 +738,16 @@ void issue_buffer_dispatch_command_sequence(
         // Send CQ_PREFETCH_CMD_RELAY_LINEAR command in a separate fetch Q entry to ensure it will be processed in
         // prefetch_h for remote device. If we don't do this, prefetch_h will "fetch" it along with the
         // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH command and send it to prefetch_d
+        
+        // Adjust address and length if we sent alignment prefix bytes inline
+        uint64_t relay_src_addr = dispatch_params.pinned_src_addr;
+        uint64_t relay_data_size = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
+        
+        if (needs_alignment_prefix) {
+            relay_src_addr += alignment_prefix_bytes;
+            relay_data_size -= alignment_prefix_bytes;
+        }
+        
         calculator.clear();
         if (dispatch_params.remote_chip) {
             calculator.add_prefetch_relay_linear_h();
@@ -714,14 +758,12 @@ void issue_buffer_dispatch_command_sequence(
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
-        const uint64_t data_size_bytes =
-            (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
         if (dispatch_params.remote_chip) {
             command_sequence.add_prefetch_relay_linear_h(
                 dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
         } else {
             command_sequence.add_prefetch_relay_linear(
-                dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
+                dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
         }
         sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
