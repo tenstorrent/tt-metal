@@ -198,6 +198,11 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
 template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_()
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        _llk_math_dbg_feature_disable_();
+    }
+
     reduce_max_row_configure_addrmod();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

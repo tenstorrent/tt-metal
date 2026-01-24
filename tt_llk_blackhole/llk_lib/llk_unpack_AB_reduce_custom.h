@@ -67,7 +67,6 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_()
     if constexpr (is_fp32_dest_acc_en)
     {
         // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
@@ -161,8 +160,4 @@ inline void _llk_unpack_AB_reduce_block_max_row_uninit_(const std::uint32_t unpA
     // TODO NC: Issue tt-llk#1036 will make this transient
     TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
-    // Fix under tt-metal#33825, move from compute API level down to here.
-    // Requires clear_fp32_accumulation flag or is_fp32_dest_acc_en flag.
-    // In compute API has tensix_sync(), why?
-    // reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 }

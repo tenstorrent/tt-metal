@@ -49,21 +49,17 @@ inline void _llk_unpack_untilize_mop_config_()
     tmp.program();
 }
 
-inline void _llk_unpack_untilize_init_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const bool include_setup_calls = false)
+inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    if (include_setup_calls)
-    {
-        // Disable transpose when unused
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    // Disable transpose when unused
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-        // Save state of unpacker config for quick restore
-        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0,
-                  UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32); // Save unpack stride config
-        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1,
-                  THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);                                              // Save tile x dim per context
-        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1); // Save descriptor 1
-    }
+    // Save state of unpacker config for quick restore
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0,
+              UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32); // Save unpack stride config
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1,
+              THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);                                              // Save tile x dim per context
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1); // Save descriptor 1
 
     const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
                                             : (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
@@ -172,22 +168,21 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     switch_config_context(unp_cfg_context);
 }
 
-template <bool include_setup_calls = false>
-inline void _llk_unpack_untilize_uninit_(const std::uint32_t face_r_dim, const std::uint32_t y_stride)
+inline void _llk_unpack_untilize_uninit_()
 {
-    if constexpr (include_setup_calls)
-    {
-        // Restore from saved GPRs
-        TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
-        TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-        TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    }
-    else
-    {
-        TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
-        // Revisit default stride value in tt-llk#1015
-        cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(y_stride);
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
-    }
+    // Check that unpacker is done (all contexts freed up) before starting hw configuration
+    wait_for_idle();
+
+    // Reset address counters
+    unpacker_addr_counter_init();
+
+    // Wait for cfg to be free to edit
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
+    // Restore from saved GPRs
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+
+    TTI_NOP;
 }

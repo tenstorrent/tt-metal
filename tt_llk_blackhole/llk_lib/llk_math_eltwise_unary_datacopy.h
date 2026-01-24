@@ -391,6 +391,15 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }
 
+    // Workaround for HW bug (budabackend#1948): tilize with UInt32/Int32 needs debug feature bit 11 disabled
+    if constexpr (tilize)
+    {
+        if ((dst_format == static_cast<uint>(DataFormat::UInt32)) || (dst_format == static_cast<uint>(DataFormat::Int32)))
+        {
+            _llk_math_dbg_feature_disable_();
+        }
+    }
+
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -402,7 +411,6 @@ inline void _llk_math_eltwise_unary_datacopy_uninit_()
     // clear debug feature disable
     if constexpr (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
     {
-        tensix_sync();
-        reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+        _llk_math_dbg_feature_enable_();
     }
 }

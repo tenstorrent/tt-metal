@@ -254,11 +254,6 @@ inline void configure_unpack_AB(
 
     alu_config_u alu_payload = {.val = 0};
 
-    uint32_t fp32_dest_acc_en  = (is_fp32_dest_acc_en) ? (1) : (0);
-    uint32_t int8_math_enabled = ((uint)(unpA_dst_format & 0xF) == (uint)DataFormat::Int8) || ((uint)(unpB_dst_format & 0xF) == (uint)DataFormat::Int8) ||
-                                 ((uint)unpA_dst_format == (uint)DataFormat::Int32) || ((uint)unpB_dst_format == (uint)DataFormat::Int32) ||
-                                 ((uint)unpA_dst_format == (uint)DataFormat::UInt32) || ((uint)unpB_dst_format == (uint)DataFormat::UInt32);
-
     constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
 
     if ((uint)unpA_src_format == (uint)DataFormat::UInt8)
@@ -375,21 +370,6 @@ inline void configure_unpack_AB(
     // used for face by face unpacking of entire tile into srcA
     cfg[UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_ADDR32] = 0x1 << UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
 
-    /*
-    // Workaround for HW bug (fp32 dest and movd2a/b is used with srcA/B configured with 5-bit exponent)
-    if (is_fp32_dest_acc_en && (exp_width == 0)) {
-        reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
-                                                               // workaround for bug tenstor
-                                                               // rent/budabackend#1372
-    }
-    */
-    // Workaround for HW bug (int32 dest and movd2a/b is used with srcA/B configured as int8)
-    if (int8_math_enabled || (fp32_dest_acc_en && ((uint)unpA_dst_format == (uint)DataFormat::UInt16)))
-    {
-        reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                                 // workaround for bug tenstorrent/budabackend#1948
-    }
-
     // Clear context ID
     reset_config_context();
 }
@@ -414,37 +394,6 @@ inline void config_unpacker_x_end(const uint32_t face_r_dim)
         default:
             TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
             break;
-    }
-}
-
-template <bool INSERT_FENCE = false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
-inline void config_unpacker_0_face_dim(const uint32_t face_r_dim)
-{
-    // tile x dim registers are only for unpacker 0
-    static_assert(UNP_SEL != p_setadc::UNP_B);
-    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK0);
-    switch (face_r_dim)
-    {
-        case 1:
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
-            break;
-        case 2:
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
-            break;
-        case 4:
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
-            break;
-        case 8:
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
-            break;
-        default:
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
-            break;
-    }
-
-    if constexpr (INSERT_FENCE)
-    {
-        TTI_DMANOP; // Insert fence if reg2flop is followed by an unpack
     }
 }
 

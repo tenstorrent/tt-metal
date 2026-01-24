@@ -34,9 +34,24 @@ inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
 }
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4)
+inline void _llk_unpack_reduce_init_(
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpB_dst_format,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t num_faces                   = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    // Configure SrcB format registers
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpB_dst_format);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpB_dst_format);
+
+    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+    TTI_NOP;
+    TTI_NOP;
+
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);

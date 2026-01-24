@@ -215,7 +215,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     {
         ZONE_SCOPED("INIT")
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-        _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
         _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2);
         PROFILER_SYNC();
     }

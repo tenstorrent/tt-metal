@@ -218,6 +218,7 @@ inline void _llk_unpack_A_init_(
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
 
+    // TODO NC: Move to TRISC1 tt-metal#36411
     if constexpr (BType != BroadcastType::NONE && unpack_to_dest)
     {
         _llk_unpack_dbg_feature_disable_();
