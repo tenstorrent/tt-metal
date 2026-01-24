@@ -1484,12 +1484,21 @@ class ModelArgs:
             ttnn.cluster.ClusterType.P300_X2,
             ttnn.cluster.ClusterType.P150_X4,
             ttnn.cluster.ClusterType.P150_X8,
+        ]:
+            return ttnn.Topology.Ring
+        elif ttnn.cluster.get_cluster_type() in [
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
-            return ttnn.Topology.Ring
-        elif self.num_devices > 1:  # All other multi chip devices
+            if self.num_devices >= 8:
+                return ttnn.Topology.Ring
+            else:
+                # e.g., 1x4 submesh does not support ring topology; fallback to linear
+                return ttnn.Topology.Linear
+
+        if self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
+
         return None
 
     def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
