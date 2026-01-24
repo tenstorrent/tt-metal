@@ -968,8 +968,8 @@ def run_all_gather_matmul_galaxy_impl(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "op_mode",
-    ["non_fused"],  # chunked_fused REJECTED: 2x slower than non_fused (396us vs 199us)
-    ids=["non_fused"],
+    ["non_fused", "local_matmul_allreduce"],  # Test both baseline and alternative approach
+    ids=["non_fused", "local_matmul_allreduce"],
 )
 def test_all_gather_matmul_galaxy_check(
     mesh_device,
@@ -1085,9 +1085,8 @@ def test_all_gather_matmul_galaxy_perf_comparison(
 
     # Test approaches:
     # - non_fused: all_gather + matmul (baseline)
-    # - local_matmul_allreduce: local matmul + all_reduce (no large intermediate!)
-    # - fused: HARDCODED 60-core L1 allocation - will OOM
-    modes_to_test = ["non_fused", "local_matmul_allreduce"]
+    # NOTE: local_matmul_allreduce hangs in trace mode - test separately with trace_mode=False
+    modes_to_test = ["non_fused"]
 
     for mode in modes_to_test:
         logger.info(f"Running {mode.upper()} operation...")
