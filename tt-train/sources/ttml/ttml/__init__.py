@@ -10,6 +10,7 @@ taking precedence when they exist.
 """
 
 import sys
+import ttnn
 from . import _ttml
 from ._recursive_import import _recursive_import_from_ttml
 
