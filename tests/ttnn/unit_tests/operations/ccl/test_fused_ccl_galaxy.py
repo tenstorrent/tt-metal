@@ -608,9 +608,13 @@ def run_all_gather_matmul_galaxy_impl(
     if op_mode == "local_matmul_allreduce":
         # Buffer tensors for all_reduce (used by local_matmul_allreduce path)
         # all_reduce_async requires WIDTH_SHARDED memory
-        # Output shape is [8, 4, M, N] - the result of matmul before reduce
+        # IMPORTANT: Buffer shard must be large enough to hold intermediate for all devices in ring
+        # Required: output_shard_volume * ring_size, where ring_size = cluster_shape[cluster_axis]
+        ring_size = cluster_shape[cluster_axis]  # 4 devices
         allreduce_num_cores = 24
         allreduce_N_per_shard = round_up(math.ceil(N / allreduce_num_cores), ttnn.TILE_SIZE)
+        # Buffer shard needs ring_size multiplier for intermediate storage
+        buffer_N_per_shard = allreduce_N_per_shard * ring_size
         allreduce_core_range_set = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 3))}  # 6x4 = 24 cores
         )
@@ -619,11 +623,12 @@ def run_all_gather_matmul_galaxy_impl(
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 allreduce_core_range_set,
-                [M, allreduce_N_per_shard],
+                [M, buffer_N_per_shard],  # Larger shard for intermediate storage
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        allreduce_buffer_shape = [*cluster_shape, M, N]
+        # Buffer tensor shape needs to match the larger shard
+        allreduce_buffer_shape = [*cluster_shape, M, buffer_N_per_shard * allreduce_num_cores]
         allreduce_buffer_tensor = torch.zeros(allreduce_buffer_shape)
         for i in range(num_buffers):
             tt_allreduce_buffer = ttnn.from_torch(
