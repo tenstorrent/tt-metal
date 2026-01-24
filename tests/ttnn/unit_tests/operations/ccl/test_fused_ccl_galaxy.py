@@ -531,74 +531,82 @@ def run_all_gather_matmul_galaxy_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    chunk_intermediate_tensor = torch.zeros(chunk_intermediate_shape)
+    # Only allocate chunk intermediate tensors if using chunked_fused mode
     tt_chunk_intermediate_tensors = []
-    for i in range(num_buffers):
-        tt_chunk_intermediate = ttnn.from_torch(
-            chunk_intermediate_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=in0_dtype,
-            memory_config=chunk_intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    chunked_fused_program_config = None
+    if op_mode == "chunked_fused":
+        chunk_intermediate_tensor = torch.zeros(chunk_intermediate_shape)
+        for i in range(num_buffers):
+            tt_chunk_intermediate = ttnn.from_torch(
+                chunk_intermediate_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=in0_dtype,
+                memory_config=chunk_intermediate_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            tt_chunk_intermediate_tensors.append(tt_chunk_intermediate)
+
+        logger.info(
+            f"Chunked fused: num_chunks={num_chunks}, K_chunk_per_device={K_chunk_per_device}, K_chunk_gathered={K_chunk_gathered}"
         )
-        tt_chunk_intermediate_tensors.append(tt_chunk_intermediate)
+        logger.info(
+            f"Chunk intermediate shape: {chunk_intermediate_shape}, shard: [M, {chunk_intermediate_N_per_shard}]"
+        )
 
-    logger.info(
-        f"Chunked fused: num_chunks={num_chunks}, K_chunk_per_device={K_chunk_per_device}, K_chunk_gathered={K_chunk_gathered}"
-    )
-    logger.info(f"Chunk intermediate shape: {chunk_intermediate_shape}, shard: [M, {chunk_intermediate_N_per_shard}]")
+        # Program config for chunked fused op (smaller K dimension)
+        chunk_in0_block_w = K_chunk_per_device // ttnn.TILE_SIZE
+        while (K_chunk_gathered / ttnn.TILE_SIZE) % chunk_in0_block_w != 0:
+            chunk_in0_block_w -= 1
+        chunked_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=storage_grid,
+            in0_block_w=chunk_in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=HOP_GRID,
+            num_global_cb_receivers=24,
+            untilize_out=False,
+        )
+        logger.debug(f"Chunked fused program config: in0_block_w={chunk_in0_block_w}")
 
-    # Program config for chunked fused op (smaller K dimension)
-    chunk_in0_block_w = K_chunk_per_device // ttnn.TILE_SIZE
-    while (K_chunk_gathered / ttnn.TILE_SIZE) % chunk_in0_block_w != 0:
-        chunk_in0_block_w -= 1
-    chunked_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=storage_grid,
-        in0_block_w=chunk_in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-        gather_in0=True,
-        hop_cores=HOP_GRID,
-        num_global_cb_receivers=24,
-        untilize_out=False,
-    )
-    logger.debug(f"Chunked fused program config: in0_block_w={chunk_in0_block_w}")
-
-    # Intermediate tensors
-    intermediate_tensor = torch.zeros(intermediate_shape)
+    # Only allocate intermediate tensors if using fused mode
     tt_intermediate_tensors = []
-    for i in range(num_buffers):
-        tt_intermediate_tensor = ttnn.from_torch(
-            intermediate_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=in0_dtype,
-            memory_config=intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-        )
-        tt_intermediate_tensors.append(tt_intermediate_tensor)
+    if op_mode == "fused":
+        intermediate_tensor = torch.zeros(intermediate_shape)
+        for i in range(num_buffers):
+            tt_intermediate_tensor = ttnn.from_torch(
+                intermediate_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=in0_dtype,
+                memory_config=intermediate_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            tt_intermediate_tensors.append(tt_intermediate_tensor)
 
-    # Buffer tensors for all_reduce (used by local_matmul_allreduce path)
-    # Output shape is [8, 4, M, N] - the result of matmul before reduce
-    allreduce_buffer_shape = [*cluster_shape, M, N]
-    allreduce_buffer_tensor = torch.zeros(allreduce_buffer_shape)
+    # Only allocate allreduce buffers if using local_matmul_allreduce mode
     tt_allreduce_buffers = []
-    for i in range(num_buffers):
-        tt_allreduce_buffer = ttnn.from_torch(
-            allreduce_buffer_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=output_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-        )
-        tt_allreduce_buffers.append(tt_allreduce_buffer)
+    if op_mode == "local_matmul_allreduce":
+        # Buffer tensors for all_reduce (used by local_matmul_allreduce path)
+        # Output shape is [8, 4, M, N] - the result of matmul before reduce
+        allreduce_buffer_shape = [*cluster_shape, M, N]
+        allreduce_buffer_tensor = torch.zeros(allreduce_buffer_shape)
+        for i in range(num_buffers):
+            tt_allreduce_buffer = ttnn.from_torch(
+                allreduce_buffer_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=output_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            tt_allreduce_buffers.append(tt_allreduce_buffer)
 
     # Compute golden
     output_tensor_goldens_list = []
@@ -1116,8 +1124,8 @@ def test_all_gather_matmul_galaxy_perf_comparison(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "op_mode",
-    ["non_fused", "fused"],  # Test both modes for PCC validation
-    ids=["non_fused", "fused"],
+    ["non_fused"],  # Fused mode OOMs with model dims (needs 487KB/bank, only 385KB free)
+    ids=["non_fused"],
 )
 def test_all_gather_matmul_galaxy_prefill_check(
     mesh_device,
