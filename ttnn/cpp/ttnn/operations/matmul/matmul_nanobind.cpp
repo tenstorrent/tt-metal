@@ -259,13 +259,18 @@ void py_module(nb::module_& mod) {
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
-                "out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, fuse_batch={})",
+                "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
                 config.out_subblock_w,
+                config.out_block_h,
+                config.out_block_w,
                 config.per_core_M,
                 config.per_core_N,
+                config.transpose_mcast,
+                config.fused_activation,
                 config.fuse_batch);
         });
 
@@ -438,15 +443,24 @@ void py_module(nb::module_& mod) {
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
-                "out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, fuse_batch={}, mcast_in0={})",
+                "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
+                "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
+                "num_global_cb_receivers={}, untilize_out={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
+                config.out_block_h,
+                config.out_block_w,
                 config.out_subblock_h,
                 config.out_subblock_w,
                 config.per_core_M,
                 config.per_core_N,
                 config.fuse_batch,
-                config.mcast_in0);
+                config.fused_activation,
+                config.mcast_in0,
+                config.gather_in0,
+                config.hop_cores,
+                config.num_global_cb_receivers,
+                config.untilize_out);
         });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
@@ -493,11 +507,15 @@ void py_module(nb::module_& mod) {
             additional memory round-trips in DRAM-based operations.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
+            // Include fused_activation in the repr for full visibility during tracing/debugging.
+            const char* fused_activation_repr =
+                config.fused_activation.has_value() ? "set" : "None";
             return fmt::format(
-                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={})",
+                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, fused_activation={})",
                 config.in0_block_w,
                 config.per_core_M,
-                config.per_core_N);
+                config.per_core_N,
+                fused_activation_repr);
         });
 
     ttnn::bind_function(
