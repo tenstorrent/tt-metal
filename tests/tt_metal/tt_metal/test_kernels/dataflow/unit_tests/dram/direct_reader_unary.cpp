@@ -21,10 +21,10 @@ void kernel_main() {
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(src_bank_id, src_addr);
 
         cb_reserve_back(cb_id, ublock_size_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes);
+        uintptr_t l1_write_addr = get_write_ptr(cb_id);
+        noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes, 0);
 
-        noc_async_read_barrier();
+        noc_async_read_barrier(0);
 
         cb_push_back(cb_id, ublock_size_tiles);
         src_addr += ublock_size_bytes;

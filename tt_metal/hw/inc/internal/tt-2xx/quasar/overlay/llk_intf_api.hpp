@@ -12,8 +12,8 @@
  */
 
 #pragma once
-#include "overlay_reg.h"
-#include "rocc_instructions.hpp"
+#include "overlay/meta/registers/overlay_reg.h"
+#include "overlay/rocc_instructions.hpp"
 
 #define LLK_REG_SIZE TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_REG_MAP_SIZE
 #define COUNTER_REG_SIZE TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__REG_FILE_SIZE

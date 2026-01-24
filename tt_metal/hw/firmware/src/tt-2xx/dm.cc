@@ -37,7 +37,7 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -87,11 +87,11 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
-    subordinate_sync->allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+    // subordinate_sync->allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
-    // subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     deassert_trisc_reset();
 }
 
@@ -116,7 +116,6 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISC0 to complete " << subordinate_sync->neo0_trisc0 << ENDL();
     while (subordinate_sync->neo0_trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
@@ -126,7 +125,7 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
-        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+        // subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -140,11 +139,12 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE &&
-           subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
-           subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
-           subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE &&
-           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (
+        subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
+        (subordinate_sync->allNeo0 != 0x40000000 && subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) ||
+        subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+        subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
+        subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("NTD");
 }
 
@@ -169,20 +169,15 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    // Reset tile counters
-    tile_counters_reset();
-
     // risc_init();
-    // Reset tile counters
-    tile_counters_reset();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
-
+        // Reset tile counters
+        tile_counters_reset();
         deassert_trisc();
-        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -285,7 +280,6 @@ extern "C" uint32_t _start1() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
                     uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
-                    DPRINT << "local mask " << local_cb_mask << ENDL();
                     // TODO: setup DataFlowBuffers
                     setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                     // cb_l1_base =
@@ -295,7 +289,7 @@ extern "C" uint32_t _start1() {
                     // experimental::setup_remote_cb_interfaces<true>(
                     //     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                     // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
-                    uint32_t kernel_lma =
+                    uintptr_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -392,7 +386,6 @@ extern "C" uint32_t _start1() {
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        DPRINT << "local mask " << local_cb_mask << ENDL();
         setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
 
         // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);

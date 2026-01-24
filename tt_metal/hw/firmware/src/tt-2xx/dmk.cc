@@ -10,7 +10,6 @@
 #include "tensix_types.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "api/dataflow/dataflow_api.h"
@@ -56,6 +55,7 @@ uint32_t _start() {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
+        DPRINT << "KERNEL START" << ENDL();
         kernel_main();
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {

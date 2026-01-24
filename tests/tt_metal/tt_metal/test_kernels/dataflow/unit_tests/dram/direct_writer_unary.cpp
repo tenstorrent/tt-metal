@@ -19,9 +19,9 @@ void kernel_main() {
 
         cb_wait_front(cb_id, ublock_size_tiles);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes, 0);
 
-        noc_async_write_barrier();
+        noc_async_write_barrier(0);
 
         cb_pop_front(cb_id, ublock_size_tiles);
         dst_addr += ublock_size_bytes;

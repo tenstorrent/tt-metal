@@ -30,6 +30,8 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "tile_counters.h"
+#include "overlay/llk_intf_api.hpp"
+#include "api/debug/dprint_pages.h"
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
 #error "dataflow_api.h is only supported in kernel build. Firmware build should use low-level APIs instead."
@@ -191,8 +193,10 @@ FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
-    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
-    pages_received_ptr[0] += num_pages;
+    // volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    // pages_received_ptr[0] += num_pages;
+    tile_counters[operand].f.posted += num_pages;
+    DPRINT << "posted: " << tile_counters[operand].f.posted << ENDL();
 
     get_local_cb_interface(operand).fifo_wr_ptr += num_words;
 
@@ -231,8 +235,9 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
-    volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    pages_acked_ptr[0] += num_pages;
+    // volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    // pages_acked_ptr[0] += num_pages;
+    tile_counters[operand].f.acked += num_pages;
 
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
@@ -348,15 +353,15 @@ inline void wait_for_sync_register_value(uintptr_t addr, int32_t val) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
-    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
+    // uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
-    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+    uint32_t pages_received = tile_counters[operand].f.tiles_posted_raw;  // get_cb_tiles_received_ptr(operand)[0];
 
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-    uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+    uint16_t pages_acked = tile_counters[operand].f.tiles_acked_raw;  // (uint16_t)reg_read(pages_acked_ptr);
     uint16_t free_space_pages_wrap = get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
     return num_pages <= static_cast<int32_t>(free_space_pages_wrap);
 }
@@ -377,25 +382,33 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
  */
 // clang-format on
 FORCE_INLINE
-void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
+void cb_reserve_back(int32_t operand, uint32_t num_pages) {
+    // uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
-    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+    // uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+    uint32_t pages_received = tile_counters[operand].f.tiles_posted_raw;
+    DPRINT << "pages_received: " << pages_received << ENDL();
 
-    int32_t free_space_pages;
+    uint32_t free_space_pages;
+    DPRINT << "interface: " << (uintptr_t)&get_local_cb_interface(operand) << ENDL();
+    print_cb_details(operand);
     WAYPOINT("CRBW");
     do {
-        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
-        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        invalidate_l1_cache();
-        // uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        //     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+        //     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        //     invalidate_l1_cache();
+        //     // uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
         uint16_t pages_acked = tile_counters[operand].f.tiles_acked_raw;
+        DPRINT << "pages_acked: " << pages_acked << ENDL();
+        DPRINT << "pages_received: " << pages_received << ENDL();
+        DPRINT << "num_pages: " << get_local_cb_interface(operand).fifo_num_pages << ENDL();
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
-        free_space_pages = (int32_t)free_space_pages_wrap;
+        free_space_pages = free_space_pages_wrap;
     } while (free_space_pages < num_pages);
+    DPRINT << "done reserving back" << ENDL();
     WAYPOINT("CRBD");
 }
 
@@ -425,10 +438,10 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
+    uint32_t pages_acked = tile_counters[operand].f.tiles_acked_raw;  // get_cb_tiles_acked_ptr(operand)[0];
+    // uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
-    uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+    uint16_t pages_received = tile_counters[operand].f.tiles_posted_raw - pages_acked;
     return num_pages <= pages_received;
 }
 
@@ -458,15 +471,15 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
+    // uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    // uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received;
 
     WAYPOINT("CWFW");
     do {
         // pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
-        pages_received = tile_counters[operand].f.tiles_posted_raw - pages_acked;
+        pages_received = tile_counters[operand].f.tiles_posted_raw - tile_counters[operand].f.tiles_acked_raw;
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
 }

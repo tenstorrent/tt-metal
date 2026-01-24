@@ -121,7 +121,7 @@ inline void assert_trisc_reset() {
 
 inline void deassert_trisc_reset() {
     uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
-    uint32_t trisc_reset_mask = 0x3800;
+    uint32_t trisc_reset_mask = 0x7800;
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
     // soft_reset_0 = READ_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
     // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);

@@ -6,8 +6,8 @@
 #pragma once
 #include "api/debug/dprint.h"
 
-#if (                                                            \
-    defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || \
+#if (                                                                                       \
+    defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_DM) || \
     (defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC != 1)))
 inline void print_cb_details(uint32_t cb_id) {
     DPRINT << "cb_id " << cb_id << ": { "

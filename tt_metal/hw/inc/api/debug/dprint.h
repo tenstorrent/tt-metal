@@ -36,7 +36,7 @@
 #include "hostdevcommon/dprint_common.h"
 
 #include "internal/debug/dprint_buffer.h"
-#include "waypoint.h"
+#include "api/debug/waypoint.h"
 
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define DPRINT DebugPrinter()

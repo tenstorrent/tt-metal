@@ -14,23 +14,24 @@ void MAIN {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    experimental::CircularBuffer cb15(tt::CBIndex::c_15);
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_15);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();
 
         // Pop tile after tile, copy to DST and pack
         cb0.wait_front(1);
-        cb16.reserve_back(1);
+        cb15.reserve_back(1);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
-        pack_tile(0, tt::CBIndex::c_16);
+        pack_tile(0, tt::CBIndex::c_15);
 
         cb0.pop_front(1);
-        cb16.push_back(1);
+        cb15.push_back(1);
 
         release_dst();
     }
+    wait_unpack_idle();
 }
 }  // namespace NAMESPACE

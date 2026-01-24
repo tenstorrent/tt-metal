@@ -248,6 +248,7 @@ uint32_t finalize_rt_args(
     uint32_t offset = max_unique_rta_size + total_crta_size;
 
     rta_offset = base_offset;
+    offset = tt::align(offset, 64);
     return offset;
 }
 
@@ -267,6 +268,7 @@ uint32_t finalize_sems(
     uint32_t sem_size = (max_id + 1) * MetalContext::instance().hal().get_alignment(HalMemType::L1);
     semaphore_offset = sem_base_offset;
     semaphore_size = sem_size;
+    semaphore_size = tt::align(semaphore_size, 64);
     return sem_base_offset + sem_size;
 }
 
@@ -301,6 +303,7 @@ uint32_t finalize_cbs(
     uint32_t total_cb_size = local_cb_size + remote_cb_size;
     cb_offset = base_offset;
     cb_size = total_cb_size;
+    cb_size = tt::align(cb_size, 64);
 
     return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
