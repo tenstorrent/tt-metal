@@ -310,8 +310,8 @@ Alternatively, you could update ``create_cb`` to take a variant argument similar
 When profiling, you can use the device profiler from Lab 1. Ensure that you build in Release mode and that DPRINT is disabled.
 
 
-Background: Data Reuse in Multi Core Matmul
-*******************************************
+Background: Data Reuse in Multi Core Matrix Multiplication
+**********************************************************
 
 Motivation
 ==========
@@ -444,7 +444,6 @@ We can split the sum over ``k`` into consecutive chunks corresponding to K-block
 
     ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``.
 
-= \sum_{b=0}^{\text{num_blocks}-1} \; \sum_{\substack{k \in \text{block } b}} A_{ik} B_{kj}.
 
 Define the partial result from block b as:
 
@@ -698,16 +697,16 @@ In this lab you explored basic optimizations to implement data reuse in a multi-
 There are many other ways in which the code could be further optimized. Here we list some examples:
 
 #. **Use multiple destination registers in the destination register array.**
-  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-  While previously we only used a single tile in the destination register array, the TT-Metalium
-  programming model exposes the array holding up to 8 tiles of data.
-  We could leverage this extra storage to keep multiple output tiles active at once.
-  By doing this, you can amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
-  data is packed into CBs. Conceptually,  instead of computing a single output tile, packing it, and then moving on
-  to the next, you compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
-  corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
-  you pack all of its tiles out together in a batch.
-  This better matches the hardware's vectorization and register file structure and typically provides a throughput improvement.
+   As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
+   While previously we only used a single tile in the destination register array, the TT-Metalium
+   programming model exposes the array holding up to 8 tiles of data.
+   We could leverage this extra storage to keep multiple output tiles active at once.
+   By doing this, you can amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
+   data is packed into CBs. Conceptually,  instead of computing a single output tile, packing it, and then moving on
+   to the next, you compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
+   corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
+   you pack all of its tiles out together in a batch.
+   This better matches the hardware's vectorization and register file structure and typically provides a throughput improvement.
 
 #. **Subblocking the Output**
    On top of using multiple destination registers, you can go further by introducing subblocking:
@@ -754,7 +753,7 @@ In this lab you extended your understanding of matrix multiplication on Tenstorr
 You saw how:
 
 * The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully
-distributing output tiles among cores.
+  distributing output tiles among cores.
 
 * TT-Metalium's static parallelism model requires you to **explicitly choose which cores participate** and how many tiles
   each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.
