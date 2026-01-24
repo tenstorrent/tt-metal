@@ -109,7 +109,7 @@ def compute_kernel_config_to_dict(compute_kernel_config: ttnn.WormholeComputeKer
         "fp32_dest_acc_en": bool(compute_kernel_config.fp32_dest_acc_en),
         "packer_l1_acc": bool(compute_kernel_config.packer_l1_acc),
         "dst_full_sync_en": bool(compute_kernel_config.dst_full_sync_en),
-        "throttle_level": compute_kernel_config.throttle_level,
+        "throttle_level": str(compute_kernel_config.throttle_level),
     }
 
 
