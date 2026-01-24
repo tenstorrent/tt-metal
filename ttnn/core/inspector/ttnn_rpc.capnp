@@ -12,5 +12,23 @@ $Cxx.namespace("ttnn::inspector::rpc");
 
 # Inspector RPC interface for querying TTNN runtime state
 
+struct MeshWorkloadData {
+    meshWorkloadId @0 :UInt64;
+    # High-level operation metadata
+    # Empty if workload was not created by a tracked operation
+    name @1 :Text;        # Operation name
+    parameters @2 :Text;  # Operation parameters
+}
+
+struct MeshWorkloadRuntimeIdEntry {
+    workloadId @0 :UInt64;
+    runtimeId @1 :UInt64;
+}
+
 interface TtnnInspector extends(Rpc.InspectorChannel) {
+    # Get mesh workloads we have additional info for
+    getMeshWorkloads @0 () -> (meshWorkloads :List(MeshWorkloadData));
+
+    # Get runtime IDs for mesh workloads
+    getMeshWorkloadsRuntimeIds @1 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 }

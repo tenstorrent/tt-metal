@@ -39,8 +39,6 @@ Data::Data()
                 [this](auto result) { this->rpc_get_mesh_devices(result); });
             get_runtime_inspector_rpc().setGetMeshWorkloadsCallback(
                 [this](auto result) { this->rpc_get_mesh_workloads(result); });
-            get_runtime_inspector_rpc().setGetMeshWorkloadsRuntimeIdsCallback(
-                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
             get_runtime_inspector_rpc().setGetDevicesInUseCallback(
                 [this](auto result) { this->rpc_get_devices_in_use(result); });
             get_runtime_inspector_rpc().setGetKernelCallback(
@@ -140,8 +138,6 @@ void Data::rpc_get_mesh_workloads(rpc::RuntimeInspector::GetMeshWorkloadsResults
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
-        mesh_workload.setName(mesh_workload_data.name);
-        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -168,17 +164,6 @@ void Data::rpc_get_mesh_workloads(rpc::RuntimeInspector::GetMeshWorkloadsResults
             binary_status.setMeshId(mesh_id);
             binary_status.setStatus(convert_binary_status(status));
         }
-    }
-}
-
-void Data::rpc_get_mesh_workloads_runtime_ids(
-    rpc::RuntimeInspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
-    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
-    for (size_t i = 0; i < runtime_ids.size(); ++i) {
-        auto entry = all_runtime_ids[i];
-        entry.setWorkloadId(runtime_ids[i].workload_id);
-        entry.setRuntimeId(runtime_ids[i].runtime_id);
     }
 }
 

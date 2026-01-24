@@ -23,6 +23,7 @@
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include "ttnn/inspector/inspector.hpp"
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -269,7 +270,7 @@ void emit_mesh_workload_annotation(
             },
             tensor_args);
 
-        tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
+        ttnn::inspector::EmitMeshWorkloadAnnotation(
             workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
     }
 }

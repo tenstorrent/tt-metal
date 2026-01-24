@@ -96,6 +96,7 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
+        core/inspector/data.cpp
         core/inspector/inspector.cpp
         core/reports.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
