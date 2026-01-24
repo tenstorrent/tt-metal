@@ -16,6 +16,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
 #include "device/layernorm_op_multi_core.hpp"
+#include "device/layernorm_op_multi_core_sharded.hpp"
 #include "device/layernorm_device_operation_types.hpp"
 #include "device/layernorm_types.hpp"
 
@@ -269,6 +270,26 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
 
             Returns:
                 ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+            )doc");
+
+    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::LayerNormShardedProgramFactory::create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            R"doc(
+            Creates a program descriptor for sharded layer norm operation.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
+                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
+                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
+                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
+
+            Returns:
+                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
             )doc");
 }
 

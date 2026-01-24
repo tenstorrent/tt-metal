@@ -126,6 +126,7 @@ DistributedLayerNormStage = ttnn._ttnn.operations.normalization.DistributedLayer
 LayerNormParams = ttnn._ttnn.operations.normalization.LayerNormParams
 LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
 LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
+LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
 
 
 # group norm helper function
