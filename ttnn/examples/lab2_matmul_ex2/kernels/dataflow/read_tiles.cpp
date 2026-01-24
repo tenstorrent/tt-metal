@@ -8,16 +8,19 @@
 void kernel_main() {
     // Read parameters from the kernel's runtime arguments.
     int arg_idx = 0;
-    uint32_t src0_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t src1_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t Kt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t Nt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tile_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t src0_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t src1_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t Nt = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t Kt = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t M_block_tiles = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t N_block_tiles = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t K_block_tiles = get_arg_val<uint32_t>(arg_idx++);
 
     // Offset of the output C_block in the output matrix.
-    uint32_t tile_offset_row = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tile_offset_col = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_offset_row = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_offset_col = get_arg_val<uint32_t>(arg_idx++);
+
+    const uint32_t num_k_blocks = Kt / K_block_tiles;    
 
     // ``Kt`` dimension is split into K-blocks of size ``K_block_tiles``,
     // such that ``Kt = num_k_blocks * K_block_tiles``.

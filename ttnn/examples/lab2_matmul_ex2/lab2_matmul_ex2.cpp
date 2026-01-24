@@ -199,18 +199,26 @@ void matmul_multi_core(
     const uint32_t Kt = K / TILE_WIDTH;
     const uint32_t Nt = N / TILE_WIDTH;
 
-    // Assume grid size is 8x8
-    CoreCoord core_grid = {8, 8};
+    // Assume fixed grid size
+    CoreCoord core_grid = {5, 5};
     CoreCoord max_core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
     log_info(tt::LogAlways, "Using core grid size of ({} x {}) out of available core grid size of ({} x {})", core_grid.x, core_grid.y, max_core_grid.x, max_core_grid.y);
-    TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size");
+    TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size.");
+    TT_FATAL((Mt % core_grid.x == 0) && (Nt % core_grid.y == 0), "MT and Nt must be divisible by core grid size.");
     
     const uint32_t M_block_tiles = Mt / core_grid.x;
     const uint32_t N_block_tiles = Nt / core_grid.y;
     // This needs to be chosen so that all the data fits into on-chip SRAM.
     const uint32_t K_block_tiles = 2;
     const uint32_t num_k_blocks = Kt / K_block_tiles;
-    
+
+    // The number of tiles in the input A and B slabs.
+    const uint32_t A_slab_tiles = M_block_tiles * K_block_tiles;
+    const uint32_t B_slab_tiles = K_block_tiles * N_block_tiles;
+
+    // The number of tiles in the output C block.
+    const uint32_t C_block_tiles = M_block_tiles * N_block_tiles;
+
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware natively operates on.
     // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
@@ -237,10 +245,10 @@ void matmul_multi_core(
 
     // Create circular buffers for the input and output data.
     // Using 2x tiles when double buffering is desired.
-    constexpr uint32_t tiles_cb_in0 = A_block_tiles * K_block_tiles * 2;
-    constexpr uint32_t tiles_cb_in1 = K_block_tiles * N_block_tiles * 2;
-    constexpr uint32_t tiles_cb_out = M_block_tiles * N_block_tiles * 2;
-    constexpr uint32_t tiles_cb_interm = M_block_tiles * N_block_tiles;
+    const uint32_t tiles_cb_in0 = M_block_tiles * K_block_tiles * 2;
+    const uint32_t tiles_cb_in1 = K_block_tiles * N_block_tiles * 2;
+    const uint32_t tiles_cb_out = M_block_tiles * N_block_tiles;
+    const uint32_t tiles_cb_interm = M_block_tiles * N_block_tiles;
 
     // There are 32 circular buffers (c_0 - c_31) on the device. We can use any of them, as long as they are not already
     // in use. Kernel code is responsible for using the correct circular buffer for the input and output data (e.g.
@@ -285,7 +293,7 @@ void matmul_multi_core(
     // functionality or performance.
     KernelHandle reader_id = tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex1/kernels/dataflow/read_tiles.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex2/kernels/dataflow/read_tiles.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -296,7 +304,7 @@ void matmul_multi_core(
     TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
     KernelHandle writer_id = tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex1/kernels/dataflow/write_tiles.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex2/kernels/dataflow/write_tiles.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -307,11 +315,11 @@ void matmul_multi_core(
     // Note that these are evaluated at the kernel's compile time, which is JIT compile done at program creation time.
     // Having arguments at compile time generally allows the compiler to optimize the kernel for the specific use case
     // (e.g. apply loop unrolling, constant folding, etc.), resulting in a more efficient kernel.
-    std::vector<uint32_t> compute_compile_time_args = {Kt};
+    std::vector<uint32_t> compute_compile_time_args = {num_k_blocks, M_block_tiles, N_block_tiles, K_block_tiles, A_slab_tiles, B_slab_tiles, C_block_tiles};
 
-    KernelHandle compute_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex1/kernels/compute/tiles_matmul.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab2_matmul_ex2/kernels/compute/tiles_matmul.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
@@ -320,26 +328,18 @@ void matmul_multi_core(
     uint32_t src1_addr = src1_mesh_buffer->address();
     uint32_t dst_addr = dst_mesh_buffer->address();
 
-    // This is a naive approach with two loops that is easier to understand..
-    // A more compact approach is possible. See tt_metal/programming_examples/matmul/matmul_multi_core/matmul_multi_core.cpp    
-    uint32_t tile_offset = 0;
-    for (const auto& core_range : core_group_1.ranges()) {
-        for (const CoreCoord& core : core_range) {
-            tt_metal::SetRuntimeArgs(prog_state.program, reader_id, core, {src0_addr, src1_addr, Kt, Nt, work_per_core_1, tile_offset});
-            tt_metal::SetRuntimeArgs(prog_state.program, writer_id, core, {dst_addr, work_per_core_1, tile_offset});
-            tt_metal::SetRuntimeArgs(prog_state.program, compute_id, core, {work_per_core_1});
-            tile_offset += work_per_core_1;
+    // Remember that core_grid x corresponds to columns and core_grid y corresponds to rows.
+    for (uint32_t row_block = 0; row_block < core_grid.y; row_block++) {
+        for (uint32_t col_block = 0; col_block < core_grid.x; col_block++) {
+            uint32_t tile_offset_row = row_block * M_block_tiles;
+            uint32_t tile_offset_col = col_block * N_block_tiles;
+
+            CoreCoord core = {col_block, row_block};
+            tt_metal::SetRuntimeArgs(prog_state.program, reader_id, core, {src0_addr, src1_addr, Nt, Kt, M_block_tiles, N_block_tiles, K_block_tiles, tile_offset_row, tile_offset_col});
+            tt_metal::SetRuntimeArgs(prog_state.program, writer_id, core, {dst_addr, Nt, M_block_tiles, N_block_tiles, tile_offset_row, tile_offset_col});
         }
     }
-    
-    for (const auto& core_range : core_group_2.ranges()) {
-        for (const CoreCoord& core : core_range) {
-            tt_metal::SetRuntimeArgs(prog_state.program, reader_id, core, {src0_addr, src1_addr, Kt, Nt, work_per_core_2, tile_offset});
-            tt_metal::SetRuntimeArgs(prog_state.program, writer_id, core, {dst_addr, work_per_core_2, tile_offset});
-            tt_metal::SetRuntimeArgs(prog_state.program, compute_id, core, {work_per_core_2});
-            tile_offset += work_per_core_2;
-        }
-    }
+
 
     // Execute the kernels (data is already on device from Tensor::from_vector)
     prog_state.workload.add_program(prog_state.device_range, std::move(prog_state.program));
