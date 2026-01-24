@@ -11,14 +11,24 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
+#include "device/layernorm_op_multi_core.hpp"
+#include "device/layernorm_device_operation_types.hpp"
+#include "device/layernorm_types.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
 namespace ttnn::operations::normalization::detail {
 
 struct LayerNormProgramConfigPlaceholder {};
+
+void bind_normalization_layernorm_types(nb::module_& mod) {
+    export_enum<ttnn::prim::LayerNormType>(mod, "LayerNormType");
+    export_enum<ttnn::prim::DistributedLayerNormStage>(mod, "DistributedLayerNormStage");
+}
 
 void bind_normalization_layernorm_program_config(nb::module_& mod) {
     nb::class_<LayerNormProgramConfigPlaceholder>(mod, "LayerNormProgramConfig");
@@ -170,9 +180,104 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()));
 }
 
+void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
+    nb::class_<ttnn::prim::LayerNormParams>(mod, "LayerNormParams")
+        .def(nb::init<>())
+        .def_rw("norm_type", &ttnn::prim::LayerNormParams::norm_type)
+        .def_rw("distributed_norm_stage", &ttnn::prim::LayerNormParams::distributed_norm_stage)
+        .def_rw("eps", &ttnn::prim::LayerNormParams::eps)
+        .def_rw("output_mem_config", &ttnn::prim::LayerNormParams::output_mem_config)
+        .def_rw("program_config", &ttnn::prim::LayerNormParams::program_config)
+        .def_rw("compute_kernel_config", &ttnn::prim::LayerNormParams::compute_kernel_config)
+        .def_rw("dtype", &ttnn::prim::LayerNormParams::dtype);
+
+    nb::class_<ttnn::prim::LayerNormInputs>(mod, "LayerNormInputs")
+        .def(
+            "__init__",
+            [](ttnn::prim::LayerNormInputs* t) {
+                new (t)
+                    ttnn::prim::LayerNormInputs{ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+            })
+        .def_rw("input", &ttnn::prim::LayerNormInputs::input)
+        .def_rw("residual_input_tensor", &ttnn::prim::LayerNormInputs::residual_input_tensor)
+        .def_rw("weight", &ttnn::prim::LayerNormInputs::weight)
+        .def_rw("bias", &ttnn::prim::LayerNormInputs::bias)
+        .def_rw("stats", &ttnn::prim::LayerNormInputs::stats);
+}
+
+void bind_normalization_layernorm_program_factory(nb::module_& mod) {
+    nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            R"doc(
+            Creates a program descriptor for layer norm multi-core operation.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
+                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
+                tensor_return_value (ttnn.Tensor): Output tensor reference.
+
+            Returns:
+                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+            )doc");
+}
+
+void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
+    nb::class_<ttnn::prim::LayerNormParams>(mod, "LayerNormParams")
+        .def(nb::init<>())
+        .def_rw("norm_type", &ttnn::prim::LayerNormParams::norm_type)
+        .def_rw("distributed_norm_stage", &ttnn::prim::LayerNormParams::distributed_norm_stage)
+        .def_rw("eps", &ttnn::prim::LayerNormParams::eps)
+        .def_rw("output_mem_config", &ttnn::prim::LayerNormParams::output_mem_config)
+        .def_rw("program_config", &ttnn::prim::LayerNormParams::program_config)
+        .def_rw("compute_kernel_config", &ttnn::prim::LayerNormParams::compute_kernel_config)
+        .def_rw("dtype", &ttnn::prim::LayerNormParams::dtype);
+
+    nb::class_<ttnn::prim::LayerNormInputs>(mod, "LayerNormInputs")
+        .def(
+            "__init__",
+            [](ttnn::prim::LayerNormInputs* t) {
+                new (t)
+                    ttnn::prim::LayerNormInputs{ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+            })
+        .def_rw("input", &ttnn::prim::LayerNormInputs::input)
+        .def_rw("residual_input_tensor", &ttnn::prim::LayerNormInputs::residual_input_tensor)
+        .def_rw("weight", &ttnn::prim::LayerNormInputs::weight)
+        .def_rw("bias", &ttnn::prim::LayerNormInputs::bias)
+        .def_rw("stats", &ttnn::prim::LayerNormInputs::stats);
+}
+
+void bind_normalization_layernorm_program_factory(nb::module_& mod) {
+    nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            &ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            R"doc(
+            Creates a program descriptor for layer norm multi-core operation.
+
+            Args:
+                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
+                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
+                tensor_return_value (ttnn.Tensor): Output tensor reference.
+
+            Returns:
+                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+            )doc");
+}
+
 void bind_normalization_layernorm(nb::module_& mod) {
+    bind_normalization_layernorm_types(mod);
     bind_normalization_layernorm_program_config(mod);
     bind_normalization_layernorm_operation(mod);
+    bind_normalization_layernorm_params_and_inputs(mod);
+    bind_normalization_layernorm_program_factory(mod);
 }
 
 }  // namespace ttnn::operations::normalization::detail
