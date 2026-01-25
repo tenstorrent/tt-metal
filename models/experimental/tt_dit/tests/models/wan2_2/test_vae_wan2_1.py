@@ -708,7 +708,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         (1, 384, 2, 180, 320, "upsample3d", None),  # decoder.up_blocks.1.upsamplers.0
         (1, 192, 4, 360, 640, "upsample2d", None),  # decoder.up_blocks.2.upsamplers.0
         (1, 384, 1, 180, 320, "downsample2d", None),  # decoder.up_blocks.3.upsamplers.0
-        (1, 384, 4, 180, 320, "downsample3d", None),  # decoder.up_blocks.3.upsamplers.0
+        (1, 384, 3, 120, 208, "downsample3d", None),  # decoder.up_blocks.3.upsamplers.0
     ],
     ids=[
         "upsample_0",
@@ -728,7 +728,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         ((2, 4), (2, 4), 1, 0),
         ((1, 8), (1, 8), 0, 1),
         ((1, 4), (1, 4), 1, 0),
-        ((1, 32), (1, 16), 0, 1),
+        ((4, 8), (4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -775,7 +775,9 @@ def test_wan_resample(
 
     torch_input_tensor = torch.randn(B, dim, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+    logger.info(f"tt_input_tensor: {tt_input_tensor.shape}")
+    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 4)
+    logger.info(f"tt_input_tensor_padded: {tt_input_tensor.shape}")
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
@@ -789,10 +791,12 @@ def test_wan_resample(
     for i in range(num_convs):
         if cache_len is not None:
             torch_cache_tensor = torch.randn(B, dim, cache_len, H // 2, W // 2, dtype=torch_dtype) * std + mean
+            logger.info(f"torch_cache_tensor: {torch_cache_tensor.shape}")
             torch_feat_cache.append(torch_cache_tensor)
 
             tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
-            tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor)
+            tt_cache_tensor, _ = conv_pad_height(tt_cache_tensor, parallel_config.height_parallel.factor * 2)
+            logger.info(f"tt_cache_tensor_padded: {tt_cache_tensor.shape}")
             tt_cache_tensor = bf16_tensor_2dshard(
                 tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
             )

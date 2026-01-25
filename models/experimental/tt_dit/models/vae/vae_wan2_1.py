@@ -881,6 +881,7 @@ class WanResample:
                 else:
                     # breakpoint()
                     cache_x_BTHWC = ttnn.clone(x_conv_BTHWC[:, -1:, :, :, :])
+                    # breakpoint()
                     x_conv_BTHWC = self.time_conv(
                         ttnn.concat([feat_cache[idx][:, -1:, :, :, :], x_conv_BTHWC], dim=1), logical_h
                     )
