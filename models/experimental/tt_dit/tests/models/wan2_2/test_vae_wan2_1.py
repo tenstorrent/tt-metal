@@ -707,26 +707,28 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         (1, 384, 1, 90, 160, "upsample3d", None),  # decoder.up_blocks.0.upsamplers.0
         (1, 384, 2, 180, 320, "upsample3d", None),  # decoder.up_blocks.1.upsamplers.0
         (1, 192, 4, 360, 640, "upsample2d", None),  # decoder.up_blocks.2.upsamplers.0
-        (1, 192, 4, 720, 1280, "downsample2d", None),  # decoder.up_blocks.3.upsamplers.0
+        (1, 384, 1, 180, 320, "downsample2d", None),  # decoder.up_blocks.3.upsamplers.0
+        (1, 384, 4, 180, 320, "downsample3d", None),  # decoder.up_blocks.3.upsamplers.0
     ],
     ids=[
         "upsample_0",
         "upsample_1",
         "upsample_2",
         "downsample_2",
+        "downsample_3",
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_shape, h_axis, w_axis",
+    "mesh_device, mesh_shape, h_axis, w_axis",
     [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
+        ((1, 1), (1, 1), 0, 1),
+        ((2, 4), (2, 4), 0, 1),
+        ((2, 4), (2, 4), 1, 0),
+        ((1, 8), (1, 8), 0, 1),
+        ((1, 4), (1, 4), 1, 0),
+        ((1, 32), (1, 16), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
@@ -736,7 +738,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         "1x4_h1_w0",
         "4x8_h0_w1",
     ],
-    # indirect=["mesh_device"],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_resample(
@@ -786,7 +788,7 @@ def test_wan_resample(
     tt_feat_idx = [0]
     for i in range(num_convs):
         if cache_len is not None:
-            torch_cache_tensor = torch.randn(B, dim, cache_len, H, W, dtype=torch_dtype) * std + mean
+            torch_cache_tensor = torch.randn(B, dim, cache_len, H // 2, W // 2, dtype=torch_dtype) * std + mean
             torch_feat_cache.append(torch_cache_tensor)
 
             tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
@@ -824,8 +826,12 @@ def test_wan_resample(
     tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
-    logger.info(f"torch_output shape: {torch_output.shape}")
-    logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
+    logger.info(
+        f"torch_output shape: {torch_output.shape}, mean: {torch_output.mean()}, std: {torch_output.std()}, min: {torch_output.min()}, max: {torch_output.max()}"
+    )
+    logger.info(
+        f"tt_output_torch shape: {tt_output_torch.shape}, mean: {tt_output_torch.mean()}, std: {tt_output_torch.std()}, min: {tt_output_torch.min()}, max: {tt_output_torch.max()}"
+    )
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.008)
 

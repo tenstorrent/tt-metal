@@ -33,8 +33,8 @@ from loguru import logger
 @pytest.mark.parametrize(
     "width, height",
     [
-        (832, 480),
-        # (1280, 720),
+        # (832, 480),
+        (1280, 720),
     ],
     ids=[
         "resolution_480p",

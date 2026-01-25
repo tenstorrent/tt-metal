@@ -102,8 +102,8 @@ def prepare_latents(image):
     )
     pipe.to("cpu")
     logger.info("Preprocessing image...")
-    image = preprocess(image, 832, 480)
-    latents, mask_w_cond = pipe.prepare_latents(image, 1)
+    image = preprocess(image, 1280, 720)
+    latents, mask_w_cond = pipe.prepare_latents(image, batch_size=1, width=1280, height=720)
     return latents, mask_w_cond
 
 
@@ -228,7 +228,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        self.tt_vae.load_state_dict(self.vae.state_dict())
+        # self.tt_vae.load_state_dict(self.vae.state_dict())
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -840,6 +840,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         # y = self.prepare_image(image).unsqueeze(0)
 
         latents, y = prepare_latents(image)
+        breakpoint()
         # torch.save(latents, "latents_tt_code.pt")
         # torch.save(y, "y_tt_code.pt")
         # latents = torch.load("latents_tt_code.pt")

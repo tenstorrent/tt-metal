@@ -776,7 +776,7 @@ class WanResample:
         self.dim = dim
         self.mode = mode
         self.mesh_device = mesh_device
-        upsample_out_dim = upsample_out_dim or dim // 2
+        upsample_out_dim = upsample_out_dim or (dim // 2 if "upsample" in mode else dim)
 
         assert mode in ["upsample2d", "upsample3d", "downsample2d", "downsample3d"]
 
@@ -800,11 +800,22 @@ class WanResample:
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
             )
+        elif mode == "downsample3d":
+            self.time_conv = WanCausalConv3d(
+                in_channels=dim,
+                out_channels=dim,
+                kernel_size=(3, 1, 1),
+                stride=(2, 1, 1),
+                padding=(0, 0, 0),
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+            )
 
     def load_state_dict(self, state_dict):
         self.conv.load_state_dict(substate(state_dict, "resample.1"))
 
-        if self.mode == "upsample3d":
+        if "3d" in self.mode:
             self.time_conv.load_state_dict(substate(state_dict, "time_conv"))
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
@@ -847,13 +858,37 @@ class WanResample:
             else:
                 raise ValueError("feat_cache cannot be None")
 
-        T2 = x_BTHWC.shape[1]
-        x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
-        x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
-        logical_h *= 2
-        H2, W2 = x_upsamped_NHWC.shape[1], x_upsamped_NHWC.shape[2]
-        x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
+        if "upsample" in self.mode:
+            T2 = x_BTHWC.shape[1]
+            x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
+            x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
+            logical_h *= 2
+            H2, W2 = x_upsamped_NHWC.shape[1], x_upsamped_NHWC.shape[2]
+            x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
         x_conv_BTHWC = self.conv(x_BTHWC, logical_h)
+        if "downsample" in self.mode:
+            logical_h //= 2
+            # breakpoint()
+            x_conv_BTHWC = x_conv_BTHWC[:, :, 1::2, 1::2, :]
+
+        # Handle downsample3d
+        if self.mode == "downsample3d":
+            if feat_cache is not None:
+                idx = feat_idx[0]
+                if feat_cache[idx] is None:
+                    feat_cache[idx] = ttnn.clone(x_conv_BTHWC)
+                    feat_idx[0] += 1
+                else:
+                    # breakpoint()
+                    cache_x_BTHWC = ttnn.clone(x_conv_BTHWC[:, -1:, :, :, :])
+                    x_conv_BTHWC = self.time_conv(
+                        ttnn.concat([feat_cache[idx][:, -1:, :, :, :], x_conv_BTHWC], dim=1), logical_h
+                    )
+                    # x_time_BTHWU = self.time_conv(x_BTHWC, logical_h, [feat_cache[idx][:, -1:, :, :, :])
+                    feat_cache[idx] = cache_x_BTHWC
+                    feat_idx[0] += 1
+            else:
+                raise ValueError("feat_cache cannot be None")
         return x_conv_BTHWC, logical_h
 
 
