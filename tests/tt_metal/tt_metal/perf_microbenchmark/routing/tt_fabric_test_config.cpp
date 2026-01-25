@@ -950,7 +950,13 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
 
     if (parsed_test.defaults.has_value()) {
-        resolved_test.defaults = resolve_traffic_pattern_single(parsed_test.defaults.value());
+        auto resolved_defaults = resolve_traffic_pattern(parsed_test.defaults.value());
+        TT_FATAL(
+            resolved_defaults.size() == 1,
+            "Test '{}': defaults cannot use core sweep (got {} patterns, expected 1)",
+            parsed_test.name,
+            resolved_defaults.size());
+        resolved_test.defaults = std::move(resolved_defaults.front());
     }
 
     // Resolve senders
@@ -1007,27 +1013,6 @@ std::vector<SenderConfig> TestConfigBuilder::resolve_sender_config(const ParsedS
     return resolved_senders;
 }
 
-// Single pattern resolution (no core expansion) - used for defaults
-TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern_single(
-    const ParsedTrafficPatternConfig& parsed_pattern) {
-    TrafficPatternConfig resolved_pattern;
-    resolved_pattern.ftype = parsed_pattern.ftype;
-    resolved_pattern.ntype = parsed_pattern.ntype;
-    resolved_pattern.size = parsed_pattern.size;
-    resolved_pattern.num_packets = parsed_pattern.num_packets;
-    resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-    resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
-    resolved_pattern.sender_credit_info = std::nullopt;
-    resolved_pattern.credit_return_batch_size = std::nullopt;
-
-    if (parsed_pattern.destination.has_value()) {
-        resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
-    }
-
-    return resolved_pattern;
-}
-
-// Pattern resolution with optional destination core expansion
 std::vector<TrafficPatternConfig> TestConfigBuilder::resolve_traffic_pattern(
     const ParsedTrafficPatternConfig& parsed_pattern) {
     std::vector<TrafficPatternConfig> resolved_patterns;
@@ -1083,7 +1068,11 @@ DestinationConfig TestConfigBuilder::resolve_destination_config(const ParsedDest
     if (parsed_dest.device.has_value()) {
         resolved_dest.device = resolve_device_identifier(parsed_dest.device.value(), device_info_provider_);
     }
-    resolved_dest.core = parsed_dest.core;
+    // Fully expect core to be of type CoreCoord here if defined, as this is within an expansion of the core sweep.
+    // If we were to get the "all" pattern here it would be UB, and throw to indicate.
+    if (parsed_dest.core.has_value()) {
+        resolved_dest.core = std::get<tt::tt_metal::CoreCoord>(parsed_dest.core.value());
+    }
     resolved_dest.hops = parsed_dest.hops;
     resolved_dest.target_address = parsed_dest.target_address;
     resolved_dest.atomic_inc_address = parsed_dest.atomic_inc_address;

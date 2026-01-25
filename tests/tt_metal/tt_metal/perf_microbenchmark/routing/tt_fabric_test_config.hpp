@@ -419,8 +419,6 @@ private:
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number);
     std::vector<SenderConfig> resolve_sender_config(const ParsedSenderConfig& parsed_sender);
-    // Use for non-sweeping core configs
-    TrafficPatternConfig resolve_traffic_pattern_single(const ParsedTrafficPatternConfig& parsed_pattern);
     std::vector<TrafficPatternConfig> resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern);
     DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest);
 
