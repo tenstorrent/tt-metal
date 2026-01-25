@@ -18,6 +18,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+#include "tt_metal/test_utils/env_vars.hpp"
 
 /*
  * FAST DISPATCHER MICROBENCHMARK SUITE
@@ -934,6 +935,10 @@ TEST_P(DispatchPagedWriteTestFixture, PagedWrite) {
 // Packed Write Unicast
 // TODO: Add multicast support
 TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
+    if (get_transfer_size_bytes() == 819200) {
+        // Test fails with watcher enabled github issue #36459
+        SKIP_FOR_WATCHER();
+    }
     log_info(tt::LogTest, "DispatchPackedWriteTestFixture - WritePackedUnicast (Fast Dispatch) - Test Start");
 
     // Test parameters
