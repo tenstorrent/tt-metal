@@ -66,33 +66,29 @@ class TtDPTReassembleLayer:
         self.sharded_config = config["l1_sharded_config"]
 
     def __call__(self, x):
-        # x is (B, Seq, Hidden) - Padded to 2048 (64 tiles)
+        # x is (B, Seq, Hidden) - Padded to 2048 (64 tiles) in TILE layout
         batch_size, seq_len, hidden_size = x.shape
         grid_h, grid_w = 37, 37  # 518/14 = 37
         patch_count_all = grid_h * grid_w  # 1369
 
-        # 1. Remove CLS tokens and Padding: (B, 2048, Hidden) -> (B, 1369, Hidden)
-        # CLS is 32 tokens (1 tile). Patches start at index 32.
-        # This slice is core-aligned in our 64-core grid!
-        cls_size = 32
-        x = ttnn.slice(x, (0, cls_size, 0), (batch_size, cls_size + patch_count_all, hidden_size))
-
-        # 2. Reshape to Grid: (B, 1369, Hidden) -> (B, Hidden, 37, 37)
-        # Move to RM for reshape/permute
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (batch_size, grid_h, grid_w, hidden_size))
-        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, Hidden, H, W)
-
-        # 3. Projection: (B, Hidden, 37, 37) -> (B, 256, 37, 37)
-        x = ttnn.permute(x, (0, 2, 3, 1))  # (B, H, W, Hidden)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # 1. Projection (Perform on full sequence to stay in TILE layout and leverage 8x8 grid)
+        # Result: (B, 2048, 256)
         x = ttnn.linear(
             x,
             self.parameters.projection.weight,
             bias=self.parameters.projection.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, 256, H, W)
+
+        # 2. Slice out relevant patch tokens: (B, 2048, 256) -> (B, 1369, 256)
+        # CLS is 32 tokens (1 tile). Patches start at index 32.
+        cls_size = 32
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.slice(x, (0, cls_size, 0), (batch_size, cls_size + patch_count_all, 256))
+
+        # 3. Reshape and Permute to (B, C, H, W) for Upsample/Conv
+        x = ttnn.reshape(x, (batch_size, grid_h, grid_w, 256))
+        x = ttnn.permute(x, (0, 3, 1, 2))  # (B, 256, 37, 37)
 
         # 4. Resample (Resize)
         if hasattr(self.parameters, "resize"):
@@ -101,10 +97,9 @@ class TtDPTReassembleLayer:
             elif self.read_idx == 1:
                 x = ttnn_upsample(x, scale_factor=2)
             elif self.read_idx == 3:
-                # Downsample
-                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                # Downsample (Stride 2 conv)
                 x, _ = ttnn_conv2d(
-                    x_rm,
+                    x,
                     self.parameters.resize.weight,
                     self.parameters.resize.bias,
                     self.device,
@@ -115,7 +110,6 @@ class TtDPTReassembleLayer:
                     grid_w,
                     stride=(2, 2),
                 )
-                ttnn.deallocate(x_rm)
 
         return x
 
