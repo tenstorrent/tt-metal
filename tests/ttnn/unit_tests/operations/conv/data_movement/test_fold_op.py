@@ -14,6 +14,7 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
+    is_watcher_enabled,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -387,6 +388,8 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     ],
 )
 def test_fold(act_shape, stride_h, stride_w, device):
+    if is_watcher_enabled() and act_shape == (10, 6, 8, 32) and stride_h == 1 and stride_w == 1:
+        pytest.skip("Skipping due to watcher compilation error")
     torch.manual_seed(0)
 
     torch_input = torch.randn(act_shape, dtype=torch.bfloat16)
