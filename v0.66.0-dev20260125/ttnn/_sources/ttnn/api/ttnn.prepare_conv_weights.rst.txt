@@ -1,0 +1,8 @@
+﻿ttnn.prepare\_conv\_weights
+===========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.prepare_conv_weights:
+
+.. autofunction:: ttnn.prepare_conv_weights
