@@ -489,7 +489,10 @@ class NormalRun:
         assert self.device is not None, "Device must be set for TTNN module execution."
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
-        func_kwargs = tree_map(transform, kwds)
+        # TODO: fix kwds not being passed correctly
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         begin = time.time()
         self.preprocess_weights()
         end = time.time()
@@ -569,7 +572,10 @@ class LightweightRun(NormalRun):
         assert self.device is not None, "Device must be set for TTNN module execution."
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
-        func_kwargs = tree_map(transform, kwds)
+        # TODO: fix kwds not being passed correctly
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         self.preprocess_weights()
         self.move_weights_to_device()
         result = self.forward(*func_args, **func_kwargs)
