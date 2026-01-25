@@ -715,52 +715,66 @@ jobs:
               connect_timeout=30
           )
 
-          # Build query to reconstruct the JSON structure
+          # Build query to reconstruct the JSON structure with tensor_placements injected
+          # This matches the format produced by MasterConfigLoader._build_db_query()
           mesh_filter = os.environ.get('MESH_FILTER', '')
 
-          # For now, just extract full_config_json which has the original format
-          # This is simpler and guaranteed to match the expected JSON structure
+          # Build the query with jsonb_set to inject tensor_placements into each config
+          # This ensures input_hash matches between database and JSON approaches
           query = """
-          WITH filtered_configs AS (
-              SELECT DISTINCT c.ttnn_configuration_id
-              FROM ttnn_ops.ttnn_configuration c
-              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.ttnn_configuration_id = cm.configuration_id
-              JOIN ttnn_ops.ttnn_mesh_config mc ON cm.mesh_config_id = mc.ttnn_mesh_config_id
-              WHERE 1=1
+          SELECT
+              o.operation_name,
+              jsonb_agg(
+                  jsonb_set(
+                      c.full_config_json,
+                      '{machine_info,0,tensor_placements}',
+                      jsonb_build_array(
+                          jsonb_build_object(
+                              'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
+                              'placement', CASE WHEN mc.placement_type = 'shard'
+                                  THEN '[PlacementShard(' || COALESCE(mc.shard_dim::text, '0') || ')]'
+                                  ELSE '[PlacementReplicate]' END,
+                              'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
+                          )
+                      )
+                  )
+                  ORDER BY c.ttnn_configuration_id, mc.device_count
+              ) as configs
+          FROM ttnn_ops.ttnn_operation o
+          JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
+          JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+          JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
           """
 
+          # Add mesh filter if specified
           if mesh_filter:
               rows, cols = mesh_filter.split('x')
-              query += f" AND mc.mesh_shape[1] = {rows} AND mc.mesh_shape[2] = {cols}"
+              query += f" WHERE mc.mesh_shape[1] = {rows} AND mc.mesh_shape[2] = {cols}"
 
           query += """
-          )
-          SELECT
-              op.operation_name,
-              jsonb_agg(c.full_config_json) as configs
-          FROM ttnn_ops.ttnn_configuration c
-          JOIN ttnn_ops.ttnn_operation op ON c.operation_id = op.ttnn_operation_id
-          WHERE c.ttnn_configuration_id IN (SELECT ttnn_configuration_id FROM filtered_configs)
-          GROUP BY op.operation_name
-          ORDER BY op.operation_name;
+          GROUP BY o.operation_name
+          ORDER BY o.operation_name;
           """
 
           cursor = conn.cursor()
           cursor.execute(query)
           rows = cursor.fetchall()
 
-          # Build the master JSON structure
-          master_json = {}
+          # Build the master JSON structure matching MasterConfigLoader expected format:
+          # {"operations": {op_name: {"configurations": [config1, config2, ...]}, ...}}
+          operations = {}
           for operation_name, configs_json in rows:
-              master_json[operation_name] = configs_json
+              operations[operation_name] = {"configurations": configs_json}
 
-          # Write to file
-          output_path = 'model_tracer/traced_operations/ttnn_operations_master.json'
+          master_json = {"operations": operations}
+
+          # Write to file (filename must match what MasterConfigLoader reads)
+          output_path = 'model_tracer/traced_operations/ttnn_operations_master_reconstructed.json'
           os.makedirs(os.path.dirname(output_path), exist_ok=True)
           with open(output_path, 'w') as f:
               json.dump(master_json, f, indent=2)
 
-          print(f"✅ Generated {output_path} with {len(master_json)} operations")
+          print(f"✅ Generated {output_path} with {len(operations)} operations")
 
           cursor.close()
           conn.close()
@@ -770,7 +784,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ttnn-operations-master-json
-          path: model_tracer/traced_operations/ttnn_operations_master.json
+          path: model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
           retention-days: 1
 
   ttnn-generate-sweeps:
