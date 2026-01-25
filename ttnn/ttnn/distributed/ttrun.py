@@ -223,8 +223,9 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             f"will be modified with rank suffix for multi-process safety"
         )
     else:
-        # Use default pattern when TT_METAL_CACHE is not set
-        base_path = f"{Path.home()}/.cache"
+        # Use launch directory for cache when TT_METAL_CACHE is not set.
+        # This ensures the cache is on the shared filesystem (NFS) visible to all nodes.
+        base_path = f"{ORIGINAL_CWD}/.cache"
 
     # Apply consistent rank suffix pattern to both user-provided and default paths
     cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
