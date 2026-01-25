@@ -193,8 +193,8 @@ inline void open_direction_connections_barrier(
         if (directions[i]) {
             MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
 
-            DPRINT << "OPENING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
-                   << "\n";
+            // DPRINT << "OPENING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+            //                    << "\n";
 
             tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 args.fabric_mux_x,
@@ -277,8 +277,8 @@ inline void close_direction_connections(
         for (uint32_t i = 0; i < NumMuxWorkers; ++i) {
             MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
 
-            DPRINT << "CLOSING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
-                   << "\n";
+            // DPRINT << "CLOSING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+            //                    << "\n";
 
             tt::tt_fabric::fabric_endpoint_terminate(
                 args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);

@@ -68,6 +68,8 @@ void kernel_main() {
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
 
+    constexpr int32_t max_tokens_per_core = global_num_tokens / num_token_parallel_cores;
+
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_expert_block_size_bytes =
@@ -163,17 +165,28 @@ void kernel_main() {
 
     DPRINT << "INIT SEMAPHORE SENT" << "\n";
 
-    cb_reserve_back(data_cb_id, global_num_tokens);
+    cb_reserve_back(data_cb_id, 1);
     const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
+
+    // tt::data_movement::common::print_bf16_pages(src_data_l1_base_addr,source_expert_block_size_bytes,1 );
 
     cb_wait_front(metadata_cb_id, 1);
     const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
     auto * metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
 
     // stashed these values in metadata
-    const uint32_t token_start = metadata_ptr[global_num_tokens * metadata_entry_size];
+    const uint32_t metadata_start_idx_offset = metadata_ptr[global_num_tokens * metadata_entry_size];
     const uint32_t token_end = metadata_ptr[global_num_tokens * metadata_entry_size + 1];
-    metadata_ptr += token_start * metadata_entry_size;
+
+    int32_t edt[num_local_experts];
+    for (uint32_t e = 0; e < num_local_experts; ++e) {
+        edt[e] = static_cast<int32_t>(metadata_ptr[global_num_tokens * metadata_entry_size + 2 + e]);
+    }
+
+    DPRINT << " metadata_start_idx_offset: " << metadata_start_idx_offset << " token_end: " << token_end
+           << " edt[0]: " << edt[0] << " edt[1]: " << edt[1] << "\n";
+
+    metadata_ptr += metadata_start_idx_offset * metadata_entry_size;
 
     auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
     if (sync_args.is_sync_core) {
@@ -191,80 +204,78 @@ void kernel_main() {
 
     DPRINT << "INIT SEMAPHORE RECEIVED" << "\n";
 
-    uint32_t edt[num_local_experts];
-    for (uint32_t e = 0; e < num_local_experts; ++e) {
-        edt[e] = 0;
-    }
-
     bool needs_barrier = false;
-    for (uint32_t dt = token_start; dt < token_end; ++dt) {
+    for (uint32_t dt = 0; dt < token_end; ++dt) {
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const uint32_t k = metadata_ptr[e + 1];
             const uint32_t st = metadata_ptr[0];
 
             if (k != select_experts_k+1) {
+                if (edt[e] >= 0l && edt[e] < max_tokens_per_core) {
+                    // figure out output page index, noc address.
+                    const uint32_t output_page_idx =
+                        detail::get_output_page_idx<tokens_per_device, select_experts_k>(st, k);
 
-                // figure out output page index, noc address.
-                const uint32_t output_page_idx =
-                    detail::get_output_page_idx<tokens_per_device, select_experts_k>(st, k);
+                    const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
+                                                      edt[e] * source_token_segment_buffer_size_bytes;
 
-                const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
-                                                  edt[e]++ * source_token_segment_buffer_size_bytes;
+                    // tt::data_movement::common::print_bf16_pages(src_data_l1_addr,source_token_segment_size_bytes/2,1
+                    // );
 
-                // figure out which device to send data to and routing
-                const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
-                    linearized_mesh_coord,
-                    tokens_per_device,
-                    mesh_rows,
-                    mesh_cols,
-                    replicate_axis>(st);
+                    // figure out which device to send data to and routing
+                    const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
+                        linearized_mesh_coord,
+                        tokens_per_device,
+                        mesh_rows,
+                        mesh_cols,
+                        replicate_axis>(st);
 
-                if (dest_device_idx == linearized_mesh_coord) {
-                    const uint64_t output_noc_addr =
-                        get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
-                    noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
-                    needs_barrier = true;
-                    noc_async_writes_flushed();
-                } else {
-                    if constexpr (is_1d_topology<topology>()) {
-                        fabric_send_chip_unicast_noc_unicast_1d<
-                            linearized_mesh_coord,
-                            topology,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size_bytes>(
-                            output_addrgen,
-                            fabric_connections,
-                            packet_headers[0],
-                            dest_device_idx,
-                            src_data_l1_addr,
-                            output_page_idx,
-                            source_token_segment_size_bytes,
-                            alignment,
-                            dest_token_segment_offset_bytes);
-
-                        // DPRINT<<"SENT PAYLOAD"<<"\n";
-
+                    if (dest_device_idx == linearized_mesh_coord) {
+                        const uint64_t output_noc_addr =
+                            get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
+                        noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
+                        needs_barrier = true;
+                        noc_async_writes_flushed();
                     } else {
-                        const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
-                        const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                        fabric_send_chip_unicast_noc_unicast<
-                            src_chip_id,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size_bytes>(
-                            output_addrgen,
-                            fabric_connections,
-                            packet_headers[0],
-                            dest_chip_id,
-                            dest_mesh_id,
-                            src_data_l1_addr,
-                            output_page_idx,
-                            source_token_segment_size_bytes,
-                            alignment,
-                            dest_token_segment_offset_bytes);
+                        if constexpr (is_1d_topology<topology>()) {
+                            fabric_send_chip_unicast_noc_unicast_1d<
+                                linearized_mesh_coord,
+                                topology,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size_bytes>(
+                                output_addrgen,
+                                fabric_connections,
+                                packet_headers[0],
+                                dest_device_idx,
+                                src_data_l1_addr,
+                                output_page_idx,
+                                source_token_segment_size_bytes,
+                                alignment,
+                                dest_token_segment_offset_bytes);
+
+                        } else {
+                            const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
+                            const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
+                            fabric_send_chip_unicast_noc_unicast<
+                                src_chip_id,
+                                mesh_rows,
+                                mesh_cols,
+                                fabric_max_packet_size_bytes>(
+                                output_addrgen,
+                                fabric_connections,
+                                packet_headers[0],
+                                dest_chip_id,
+                                dest_mesh_id,
+                                src_data_l1_addr,
+                                output_page_idx,
+                                source_token_segment_size_bytes,
+                                alignment,
+                                dest_token_segment_offset_bytes);
+                        }
                     }
                 }
+                ++edt[e];
             }
         }
 
@@ -275,7 +286,7 @@ void kernel_main() {
     if (needs_barrier) {
         noc_async_write_barrier();
     }
-    cb_push_back(data_cb_id, global_num_tokens);
+    cb_push_back(data_cb_id, 1);
     DPRINT << "PASSED PAYLOAD LOOP \n";
 
     if (sync_args.is_sync_core) {
