@@ -12,20 +12,48 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TtRMSNorm
+from models.experimental.tt_symbiote.modules.attention import LlamaAttention
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 
+class LlamaMLP(nn.Module):
+    def __init__(self, old_layer):
+        super().__init__()
+        self.config = old_layer.config
+        self.hidden_size = old_layer.hidden_size
+        self.intermediate_size = old_layer.intermediate_size
+        self.gate_proj = old_layer.gate_proj
+        self.up_proj = old_layer.up_proj
+        self.down_proj = old_layer.down_proj
+        assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in this test."
+        self.act_fn = nn.SiLU()
+
+    @classmethod
+    def from_torch(cls, old_layer):
+        return cls(old_layer)
+
+    def forward(self, x):
+        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        return down_proj
+
+
 def test_llama(device):
     """Test LLaMA model with TTNN acceleration."""
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B-Instruct").to(dtype=torch.bfloat16)
+    nn_to_nn = {
+        model.model.layers[0].mlp.__class__: LlamaMLP,
+    }
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
         nn.LayerNorm: TTNNLayerNorm,
+        model.model.layers[0].input_layernorm.__class__: TtRMSNorm,
+        model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
-    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B-Instruct").to(dtype=torch.bfloat16)
+    modules = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     messages = [
         {
             "role": "user",
