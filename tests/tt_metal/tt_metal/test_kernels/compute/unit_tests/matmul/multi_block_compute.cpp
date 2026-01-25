@@ -7,8 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
     const uint32_t in1_cb = get_compile_time_arg_val(1);
     const uint32_t out_cb = get_compile_time_arg_val(2);
@@ -75,4 +74,3 @@ void MAIN {
         release_dst();
     }
 }
-}  // namespace NAMESPACE

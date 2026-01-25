@@ -8,9 +8,9 @@
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_bw_device_operation.hpp"
 
-namespace ttml::metal::ops::layernorm_bw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& mean_tensor,
@@ -43,4 +43,4 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
         reduction_with_reshape_to2D(result[2])};
 }
 
-}  // namespace ttml::metal::ops::layernorm_bw
+}  // namespace ttml::metal

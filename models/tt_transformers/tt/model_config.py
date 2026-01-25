@@ -1338,10 +1338,6 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
-            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")
@@ -1418,7 +1414,7 @@ class ModelArgs:
                 "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
-                "T3K": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128],
                 "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Qwen3-Embedding-8B": {
@@ -1428,23 +1424,23 @@ class ModelArgs:
                 "TG": [128, 1024, 2048, 4096, 8192],
                 "P150x4": [128, 1024, 2048, 4096, 8192],
             },
+            "Llama-3.2-3B": {
+                "N150": [],
+            },
         }
 
         model_name = self.base_model_name
         device_name = self.device_name
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
+        if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        else:
+            return []
 
     @staticmethod
     def __get_llama_local_params_name(model_name):
@@ -1483,8 +1479,11 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        # Use ring on a T3K or 6U galaxy or P300x2 or P150x4/8 submesh
+        if ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.P300_X2,
+            ttnn.cluster.ClusterType.P150_X4,
+            ttnn.cluster.ClusterType.P150_X8,
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
@@ -1690,9 +1689,19 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        self.use_sliding_window = text_config.get("use_sliding_window", None)
+        if (
+            self.sliding_window is not None
+            and self.rope_theta_local is None
+            and (self.use_sliding_window == True or self.use_sliding_window is None)
+        ):  # For interleaved attention
+            self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
@@ -1703,9 +1712,6 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
-        # Sliding window attention
-        self.sliding_window = text_config.get("sliding_window", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
