@@ -242,9 +242,29 @@ protected:
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_for_watcher_ = false;
+
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+    static void SetUpTestSuite() {
+        if (tt::test_utils::is_watcher_enabled()) {
+            should_skip_for_watcher_ = true;
+            return;
+        }
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+    static void TearDownTestSuite() {
+        if (!should_skip_for_watcher_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+
+    void SetUp() override {
+        if (should_skip_for_watcher_) {
+            GTEST_SKIP() << "Fabric2D fixture tests are skipped when watcher is enabled";
+        }
+        BaseFabricFixture::SetUp();
+    }
 };
 
 class Fabric2DUDMModeFixture : public BaseFabricFixture {
@@ -253,6 +273,11 @@ private:
 
 protected:
     static void SetUpTestSuite() {
+        if (tt::test_utils::is_watcher_enabled()) {
+            should_skip_ = true;
+            return;
+        }
+
         // Check specifically for Wormhole Galaxy
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
@@ -279,9 +304,8 @@ protected:
 
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "Tensix fixture tests are not supported on Wormhole Galaxy systems";
+            GTEST_SKIP() << "UDM fixture tests are skipped (watcher enabled or Wormhole Galaxy system)";
         }
-        SKIP_FOR_WATCHER();
         BaseFabricFixture::SetUp();
     }
 };
@@ -289,7 +313,6 @@ protected:
 class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
 protected:
     void SetUp() override {
-        SKIP_FOR_WATCHER();
         if (devices_.size() < 8) {
             GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
         }
