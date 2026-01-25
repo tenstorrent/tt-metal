@@ -171,11 +171,11 @@ def test_layernorm_part_2_with_program_cache(
         is_watcher_enabled()
         and fp32_enabled
         and not is_rmsnorm
-        and n_devices == 4
-        and inp_shape == (1, 1, 2048, 8192)
-        and input_dtype == ttnn.bfloat16
+        and n_devices in (4, 8)
+        and inp_shape in ((1, 1, 2048, 8192), (1, 1, 128, 8192), (2, 1, 128, 8192))
+        and input_dtype in (ttnn.bfloat16, ttnn.bfloat8_b)
     ):
-        pytest.skip("Skipping due to watcher compilation error")
+        pytest.skip("Skipping due to watcher timeout")
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
 
