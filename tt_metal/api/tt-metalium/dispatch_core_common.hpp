@@ -23,7 +23,7 @@ private:
     static DispatchCoreAxis get_default_axis();
 
 public:
-    DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
+    DispatchCoreConfig() : type_(DispatchCoreType::ETH) {}
 
     DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
