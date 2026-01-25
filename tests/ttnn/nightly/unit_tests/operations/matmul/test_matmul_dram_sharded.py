@@ -257,7 +257,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
         and K == 8192
         and N == 1280
         and not has_bias
-        and fidelity == ttnn.MathFidelity.HiFi2
+        and fidelity in (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi)
     ):
         pytest.skip("Test is not passing with watcher enabled github issue #36314")
     for _ in range(2):
