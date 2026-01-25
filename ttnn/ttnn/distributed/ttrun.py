@@ -11,7 +11,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import click
 import yaml
@@ -66,82 +66,79 @@ class TTRunConfig(BaseModel):
     def validate_mesh_graph_exists(cls, path: str) -> str:
         """Ensure mesh graph descriptor file exists.
 
-        Resolves relative paths against multiple locations in order:
-        1. ORIGINAL_CWD (launch directory - critical for SLURM/sbatch)
-        2. TT_METAL_HOME environment variable
-        3. Current working directory (fallback)
+        Uses resolve_path() to search multiple locations for relative paths.
         """
-        expanded_path = Path(path).expanduser()
-
-        # If already absolute, just validate it exists
-        if expanded_path.is_absolute():
-            if not expanded_path.is_file():
-                raise ValueError(f"Mesh graph descriptor not found: {expanded_path}")
-            return str(expanded_path)
-
-        # For relative paths, try multiple resolution strategies
-        search_paths = [
-            ORIGINAL_CWD,  # Launch directory (most important for SLURM)
-            Path(os.environ.get("TT_METAL_HOME", "")).expanduser() if os.environ.get("TT_METAL_HOME") else None,
-            Path.cwd(),  # Current working directory as fallback
-        ]
-
-        for base_path in search_paths:
-            if base_path is None:
-                continue
-            candidate = (base_path / expanded_path).resolve()
-            if candidate.is_file():
-                logger.debug(f"{TT_RUN_PREFIX} Resolved mesh_graph_desc_path: {path} -> {candidate}")
-                return str(candidate)
-
-        # Provide helpful error message with all searched locations
-        searched = [str(p) for p in search_paths if p is not None]
-        raise ValueError(
-            f"Mesh graph descriptor not found: {path}\n"
-            f"Searched in: {searched}\n"
-            f"Tip: Use an absolute path or ensure the file exists relative to the launch directory."
-        )
+        resolved = resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
+        return str(resolved)
 
 
-def resolve_path_from_search_locations(path: Path, description: str = "file", must_exist: bool = True) -> Path:
+def get_search_paths() -> List[Optional[Path]]:
+    """Get the ordered list of paths to search for relative file resolution.
+
+    Search order:
+    1. TT_METAL_HOME - If environment variable is set (explicit user configuration)
+    2. ORIGINAL_CWD - Launch directory (critical for SLURM/sbatch where mpirun
+       may change the working directory on remote nodes)
+    3. Current working directory - Fallback for local execution
+
+    Returns:
+        List of paths to search, with None entries for unset optional paths.
+    """
+    return [
+        Path(os.environ["TT_METAL_HOME"]).expanduser() if os.environ.get("TT_METAL_HOME") else None,
+        ORIGINAL_CWD,
+        Path.cwd(),
+    ]
+
+
+def resolve_path(
+    path: Union[str, Path],
+    description: str = "file",
+    must_exist: bool = True,
+    must_be_file: bool = False,
+) -> Path:
     """Resolve a path by searching multiple locations.
 
-    For relative paths, searches in order:
-    1. ORIGINAL_CWD (launch directory - critical for SLURM/sbatch)
-    2. TT_METAL_HOME environment variable
-    3. Current working directory (fallback)
+    For absolute paths, validates existence if required and returns as-is.
+    For relative paths, searches locations from get_search_paths() in order.
 
     Args:
         path: The path to resolve (can be relative or absolute)
-        description: Description for error messages
-        must_exist: Whether to raise an error if the path doesn't exist
+        description: Human-readable description for error messages
+        must_exist: Raise ValueError if path doesn't exist (default: True)
+        must_be_file: Require path to be a file, not directory (default: False)
 
     Returns:
         Resolved absolute path
+
+    Raises:
+        ValueError: If must_exist=True and path not found in any search location
     """
     expanded_path = Path(path).expanduser()
 
-    # If already absolute, return as-is (optionally validate existence)
+    # Absolute paths: validate and return
     if expanded_path.is_absolute():
-        if must_exist and not expanded_path.exists():
-            raise ValueError(f"{description} not found: {expanded_path}")
-        return expanded_path.resolve()
+        resolved = expanded_path.resolve()
+        if must_exist:
+            if must_be_file and not resolved.is_file():
+                raise ValueError(f"{description} not found: {resolved}")
+            elif not must_be_file and not resolved.exists():
+                raise ValueError(f"{description} not found: {resolved}")
+        return resolved
 
-    # For relative paths, try multiple resolution strategies
-    search_paths = [
-        ORIGINAL_CWD,  # Launch directory (most important for SLURM)
-        Path(os.environ.get("TT_METAL_HOME", "")).expanduser() if os.environ.get("TT_METAL_HOME") else None,
-        Path.cwd(),  # Current working directory as fallback
-    ]
+    # Relative paths: search multiple locations
+    search_paths = get_search_paths()
+    check_fn = Path.is_file if must_be_file else Path.exists
 
     for base_path in search_paths:
         if base_path is None:
             continue
         candidate = (base_path / expanded_path).resolve()
-        if candidate.exists():
+        if check_fn(candidate):
             logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
             return candidate
 
+    # Path not found
     if must_exist:
         searched = [str(p) for p in search_paths if p is not None]
         raise ValueError(
@@ -150,7 +147,7 @@ def resolve_path_from_search_locations(path: Path, description: str = "file", mu
             f"Tip: Use an absolute path or ensure the file exists relative to the launch directory."
         )
 
-    # Return best-effort resolution if existence check is not required
+    # Best-effort resolution when existence check is not required
     return (ORIGINAL_CWD / expanded_path).resolve()
 
 
@@ -161,7 +158,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     to ensure proper operation in SLURM/sbatch environments.
     """
     # Resolve the yaml_path first
-    resolved_yaml_path = resolve_path_from_search_locations(yaml_path, "Configuration file")
+    resolved_yaml_path = resolve_path(yaml_path, description="Configuration file", must_be_file=True)
 
     logger.debug(f"{TT_RUN_PREFIX} Loading configuration from: {resolved_yaml_path}")
     logger.debug(f"{TT_RUN_PREFIX} Original CWD: {ORIGINAL_CWD}")
@@ -176,8 +173,8 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
 
     # Parse mock cluster rank binding configuration
     if mock_cluster_rank_binding:
-        resolved_mock_path = resolve_path_from_search_locations(
-            mock_cluster_rank_binding, "Mock cluster rank binding configuration"
+        resolved_mock_path = resolve_path(
+            mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
         )
         with open(resolved_mock_path, "r") as f:
             mock_data = yaml.safe_load(f)
@@ -185,7 +182,9 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         # Validate and resolve mock cluster rank binding configuration paths
         resolved_mock_bindings = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            resolved_path = resolve_path_from_search_locations(Path(path), f"Mock cluster descriptor for rank {rank}")
+            resolved_path = resolve_path(
+                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+            )
             resolved_mock_bindings[rank] = resolved_path
 
         config.mock_cluster_rank_binding = resolved_mock_bindings
@@ -250,6 +249,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
             "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
+            "PYTHONHOME": os.environ.get("PYTHONHOME", str(ORIGINAL_CWD)),
             # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
             "LD_LIBRARY_PATH": os.environ.get(
                 "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))
@@ -507,6 +507,7 @@ def main(
         - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
+        - PYTHONHOME: Python installation directory
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
@@ -515,6 +516,7 @@ def main(
         - TT_METAL_HOME: Launch directory (where tt-run was invoked)
         - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
         - PYTHONPATH: Launch directory
+        - PYTHONHOME: Launch directory
         - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
 
         This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
@@ -535,10 +537,10 @@ def main(
         Relative paths for --rank-binding, --mock-cluster-rank-binding, and mesh_graph_desc_path
         are resolved by searching multiple locations in order:
 
-        1. Launch directory - The directory where tt-run was originally invoked. This is
+        1. TT_METAL_HOME - If the environment variable is set (explicit user configuration).
+        2. Launch directory - The directory where tt-run was originally invoked. This is
            captured at module load time and is critical for SLURM/sbatch environments where
            mpirun may change the working directory when spawning processes on remote nodes.
-        2. TT_METAL_HOME - If the environment variable is set, it is searched next.
         3. Current working directory - Fallback to the current directory at resolution time.
 
         The first location where the file is found will be used. If the file is not found
@@ -557,7 +559,7 @@ def main(
         This adds the following MPI arguments:
 
         - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
-        - --mca btl_tcp_if_exclude lo,docker0: Exclude loopback and docker interfaces
+        - --mca btl_tcp_if_exclude lo: Exclude loopback interface (can't route inter-node traffic)
         - --tag-output: Prefix output lines with rank information for easier debugging
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
@@ -567,6 +569,12 @@ def main(
         - Stale process connections from other nodes
         - Network interface selection problems
         - Output interleaving from multiple ranks
+
+        Note: Only loopback (lo) is excluded by default. Loopback must be excluded because it
+        can only communicate with the local machine, making it useless for inter-node MPI traffic.
+        Other interfaces like docker0 are not excluded to remain compatible with Docker containers
+        and other virtualized environments where network interface naming varies. For explicit
+        interface control, use --tcp-interface.
 
         Example:
             tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
@@ -634,7 +642,9 @@ def main(
         logger.info(f"{TT_RUN_PREFIX}   Current CWD: {Path.cwd()}")
         logger.info(f"{TT_RUN_PREFIX}   rank-binding input: {rank_binding}")
         logger.info(f"{TT_RUN_PREFIX}   TT_METAL_HOME env: {os.environ.get('TT_METAL_HOME', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   HOME env: {os.environ.get('HOME', '<not set>')}")
         logger.info(f"{TT_RUN_PREFIX}   PYTHONPATH env: {os.environ.get('PYTHONPATH', '<not set>')}")
+        logger.info(f"{TT_RUN_PREFIX}   PYTHONHOME env: {os.environ.get('PYTHONHOME', '<not set>')}")
         logger.info(f"{TT_RUN_PREFIX}   LD_LIBRARY_PATH env: {os.environ.get('LD_LIBRARY_PATH', '<not set>')}")
         if os.environ.get("SLURM_JOB_ID"):
             logger.info(f"{TT_RUN_PREFIX}   SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
@@ -667,15 +677,18 @@ def main(
     if multihost:
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
-        # - Exclude common non-routable interfaces
+        # - Exclude loopback (can't route inter-node traffic)
         # - Tag output with rank info for easier debugging
+        # Note: Only exclude 'lo' to remain compatible with Docker containers
+        # and other virtualized environments. Users needing specific interface
+        # control should use --tcp-interface.
         multihost_args = [
             "--mca",
             "btl",
             "self,tcp",
             "--mca",
             "btl_tcp_if_exclude",
-            "lo,docker0",
+            "lo",
             "--tag-output",
         ]
 
