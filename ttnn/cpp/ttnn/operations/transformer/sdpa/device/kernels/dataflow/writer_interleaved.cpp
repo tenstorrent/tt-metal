@@ -98,9 +98,9 @@ void kernel_main() {
                     q_chunk = local_q_start + q_iter;
 #endif
 
-                    // Generate mask when: causal, sliding window, or non-causal padding without user mask
+                    // Generate mask only when user didn't provide one
                     // When use_provided_mask, reader handles mask reading (and padding if needed)
-                    if constexpr (is_causal || sliding_window_size > 0 || (use_padded_mask && !use_provided_mask)) {
+                    if constexpr (!use_provided_mask) {
                         generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
                             Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
                     }
