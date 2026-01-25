@@ -28,7 +28,7 @@ struct Core {
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
 // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
@@ -362,4 +362,3 @@ KERNEL_ENTRY {
         matmul2(matmul2_args);
     }
 }
-KERNEL_END
