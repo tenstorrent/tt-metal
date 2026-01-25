@@ -69,7 +69,8 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     dense_metadata_buffer = torch.ones([devices, batch * seq, metadata_entry_size], dtype=torch.uint32) * (
         select_experts_k + 1
     )
-    dense_token_counts = torch.zeros([devices], dtype=torch.uint32)
+    dense_metadata_len = torch.zeros([devices], dtype=torch.uint32)
+    active_token_counts = torch.zeros([experts], dtype=torch.int32)
 
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
@@ -82,15 +83,16 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
                     if ek in device_expert_list:
                         local_e_idx = device_expert_list.index(ek)
                         k_entries[local_e_idx] = k
+                        active_token_counts[ek] += 1
                 if any(map(lambda x: x != select_experts_k + 1, k_entries)):
                     metadata_entry = torch.zeros([metadata_entry_size], dtype=torch.uint32)
                     metadata_entry[0] = b * seq + s
                     metadata_entry[1 : num_local_experts + 1] = torch.tensor(k_entries)
-                    token_count = dense_token_counts[rec_d].item()
+                    token_count = dense_metadata_len[rec_d].item()
                     dense_metadata_buffer[rec_d, token_count] = metadata_entry
-                    dense_token_counts[rec_d] = token_count + 1
+                    dense_metadata_len[rec_d] = token_count + 1
 
-    return dense_metadata_buffer, dense_token_counts
+    return dense_metadata_buffer, dense_metadata_len, active_token_counts
 
 
 def gen_dense_input_contribs(
@@ -101,7 +103,7 @@ def gen_dense_input_contribs(
     sparse_contribs_tensor,
     expert_mapping,
     dense_metadata_tensor,
-    dense_token_counts,
+    dense_metadata_len,
     mesh_shape,
 ):
     num_local_experts = experts // expert_mapping.shape[-1]
@@ -113,7 +115,7 @@ def gen_dense_input_contribs(
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
         device_dense_idxs = [0] * num_local_experts
-        for dt in range(dense_token_counts[rec_d]):
+        for dt in range(dense_metadata_len[rec_d]):
             dense_metadata_entry = dense_metadata_tensor[rec_d, dt]
             k_entries, b, s = _unpack_dense_metadata_entry(dense_metadata_entry, num_local_experts, seq)
             for local_e_idx, k_entry in enumerate(k_entries):
@@ -138,7 +140,7 @@ def gen_output_ref(
     select_experts_k,
     dense_input_contribs_tensor,
     dense_metadata_tensor,
-    dense_token_counts,
+    dense_metadata_len,
     mesh_shape,
     cluster_axis,
     local_reduce=False,
@@ -154,7 +156,7 @@ def gen_output_ref(
 
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         edt = [0] * num_local_experts
-        for dt in range(dense_token_counts[rec_d]):
+        for dt in range(dense_metadata_len[rec_d]):
             dense_metadata_entry = dense_metadata_tensor[rec_d, dt]
             k_entries, b, s = _unpack_dense_metadata_entry(dense_metadata_entry, num_local_experts, seq)
             global_batch = batch_rep_idxr(m0, m1, b)
@@ -210,7 +212,7 @@ def gen_tensors(
         local_reduce=False,
     )
 
-    dense_metadata_tensor, dense_token_counts_tensor = gen_dense_metadata(
+    dense_metadata_tensor, dense_metadata_len, active_token_counts = gen_dense_metadata(
         batch, seq, experts, select_experts_k, mesh_shape, cluster_axis, metadata_tensor, expert_mapping
     )
     dense_contribs_tensor = gen_dense_input_contribs(
@@ -221,7 +223,7 @@ def gen_tensors(
         input_sparse_contribs_tensor,
         expert_mapping,
         dense_metadata_tensor,
-        dense_token_counts_tensor,
+        dense_metadata_len,
         mesh_shape,
     )
     output_ref, output_data_map = gen_output_ref(
@@ -231,13 +233,13 @@ def gen_tensors(
         select_experts_k,
         dense_contribs_tensor,
         dense_metadata_tensor,
-        dense_token_counts_tensor,
+        dense_metadata_len,
         mesh_shape,
         cluster_axis,
         local_reduce,
     )
 
-    return dense_metadata_tensor, dense_token_counts_tensor, dense_contribs_tensor, output_ref, output_data_map
+    return dense_metadata_tensor, active_token_counts, dense_contribs_tensor, output_ref, output_data_map
 
 
 NUM_DEVICES = 8
@@ -291,7 +293,7 @@ def test_gen_tensors(
         mesh_shape,
         cluster_axis,
         devices,
-        scheme="sequential",
+        scheme="random",
     )
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
@@ -314,7 +316,9 @@ def _get_tt_sharded_dense_input(
 ):
     hidden0 = dense_contribs_tensor.shape[-1]
 
-    packet_multiple = FABRIC_PACKET_SIZE_BYTES // 2
+    packet_size = min(FABRIC_PACKET_SIZE_BYTES, hidden0 * 2)
+
+    packet_multiple = packet_size // 2
     packet_padded_hidden = math.ceil(hidden0 / packet_multiple) * packet_multiple
     packet_padding = (0, packet_padded_hidden - hidden0)
     dense_contribs_tensor = F.pad(dense_contribs_tensor, packet_padding)
@@ -328,8 +332,6 @@ def _get_tt_sharded_dense_input(
     )
 
     shape0 = dense_contribs_tensor.shape
-
-    print(shape0)
 
     local_experts = shape0[0] // ttnn.get_num_devices()
     num_tokens = shape0[1]
@@ -348,7 +350,7 @@ def _get_tt_sharded_dense_input(
     ]
 
     tt_dense_contribs = ttnn.reshape(tt_dense_contribs, shape1)
-    tt_dense_contribs = ttnn.permute(tt_dense_contribs, [1, 3, 0, 2, 4])
+    tt_dense_contribs = ttnn.permute(tt_dense_contribs, [3, 1, 0, 2, 4])
 
     shard_shape = (local_experts * num_tokens // num_token_parallel_cores, hidden // num_data_parallel_cores)
     shard_spec = ttnn.ShardSpec(core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -453,6 +455,7 @@ def _run_test(
     num_test_iters,
     trace_mode,
     profiler=None,
+    scheme="random",
 ):
     mesh_shape = tuple(mesh_device.shape)
     devices = math.prod(mesh_shape)
@@ -466,8 +469,11 @@ def _run_test(
         output_ref,
         output_data_map,
     ) = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="random"
+        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme=scheme
     )
+
+    # print(f"{dense_metadata_tensor=}")
+    #     print(f"{dense_token_counts_tensor=}")
 
     tt_dense_contribs = _get_tt_sharded_dense_input(
         dense_contribs_tensor,
@@ -525,11 +531,11 @@ def _run_test(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [4])
 @pytest.mark.parametrize("num_data_parallel_cores", [4])
-@pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (4, 3))])
 @pytest.mark.parametrize("num_test_iters", [1])
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
@@ -571,6 +577,7 @@ def test_decode(
             mesh_device,
             num_inner_iters,
             False,
+            scheme="sequential",
         )
         logger.info(f"Decode iter: {i} success")
 
@@ -585,11 +592,11 @@ def test_decode(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [4])
 @pytest.mark.parametrize("num_data_parallel_cores", [4])
 @pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (4, 3))])
 @pytest.mark.parametrize("num_outer_test_iters", [1])
 @pytest.mark.parametrize("num_test_iters", [4])
 def test_decode_trace(

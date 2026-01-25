@@ -30,27 +30,73 @@ inline uint32_t get_max_token_count(volatile tt_l1_ptr uint32_t* count_addrs) {
     return max;
 }
 
-template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
-std::tuple<uint32_t, uint32_t> token_work_split(
-    volatile tt_l1_ptr uint32_t* dense_token_counts_addr, const uint32_t token_parallel_core_id) {
-    // read dense token counts, distribute
-    const auto dense_tokens_total = get_max_token_count<NumLocalExperts>(dense_token_counts_addr);
-    const uint32_t num_dense_tokens_per_core = dense_tokens_total / NumTokenParallelCores;
-    const uint32_t dense_token_remainder = dense_tokens_total % NumTokenParallelCores;
+template <
+    uint32_t GlobalNumTokens,
+    uint32_t SelectExpertsK,
+    uint32_t NumLocalExperts,
+    uint32_t NumTokenParallelCores,
+    uint32_t MetaDataEntrySize>
+void token_work_split(
+    volatile tt_l1_ptr uint32_t* dense_token_counts_ptr,
+    volatile tt_l1_ptr uint32_t* dense_metadata_ptr,
+    const uint32_t token_parallel_core_id,
+    uint32_t& metadata_start_offset,
+    uint32_t& token_end,
+    int32_t* edt) {
+    constexpr auto invalid = GlobalNumTokens + 1;
+    const auto max_active_tokens = get_max_token_count<NumLocalExperts>(dense_token_counts_ptr);
 
-    uint32_t token_start = 0;
-    for (uint32_t d = 0; d < token_parallel_core_id; ++d) {
-        token_start+= (d<dense_token_remainder)?  num_dense_tokens_per_core+1:num_dense_tokens_per_core;
+    constexpr uint32_t token_core_block_size = GlobalNumTokens / NumTokenParallelCores;
+    const int32_t core_token_index_start = token_parallel_core_id * token_core_block_size;
+    const int32_t core_token_index_end = core_token_index_start + std::min(max_active_tokens, token_core_block_size);
+
+    DPRINT << "max_active_tokens: " << max_active_tokens << " core_token_index_end: " << core_token_index_end << "\n";
+    metadata_start_offset = invalid;
+    token_end = 0;
+
+    for (uint32_t e = 0; e < NumLocalExperts; ++e) {
+        edt[e] = 0;
     }
 
-    const uint32_t token_end = token_start + (token_parallel_core_id < dense_token_remainder)
-                                   ? num_dense_tokens_per_core + 1
-                                   : num_dense_tokens_per_core;
+    bool end = false;
+    int32_t max_edt = 0;
+    for (uint32_t dt = 0; dt < GlobalNumTokens; ++dt) {
+        for (uint8_t e = 0; e < NumLocalExperts; ++e) {
+            if (edt[e] == core_token_index_start) {
+                if (metadata_start_offset == invalid) {
+                    metadata_start_offset = dt;
+                }
+            }
 
-    return std::make_tuple(token_start, token_end);
+            if (edt[e] == core_token_index_end) {
+                token_end = dt + 1;
+                end = true;
+                break;
+            }
+            const auto k = dense_metadata_ptr[e + 1];
+            if (k != SelectExpertsK + 1) {
+                if (++edt[e] > max_edt) {
+                    max_edt = edt[e];
+                }
+            }
+            // DPRINT<<"dt: "<<dt<<" e: "<<"edt[e]: "<< edt[e]<<"\n";
+        }
+        if (end) {
+            break;
+        }
+        dense_metadata_ptr += MetaDataEntrySize;
+    }
+
+    if (token_parallel_core_id == 0) {
+        for (uint8_t e = 0; e < NumLocalExperts; ++e) {
+            edt[e] = 0;
+        }
+    } else {
+        for (uint8_t e = 0; e < NumLocalExperts; ++e) {
+            edt[e] -= max_edt;
+        }
+    }
 }
-
-constexpr uint32_t metadata_extra_size_bytes = 8;
 
 }//namespace detail
 void kernel_main() {
@@ -60,8 +106,9 @@ void kernel_main() {
     constexpr uint32_t metadata_entry_size_bytes = get_named_compile_time_arg_val("metadata_entry_size_bytes");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");
-    constexpr uint32_t metadata_size_bytes =
-        metadata_entry_size_bytes * global_num_tokens + detail::metadata_extra_size_bytes;
+    constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
+
+    constexpr uint32_t metadata_size_bytes = metadata_entry_size_bytes * global_num_tokens;
 
     constexpr auto metadata_ta_args = TensorAccessorArgs<0>();
 
@@ -79,14 +126,29 @@ void kernel_main() {
     noc_async_read(metadata_noc_addr, metadata_cb_addr, metadata_size_bytes);  // read_metadata;
     noc_async_read_barrier();
 
-    const auto [token_start, token_end] = detail::token_work_split<num_local_experts, num_token_parallel_cores>(
-        dense_token_counts_addr, token_parallel_core_id);
-
     const uint32_t metadata_addr = get_read_ptr(dense_metadata_cb_id);
     auto* metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
-    // this is cheesy, but pass token starts and ends to the reader through the end of the metadata buffer TODO ALLOCATE
-    metadata_ptr[global_num_tokens * metadata_entry_size] = token_start;
+
+    uint32_t metadata_start_idx_offset, token_end;
+    int32_t edt[num_local_experts];
+    detail::token_work_split<
+        global_num_tokens,
+        select_experts_k,
+        num_local_experts,
+        num_token_parallel_cores,
+        metadata_entry_size>(
+        dense_token_counts_addr, metadata_ptr, token_parallel_core_id, metadata_start_idx_offset, token_end, edt);
+
+    // this is cheesy, but pass token starts and ends to the reader through the end of the metadata buffer
+    metadata_ptr[global_num_tokens * metadata_entry_size] = metadata_start_idx_offset;
     metadata_ptr[global_num_tokens * metadata_entry_size + 1] = token_end;
+
+    DPRINT << "token_parallel_core_id: " << token_parallel_core_id
+           << " metadata_start_idx_offset: " << metadata_start_idx_offset << " token_end: " << token_end
+           << " edt[0]: " << edt[0] << " edt[1]: " << edt[1] << "\n";
+    for (uint8_t e = 0; e < num_local_experts; ++e) {
+        metadata_ptr[global_num_tokens * metadata_entry_size + 2 + e] = static_cast<uint32_t>(edt[e]);
+    }
 
     cb_push_back(dense_metadata_cb_id, 1);
 }
