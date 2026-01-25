@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <cmath>
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -267,7 +267,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
 void CloneOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& program = cached_program.program;

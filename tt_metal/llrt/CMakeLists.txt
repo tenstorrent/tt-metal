@@ -10,6 +10,7 @@ set(LLRT_SRC
     tt_memory.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
+    metal_soc_descriptor.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})

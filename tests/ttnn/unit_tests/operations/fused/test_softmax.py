@@ -443,16 +443,20 @@ def test_softmax_dtypes(device, shape, dim, dtype):
 
 
 @pytest.mark.parametrize(
-    "fp32_acc_en, math_approx_mode, expected_ulp",
+    "fp32_acc_en, math_approx_mode, expected_ulp, numeric_stable",
     [
-        (True, False, 3),
-        (False, True, 11),
-        (True, True, 9),
-        (False, False, 7),
+        (True, False, 3, False),
+        (True, False, 3, True),
+        (False, True, 11, False),
+        (False, True, 13, True),
+        (True, True, 9, False),
+        (True, True, 9, True),
+        (False, False, 7, False),
+        (False, False, 7, True),
     ],
 )
 @pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
-def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp):
+def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp, numeric_stable):
     torch.manual_seed(0)
 
     # Reference output
@@ -469,12 +473,6 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     )
 
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    numeric_stable = True
-    if math_approx_mode:
-        # TODO: fix accuracy issue when both math_approx_mode and numeric_stable are True
-        # See issue #28500
-        numeric_stable = False
 
     ttnn_output = ttnn.softmax(
         ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable

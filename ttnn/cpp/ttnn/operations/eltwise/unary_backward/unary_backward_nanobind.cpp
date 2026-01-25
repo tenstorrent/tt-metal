@@ -661,8 +661,8 @@ void bind_unary_backward_optional_float_params_with_default(
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -1124,7 +1124,7 @@ void bind_unary_backward_gelu(
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               std::string parameter_a,
+               const std::string& parameter_a,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
@@ -1254,11 +1254,11 @@ void py_module(nb::module_& mod) {
         ttnn::rdiv_bw,
         "scalar",
         "divisor",
-        "round_mode",
+        "rounding_mode",
         "Mode of Rounding",
         "None",
-        R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`round_mode`.
-        :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc");
+        R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`rounding_mode`.
+        :attr:`rounding_mode` can be 'None', 'trunc', or 'floor'.)doc");
 
     bind_unary_backward_shape(
         mod,

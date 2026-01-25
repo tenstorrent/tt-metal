@@ -270,6 +270,12 @@ class MllamaMultiModalProcessor(EncDecMultiModalProcessor[TT_MllamaProcessingInf
     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
+    # Class-level capabilities
+    # Note: Mllama doesn't support prefix caching (it's V0 only)
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -354,6 +360,11 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
 
 
 class LlamaForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -374,7 +385,7 @@ class LlamaForCausalLM(Generator):
             and mesh_device.get_num_devices() == 1
             and is_wormhole_b0()
         ):
-            MAX_PROMPT_LEN = 65536
+            MAX_PROMPT_LEN = 32768
             if max_seq_len > MAX_PROMPT_LEN:
                 raise ValueError(
                     f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
@@ -410,6 +421,11 @@ class LlamaForCausalLM(Generator):
 
 
 class QwenForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -453,6 +469,11 @@ class QwenForCausalLM(Generator):
 
 
 class MistralForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -565,6 +586,11 @@ class MultiModalProcessor(BaseMultiModalProcessor):
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -628,6 +654,11 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 class GptOssForCausalLM(Generator):
     """GPT-OSS model for vLLM integration"""
 
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -650,6 +681,11 @@ class GptOssForCausalLM(Generator):
         model_args = []
         model = []
         state_dict = None
+        # GPT-OSS throughput profile uses user-row sharding on
+        # multi-row meshes with large max batch sizes (e.g., 128 on 4x8).
+        # This must be selected at model init time to ensure correct sharding
+        # and input preparation.
+        users_row_sharded = bool(mesh_device.shape[0] > 1 and max_batch_size > 32)
 
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
@@ -663,6 +699,8 @@ class GptOssForCausalLM(Generator):
                 num_layers=n_layers,
                 mesh_config=None,
                 create_kv_cache=False,
+                users_row_sharded=users_row_sharded,
+                use_throughput_experts=submesh.shape[0] > 1 and (max_batch_size > 1),
             )
 
             model_args.append(model_args_i)

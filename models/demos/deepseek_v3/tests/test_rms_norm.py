@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
@@ -15,7 +16,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
-    load_reference_io_tensors_for_module,
     run_module_forward,
 )
 
@@ -29,9 +29,18 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "mode, seq_len",
     [
         ("decode", 32),
-        ("prefill", 128),
-        ("prefill", 512),
-        ("prefill", 2048),
+    ]
+    + [
+        ("prefill", seq_len)
+        if seq_len == 128
+        else pytest.param(
+            "prefill",
+            seq_len,
+            marks=pytest.mark.skip(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
+        )
+        for seq_len in PREFILL_SEQ_LENS
     ],
 )
 @pytest.mark.parametrize(
@@ -40,10 +49,18 @@ from models.demos.deepseek_v3.utils.test_utils import (
         (None, DistributedRMSNorm, "hidden_size"),
         ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
         ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
-        (None, RMSNorm, "kv_lora_rank"),
-        (None, RMSNorm, "q_lora_rank"),
-        ("model.layers.0.self_attn.kv_a_layernorm", RMSNorm, "kv_lora_rank"),
-        ("model.layers.0.self_attn.q_a_layernorm", RMSNorm, "q_lora_rank"),
+        (None, RMSNorm, "kv_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (None, RMSNorm, "q_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.kv_a_layernorm",
+            RMSNorm,
+            "kv_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.q_a_layernorm",
+            RMSNorm,
+            "q_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
     ],
 )
 def test_forward_pass(
@@ -67,22 +84,22 @@ def test_forward_pass(
     hidden_size = getattr(hf_config, hf_config_size_attr)
 
     # Get the reference inputs and outputs
-    if reference_layernorm_path is None:
-        reference_model = DeepseekV3RMSNorm(
-            hidden_size=hidden_size,
-            eps=hf_config.rms_norm_eps,
-        ).eval()
+    reference_model = DeepseekV3RMSNorm(
+        hidden_size=hidden_size,
+        eps=hf_config.rms_norm_eps,
+    ).eval()
+
+    if reference_layernorm_path is not None:
+        # Use real weights from the model
+        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
+        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+    else:
         state_dict = reference_model.to(torch.bfloat16).state_dict()
 
-        torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
-        reference_model = reference_model.to(torch.float32)
-        reference_output = reference_model(torch_input)
-
-    else:
-        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
-        torch_input, reference_output = load_reference_io_tensors_for_module(
-            mode, reference_layernorm_path, seq_len, num_module_layers
-        )
+    torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+    reference_model = reference_model.to(torch.float32)
+    reference_output = reference_model(torch_input)
 
     # Generate module configs and state
     weight_config = get_test_weight_config(
@@ -100,10 +117,10 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
-    if RMSNormClass is not DistributedRMSNorm:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
-    else:
+    if RMSNormClass is DistributedRMSNorm:
         memory_config = run_config["input_memory_config"]
+    else:
+        memory_config = ttnn.L1_MEMORY_CONFIG
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

@@ -158,7 +158,8 @@ int main(int argc, char** argv) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
-        } else if (builder.should_skip_test_on_platform(test_config)) {
+        }
+        if (builder.should_skip_test_on_platform(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
@@ -183,6 +184,15 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        // Validate device frequencies for performance tests. Validation runs only once
+        // since device frequencies are cached in TestFixture for its lifetime.
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+            if (!fixture->validate_device_frequencies_for_performance_tests()) {
+                test_context.close_devices();
+                return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
+            }
+        }
+
         // Check topology-based skip conditions after devices are opened
         if (builder.should_skip_test_on_topology(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);
@@ -198,8 +208,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set performance test mode and line sync for this test group
-            test_context.set_performance_test_mode(test_config.performance_test_mode);
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
             test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
             // Set skip_packet_validation flag
@@ -214,6 +222,9 @@ int main(int argc, char** argv) {
 
                 // Prepare allocator and memory maps for this specific test
                 test_context.prepare_for_test(built_test);
+
+                // Set performance test mode for each iteration
+                test_context.set_performance_test_mode(built_test.performance_test_mode);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");

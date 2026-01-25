@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -13,20 +15,20 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::joint_sdpa {
+namespace ttnn::prim {
 
 JointSDPADeviceOperation::program_factory_t JointSDPADeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::JointSDPAProgramFactory{};
+    const JointSDPAParams& /*args*/, const JointSDPAInputs& /*tensor_args*/) {
+    return JointSDPAProgramFactory{};
 }
 
 void JointSDPADeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
 void JointSDPADeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
@@ -160,8 +162,8 @@ void JointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t JointSDPADeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+JointSDPAResultSpec JointSDPADeviceOperation::compute_output_specs(
+    const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
     return {
@@ -172,16 +174,19 @@ spec_return_value_t JointSDPADeviceOperation::compute_output_specs(
             TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
-tensor_return_value_t JointSDPADeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+JointSDPAResult JointSDPADeviceOperation::create_output_tensors(
+    const JointSDPAParams& args, const JointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
         .output = create_device_tensor(output_specs.output, tensor_args.input_q.device()),
         .joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.device())};
 }
 
-std::tuple<JointSDPADeviceOperation::operation_attributes_t, JointSDPADeviceOperation::tensor_args_t>
-JointSDPADeviceOperation::invoke(
+}  // namespace ttnn::prim
+
+namespace ttnn::prim {
+
+JointSDPAResult joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -189,28 +194,28 @@ JointSDPADeviceOperation::invoke(
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
     const std::string& joint_strategy,
-    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = ttnn::prim::JointSDPADeviceOperation;
+
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     auto scale_val = scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
 
-    return {
-        operation_attributes_t{
-            joint_strategy,
-            scale_val,
-            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            program_config,
-            kernel_config_val},
-        tensor_args_t{
-            .input_q = input_tensor_q,
-            .input_k = input_tensor_k,
-            .input_v = input_tensor_v,
-            .joint_q = joint_tensor_q,
-            .joint_k = joint_tensor_k,
-            .joint_v = joint_tensor_v}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        joint_strategy, scale_val, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG, program_config, kernel_config_val};
+
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_q = input_tensor_q,
+        .input_k = input_tensor_k,
+        .input_v = input_tensor_v,
+        .joint_q = joint_tensor_q,
+        .joint_k = joint_tensor_k,
+        .joint_v = joint_tensor_v};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa
+}  // namespace ttnn::prim

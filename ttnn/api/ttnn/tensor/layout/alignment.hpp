@@ -32,9 +32,9 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value_); }
 
-    friend std::ostream& operator<<(std::ostream& os, const Alignment& shape);
+    friend std::ostream& operator<<(std::ostream& os, const Alignment& alignment);
 };
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Alignment& shape);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Alignment& alignment);
 
 }  // namespace tt::tt_metal

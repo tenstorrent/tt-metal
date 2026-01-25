@@ -73,6 +73,7 @@ def initialize_vllm_text_transformer(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
     assert tt_model_args.model_name.replace("-", "").endswith(
         hf_config.name_or_path.split("/")[-1].replace("-", "")
     ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
@@ -107,6 +108,11 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder if envs.VLLM_USE_V1 else DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)
@@ -179,6 +185,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         enable_trace,
         **kwargs,  # images for V0, pixel_values and image_grid_thw for V1,
     ):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or all(
+            x == 0 for x in start_pos
+        ), f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
         # Must add this so that vLLM can call without errors
         enable_trace = False
         logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")

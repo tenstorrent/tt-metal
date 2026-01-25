@@ -10,8 +10,7 @@
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::transformer {
@@ -235,8 +234,10 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -251,8 +252,10 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         ring_id,  // Pass through the ring_id parameter (can be used or ignored)
         scale,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        std::move(program_config),
-        kernel_config_val);
+        program_config,
+        kernel_config_val,
+        page_table,
+        chunk_start_idx);
 }
 
 }  // namespace ttnn::operations::transformer

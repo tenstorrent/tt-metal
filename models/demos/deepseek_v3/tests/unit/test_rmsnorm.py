@@ -37,6 +37,7 @@ def reference_rmsnorm(x: torch.Tensor, gamma: torch.Tensor, epsilon: float) -> t
 # =============================================================================
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_pre_all_gather_single_device(device):
     """
     Test rms_norm_pre_all_gather operation.
@@ -119,6 +120,7 @@ def test_rmsnorm_pre_all_gather_single_device(device):
     assert_with_pcc(expected_sum_x2, tt_sum_x2, pcc=0.99)
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
@@ -358,7 +360,7 @@ def test_rmsnorm_post_all_gather(device):
     assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
@@ -499,12 +501,15 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
 
     def check_outputs(tt_output):
         # tt_output is sharded across devices, each device has its chunk
+        coords = list(tt_output.tensor_topology().mesh_coords())
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
         device_tensors = ttnn.get_device_tensors(tt_output)
 
-        # Compare each device's output with its corresponding chunk of reference
-        # Devices are ordered by (row, col) in the mesh, we care about col (cluster_axis=1)
-        for device_idx, tt_device_out in enumerate(device_tensors):
-            col_idx = device_idx % n_devices_row  # Column index in mesh
+        # Compare each local device's output with its corresponding chunk of reference.
+        for coord, tt_device_out in zip(coords, device_tensors):
+            if view is not None and not view.is_local(coord):
+                continue
+            col_idx = coord[1]  # Column index in mesh (cluster_axis=1)
             tt_output_torch = ttnn.to_torch(tt_device_out)
             ref_chunk = ref_out[..., col_idx * per_device_width : (col_idx + 1) * per_device_width]
             assert_with_pcc(ref_chunk, tt_output_torch, pcc=0.99)
@@ -543,6 +548,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     ],
     ids=["32x1536", "32x512"],
 )
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     """
     Test non-distributed RMSNorm operation (ttnn.rms_norm).
@@ -601,7 +607,6 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     assert_with_pcc(ref_out, tt_out_cpu, pcc=0.99)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "inp_shape, weight_shape",
     [
@@ -614,6 +619,7 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace, device_params):
     """
     Mesh device test for non-distributed RMSNorm operation (ttnn.rms_norm).

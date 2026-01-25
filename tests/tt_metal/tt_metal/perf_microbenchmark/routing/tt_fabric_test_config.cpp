@@ -47,13 +47,15 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
     if (node.IsScalar()) {
         ChipId chip_id = parse_scalar<ChipId>(node);
         return chip_id;
-    } else if (node.IsSequence() && node.size() == 2) {
+    }
+    if (node.IsSequence() && node.size() == 2) {
         MeshId mesh_id = parse_mesh_id(node[0]);
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
             ChipId chip_id = parse_scalar<ChipId>(node[1]);
             return std::make_pair(mesh_id, chip_id);
-        } else if (node[1].IsSequence()) {
+        }
+        if (node[1].IsSequence()) {
             // Format: [mesh_id, [row, col]]
             MeshCoordinate mesh_coord = parse_mesh_coord(node[1]);
             return std::make_pair(mesh_id, mesh_coord);
@@ -133,6 +135,13 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
     }
+    if (sender_yaml["noc_id"]) {
+        config.noc_id = static_cast<tt::tt_metal::NOC>(parse_scalar<uint8_t>(sender_yaml["noc_id"]));
+        TT_FATAL(
+            config.noc_id == 0 || config.noc_id == 1,
+            "Expected NOC ID 0 or 1, got: {}",
+            static_cast<uint8_t>(config.noc_id.value()));
+    }
     if (sender_yaml["link_id"]) {
         config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
     }
@@ -148,24 +157,32 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
-    TT_FATAL(
-        !test_config.patterns.has_value() || test_config.patterns.value().empty(),
-        "Test '{}': latency_test_mode does not support high-level patterns",
-        test_config.name);
-    TT_FATAL(
-        test_config.senders.size() == 1,
-        "Test '{}': latency_test_mode requires exactly one sender, got {}",
-        test_config.name,
-        test_config.senders.size());
-    TT_FATAL(
-        test_config.senders[0].patterns.size() == 1,
-        "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
-        test_config.name,
-        test_config.senders[0].patterns.size());
-    TT_FATAL(
-        test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
-        "Test '{}': latency_test_mode only supports unicast",
-        test_config.name);
+    // Special case for sequential high level patterns, which are allowed
+    if(test_config.patterns.has_value()){
+        auto iterator = std::find_if_not(test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) { return config.is_sequential; });
+        TT_FATAL(
+            // If no config which is NOT sequential was found (all configs were sequential), we can proceed
+            // Otherwise, print the first non-sequential high-level pattern returned from std::find_if_not
+            iterator == test_config.patterns.value().end(),
+            "Test '{}': latency_test_mode does not support non-sequential high-level pattern: {}",
+            test_config.name, iterator->type);
+    }
+    else{
+        TT_FATAL(
+            test_config.senders.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one sender, got {}",
+            test_config.name,
+            test_config.senders.size());
+        TT_FATAL(
+            test_config.senders[0].patterns.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+            test_config.name,
+            test_config.senders[0].patterns.size());
+        TT_FATAL(
+            test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+            "Test '{}': latency_test_mode only supports unicast",
+            test_config.name);
+    }
 }
 
 ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
@@ -343,6 +360,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
         fabric_setup.num_links = 1;
     }
 
+    if (fabric_setup_yaml["max_packet_size"]) {
+        fabric_setup.max_packet_size = parse_scalar<uint32_t>(fabric_setup_yaml["max_packet_size"]);
+    }
+
     // Handle torus_config for Torus topology
     if (fabric_setup.topology == Topology::Torus) {
         if (fabric_setup_yaml["torus_config"]) {
@@ -407,7 +428,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
     if (filter_type.has_value()) {
         if (filter_type.value() == "name" || filter_type.value() == "Name") {
             return test_config.name == filter_value;
-        } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
+        }
+        if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
             auto topo = tt::tt_fabric::Topology::Linear;  // Default value
             if (filter_value == "Ring") {
                 topo = tt::tt_fabric::Topology::Ring;
@@ -425,31 +447,32 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 return false;
             }
             return test_config.fabric_setup.topology == topo;
-        } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
+        }
+        if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
                 return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
-            } else if (filter_value == "false") {
-                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
-                    filter_value);
-                return false;
             }
-        } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
+            if (filter_value == "false") {
+                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
+            }
+            log_info(
+                tt::LogTest,
+                "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
+                filter_value);
+            return false;
+        }
+        if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
             if (filter_value == "true") {
                 return test_config.global_sync;
-            } else if (filter_value == "false") {
-                return !test_config.global_sync;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported sync filter value: '{}'. Supported values are: true, false",
-                    filter_value);
-                return false;
             }
-        } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            if (filter_value == "false") {
+                return !test_config.global_sync;
+            }
+            log_info(
+                tt::LogTest, "Unsupported sync filter value: '{}'. Supported values are: true, false", filter_value);
+            return false;
+        }
+        if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -466,7 +489,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 }
             }
             return test_config.fabric_setup.num_links == stoi(filter_value.value());
-        } else if (filter_type.value() == "ntype") {
+        }
+        if (filter_type.value() == "ntype") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -512,7 +536,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().ntype.value() == ntype.value();
             }
             return checker;
-        } else if (filter_type.value() == "ftype") {
+        }
+        if (filter_type.value() == "ftype") {
             // soft filter
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
@@ -558,7 +583,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().ftype.value() == ftype.value();
             }
             return checker;
-        } else if (filter_type.value() == "num_packets") {
+        }
+        if (filter_type.value() == "num_packets") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -603,7 +629,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().num_packets.value() == num_packets;
             }
             return checker;
-        } else if (filter_type.value() == "size") {
+        }
+        if (filter_type.value() == "size") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -648,7 +675,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().size.value() == size;
             }
             return checker;
-        } else if (filter_type.value() == "pattern") {
+        }
+        if (filter_type.value() == "pattern") {
             bool checker = false;
             if (test_config.patterns.has_value()) {
                 for (auto& high_level_pattern : test_config.patterns.value()) {
@@ -659,14 +687,13 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 }
             }
             return checker;
-        } else {
-            log_info(
-                tt::LogTest,
-                "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
-                "sync, num_links, ntype, ftype, num_packets, size, pattern",
-                filter_type.value());
-            return false;
         }
+        log_info(
+            tt::LogTest,
+            "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
+            "sync, num_links, ntype, ftype, num_packets, size, pattern",
+            filter_type.value());
+        return false;
     }
     return true;
 }
@@ -722,9 +749,7 @@ std::optional<uint32_t> CmdlineParser::get_master_seed() {
     return std::nullopt;
 }
 
-bool CmdlineParser::dump_built_tests() {
-    return test_args::has_command_option(input_args_, "--dump-built-tests");
-}
+bool CmdlineParser::dump_built_tests() { return test_args::has_command_option(input_args_, "--dump-built-tests"); }
 
 std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& default_file_name) {
     auto dump_file = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_file_name);
@@ -798,7 +823,6 @@ MeshId YamlConfigParser::parse_mesh_id(const YAML::Node& yaml_node) {
     return MeshId{mesh_id};
 }
 
-
 ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const YAML::Node& params_yaml) {
     ParametrizationOptionsMap options;
     TT_FATAL(params_yaml.IsMap(), "Expected 'parametrization_params' to be a map.");
@@ -825,11 +849,13 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
     config.type = parse_scalar<std::string>(pattern_yaml["type"]);
 
     TT_FATAL(
-        detail::high_level_traffic_pattern_mapper.to_enum.find(config.type) !=
-            detail::high_level_traffic_pattern_mapper.to_enum.end(),
+        detail::high_level_traffic_pattern_mapper.to_enum.contains(config.type),
         "Unsupported pattern type: '{}'. Supported types are: {}",
         config.type,
         get_supported_high_level_patterns());
+
+    // Above ensures the config type is supported before checking if it is sequential
+    config.is_sequential = high_level_pattern_is_sequential(detail::high_level_traffic_pattern_mapper.to_enum.at(config.type));
 
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
@@ -911,6 +937,7 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.global_sync = parsed_test.global_sync;
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
+    resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
 
     // Resolve defaults
     if (parsed_test.defaults.has_value()) {
@@ -930,6 +957,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     SenderConfig resolved_sender;
     resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
     resolved_sender.core = parsed_sender.core;
+    resolved_sender.noc_id = parsed_sender.noc_id;
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
 
     resolved_sender.patterns.reserve(parsed_sender.patterns.size());
@@ -1010,7 +1038,17 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
                     num_pairs,
                     p_config.name);
+            } else if (p.type == "sequential_neighbor_exchange"){
+                auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+                uint32_t num_pairs = static_cast<uint32_t>(neighbor_pairs.size());
+                max_iterations = std::max(max_iterations, num_pairs);
+                log_info(
+                    LogTest,
+                    "Auto-detected {} iterations for sequential_neighbor_exchange pattern in test '{}'",
+                    num_pairs,
+                    p_config.name);
             }
+
         }
     }
 
@@ -1052,6 +1090,19 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     "Please specify one or the other.",
                     p_config.name);
             }
+
+            // If we are in latency test mode, all high-level patterns need to be sequential
+            if(p_config.performance_test_mode == PerformanceTestMode::LATENCY){
+                // This is a redundant check; also performed in `validate_latency_test_config`
+                bool all_sequential = std::all_of(
+                    p_config.patterns.value().begin(),
+                    p_config.patterns.value().end(),
+                    [](const auto& pattern) { return pattern.is_sequential; });
+
+                // Need to remember this field so we can allow multiple iterations on a latency test in the sequential case
+                iteration_test.from_sequential_pattern = all_sequential;
+            }
+
             expand_patterns_into_test(iteration_test, p_config.patterns.value(), i);
         } else if (p_config.defaults.has_value()) {
             // if we have concrete senders, we still need to apply the defaults to them
@@ -1361,6 +1412,8 @@ void TestConfigBuilder::expand_patterns_into_test(
             expand_neighbor_exchange(test, defaults);
         } else if (pattern.type == "sequential_all_to_all") {
             expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
+        } else if (pattern.type == "sequential_neighbor_exchange") {
+            expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
         } else {
             TT_THROW("Unsupported pattern type: {}", pattern.type);
         }
@@ -1389,6 +1442,31 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
                 filtered_pairs.push_back(pair);
             }
         }
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
+    } else if (device_info_provider_.is_multi_mesh()) {
+        const auto mesh_adjacency_map = device_info_provider_.get_mesh_adjacency_map();
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        for (const auto& pair : all_pairs) {
+            MeshId src_mesh_id = pair.first.mesh_id;
+            MeshId dst_mesh_id = pair.second.mesh_id;
+            bool same_mesh = (src_mesh_id == dst_mesh_id);
+            bool dst_is_adjacent = false;
+            auto it = mesh_adjacency_map.find(src_mesh_id);
+            if (it != mesh_adjacency_map.end()) {
+                dst_is_adjacent = it->second.contains(dst_mesh_id);
+            }
+            if (same_mesh || dst_is_adjacent) {
+                filtered_pairs.push_back(pair);
+            }
+        }
+
+        log_info(
+            LogTest,
+            "Multi-mesh all_to_all: filtered {} pairs to {} pairs with adjacent mesh destinations",
+            all_pairs.size(),
+            filtered_pairs.size());
+
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
         add_senders_from_pairs(test, all_pairs, base_pattern);
@@ -1529,6 +1607,36 @@ void TestConfigBuilder::expand_neighbor_exchange(
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
     if (!neighbor_pairs.empty()) {
         add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+    }
+}
+
+void TestConfigBuilder::expand_sequential_neighbor_exchange(
+    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+    log_debug(
+        LogTest,
+        "Expanding sequential_neighbor_exchange pattern for test: {} (iteration {})",
+        test.name,
+        iteration_idx);
+    auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+
+    if (neighbor_pairs.empty()) {
+        log_warning(LogTest, "No valid pairs found for sequential_neighbor_exchange pattern");
+        return;
+    }
+
+    // Select only the pair for this iteration
+    if (iteration_idx < neighbor_pairs.size()) {
+        const auto& pair = neighbor_pairs[iteration_idx];
+        // Append sender→receiver device IDs to test name for clarity
+        detail::append_with_separator(test.parametrized_name, "_", pair.first.chip_id, "to", pair.second.chip_id);
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
+        add_senders_from_pairs(test, single_pair, base_pattern);
+    } else {
+        TT_THROW(
+            "Iteration index {} exceeds number of available device pairs {} for sequential_neighbor_exchange pattern",
+            iteration_idx,
+            neighbor_pairs.size());
     }
 }
 

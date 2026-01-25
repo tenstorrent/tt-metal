@@ -14,57 +14,47 @@
 #include "ttnn/decorators.hpp"
 #include <variant>
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding {
+namespace ttnn::prim {
 
 struct UntilizeWithUnpaddingDeviceOperation {
-    using operation_attributes_t = untilize_with_unpadding::operation_attributes_t;
-    using tensor_args_t = untilize_with_unpadding::tensor_args_t;
-    using spec_return_value_t = untilize_with_unpadding::spec_return_value_t;
-    using tensor_return_value_t = untilize_with_unpadding::tensor_return_value_t;
+    using operation_attributes_t = UntilizeWithUnpaddingParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
-        program::UntilizeWithUnpaddingSingleCoreProgramFactory,
-        program::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory,
-        program::UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
-        program::UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory,
-        program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory>;
+        UntilizeWithUnpaddingSingleCoreProgramFactory,
+        UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory,
+        UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
+        UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory,
+        UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory>;
 
     static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& operation_attributes, const Tensor& input);
 
-    static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const ttnn::Shape& output_tensor_end,
-        const std::optional<MemoryConfig>& memory_config,
-        bool use_multicore,
-        bool use_pack_untilize,
-        bool fp32_dest_acc_en,
-        bool enough_space_width,
-        bool enough_space_height,
-        const std::optional<CoreRangeSet>& sub_core_grids);
+        const operation_attributes_t& operation_attributes, const Tensor& input, tensor_return_value_t& output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
+Tensor untilize_with_unpadding(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<MemoryConfig>& output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    bool enough_space_width,
+    bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
-namespace ttnn::prim {
-constexpr auto untilize_with_unpadding = ttnn::register_operation<
-    "ttnn::prim::untilize_with_unpadding",
-    ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation>();
 }  // namespace ttnn::prim

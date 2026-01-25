@@ -71,7 +71,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_sub_grids_set,
+        const MeshCoordinateRangeSet& active_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
@@ -210,6 +210,7 @@ protected:
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;

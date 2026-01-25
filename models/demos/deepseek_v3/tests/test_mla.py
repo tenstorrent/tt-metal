@@ -11,7 +11,12 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
+from models.demos.deepseek_v3.tests.pytest_utils import (
+    build_expanded_test_ids,
+    expand_test_cases_with_position_ids_ranges,
+)
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -58,7 +63,16 @@ def generate_reference_io(
     batch_size: int,
     mode: str,
     state_dict: dict[str, torch.Tensor],
+    decode_position_id: int | None = None,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Generate reference input/output for testing.
+
+    Args:
+        decode_position_id: Configuration for position_ids generation (only used in decode mode):
+            - None: Generate random position_ids in range [0, max_seq_len - 1)
+            - int: Use this specific position for all batches
+    """
     if module_path is None:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = add_inv_scale_to_state_dict(
@@ -76,7 +90,21 @@ def generate_reference_io(
     if mode == "prefill":
         position_ids_or_seq_lens = torch.tensor([seq_len])
     else:
-        position_ids = position_ids_or_seq_lens = torch.randint(0, hf_config.max_seq_len - 1, (batch_size,))
+        # Handle decode_position_ids for decode mode
+        if decode_position_id is None:
+            # Generate random position_ids
+            position_ids = position_ids_or_seq_lens = torch.randint(
+                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.long
+            )
+        else:
+            # Must be an int, use that value for all batches
+            if not isinstance(decode_position_id, int):
+                raise ValueError(f"decode_position_id must be int or None, got {type(decode_position_id)}")
+            if not (0 <= decode_position_id < hf_config.max_seq_len):
+                raise ValueError(
+                    f"decode_position_id must be in [0, {hf_config.max_seq_len - 1}], got {decode_position_id}"
+                )
+            position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.long) * decode_position_id
     reference_output, input_cache, output_cache = run_reference_with_attention(
         reference_model, torch_input, position_ids_or_seq_lens, layer_idx, hf_config, mode, zeroed_cache=True
     )
@@ -169,6 +197,7 @@ def run_test_forward_pass_mla1d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    decode_position_ids: int | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -179,7 +208,15 @@ def run_test_forward_pass_mla1d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
+        model_path,
+        module_path,
+        hf_config_short,
+        layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
+        decode_position_ids,
     )
 
     # Set up page config
@@ -300,6 +337,7 @@ def run_test_forward_pass_mla2d(
     module_path,
     force_recalculate_weight_config,
     state_dict,
+    decode_position_ids: int | None = None,
 ):
     # Check params
     if mode == "prefill":
@@ -312,7 +350,15 @@ def run_test_forward_pass_mla2d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
+        model_path,
+        module_path,
+        hf_config_short,
+        layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
+        decode_position_ids,
     )
 
     # Set up page config
@@ -407,13 +453,36 @@ def run_test_forward_pass_mla2d(
         ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
 
 
+# Base test cases - ranges will be expanded into individual test cases
+# see documentation for expand_test_cases_with_position_ids_ranges for more details
+BASE_TEST_CASES = [
+    # mode, seq_len, batch_size_per_row, decode_position_ids
+    ("decode", 1, USERS_PER_ROW, None),
+    # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
+] + [
+    ("prefill", seq_len, 1, None)
+    if seq_len == 128
+    else pytest.param(
+        "prefill",
+        seq_len,
+        1,
+        None,
+        marks=pytest.mark.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        ),
+    )
+    for seq_len in PREFILL_SEQ_LENS
+]  # decode_position_ids is not applicable for prefill
+
+# Expand ranges into individual position_ids for pytest
+EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
+EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+
+
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size_per_row",
-    [
-        ("decode", 1, USERS_PER_ROW),
-        ("prefill", 128, 1),
-        ("prefill", 2048, 1),
-    ],
+    "mode, seq_len, batch_size_per_row, decode_position_ids",
+    EXPANDED_TEST_CASES,
+    ids=EXPANDED_TEST_IDS,
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -430,12 +499,16 @@ def run_test_forward_pass_mla2d(
 )
 @pytest.mark.parametrize(
     "test_closure",
-    [run_test_forward_pass_mla1d, run_test_forward_pass_mla2d],
+    [
+        pytest.param(run_test_forward_pass_mla1d, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(run_test_forward_pass_mla2d, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
+    ],
 )
 def test_forward_pass(
     mode,
     seq_len,
     batch_size_per_row,
+    decode_position_ids,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -450,6 +523,10 @@ def test_forward_pass(
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
 
+    # Only use decode_position_ids for decode mode
+    if mode != "decode":
+        decode_position_ids = None
+
     test_closure(
         layer_idx,
         mode,
@@ -463,6 +540,7 @@ def test_forward_pass(
         module_path,
         force_recalculate_weight_config,
         state_dict,
+        decode_position_ids,
     )
 
 

@@ -63,7 +63,11 @@ inline __attribute__((always_inline)) void reblock_and_untilize(
         llk_unpack_untilize_init(reblock_cb_id);
         llk_unpack_untilize_<true>(reblock_cb_id, out_block_w);
         llk_unpack_untilize_<false>(reblock_cb_id, out_block_w);
+#ifdef ARCH_BLACKHOLE
         llk_unpack_untilize_uninit(reblock_cb_id);
+#else
+        llk_unpack_untilize_uninit();
+#endif
 
         llk_pop_tiles(reblock_cb_id, out_block_w);
 
@@ -160,7 +164,7 @@ void unpack_main() {
         matmul_out_intermediate_cb_id = 25;  // Given 24 is no longer available, we use 25 instead
     }
 
-    llk_unpack_AB_matmul_hw_configure_disaggregated(0, 1, 0);
+    llk_unpack_hw_configure<false>(0, 1);
 
     uint32_t reblock_cb_id = 26;
 

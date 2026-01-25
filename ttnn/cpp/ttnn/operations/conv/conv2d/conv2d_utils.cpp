@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
@@ -33,6 +34,7 @@
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
+using ttnn::prim::conv_op_l1_usage;
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
@@ -82,24 +84,25 @@ uint32_t get_input_channels_alignment(
         (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
+            // NOLINTNEXTLINE(bugprone-branch-clone)
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
                 return tt::constants::TILE_WIDTH;
-            } else if (shard_width % 16 == 0) {
-                return 16U;
-            } else if (shard_width % 8 == 0) {
-                return 8U;
-            } else {
-                return tt::constants::TILE_WIDTH;
             }
-        } else {
-            // The minimum valid value for input channels alignment is 8.
-            // This requirement comes from the L1 alignment, which is 16 bytes.
-            // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
-            // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
-            // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
-            // (Network on Chip) in a single, aligned operation.
-            return tt::tt_metal::hal::get_l1_alignment() / 2;
+            if (shard_width % 16 == 0) {
+                return 16U;
+            }
+            if (shard_width % 8 == 0) {
+                return 8U;
+            }
+            return tt::constants::TILE_WIDTH;
         }
+        // The minimum valid value for input channels alignment is 8.
+        // This requirement comes from the L1 alignment, which is 16 bytes.
+        // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
+        // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
+        // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
+        // (Network on Chip) in a single, aligned operation.
+        return tt::tt_metal::hal::get_l1_alignment() / 2;
     }
     return tt::constants::TILE_WIDTH;
 }
@@ -421,7 +424,8 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t output_width,
     bool fp32_accum,
     bool full_inner_dim,
-    bool enable_activation_reuse) {
+    bool enable_activation_reuse,
+    bool is_1d_depthwise_conv) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -466,9 +470,15 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = enable_activation_reuse
-                          ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
-                          : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        // For 1D depthwise conv, each channel is processed independently, so activation
+        // block width doesn't need to be multiplied by the kernel window size
+        if (is_1d_depthwise_conv) {
+            act_block_w = tt::round_up(padded_in_channels, tt::constants::TILE_WIDTH);
+        } else {
+            act_block_w = enable_activation_reuse
+                              ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
+                              : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        }
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         act_block_w = tt::round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
@@ -501,7 +511,7 @@ bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 4>& padding,
     const std::array<uint32_t, 2>& dilation,
-    uint32_t groups,
+    uint32_t /*groups*/,
     const Conv2dConfig& conv_config) {
     bool is_width_sharded =
         (conv_config.shard_layout.has_value() && conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED);
@@ -510,17 +520,20 @@ bool use_matmul_for_1x1_conv(
            (not is_width_sharded);
 }
 
-bool is_1d_conv(uint32_t kernel_width, uint32_t image_width) { return kernel_width == 1 && image_width == 1; }
+bool is_1d_conv(uint32_t kernel_height, uint32_t image_height) { return kernel_height == 1 && image_height == 1; }
 
-bool is_1d_deptwise_conv(
+bool is_1d_depthwise_conv(
     uint32_t groups,
     uint32_t input_channels,
     uint32_t output_channels,
+    uint32_t kernel_height,
     uint32_t kernel_width,
-    uint32_t image_width,
+    uint32_t image_height,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
+    // Only use 1D depthwise path when kernel is truly pointwise (1x1)
+    // is_1d_conv checks height=1, we also need kernel_width=1 to ensure no spatial computation
+    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && kernel_width == 1 && !has_bias;
 }
 
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
@@ -536,8 +549,12 @@ SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_con
     return SkipMcast{skip_act_mcast, skip_weights_mcast};
 }
 
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device) {
-    return init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
+    MeshDevice* device, DataType input_dtype, DataType weight_dtype) {
+    // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
+    bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
+    return init_device_compute_kernel_config(
+        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
@@ -551,7 +568,10 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<ParallelConfig>& input_tensor_parallel_config,
-    std::optional<uint32_t> act_block_h_override) {
+    std::optional<uint32_t> act_block_h_override,
+    bool enable_channels_padding,
+    bool is_shard_height_tile_multiple,
+    bool is_shard_width_tile_multiple) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
@@ -568,9 +588,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
             input_channels_alignment,
             compute_grid_size,
             block_shard_orientation,
-            !is_mm_conv,
-            true,
-            true,
+            enable_channels_padding && !is_mm_conv,
+            is_shard_height_tile_multiple,
+            is_shard_width_tile_multiple,
             act_block_h_override.value_or(0));
     }
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
@@ -739,9 +759,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             parallel_config,
             conv_config.act_block_h_override);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
-    } else {
-        return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
     }
+    return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
 }
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
@@ -856,7 +875,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     bool height_sharded,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
-    uint32_t grid_size_along_c) {
+    uint32_t /*grid_size_along_c*/) {
     if (height_sharded) {
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
@@ -873,22 +892,21 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
-    } else {
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
-            .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
-            .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
-            .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-            .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .transpose_mcast = transpose_mcast};
-        if (activation.has_value()) {
-            matmul_config.fused_activation = activation.value();
-        }
-        return matmul_config;
     }
+    ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
+        .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
+        .in0_block_w = conv_blocking_config.act_block_w_ntiles,
+        .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
+        .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
+        .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .transpose_mcast = transpose_mcast};
+    if (activation.has_value()) {
+        matmul_config.fused_activation = activation.value();
+    }
+    return matmul_config;
 }
 
 core_count_and_size calculate_L1_usage_for_conv_op(
@@ -926,8 +944,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_deptwise =
-        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
 
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -967,6 +985,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
 
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
+
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
@@ -978,7 +997,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         output_height,
         output_width,
         kernel_size,
-        compute_grid_size);
+        compute_grid_size,
+        conv_is_1d_depthwise);
 
     SlidingWindowConfig sliding_window_config{
         .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
@@ -994,7 +1014,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         output_datatype,
         output_width,
         enable_bias,
-        conv_is_1d_deptwise,
+        conv_is_1d_depthwise,
         in_channels_padded);
 
     auto halo_input_memory_config = _halo_input_memory_config.has_value()
@@ -1059,7 +1079,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t out_channels,
     uint32_t output_height,
     uint32_t output_width,
-    uint32_t weights_width,
+    uint32_t /*weights_width*/,
     uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
@@ -1091,8 +1111,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_deptwise =
-        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(
@@ -1120,8 +1140,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
-    // 1d deptwise convs support only height sharding
-    if (conv_is_1d_deptwise) {
+    // 1d depthwise convs support only height sharding
+    if (conv_is_1d_depthwise) {
         return height.conv_config;
     }
 
@@ -1157,7 +1177,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
-    const CoreCoord& compute_grid) {
+    const CoreCoord& /*compute_grid*/,
+    bool is_1d_depthwise_conv) {
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
     uint32_t nhw_out = batch_size * output_height * output_width;
     uint32_t out_channels_padded = tt::round_up(
@@ -1187,11 +1208,18 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
         output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        conv_config.enable_activation_reuse,
+        is_1d_depthwise_conv);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-conv_op_l1_usage conv2d::calculate_L1_usage(
+}  // namespace ttnn::operations::conv
+
+namespace ttnn::prim {
+
+using ttnn::operations::sliding_window::SlidingWindowConfig;
+
+conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
     const Conv2dParallelizationConfig& pconfig,
@@ -1237,17 +1265,21 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     }
     log_trace(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
 
-    return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
+    return conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
 }
 
-bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w) {
+bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w) {
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
+
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::conv {
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_layout,
-    const DataType& input_dtype,
+    const DataType& /*input_dtype*/,
     std::optional<bool> enable_folding_,
     uint32_t input_height,
     uint32_t input_width,
@@ -1275,9 +1307,8 @@ bool auto_enable_kernel_folding(
         return (
             (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
             (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
-    } else {
-        return enable_folding_.value();
     }
+    return enable_folding_.value();
 }
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
@@ -1325,9 +1356,8 @@ Tensor fold_input_tensor_if_required(
         padding_n4 = folding_result.padding_n4;  // Padding is zero after folding
         mm_conv = folding_result.mm_conv;
         return folded_input_tensor;
-    } else {
-        return input_tensor;
     }
+    return input_tensor;
 }
 
 ttnn::Tensor fold_tensor(
@@ -1374,7 +1404,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config) {
+    const Conv2dConfig& /*conv_config*/) {
     // Calculate padded dimensions first - this is what the folding operation will see
     uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
     uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];
@@ -1421,6 +1451,26 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
         }
         input_tensor_on_device = std::move(input_tensor_tilized);
     }
+}
+
+Conv2dExecutionPath determine_conv2d_execution_path(
+    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    return determine_conv2d_execution_path(input_tensor.memory_config().is_l1(), slice_config);
+}
+Conv2dExecutionPath determine_conv2d_execution_path(
+    bool input_is_in_L1, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    // If slice config explicitly specifies L1_FULL, use L1 path
+    if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+        return Conv2dExecutionPath::L1;
+    }
+
+    // If no slice config and input is already on device in L1, use L1 path
+    if (!slice_config.has_value() && input_is_in_L1) {
+        return Conv2dExecutionPath::L1;
+    }
+
+    // Otherwise, use DRAM path
+    return Conv2dExecutionPath::DRAM;
 }
 
 }  // namespace ttnn::operations::conv

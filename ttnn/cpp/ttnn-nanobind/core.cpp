@@ -5,7 +5,6 @@
 #include "core.hpp"
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,7 +19,6 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
-#include "ttnn/common/guard.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
@@ -32,21 +30,17 @@
 
 namespace ttnn::core {
 
-void py_module_types(nb::module_& mod) {
-    nb::class_<ttnn::Config>(mod, "Config");
-}
+void py_module_types(nb::module_& mod) { nb::class_<ttnn::Config>(mod, "Config"); }
 
 void py_module(nb::module_& mod) {
     namespace lightmetal = tt::tt_metal::experimental::lightmetal;
 
     auto py_config = static_cast<nb::class_<ttnn::Config>>(mod.attr("Config"));
-    py_config
-        .def(nb::init<const ttnn::Config&>())
-        .def("__repr__", [](const ttnn::Config& config) {
-            return fmt::format("{}", config);
-        });
+    py_config.def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
+        return fmt::format("{}", config);
+    });
     reflect::for_each<ttnn::Config::attributes_t>([&py_config](auto I) {
-       py_config.def_prop_rw(
+        py_config.def_prop_rw(
             std::string{reflect::member_name<I, ttnn::Config::attributes_t>()}.c_str(),
             &ttnn::Config::get<I>,
             &ttnn::Config::set<I>);

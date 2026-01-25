@@ -18,7 +18,7 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
 )
 
 
-@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("B", [1, 3])
 @pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [32, 64])
 @pytest.mark.parametrize("T", [3, 5])
@@ -52,6 +52,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
         [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(3, 64, 8, 8, 8), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
     ],
 )
 @pytest.mark.timeout(1000)

@@ -8,6 +8,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("matrix_size", [4, 8, 16, 32, 64, 128, 256, 512, 1024])

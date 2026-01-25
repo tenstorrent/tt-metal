@@ -201,7 +201,7 @@ void BandwidthResultsManager::add_result(const TestConfig& config, const Bandwid
 void BandwidthResultsManager::add_summary(const TestConfig& config, const BandwidthResultSummary& summary) {
     const std::string& test_name = config.name;
     // First iteration or first time we see this test name
-    if (config.iteration_number == 0 || !test_name_to_summary_index_.count(test_name)) {
+    if (config.iteration_number == 0 || !test_name_to_summary_index_.contains(test_name)) {
         test_name_to_summary_index_[test_name] = bandwidth_results_summary_.size();
         bandwidth_results_summary_.push_back(summary);
         return;
@@ -237,7 +237,7 @@ void BandwidthResultsManager::append_to_csv(const TestConfig& config, const Band
         return;
     }
 
-    csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+    csv_stream << config.parametrized_name << "," << ftype_str << "," << ntype_str << ","
                << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
                << result.device_id << "," << config.fabric_setup.num_links << ","
                << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
@@ -307,9 +307,9 @@ void BandwidthResultsManager::load_golden_csv() {
             }
         }
 
-        // Validate we have enough tokens for the new format with tolerance
-        if (tokens.size() < 11) {
-            log_error(tt::LogTest, "Invalid CSV format in golden file. Expected 11+ fields, got {}", tokens.size());
+        // Validate we have enough tokens for the new format with tolerance and max_packet_size
+        if (tokens.size() < 16) {
+            log_error(tt::LogTest, "Invalid CSV format in golden file. Expected 16 fields, got {}", tokens.size());
             continue;
         }
 
@@ -326,11 +326,8 @@ void BandwidthResultsManager::load_golden_csv() {
         entry.packets_per_second = std::stod(tokens[9]);
         entry.bandwidth_GB_s = std::stod(tokens[10]);
         // Skip min, max, std dev (indexes 11,12,13)
-        if (tokens.size() > 14) {
-            entry.tolerance_percent = std::stod(tokens[14]);
-        } else {
-            entry.tolerance_percent = 1.0;
-        }
+        entry.tolerance_percent = std::stod(tokens[14]);
+        entry.max_packet_size = std::stoul(tokens[15]);
         golden_csv_entries_.push_back(entry);
     }
 
@@ -441,6 +438,7 @@ ComparisonResult BandwidthResultsManager::create_comparison_result(const Bandwid
     comp_result.num_links = test_result.num_links;
     comp_result.packet_size = test_result.packet_size;
     comp_result.num_iterations = test_result.num_iterations;
+    comp_result.max_packet_size = test_result.max_packet_size;
     return comp_result;
 }
 
@@ -691,8 +689,7 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
             golden_csv_entries_.size());
     }
 
-    for (int i = 0; i < bandwidth_results_summary_.size(); i++) {
-        BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
+    for (auto& test_result : bandwidth_results_summary_) {
         auto bandwidth_stat_location =
             std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::BandwidthMean);
         if (bandwidth_stat_location == stat_order_.end()) {
@@ -719,7 +716,7 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
     auto diff_csv_stream = init_diff_csv_file(
         diff_csv_file_path_,
         "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,"
-        "current_bandwidth_GB_s,golden_bandwidth_GB_s,difference_percent,status",
+        "current_bandwidth_GB_s,golden_bandwidth_GB_s,difference_percent,status,max_packet_size",
         "bandwidth");
 
     if (diff_csv_stream.is_open()) {
@@ -728,7 +725,8 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
                             << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size
                             << "," << result.num_iterations << "," << std::fixed << std::setprecision(6)
                             << result.current_bandwidth_GB_s << "," << result.golden_bandwidth_GB_s << ","
-                            << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
+                            << std::setprecision(2) << result.difference_percent() << "," << result.status << ","
+                            << result.max_packet_size << "\n";
         }
         diff_csv_stream.close();
         log_info(tt::LogTest, "Bandwidth comparison diff CSV results written to: {}", diff_csv_file_path_.string());

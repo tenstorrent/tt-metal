@@ -11,6 +11,9 @@ Description:
     Goes through all tensix and idle_eth blocks and tries to halt every core inside them.
     If halt is successful, does nothing. If it throws an exception, prints all debug bus
     signals related to that core (e.g., for brisc, prints all signals matching brisc*).
+
+Owner:
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass
@@ -89,7 +92,12 @@ def dump_risc_debug_signals(
                     # Verifying that the original data was restored
                     assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
 
-        log_check_risc(risc_name, location, False, f"Failed to halt core {risc_name} at {location.to_user_str()}")
+        log_check_risc(
+            risc_name,
+            location,
+            False,
+            f"Failed to halt core.",
+        )
 
         # Return the collected debug bus signals
         return DumpDebugBusSignals(

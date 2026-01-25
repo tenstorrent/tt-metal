@@ -15,50 +15,50 @@ using OptionalTensor = std::optional<Tensor>;
 
 struct AddcmulBackwardOperation {
     static std::vector<Tensor> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const Tensor& input_tensor_c_arg,
-        float alpha,
-        const MemoryConfig& memory_config);
+        const Tensor& grad_tensor,
+        const Tensor& input_a,
+        const Tensor& tensor1,
+        const Tensor& tensor2,
+        float value,
+        const MemoryConfig& output_mem_config);
 };
 
 struct AddcdivBackwardOperation {
     static std::vector<Tensor> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const Tensor& input_tensor_c_arg,
-        float alpha,
-        const MemoryConfig& memory_config);
+        const Tensor& grad_tensor,
+        const Tensor& input_a,
+        const Tensor& tensor1,
+        const Tensor& tensor2,
+        float value,
+        const MemoryConfig& output_mem_config);
 };
 
 struct WhereBackwardOperation {
     static std::vector<OptionalTensor> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const Tensor& input_tensor_c_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const Tensor& grad_tensor,
+        const Tensor& condition,
+        const Tensor& input_a,
+        const Tensor& other,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
-        OptionalTensor input_a_grad = std::nullopt,
-        OptionalTensor input_b_grad = std::nullopt);
+        OptionalTensor input_grad = std::nullopt,
+        OptionalTensor other_grad = std::nullopt);
 };
 
 struct LerpBackwardOperation {
     static std::vector<Tensor> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const Tensor& input_tensor_c_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& grad_tensor,
+        const Tensor& input_a,
+        const Tensor& end,
+        const Tensor& weight,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<Tensor> invoke(
-        const Tensor& grad_tensor_arg,
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        float scalar,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& grad_tensor,
+        const Tensor& input_a,
+        const Tensor& end,
+        float weight,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 }  // namespace operations::ternary_backward

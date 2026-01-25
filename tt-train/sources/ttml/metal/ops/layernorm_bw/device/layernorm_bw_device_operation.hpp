@@ -29,22 +29,20 @@ struct LayerNormBackwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& gamma_tensor,
-        const ttnn::Tensor& mean_tensor,
-        const ttnn::Tensor& rstd_tensor,
-        const ttnn::Tensor& dL_dout_tensor,
-        const std::optional<ttnn::Tensor>& preallocated_dx = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::layernorm_bw::device
 
 namespace ttnn::prim {
-constexpr auto ttml_layernorm_bw = ttnn::register_operation<
-    "ttnn::prim::ttml_layernorm_bw",
-    ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation>();
-}
+
+ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor_return_value_t ttml_layernorm_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    const ttnn::Tensor& mean_tensor,
+    const ttnn::Tensor& rstd_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_dx = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt);
+
+}  // namespace ttnn::prim

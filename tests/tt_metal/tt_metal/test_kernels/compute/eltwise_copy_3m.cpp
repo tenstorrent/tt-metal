@@ -19,7 +19,7 @@ void math_main() {
     int __outer_loop_iter;
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0)));
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
-    llk_math_hw_configure_disaggregated(0, 0);
+    llk_math_hw_configure<DST_ACCUM_MODE>(0, 0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_math_wait_for_dest_available();
@@ -36,7 +36,7 @@ void math_main() {
 void pack_main() {
     int __outer_loop_iter;
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -53,7 +53,7 @@ void pack_main() {
 void unpack_main() {
     int __outer_loop_iter;
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()));
-    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(0)));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_wait_tiles(0, 1);

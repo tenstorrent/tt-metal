@@ -39,6 +39,13 @@ class ModelArgs:
         self.mesh_device = mesh_device
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        if self.max_batch_size > 32:
+            assert (
+                self.max_batch_size % self.mesh_device.shape[0] == 0
+            ), "max_batch_size must be divisible by the number of device rows"
+            self.max_local_batch_size = self.max_batch_size // self.mesh_device.shape[0]
+        else:
+            self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
@@ -101,7 +108,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
@@ -142,7 +149,7 @@ class ModelArgs:
     def base_model_name(self):
         return get_base_model_name(self.model_name)
 
-    def can_enable_trace(self, prefill_seq_len):
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
@@ -155,6 +162,7 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
+            and num_cached_tokens == 0
         )
 
     def get_trace_prefill_supported_seq_lens(self):
@@ -170,18 +178,15 @@ class ModelArgs:
         model_name = self.model_name
         device_name = determine_device_name(self.mesh_device)
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
+        if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        else:
+            return []
 
     def encode_prompt(self, prompt_text, instruct=False, system_prompt_text=None):
         """

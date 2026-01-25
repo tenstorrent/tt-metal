@@ -14,8 +14,7 @@ void unpack_main() {
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
-    llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(0, 1);
-    // llk_unpack_untilize_hw_configure_disaggregated(0);
+    llk_unpack_hw_configure<DST_ACCUM_MODE>(0, 1);
 
     // llk_unpack_untilize_init(0);
     for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
@@ -24,7 +23,11 @@ void unpack_main() {
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize_<true>(0, per_core_block_c_tiles);
             llk_unpack_untilize_<false>(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 

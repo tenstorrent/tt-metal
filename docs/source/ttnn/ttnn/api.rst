@@ -291,7 +291,6 @@ Pointwise Binary
    ttnn.outer
    ttnn.polyval
    ttnn.pow
-   ttnn.prim.binary
    ttnn.remainder
    ttnn.rpow
    ttnn.rsub
@@ -563,6 +562,7 @@ Vision
 
    ttnn.grid_sample
    ttnn.upsample
+   ttnn.rotate
 
 Generic
 =======

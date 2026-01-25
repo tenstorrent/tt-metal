@@ -147,14 +147,13 @@ protected:
     // Verify bidirectional mapping consistency
     static void verify_bidirectional_consistency(const TopologyMappingResult& result) {
         for (const auto& [node, asic] : result.fabric_node_to_asic) {
-            ASSERT_TRUE(result.asic_to_fabric_node.count(asic) > 0)
+            ASSERT_TRUE(result.asic_to_fabric_node.contains(asic))
                 << "ASIC " << asic.get() << " not found in reverse mapping";
             EXPECT_EQ(result.asic_to_fabric_node.at(asic), node)
                 << "Bidirectional mapping inconsistent for ASIC " << asic.get();
         }
         for (const auto& [asic, node] : result.asic_to_fabric_node) {
-            ASSERT_TRUE(result.fabric_node_to_asic.count(node) > 0)
-                << "Node not found in forward mapping";
+            ASSERT_TRUE(result.fabric_node_to_asic.contains(node)) << "Node not found in forward mapping";
             EXPECT_EQ(result.fabric_node_to_asic.at(node), asic) << "Bidirectional mapping inconsistent for node";
         }
     }

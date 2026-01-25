@@ -75,6 +75,7 @@ struct BandwidthResultSummary {
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
     std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
+    uint32_t max_packet_size{};             // Max packet size for router (always set explicitly)
 
     // Optional fields for database upload CSV
     std::optional<std::string> file_name;
@@ -161,6 +162,7 @@ struct GoldenCsvEntry {
     double bandwidth_GB_s{};
     double packets_per_second{};
     double tolerance_percent{};  // Per-test tolerance percentage
+    uint32_t max_packet_size{};  // Max packet size for router (always set from CSV)
 };
 
 struct ComparisonResult {
@@ -181,6 +183,7 @@ struct ComparisonResult {
     double golden_bandwidth_GB_s{};
     bool within_tolerance{};
     std::string status;
+    uint32_t max_packet_size{};  // Max packet size for router (always set from test result)
 };
 
 // Used to organize per-test speedups by test topology, packet size, and ntype
@@ -284,7 +287,7 @@ private:
         std::vector<GoldenCsvEntry>::iterator golden_it,
         const std::vector<GoldenCsvEntry>::iterator& golden_end);
     std::ofstream init_diff_csv_file(
-        std::filesystem::path& csv_path, const std::string& header, const std::string& csv_type);
+        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type);
     std::string get_golden_csv_filename();
     void compare_summary_results_with_golden();
 

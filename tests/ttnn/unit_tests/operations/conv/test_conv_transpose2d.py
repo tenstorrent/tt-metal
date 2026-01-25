@@ -514,3 +514,63 @@ def test_conv_transpose2d_config_tensors_in_dram(
         out_pad_w=out_pad_w,
         config_tensors_in_dram=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, groups",
+    (
+        # Grouped transposed convolution tests (Issue #34497)
+        # Test 1: Original issue with C_in=1088, C_out=1088, groups=17
+        (1, 7, 7, 1088, 1088, 3, 3, 2, 2, 1, 1, 1, 1, 17),
+        # Test 2: Secondary issue with C_in=119, C_out=119, groups=17 (divisible by 7)
+        (1, 7, 7, 119, 119, 3, 3, 2, 2, 1, 1, 1, 1, 17),
+        # Test 3: From comment - C_in=160, C_out=80, groups=2 (numerical accuracy issue)
+        (1, 14, 14, 160, 80, 3, 3, 2, 2, 0, 0, 0, 0, 2),
+    ),
+)
+def test_conv_transpose2d_with_groups(
+    device,
+    batch_size,
+    input_height,
+    input_width,
+    input_channels,
+    output_channels,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    groups,
+):
+    """
+    Test grouped transposed convolution.
+    Reproduces and validates fix for issue #34497.
+    """
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        groups=groups,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        auto_shard=True,
+    )
