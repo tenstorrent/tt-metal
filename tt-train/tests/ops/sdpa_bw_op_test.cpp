@@ -573,9 +573,11 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         query,
         key,
         value,
+        ttml::metal::AttentionMaskType::Arbitrary,
         attn_mask,
         dropout_probability,
         /*return_intermediates=*/true);
+    // Note: Using Arbitrary mask type for backward test since sdpa_bw currently only supports arbitrary masks
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
     const auto kernel_attn_output = sdpa_fw_result[0].value();
