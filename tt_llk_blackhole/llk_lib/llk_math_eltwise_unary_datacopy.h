@@ -47,7 +47,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // Clears zero flags in DEST for one face.
             TT_ZEROACC(
                 p_zeroacc::CLR_16,
-                static_cast<int>(dst_format == (uint)DataFormat::Float32),
+                static_cast<int>(dst_format == (uint)DataFormat::Float32 || dst_format == (uint)DataFormat::Int32 || dst_format == (uint)DataFormat::UInt32),
                 1 /*clear zero flags*/,
                 ADDR_MOD_3,
                 dest_base_offset_in_faces + dst_index_in_faces + i);
