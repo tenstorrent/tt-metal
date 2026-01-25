@@ -48,8 +48,8 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
-    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
+    constexpr auto num_buffers_full_size_channels = 4;    // parameterize?
+    constexpr auto num_buffers_header_only_channels = 4;  // parameterize?
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
@@ -243,12 +243,12 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // input sharded buffer
     constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
-                                              .set_page_size(data_cb_id, token_segment_buffer_size_bytes)
+                                              .set_page_size(data_cb_id, buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // metadata page buffer
     constexpr auto metadata_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t metadata_extra_size_bytes = 8;
+    const uint32_t metadata_extra_size_bytes = 8 + 4 * experts_per_device;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(
             aligned_metadata_page_size_bytes + metadata_extra_size_bytes, {{metadata_cb_id, metadata_data_format}})
@@ -287,7 +287,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         {"metadata_entry_size_bytes", detail::metadata_entry_bytes * detail::metadata_entry_size(experts_per_device)},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
-    };
+        {"select_experts_k", select_experts_k}};
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
@@ -401,10 +401,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         const bool is_termination_master = (sender_core == termination_master_core);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
-            const auto link_idx = core_map_iter - mux_neigbor_core_maps.cbegin();
-            std::cout << "Device index: " << flat_mesh_idx << " Worker core: " << sender_core.x << ", " << sender_core.y
-                      << " mux core: " << mux_virtual_core.x << ", " << mux_virtual_core.y
-                      << " link worker: " << link_worker_idx << " link_idx: " << link_idx << std::endl;
+
+            // const auto link_idx = core_map_iter - mux_neigbor_core_maps.cbegin();
+            // std::cout<<"Device index: "<<flat_mesh_idx<<" Worker core: "<< sender_core.x<< ", "<<sender_core.y << "
+            // mux core: "<<mux_virtual_core.x<<", "
+            //<<mux_virtual_core.y<<" link worker: "<<link_worker_idx<<" link_idx: "<<link_idx<<std::endl;
 
             ttnn::ccl::fabric_mux_connection_rt_args(
                 true,
