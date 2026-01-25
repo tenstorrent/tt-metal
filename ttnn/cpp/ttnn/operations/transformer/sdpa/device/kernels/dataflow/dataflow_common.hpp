@@ -238,16 +238,6 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     }
 }
 
-// Keep bfp4 version for backward compatibility with existing causal mask generation
-template <uint32_t tile_bytes>
-void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
-    constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
-    constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
-    static_assert(
-        tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
-    fill_neginf_tile<tile_bytes>(cb_id, tile_id);
-}
-
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
     uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
@@ -593,7 +583,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -642,7 +632,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
