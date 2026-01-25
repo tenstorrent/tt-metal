@@ -143,14 +143,18 @@ protected:
             cluster_type == tt::tt_metal::ClusterType::T3K or cluster_type == tt::tt_metal::ClusterType::N300;
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-
+        constexpr size_t max_packet_payload_size_bytes = 7 * 1024;
         if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
             tt_fabric::SetFabricConfig(
                 config_.fabric_config,
                 tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 std::nullopt,
                 config_.fabric_tensix_config,
-                config_.fabric_udm_mode);
+                config_.fabric_udm_mode,
+                tt_fabric::FabricManagerMode::DEFAULT,
+                tt_fabric::FabricRouterConfig{
+                    .max_packet_payload_size_bytes = max_packet_payload_size_bytes,
+                });
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
