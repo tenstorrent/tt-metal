@@ -1,0 +1,38 @@
+{
+    "gpt-oss-20b": {
+        "decode": {
+            "attention": 0.95,
+            "rms_norm": 0.99,
+            "router": 0.945,
+            "experts": 0.92,
+            "mlp": 0.7,
+            "decoder": 0.92
+        },
+        "prefill": {
+            "attention": 0.95,
+            "rms_norm": 0.99,
+            "router": 0.945,
+            "experts": 0.93,
+            "mlp": 0.7,
+            "decoder": 0.88
+        }
+    },
+    "gpt-oss-120b": {
+        "decode": {
+            "attention": 0.95,
+            "rms_norm": 0.99,
+            "router": 0.945,
+            "experts": 0.925,
+            "mlp": 0.7,
+            "decoder": 0.90
+        },
+        "prefill": {
+            "attention": 0.95,
+            "rms_norm": 0.99,
+            "router": 0.945,
+            "experts": 0.925,
+            "mlp": 0.7,
+            "decoder": 0.88
+        }
+    }
+}

@@ -115,25 +115,17 @@ public:
         uint32_t trid = INVALID_TXN_ID) const {
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             noc_async_read_set_trid(trid, noc_id_);
-            uint64_t src_noc_addr = get_src_ptr<AddressType::NOC>(src, src_args);
-            static_assert(
-                max_page_size <= NOC_MAX_BURST_SIZE,
-                "Read with transaction id is not supported for page sizes greater than NOC_MAX_BURST_SIZE");
-            noc_async_read_one_packet_set_state(src_noc_addr, size_bytes, read_req_vc, noc_id_);
-            noc_async_read_one_packet_with_state_with_trid(
-                static_cast<uint32_t>((src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK),
-                static_cast<uint32_t>(src_noc_addr),
-                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-                trid,
-                noc_id_);
-        } else {
-            noc_async_read<max_page_size, enable_noc_tracing>(
-                get_src_ptr<AddressType::NOC>(src, src_args),
-                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-                size_bytes,
-                noc_id_,
-                read_req_vc);
+            while (noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2)) {
+                // Busy-wait until sufficient transactions are available for the configured transaction ID.
+            }
         }
+        noc_async_read<max_page_size, enable_noc_tracing>(
+            get_src_ptr<AddressType::NOC>(src, src_args),
+            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+            size_bytes,
+            noc_id_,
+            read_req_vc
+        );
     }
 
     /**
@@ -165,7 +157,8 @@ public:
             src_noc_addr,
             size_bytes,
             (vc_selection == VcSelection::CUSTOM) ? static_cast<int8_t>(vc) : -1,
-            false);
+            false,
+            noc_id_);
 
         WAYPOINT("NASW");
         ncrisc_noc_read_set_state<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE, vc_selection == VcSelection::CUSTOM>(
@@ -262,7 +255,7 @@ public:
             auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
             if constexpr (enable_noc_tracing) {
                 RECORD_NOC_EVENT_WITH_ADDR(
-                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted);
+                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
             }
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
             constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
@@ -367,7 +360,7 @@ public:
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
         constexpr bool posted = response_mode == ResponseMode::POSTED;
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size_bytes, vc, posted);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size_bytes, vc, posted, noc_id_);
 
         WAYPOINT("NWPW");
         ncrisc_noc_write_set_state<posted, max_page_size <= NOC_MAX_BURST_SIZE>(
@@ -417,7 +410,7 @@ public:
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_addr =
                 get_dst_ptr<AddressType::NOC>(dst, dst_args);  // NoC target was programmed in set_async_write_state
-            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted);
+            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted, noc_id_);
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id_, dst_addr, src_addr);
 
             WAYPOINT("NWPW");

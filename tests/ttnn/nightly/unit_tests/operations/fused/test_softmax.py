@@ -26,3 +26,9 @@ def test_ttnn_softmax_sdxl_attention(device, shape):
     tt_output = ttnn.softmax(tt_input, dim=-1, numeric_stable=True)
     tt_output_torch = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.999)
+
+    # test program cache
+    torch_output2 = F.softmax(torch_output, dim=-1, dtype=torch.bfloat16)
+    tt_output2 = ttnn.softmax(tt_output, dim=-1, numeric_stable=True)
+    tt_output_torch2 = ttnn.to_torch(tt_output2)
+    assert_with_pcc(torch_output2, tt_output_torch2, pcc=0.999)
