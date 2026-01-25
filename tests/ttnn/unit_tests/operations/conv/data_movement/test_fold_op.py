@@ -87,6 +87,16 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @skip_with_watcher("Skipping test_fold_with_permute_for_dram_tensor with watcher enabled, github issue #37096")
 def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout, input_dtype):
+    if (
+        is_watcher_enabled()
+        and input_dtype == ttnn.bfloat8_b
+        and input_layout == ttnn.ROW_MAJOR_LAYOUT
+        and padding == (8, 8)
+        and stride == (32, 32)
+        and channels == 320
+        and nhw == (1, 224, 224)
+    ):
+        pytest.skip("Skipping due to watcher timeout")
     batch_size, height, width = nhw
     stride_h, stride_w = stride
 
