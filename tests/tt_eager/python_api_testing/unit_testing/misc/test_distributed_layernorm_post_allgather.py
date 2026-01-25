@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
+from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor, is_watcher_enabled
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -167,6 +167,15 @@ def test_layernorm_part_2_with_program_cache(
 ):
     if fp32_enabled == False:
         pytest.skip("Skipping when fp32_enabled=False due to unexpected kernel behavior")
+    if (
+        is_watcher_enabled()
+        and fp32_enabled
+        and not is_rmsnorm
+        and n_devices == 4
+        and inp_shape == (1, 1, 2048, 8192)
+        and input_dtype == ttnn.bfloat16
+    ):
+        pytest.skip("Skipping due to watcher compilation error")
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
 
