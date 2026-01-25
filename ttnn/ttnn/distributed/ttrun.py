@@ -400,6 +400,17 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
+@click.option(
+    "--multihost",
+    is_flag=True,
+    help="Enable recommended MPI settings for multi-host clusters (TCP transport, tagged output, etc.)",
+)
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Implies --multihost.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -410,6 +421,8 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    multihost: bool,
+    tcp_interface: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -444,12 +457,40 @@ def main(
         mesh_graph_desc_path: "path/to/mesh_graph.yaml"  # Required
 
     \b
+    Understanding --rank-binding vs MPI Host Options:
+        tt-run's --rank-binding and MPI's host/rankfile options serve complementary purposes:
+
+        --rank-binding (tt-run):
+            Configures TT-Metal mesh topology. Maps MPI ranks to:
+            - mesh_id: Which TT-Metal mesh the rank belongs to
+            - mesh_host_rank: Position within the mesh
+            - env_overrides: Per-rank environment variables (e.g., TT_VISIBLE_DEVICES)
+            This is about TT-Metal's logical device organization.
+
+        --mpi-args "--host ..." or "--rankfile ...":
+            Configures MPI process placement. Tells mpirun:
+            - Which physical cluster nodes to spawn processes on
+            - How to distribute ranks across those nodes
+            This is about physical cluster topology.
+
+        For multi-host setups, you typically need BOTH:
+            tt-run --rank-binding mesh_config.yaml \\
+                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=/etc/mpirun/rankfile" \\
+                   ./my_app
+
+        The rank-binding configures what each MPI rank "sees" in terms of TT-Metal devices,
+        while the MPI host options control where those ranks physically execute.
+
+    \b
     Examples:
         # Single host, multiple processes
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # Multi-host with rankfile
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        # Multi-host with recommended MPI settings
+        tt-run --rank-binding binding.yaml --multihost --mpi-args "--rankfile hosts.txt" ./my_app
+
+        # Multi-host with specific network interface (e.g., ConnectX NIC)
+        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
 
         # With additional MPI args
         tt-run --rank-binding binding.yaml --mpi-args "--bind-to core" ./my_app
@@ -462,7 +503,7 @@ def main(
         The following variables are automatically set for each rank:
         - TT_MESH_ID: Mesh identifier
         - TT_MESH_HOST_RANK: Host rank within the mesh
-        - TT_METAL_CACHE: Per-rank cache directory
+        - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path
@@ -508,6 +549,27 @@ def main(
         mpirun spawns processes on remote cluster nodes with different working directories.
 
         Use --verbose to see path resolution diagnostics.
+
+    \b
+    Multi-Host Mode (--multihost):
+        The --multihost flag enables recommended MPI settings for multi-host cluster environments.
+        This adds the following MPI arguments:
+
+        - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
+        - --mca btl_tcp_if_exclude lo,docker0: Exclude loopback and docker interfaces
+        - --tag-output: Prefix output lines with rank information for easier debugging
+
+        If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
+        instead of btl_tcp_if_exclude to explicitly select the network interface.
+
+        These settings help avoid common MPI issues in multi-host environments:
+        - Stale process connections from other nodes
+        - Network interface selection problems
+        - Output interleaving from multiple ranks
+
+        Example:
+            tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
+            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
     \b
     Debugging with --debug-gdbserver:
@@ -594,8 +656,50 @@ def main(
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")
 
+    # Build multihost MPI args if requested
+    # --tcp-interface implies --multihost
+    if tcp_interface:
+        multihost = True
+
+    effective_mpi_args = list(mpi_args) if mpi_args else []
+
+    if multihost:
+        # Recommended MPI settings for multi-host clusters:
+        # - Use TCP for byte transfer layer (reliable for multi-host)
+        # - Exclude common non-routable interfaces
+        # - Tag output with rank info for easier debugging
+        multihost_args = [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_exclude",
+            "lo,docker0",
+            "--tag-output",
+        ]
+
+        if tcp_interface:
+            # If a specific interface is requested, use include instead of exclude
+            multihost_args = [
+                "--mca",
+                "btl",
+                "self,tcp",
+                "--mca",
+                "btl_tcp_if_include",
+                tcp_interface,
+                "--tag-output",
+            ]
+
+        # Prepend multihost args so user-provided --mpi-args can override if needed
+        effective_mpi_args = multihost_args + effective_mpi_args
+
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Multihost mode enabled with args: {' '.join(multihost_args)}")
+
     # Build MPI command
-    mpi_cmd = build_mpi_command(config, program, mpi_args, debug_gdbserver=debug_gdbserver)
+    mpi_cmd = build_mpi_command(
+        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+    )
 
     if verbose or dry_run:
         print_command(mpi_cmd)
