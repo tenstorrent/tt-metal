@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/env_utils.hpp"
 #include "ttnn/types.hpp"
 
 class MemoryUtilsTest : public ::testing::Test {
@@ -30,6 +31,7 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data1(64 * 128, 1.0F);
@@ -99,6 +101,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Create multiple tensors of various sizes
@@ -179,6 +182,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     // First capture: two 256x256 tensors added
@@ -274,6 +278,7 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 }
 
 TEST_F(MemoryUtilsTest, SnapshotFeature) {
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     device->disable_and_clear_program_cache();
 
