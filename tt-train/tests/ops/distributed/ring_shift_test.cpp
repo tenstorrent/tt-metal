@@ -36,14 +36,16 @@ auto check_32_chips() {
 class GalaxyRingShiftTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
         ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
         ttml::ttnn_fixed::distributed::enable_fabric(32);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
         ttml::autograd::ctx().set_seed(42);
         ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+    }
+    static void SetUp() {
+        if (!check_32_chips()) {
+            GTEST_SKIP() << "Skipping Galaxy specific tests";
+        }
     }
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
