@@ -1,0 +1,95 @@
+tt-metal
+Copyright 2026 Tenstorrent USA, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+
+This project includes modified portions of the LLVM Project (https://llvm.org)
+in the following files:
+
+  tt_stl/tt_stl/llvm/llvm_small_vector.cpp  (renamed from llvm/ADT/SmallVector.cpp)
+  tt_stl/tt_stl/llvm/llvm_small_vector.hpp  (renamed from llvm/ADT/SmallVector.h)
+  tt_stl/tt_stl/llvm/memory_alloc.hpp  (renamed from llvm/Support/MemAlloc.h)
+
+These files are licensed under the Apache License v2.0 with LLVM Exceptions.
+License available at: https://llvm.org/LICENSE.txt
+
+================================================================================
+
+Third-Party Dependencies:
+
+The following separate and independent dependencies are utilized by this
+project and are included in distributed builds (such as Python Wheels).
+Each is subject to its own license terms:
+
+- sfpi-gcc
+  Tenstorrent USA, Inc.
+  Licensed under Apache 2.0
+  https://github.com/tenstorrent/sfpi-gcc
+
+- OpenMPI
+  Licensed under BSD-3-Clause
+  https://github.com/open-mpi/ompi
+  https://github.com/open-mpi/ompi/blob/main/LICENSE
+
+- PMIx Reference Library (OpenPMIx)
+  Licensed under BSD-3-Clause
+  https://github.com/openpmix/openpmix
+  https://github.com/openpmix/openpmix/blob/master/LICENSE
+
+- libevent Event Notification Library
+  Copyright 2012 Niels Provos and Nick Mathewson
+  Licensed under BSD-3-Clause
+  https://github.com/libevent/libevent
+  https://github.com/libevent/libevent?tab=License-1-ov-file#readme
+
+- numactl (libnuma)
+  Simple NUMA policy support
+  Licensed under GPL-2.0
+  https://github.com/numactl/numactl
+  https://github.com/numactl/numactl/blob/master/LICENSE.GPL2
+
+- hwloc (libhwloc)
+  Portable Hardware Locality
+  Licensed under BSD-3-Clause
+  https://github.com/open-mpi/hwloc
+  https://github.com/open-mpi/hwloc?tab=License-1-ov-file
+
+The following dependencies are utilized by this project but are not explicitly
+distributed as part of the software:
+
+- yaml-cpp
+  Licensed under MIT
+  https://github.com/jbeder/yaml-cpp
+  https://github.com/jbeder/yaml-cpp/blob/master/LICENSE
+
+- Doxygen
+  Licensed under GPL-2.0
+  https://github.com/doxygen/doxygen
+  https://github.com/doxygen/doxygen/blob/master/LICENSE
+
+- Boost C++ Libraries
+  Licensed under Boost Software License 1.0
+  https://www.boost.org
+  https://www.boost.org/LICENSE_1_0.txt
+
+- glog (Google Logging Library)
+  Licensed under BSD-3-Clause
+  https://github.com/google/glog
+  https://github.com/google/glog/blob/v0.4.0/COPYING
+
+- ICU (International Components for Unicode)
+  Licensed under ICU License
+  http://site.icu-project.org
+  http://www.unicode.org/copyright.html#license
