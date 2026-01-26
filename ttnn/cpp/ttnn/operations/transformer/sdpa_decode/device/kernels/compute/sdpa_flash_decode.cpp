@@ -164,7 +164,7 @@ void kernel_main() {
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-        tilize(cb_q_rm, q_chunk_tiles, cb_q_in, 1);
+        compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_q_rm>, OutputCB<cb_q_in>>>(q_chunk_tiles, 1);
         mm_init_short(cb_q_in, cb_k_in);
     } else {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
@@ -536,7 +536,10 @@ void kernel_main() {
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
-                compute_kernel_lib::untilize<out_chunk_tiles, cb_out_accumulate_im, cb_out_final>(1);
+                compute_kernel_lib::untilize<UntilizeConfig<
+                    WidthInTiles<out_chunk_tiles>,
+                    InputCB<cb_out_accumulate_im>,
+                    OutputCB<cb_out_final>>>(1);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
