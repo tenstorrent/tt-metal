@@ -68,6 +68,8 @@ on:
 jobs:
   # Parse platform dropdown to extract distro/version
   parse-platform:
+    # Only run if we're building an artifact (build-artifact-name is empty)
+    if: ${{ inputs.build-artifact-name == '' }}
     runs-on: ubuntu-latest
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
@@ -131,7 +133,7 @@ jobs:
 
   build-artifact:
     # This job will ONLY run if the build-artifact-name input is NOT provided.
-    if: ${{ inputs.build-artifact-name == '' }}
+    if: ${{ always() && !failure() && !cancelled() && inputs.build-artifact-name == '' }}
     needs: [load-test-matrix, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
