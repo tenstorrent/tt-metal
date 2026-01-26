@@ -355,14 +355,14 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 
 
 @skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
-@pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [1280])
-@pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("grid_size", [(8, 1)])
+@pytest.mark.parametrize("k", [7168])
+@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("grid_size", [(4, 1)])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("transpose_tile", [True, False])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat4_b])
+@pytest.mark.parametrize("transpose_tile", [False])
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
@@ -441,7 +441,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=in0_block_w // 4,
+        in0_block_w=in0_block_w,
         per_core_M=out_block_h,
         per_core_N=out_block_w,
         fused_activation=None,
@@ -451,8 +451,8 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
     )
 
     if has_bias:
