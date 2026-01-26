@@ -83,6 +83,16 @@ void add_bias_and_addcmul_block(
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             acquire_dst();
 
+#ifdef FUSE_BIAS
+            add_bcast_rows_init_short(in_cb, bias_cb);
+            reconfig_data_format(in_cb, bias_cb);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
+#else
+            reconfig_data_format_srca(in_cb);
+            copy_tile_init(in_cb);
+            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
+#endif
+
 #ifdef FUSE_TERNARY
             // Read ternary tensors into destination registers
             reconfig_data_format_srca(ternary_a_cb);
@@ -93,15 +103,6 @@ void add_bias_and_addcmul_block(
             copy_tile_init(ternary_b_cb);
             copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
 #endif  // FUSE_TERNARY
-
-#ifdef FUSE_BIAS
-            reconfig_data_format(in_cb, bias_cb);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
-#else
-            reconfig_data_format_srca(in_cb);
-            copy_tile_init(in_cb);
-            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
-#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
