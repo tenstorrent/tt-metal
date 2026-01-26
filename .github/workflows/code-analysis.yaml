@@ -2,7 +2,8 @@ name: "Code analysis"
 
 on:
   schedule:
-    - cron: "0 2 * * 2,4,6" # Static analysis: 6 PM PST Mon/Wed/Fri (2 AM UTC Tue/Thu/Sat)
+    # Run daily at 6 PM PST (2 AM UTC next day)
+    - cron: "0 2 * * *"
   workflow_call:
     inputs:
       distro:
@@ -33,7 +34,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 15)"
+        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -67,7 +68,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 15)"
+        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -422,9 +423,9 @@ jobs:
             exit 0
           fi
 
-          # Build prompt
+          # Build prompt - default to 1 issue for focused, quality fixes
           LIMIT="${{ inputs.copilot-max-fixes }}"
-          LIMIT="${LIMIT:-15}"
+          LIMIT="${LIMIT:-1}"  # Default: 1 issue per run
 
           {
             echo "Fix these Clang Static Analyzer issues:"
