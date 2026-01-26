@@ -520,7 +520,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [2 * 16])
-@pytest.mark.parametrize("select_experts_k", [7])
+@pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
@@ -574,12 +574,12 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="best_congestion",
+        scheme="worst_congestion_descending",
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
         worker_mode=ttnn.WorkerMode.DIRECT,
-        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.UNICAST,
     )
 
     signpost(header="stop")
