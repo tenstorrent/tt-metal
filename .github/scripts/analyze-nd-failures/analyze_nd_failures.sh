@@ -556,6 +556,8 @@ main() {
     local keep_output=false
     local claude_model="sonnet"  # Default model
     local no_overwrite=false
+    local create_pr=false
+    local pr_base_branch="main"
 
     # Parse arguments
     local custom_output_dir=""
@@ -588,6 +590,14 @@ main() {
                 no_overwrite=true
                 shift
                 ;;
+            --create-pr)
+                create_pr=true
+                shift
+                ;;
+            --pr-base)
+                pr_base_branch=$2
+                shift 2
+                ;;
             --help|-h)
                 echo "Usage: $0 [OPTIONS] <job_url_1> [job_url_2] ... [job_url_n]"
                 echo ""
@@ -598,12 +608,15 @@ main() {
                 echo "  --skip-download        Skip downloading logs (use existing downloads)"
                 echo "  --keep-output          Keep output and downloaded folders (don't clean up)"
                 echo "  --no-overwrite         If output folder exists, append number suffix instead of overwriting"
+                echo "  --create-pr            After analysis, create a PR with the suggested fixes"
+                echo "  --pr-base <branch>     Base branch for PR (default: main)"
                 echo "  --help, -h             Show this help message"
                 echo ""
                 echo "Examples:"
                 echo "  $0 https://github.com/tenstorrent/tt-metal/actions/runs/1234567890/job/9876543210"
                 echo "  $0 --file urls.txt --model opus"
                 echo "  $0 --model sonnet-1M <job_url>"
+                echo "  $0 --create-pr --pr-base main <job_url>"
                 exit 0
                 ;;
             *)
@@ -765,6 +778,35 @@ main() {
         echo "  - $result_file"
     done
     echo ""
+
+    # Create PR if requested
+    if [[ "$create_pr" == "true" ]]; then
+        echo ""
+        log_info "=== Creating PR from Analysis ==="
+
+        # Use the first analysis result (or combined if multiple)
+        local pr_analysis_file=""
+        if [[ ${#analysis_results[@]} -gt 1 ]] && [[ -f "$combined_output" ]]; then
+            pr_analysis_file="$combined_output"
+            log_info "Using combined analysis for PR"
+        elif [[ ${#analysis_results[@]} -gt 0 ]]; then
+            pr_analysis_file="${analysis_results[0]}"
+            log_info "Using first analysis result for PR"
+        else
+            log_error "No analysis results available for PR creation"
+            exit 1
+        fi
+
+        # Call the PR creation script
+        local pr_script="${SCRIPT_DIR}/create_pr_from_analysis.sh"
+        if [[ ! -f "$pr_script" ]]; then
+            log_error "PR creation script not found: $pr_script"
+            exit 1
+        fi
+
+        log_info "Running PR creation script..."
+        bash "$pr_script" --base "$pr_base_branch" --model "$claude_model" "$pr_analysis_file"
+    fi
 }
 
 main "$@"
