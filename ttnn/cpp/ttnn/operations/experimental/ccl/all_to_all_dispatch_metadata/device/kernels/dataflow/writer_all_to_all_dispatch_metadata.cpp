@@ -325,7 +325,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, we dispatch the input token to it
-                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
                 // If the expert lives on a remote device, we dispatch the input token to it
@@ -349,6 +349,7 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
         }
     }
 
+    noc_async_writes_flushed();
     return needs_barrier;
 }
 
@@ -418,7 +419,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
 
             if (target_device == LinearizedSrcMeshCoord) {
                 // If the expert lives on the current device, dispatch locally
-                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
                 // Add to remote destinations list
@@ -446,7 +447,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             (int)output_page_size,
             alignment);
     }
-
+    noc_async_writes_flushed();
     return needs_barrier;
 }
 
@@ -520,7 +521,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
         if (target_device == LinearizedSrcMeshCoord) {
             // Local device - dispatch once
             if (!sent_local) {
-                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
                 sent_local = true;
             }
@@ -590,6 +591,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             alignment);
     }
 
+    noc_async_writes_flushed();
     return needs_barrier;
 }
 
@@ -670,7 +672,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
         if (target_device == LinearizedSrcMeshCoord) {
             // Local device - dispatch once
             if (!sent_local) {
-                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, input_page_size);
+                noc_async_write(input_token_read_addr, output_token_write_addr, input_page_size);
                 needs_barrier = true;
                 sent_local = true;
             }
@@ -740,7 +742,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
         (int)half_size,
         alignment,
         neg_offset);
-
+    noc_async_writes_flushed();
     return needs_barrier;
 }
 

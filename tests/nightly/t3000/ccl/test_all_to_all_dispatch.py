@@ -51,13 +51,11 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
     factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
-            if scheme == "random" or scheme == "worst_perf" or scheme == "avg_perf" or scheme == "worst_congestion":
-                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
-            elif scheme == "sequential":
+            if scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
                 factor += 1
             else:
-                raise ValueError(f"Invalid scheme: {scheme}")
+                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
     res = torch.cat(tokens, dim=0)
     return res.reshape(batch, 1, seq_len, hidden_size)
 
@@ -70,19 +68,16 @@ def gen_expert_mapping(experts, devices, scheme="random"):
     experts_per_devices = experts // devices
     device_expert_count = {d: 0 for d in range(devices)}
     for i in range(experts):
-        if scheme == "sequential" or scheme == "worst_perf" or scheme == "avg_perf" or scheme == "worst_congestion":
-            if i > 0 and i % experts_per_devices == 0:
-                device_id += 1
-            expert_mapping[0, 0, i, device_id] = 1
-        elif scheme == "random":
+        if scheme == "random":
             device_id = random.choice(
                 [d for d, _ in filter(lambda kv: kv[1] < experts_per_devices, device_expert_count.items())]
             )
             expert_mapping[0, 0, i, device_id] = 1
             device_expert_count[device_id] += 1
-
         else:
-            raise ValueError(f"Invalid scheme: {scheme}")
+            if i > 0 and i % experts_per_devices == 0:
+                device_id += 1
+            expert_mapping[0, 0, i, device_id] = 1
 
     # identical across all devices
     return expert_mapping
@@ -110,8 +105,10 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
         max_tokens_per_expert = max(1, (tokens * selected_experts_k + experts - 1) // experts)
         expert_token_count = {e: 0 for e in range(experts)}
 
+    token = 0
     for b in range(batch):
         for s in range(seq_len):
+            token += 1
             for k in range(selected_experts_k):
                 if scheme == "sequential":
                     expert_indices[b, 0, s, k] = current_expert % experts
@@ -151,8 +148,10 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     devices = mesh_shape[0] * mesh_shape[1]
                     experts_per_device = experts // devices
 
-                    # Determine source device for this token (batch is sharded across devices)
-                    src_device = b % devices
+                    # Determine source device for this token (batch is sharded in chunks across devices)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    batches_per_device = batch // devices
+                    src_device = b // batches_per_device
 
                     # Target device is src_device + k + 1 (wrapping around)
                     target_device = (src_device + 1 + k) % devices
@@ -163,6 +162,78 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                     expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
 
                     expert_indices[b, 0, s, k] = expert_id
+                elif scheme == "best_congestion":
+                    # Best case for congestion: tokens prefer local experts first, then nearest
+                    # neighbors, minimizing average hop distance and spreading traffic.
+                    # Algorithm:
+                    # 1. Fill local device first (up to experts_per_device)
+                    # 2. Alternate between CCW and CW neighbors, picking 1 expert at a time
+                    # 3. When a device is full, move to the next device in that direction
+                    #
+                    # Example with k=8, experts_per_device=2:
+                    # - 2 local
+                    # - 2 from CCW neighbor (1-hop)
+                    # - 2 from CW neighbor (1-hop)
+                    # - 1 from CW 2-hop neighbor
+                    # - 1 from CCW 2-hop neighbor
+                    devices = mesh_shape[0] * mesh_shape[1]
+                    experts_per_device = experts // devices
+                    # Batch is sharded in chunks across devices (not round-robin)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    batches_per_device = batch // devices
+                    src_device = b // batches_per_device
+
+                    # Build list of (device, local_expert_idx) for all k experts
+                    if k == 0:
+                        # First expert slot - start building the selection list
+                        # We need to compute all k experts at once for this token
+                        picked = []
+                        remaining = selected_experts_k
+
+                        # Step 1: Fill local device
+                        local_count = min(remaining, experts_per_device)
+                        for i in range(local_count):
+                            picked.append((src_device, i))
+                        remaining -= local_count
+
+                        # Step 2: Alternate CCW and CW
+                        ccw_hop = 1
+                        cw_hop = 1
+                        ccw_count = 0  # experts picked from current CCW device
+                        cw_count = 0  # experts picked from current CW device
+                        use_ccw = True  # alternate starting with CCW
+
+                        while remaining > 0:
+                            if use_ccw:
+                                ccw_device = (src_device - ccw_hop) % devices
+                                if ccw_count < experts_per_device:
+                                    picked.append((ccw_device, ccw_count))
+                                    ccw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CCW device
+                                    ccw_hop += 1
+                                    ccw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            else:
+                                cw_device = (src_device + cw_hop) % devices
+                                if cw_count < experts_per_device:
+                                    picked.append((cw_device, cw_count))
+                                    cw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CW device
+                                    cw_hop += 1
+                                    cw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            use_ccw = not use_ccw  # Alternate direction
+
+                        # Store the selection in a way we can access for subsequent k values
+                        # We use a simple approach: just compute all k at once and store in tensor
+                        for idx, (device, local_idx) in enumerate(picked):
+                            expert_id = device * experts_per_device + local_idx
+                            expert_indices[b, 0, s, idx] = expert_id
+                    # For k > 0, the values were already set when k == 0
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices

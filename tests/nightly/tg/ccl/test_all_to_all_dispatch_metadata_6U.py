@@ -293,6 +293,7 @@ def run_all_to_all_dispatch_metadata_test(
                 # Use a drain core that's NOT in the sender cores to avoid L1 address overlap
                 # between the metadata tensor and the global semaphore
                 drain_sync_tilizer_core=(0, 0),
+                use_mux=False,
             )
 
             if not trace_mode:
