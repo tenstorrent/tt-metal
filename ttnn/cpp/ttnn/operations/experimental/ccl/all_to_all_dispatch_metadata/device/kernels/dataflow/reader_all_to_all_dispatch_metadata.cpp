@@ -76,6 +76,13 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_ags++);
 
+    // Payload split parameters (always read from RT args)
+    // In payload split mode: each worker reads only its portion of the input token
+    // In non-split mode: defaults are payload_offset=0, payload_size=input_page_size, is_primary=true
+    uint32_t payload_offset = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t payload_size = get_arg_val<uint32_t>(rt_ags++);
+    bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_ags++) == 1;
+
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
@@ -100,40 +107,52 @@ void kernel_main() {
 
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
-        cb_reserve_back(scores_tensor_cb_id, 1);
         cb_reserve_back(input_tensor_cb_id, 1);
 
+        // All workers read indices (needed for routing decisions)
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
 
-        l1_write_addr = get_write_ptr(scores_tensor_cb_id);
-        noc_async_read_page(i, scores_addr_gen, l1_write_addr);
+        // Only primary worker reads scores (only primary sends metadata)
+        if (is_primary_payload_worker) {
+            cb_reserve_back(scores_tensor_cb_id, 1);
+            l1_write_addr = get_write_ptr(scores_tensor_cb_id);
+            noc_async_read_page(i, scores_addr_gen, l1_write_addr);
+        }
 
+        // Read input token (or portion of it in payload split mode)
+        // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
+        // In split mode: reads only this worker's portion
+        uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
-        noc_async_read_page(i, input_addr_gen, l1_write_addr);
+        noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 
         noc_async_read_barrier();
         cb_push_back(indices_tensor_cb_id, 1);
-        cb_push_back(scores_tensor_cb_id, 1);
+        if (is_primary_payload_worker) {
+            cb_push_back(scores_tensor_cb_id, 1);
+        }
         cb_push_back(input_tensor_cb_id, 1);
     }
 
-    // copy indices and scores to the metadata buffer id CB with 2 reads
-    cb_reserve_back(metadata_buffer_id, tokens_per_device);
-    noc_async_read(
-        get_noc_addr(base_indices_addr),
-        get_write_ptr(metadata_buffer_id),
-        (token_end_idx - token_start_idx) * aligned_indices_page_size);
-    noc_async_read(
-        get_noc_addr(base_scores_addr),
-        get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_indices_page_size,
-        (token_end_idx - token_start_idx) * aligned_scores_page_size);
-    noc_async_read_barrier();
-    cb_push_back(metadata_buffer_id, tokens_per_device);
+    // Only primary worker copies indices and scores to metadata buffer (only primary sends metadata)
+    if (is_primary_payload_worker) {
+        cb_reserve_back(metadata_buffer_id, tokens_per_device);
+        noc_async_read(
+            get_noc_addr(base_indices_addr),
+            get_write_ptr(metadata_buffer_id),
+            (token_end_idx - token_start_idx) * aligned_indices_page_size);
+        noc_async_read(
+            get_noc_addr(base_scores_addr),
+            get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_indices_page_size,
+            (token_end_idx - token_start_idx) * aligned_scores_page_size);
+        noc_async_read_barrier();
+        cb_push_back(metadata_buffer_id, tokens_per_device);
 
-    // Wait for all other devices to finish dispatching their input tokens and metadata.
-    // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
-    // so we no longer need to copy from the intermediate buffer to the final output here.
-    noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
-    noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+        // Wait for all other devices to finish dispatching their input tokens and metadata.
+        // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
+        // so we no longer need to copy from the intermediate buffer to the final output here.
+        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
+        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+    }
 }

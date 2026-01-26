@@ -47,8 +47,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const AllToAllTransferType impl;
         const uint32_t output_concat_dim;
         const CoreCoord drain_sync_tilizer_core;  // Core where indices/scores are sharded for selective_tilize
-        const bool use_mux;                       // Whether to use fabric mux (allows multiple workers per link)
-        const CoreRangeSet mux_core_range_set;    // Cores to run mux kernels on (only used if use_mux is true)
+        const WorkerMode worker_mode;           // Worker distribution mode (DIRECT, MUX_TOKEN_SPLIT, MUX_PAYLOAD_SPLIT)
+        const CoreRangeSet mux_core_range_set;  // Cores to run mux kernels on (only used if worker_mode uses mux)
         const DispatchAlgorithm dispatch_algorithm;  // Algorithm for routing tokens to destination devices
         static constexpr auto attribute_names = std::forward_as_tuple(
             "worker_core_range_set",
@@ -59,7 +59,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "impl",
             "output_concat_dim",
             "drain_sync_tilizer_core",
-            "use_mux",
+            "worker_mode",
             "mux_core_range_set",
             "dispatch_algorithm");
         auto attribute_values() const {
@@ -72,7 +72,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 impl,
                 output_concat_dim,
                 drain_sync_tilizer_core,
-                use_mux,
+                worker_mode,
                 mux_core_range_set,
                 dispatch_algorithm);
         };
@@ -159,7 +159,7 @@ all_to_all_dispatch_metadata(
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim,
     const CoreCoord& drain_sync_tilizer_core,
-    bool use_mux,
+    ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,
     ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm);
 }  // namespace ttnn::prim

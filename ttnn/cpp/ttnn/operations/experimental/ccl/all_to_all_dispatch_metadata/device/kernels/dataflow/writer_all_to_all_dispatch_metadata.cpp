@@ -307,7 +307,8 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     uint32_t global_token,
     uint32_t local_token,
     uint32_t token_start_idx,
-    uint32_t alignment) {
+    uint32_t alignment,
+    uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
     using ttnn::operations::ccl::common::is_configured_target;
 
@@ -344,7 +345,8 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
                     input_token_read_addr,
                     global_token,
                     (int)output_page_size,
-                    alignment);
+                    alignment,
+                    payload_offset);
             }
         }
     }
@@ -398,7 +400,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     uint32_t global_token,
     uint32_t local_token,
     uint32_t token_start_idx,
-    uint32_t alignment) {
+    uint32_t alignment,
+    uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d;
     using ttnn::operations::ccl::common::is_configured_target;
 
@@ -445,7 +448,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             input_token_read_addr,
             global_token,
             (int)output_page_size,
-            alignment);
+            alignment,
+            payload_offset);
     }
     noc_async_writes_flushed();
     return needs_barrier;
@@ -501,7 +505,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
     uint32_t output_page_size,
     uint32_t global_token,
     ttnn::operations::ccl::common::Polarity antipodal_polarity,  // Direction for antipodal tie-breaking
-    uint32_t alignment) {
+    uint32_t alignment,
+    uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
@@ -573,7 +578,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             input_token_read_addr,
             global_token,
             (int)output_page_size,
-            alignment);
+            alignment,
+            payload_offset);
     }
 
     // Send in negative direction if any destinations
@@ -587,7 +593,8 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             input_token_read_addr,
             global_token,
             (int)output_page_size,
-            alignment);
+            alignment,
+            payload_offset);
     }
 
     noc_async_writes_flushed();
@@ -881,6 +888,13 @@ void kernel_main() {
     uint32_t drain_sync_tilizer_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t drain_sync_tilizer_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
 
+    // Payload split parameters (always read from RT args)
+    // In payload split mode: each worker sends a portion of the payload
+    // In non-split mode: defaults are payload_offset=0, payload_size=input_page_size, is_primary=true
+    uint32_t payload_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t payload_size = get_arg_val<uint32_t>(rt_args_idx++);
+    bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
@@ -1071,11 +1085,22 @@ void kernel_main() {
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
+        // All workers read indices (needed for routing decisions)
+        // Only primary worker reads scores (only primary sends metadata)
         cb_wait_front(indices_tensor_cb_id, 1);
-        cb_wait_front(scores_tensor_cb_id, 1);
+        if (is_primary_payload_worker) {
+            cb_wait_front(scores_tensor_cb_id, 1);
+        }
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+
+        // In payload split mode: reader already reads only this worker's portion into CB
+        // In non-split mode: reader reads full page, payload_offset=0
+        // Either way, we read from the start of the CB
+        uint32_t payload_read_addr = input_token_read_addr;
+        // Write address includes offset to write to correct position in output
+        uint64_t payload_write_addr = output_token_write_addr + payload_offset;
 
         if constexpr (dispatch_algorithm == DispatchAlgorithm::BROADCAST) {
             // Broadcast token to all devices via bidirectional multicast
@@ -1088,9 +1113,9 @@ void kernel_main() {
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
-                input_token_read_addr,
-                output_token_write_addr,
-                input_page_size,
+                payload_read_addr,
+                payload_write_addr,
+                payload_size,
                 alignment);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_UNICAST) {
             // Send token only to devices that need it based on expert selection
@@ -1109,13 +1134,14 @@ void kernel_main() {
                 expert_mapping,
                 send_preparation_buffer,
                 token_indices,
-                input_token_read_addr,
-                output_token_write_addr,
-                output_page_size,
+                payload_read_addr,
+                payload_write_addr,
+                payload_size,
                 global_token,
                 local_token,
                 token_start_idx,
-                alignment);
+                alignment,
+                payload_offset);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_LINEAR) {
             // Collect unique destinations and send via sparse multicast (single direction)
             needs_barrier |= detail::dispatch_token_sparse_multicast<
@@ -1133,13 +1159,14 @@ void kernel_main() {
                 expert_mapping,
                 send_preparation_buffer,
                 token_indices,
-                input_token_read_addr,
-                output_token_write_addr,
-                output_page_size,
+                payload_read_addr,
+                payload_write_addr,
+                payload_size,
                 global_token,
                 local_token,
                 token_start_idx,
-                alignment);
+                alignment,
+                payload_offset);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH) {
             // Collect unique destinations and send via bidirectional sparse multicast
             // Uses shortest path routing with antipodal tie-breaking
@@ -1158,17 +1185,20 @@ void kernel_main() {
                 output_addr_gen,
                 expert_mapping,
                 token_indices,
-                input_token_read_addr,
-                output_token_write_addr,
-                output_page_size,
+                payload_read_addr,
+                payload_write_addr,
+                payload_size,
                 global_token,
                 static_cast<ttnn::operations::ccl::common::Polarity>(local_token % 2),
-                alignment);
+                alignment,
+                payload_offset);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_SPLIT_BW) {
             // Split token data in half: first half one direction, second half other direction
             // Both halves go to same destinations, just via different directions
             // Token 0: first half → positive dir, second half → negative dir
             // Token 1: first half → negative dir, second half → positive dir
+            // NOTE: SPARSE_MCAST_SPLIT_BW already splits the payload by direction, so it's
+            // incompatible with PAYLOAD_SPLIT_MODE which splits by worker. Use only one mode.
             needs_barrier |= detail::dispatch_token_split_bandwidth<
                 linearized_mesh_coord,
                 mesh_rows,
@@ -1183,64 +1213,87 @@ void kernel_main() {
                 output_addr_gen,
                 expert_mapping,
                 token_indices,
-                input_token_read_addr,
-                output_token_write_addr,
-                input_page_size,
+                payload_read_addr,
+                payload_write_addr,
+                payload_size,
                 global_token,
                 static_cast<ttnn::operations::ccl::common::Polarity>(local_token % 2),
                 alignment);
         }
 
+        // All workers pop indices (all read them for routing)
+        // Only primary pops scores (only primary reads them)
         cb_pop_front(indices_tensor_cb_id, 1);
-        cb_pop_front(scores_tensor_cb_id, 1);
+        if (is_primary_payload_worker) {
+            cb_pop_front(scores_tensor_cb_id, 1);
+        }
         cb_pop_front(input_tensor_cb_id, 1);
     }
     if (needs_barrier) {
         noc_async_write_barrier();
     }
 
-    // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
-    // with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
-    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
+#ifdef PAYLOAD_SPLIT_MODE
+    // In payload split mode, all workers must barrier before the primary sends atomic_inc
+    // This ensures all payload portions have been sent before signaling completion
+    noc_async_write_barrier();
+#endif
 
-    // IMPORTANT: Use aligned_metadata_page_size for OUTPUT metadata tensor offsets.
-    // The input indices tensor MUST be in L1 (not DRAM) to ensure its alignment matches the output
-    // metadata tensor's alignment. DRAM uses 32B alignment while L1 uses 16B alignment.
-    // If alignments don't match, the padding bytes in the CB will corrupt the output.
-    // The metadata tensor layout is: [device_0_tokens, device_1_tokens, ..., device_N_tokens]
-    // Each device section is: tokens_per_device * aligned_metadata_page_size bytes
-    uint32_t metadata_size_per_device = aligned_metadata_page_size * tokens_per_device;
-    uint32_t metadata_size_per_core = aligned_metadata_page_size * (token_end_idx - token_start_idx);
+    // Only the primary worker (or all workers in non-payload-split mode) sends metadata and atomic_inc
+    // In payload split mode, non-primary workers skip metadata/atomic_inc entirely
+    if (is_primary_payload_worker) {
+        // Send our selected experts tensor to all other devices and signal that we are done dispatching the input
+        // tokens with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
+        uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
 
-    // Write directly to the sharded output metadata tensor on the drain sync tilizer core
-    // The tensor is contiguous in L1 at metadata_tensor_address on the drain core
-    // NOTE: We manually construct the NOC address using drain core coords rather than using
-    // metadata_addr_gen because our offset logic (dispatch_index * metadata_size) assumes
-    // a specific memory layout that may not match the accessor's page indexing.
-    uint64_t metadata_output_base_addr =
-        get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, metadata_tensor_address);
-    uint64_t noc_core_offset_md_write_addr = metadata_output_base_addr + dispatch_index * metadata_size_per_device +
-                                             token_start_idx * aligned_metadata_page_size;
+        // IMPORTANT: Use aligned_metadata_page_size for OUTPUT metadata tensor offsets.
+        // The input indices tensor MUST be in L1 (not DRAM) to ensure its alignment matches the output
+        // metadata tensor's alignment. DRAM uses 32B alignment while L1 uses 16B alignment.
+        // If alignments don't match, the padding bytes in the CB will corrupt the output.
+        // The metadata tensor layout is: [device_0_tokens, device_1_tokens, ..., device_N_tokens]
+        // Each device section is: tokens_per_device * aligned_metadata_page_size bytes
+        uint32_t metadata_size_per_device = aligned_metadata_page_size * tokens_per_device;
+        uint32_t metadata_size_per_core = aligned_metadata_page_size * (token_end_idx - token_start_idx);
 
-    uint64_t scores_output_base_addr =
-        get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, scores_out_tensor_address);
-    uint64_t noc_core_offset_scores_write_addr = scores_output_base_addr + dispatch_index * metadata_size_per_device +
-                                                 token_start_idx * aligned_scores_page_size;
+        // Write directly to the sharded output metadata tensor on the drain sync tilizer core
+        // The tensor is contiguous in L1 at metadata_tensor_address on the drain core
+        // NOTE: We manually construct the NOC address using drain core coords rather than using
+        // metadata_addr_gen because our offset logic (dispatch_index * metadata_size) assumes
+        // a specific memory layout that may not match the accessor's page indexing.
+        uint64_t metadata_output_base_addr =
+            get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, metadata_tensor_address);
+        uint64_t noc_core_offset_md_write_addr = metadata_output_base_addr + dispatch_index * metadata_size_per_device +
+                                                 token_start_idx * aligned_metadata_page_size;
 
-    cb_wait_front(metadata_buffer_id, tokens_per_device);
-    uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
-    detail::
-        fabric_multicast_bidirectional_scatter_write_ring_1d_async<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
+        uint64_t scores_output_base_addr =
+            get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, scores_out_tensor_address);
+        uint64_t noc_core_offset_scores_write_addr = scores_output_base_addr +
+                                                     dispatch_index * metadata_size_per_device +
+                                                     token_start_idx * aligned_scores_page_size;
+
+        cb_wait_front(metadata_buffer_id, tokens_per_device);
+        uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
+        detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
+            linearized_mesh_coord,
+            mesh_rows,
+            mesh_cols,
+            axis>(
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
             base_metadata_addr,
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
             {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
-    cb_pop_front(metadata_buffer_id, tokens_per_device);
-    // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal device
-    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
-        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, global_noc_semaphore_address);
+        cb_pop_front(metadata_buffer_id, tokens_per_device);
+        // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
+        // device
+        detail::
+            fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
+                fabric_connections,
+                atomic_inc_packet_header_pos,
+                atomic_inc_packet_header_neg,
+                global_noc_semaphore_address);
+    }
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 

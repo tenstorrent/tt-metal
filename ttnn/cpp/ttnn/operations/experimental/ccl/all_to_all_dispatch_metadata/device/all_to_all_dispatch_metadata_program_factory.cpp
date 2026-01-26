@@ -393,15 +393,18 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         subdevice_cores.size(),
         num_links);
 
-    // Determine number of workers based on mux usage:
-    // - With mux: Use all available cores, multiple workers per link
-    // - Without mux: Cap to num_links (1 worker per link, since we can't share fabric connections)
-    const bool use_mux = operation_attributes.use_mux;
+    // Determine number of workers based on worker mode:
+    // - DIRECT: 1 worker per link (can't share direct fabric connections)
+    // - MUX_TOKEN_SPLIT: Multiple workers per link, tokens distributed across workers
+    // - MUX_PAYLOAD_SPLIT: Multiple workers per link, same tokens but payload split across workers
+    const WorkerMode worker_mode = operation_attributes.worker_mode;
+    const bool use_mux = (worker_mode != WorkerMode::DIRECT);
+    const bool payload_split_mode = (worker_mode == WorkerMode::MUX_PAYLOAD_SPLIT);
     uint32_t num_cores;
     uint32_t workers_per_link;
 
     if (use_mux) {
-        // Phase 2: Use all available worker cores, distributing them across links
+        // Use all available worker cores, distributing them across links
         // For example: 8 cores / 4 links = 2 workers per link
         num_cores = subdevice_cores.size();
         workers_per_link = num_cores / num_links;
@@ -418,15 +421,21 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         workers_per_link = 1;
     }
 
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_cores);
+    // In payload split mode: tokens distributed across links, workers on same link share tokens
+    // In token split mode: tokens distributed across all workers
+    // In direct mode: tokens distributed across workers (1 worker per link)
+    uint32_t tokens_per_core = payload_split_mode ? tt::div_up(tokens_per_device, num_links)  // tokens per link
+                                                  : tt::div_up(tokens_per_device, num_cores);
 
     log_debug(
         tt::LogOp,
-        "Phase 2 worker distribution: {} total workers, {} links, {} workers per link, {} tokens per core",
+        "Worker distribution: {} total workers, {} links, {} workers per link, {} tokens per {}, payload_split={}",
         num_cores,
         num_links,
         workers_per_link,
-        tokens_per_core);
+        tokens_per_core,
+        payload_split_mode ? "link" : "core",
+        payload_split_mode);
 
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
@@ -569,11 +578,17 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             src_fabric_node_id,
             neighbors,
             num_links,
-            workers_per_link,  // Phase 2: workers per link = clients per mux channel
+            workers_per_link,  // workers per link = clients per mux channel
             program);
         mux_kernel_id = launched_mux_kernel_id;
         mux_kernel_config = launched_mux_config;
         mux_neigbor_core_maps = std::move(launched_mux_neigbor_core_maps);
+    }
+
+    if (payload_split_mode) {
+        writer_defines["PAYLOAD_SPLIT_MODE"] = "1";
+        writer_defines["WORKERS_PER_LINK"] = std::to_string(workers_per_link);
+        log_debug(tt::LogOp, "Using payload split mode with {} workers per link", workers_per_link);
     }
 
     // Build writer compile-time args - add mux args if enabled
@@ -611,6 +626,14 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     uint32_t reader_token_start_idx = reader_runtime_args.size();
     reader_runtime_args.push_back(0);
     uint32_t reader_token_end_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+
+    // Pre-allocate slots for payload split args (only used in payload_split_mode)
+    uint32_t reader_payload_offset_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t reader_payload_size_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t reader_is_primary_idx = reader_runtime_args.size();
     reader_runtime_args.push_back(0);
 
     // Get drain sync tilizer core NOC coordinates for direct metadata output
@@ -685,12 +708,69 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         // Add drain sync tilizer core NOC coordinates for direct metadata write
         writer_runtime_args.push_back(drain_sync_tilizer_noc_core.x);
         writer_runtime_args.push_back(drain_sync_tilizer_noc_core.y);
-        reader_runtime_args[reader_token_start_idx] = tokens_per_core_start;
-        reader_runtime_args[reader_token_end_idx] =
-            std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[writer_token_start_idx] = tokens_per_core_start;
-        writer_runtime_args[writer_token_end_idx] = reader_runtime_args[reader_token_end_idx];
-        tokens_per_core_start = reader_runtime_args[reader_token_end_idx];
+
+        if (payload_split_mode) {
+            // In payload split mode:
+            // - Tokens are distributed across links (tokens_per_link = tokens_per_device / num_links)
+            // - Workers on the same link handle the SAME tokens but split the payload
+            // - Worker 0 sends first half of payload, worker 1 sends second half, etc.
+            uint32_t tokens_per_link = tokens_per_device / num_links;
+            uint32_t link_token_start = link_id * tokens_per_link;
+            uint32_t link_token_end = std::min(link_token_start + tokens_per_link, tokens_per_device);
+
+            // Both workers on this link process the same token range
+            reader_runtime_args[reader_token_start_idx] = link_token_start;
+            reader_runtime_args[reader_token_end_idx] = link_token_end;
+            writer_runtime_args[writer_token_start_idx] = link_token_start;
+            writer_runtime_args[writer_token_end_idx] = link_token_end;
+
+            // Calculate payload split parameters
+            // Worker 0 sends first portion, worker 1 sends second portion, etc.
+            uint32_t full_payload_size = input_page_size;
+            uint32_t payload_size = full_payload_size / workers_per_link;
+            uint32_t payload_offset = worker_idx_within_link * payload_size;
+            // Primary worker (worker 0) sends metadata + atomic_inc and is also termination master
+            bool is_primary_payload_worker = (worker_idx_within_link == 0);
+
+            // Set payload split RT args using pre-allocated indices
+            // Reader needs them to read only the relevant portion of input tokens
+            reader_runtime_args[reader_payload_offset_idx] = payload_offset;
+            reader_runtime_args[reader_payload_size_idx] = payload_size;
+            reader_runtime_args[reader_is_primary_idx] = is_primary_payload_worker ? 1 : 0;
+
+            writer_runtime_args.push_back(payload_offset);
+            writer_runtime_args.push_back(payload_size);
+            writer_runtime_args.push_back(is_primary_payload_worker ? 1 : 0);
+
+            log_debug(
+                tt::LogOp,
+                "Worker {} payload split: link={}, tokens=[{},{}), offset={}, size={}, is_primary={}",
+                worker_idx,
+                link_id,
+                link_token_start,
+                link_token_end,
+                payload_offset,
+                payload_size,
+                is_primary_payload_worker);
+        } else {
+            // Token split mode or direct mode: distribute tokens across workers
+            reader_runtime_args[reader_token_start_idx] = tokens_per_core_start;
+            reader_runtime_args[reader_token_end_idx] =
+                std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
+            writer_runtime_args[writer_token_start_idx] = tokens_per_core_start;
+            writer_runtime_args[writer_token_end_idx] = reader_runtime_args[reader_token_end_idx];
+            tokens_per_core_start = reader_runtime_args[reader_token_end_idx];
+
+            // Set defaults for payload split args (full page, all workers are "primary")
+            reader_runtime_args[reader_payload_offset_idx] = 0;
+            reader_runtime_args[reader_payload_size_idx] = input_page_size;
+            reader_runtime_args[reader_is_primary_idx] = 1;  // All workers are primary in non-split mode
+
+            // Writer also needs defaults
+            writer_runtime_args.push_back(0);                // payload_offset
+            writer_runtime_args.push_back(input_page_size);  // payload_size
+            writer_runtime_args.push_back(1);                // is_primary (all workers in non-split mode)
+        }
 
         if (use_mux) {
             // Use mux connection runtime args

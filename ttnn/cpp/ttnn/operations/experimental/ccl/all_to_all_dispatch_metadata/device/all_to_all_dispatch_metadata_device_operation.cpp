@@ -238,7 +238,7 @@ all_to_all_dispatch_metadata(
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim,
     const CoreCoord& drain_sync_tilizer_core,
-    bool use_mux,
+    ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,
     ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm) {
     using OperationType = ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation;
@@ -252,7 +252,7 @@ all_to_all_dispatch_metadata(
             .impl = impl,
             .output_concat_dim = output_concat_dim,
             .drain_sync_tilizer_core = drain_sync_tilizer_core,
-            .use_mux = use_mux,
+            .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
             .dispatch_algorithm = dispatch_algorithm},
         OperationType::tensor_args_t{

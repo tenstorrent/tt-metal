@@ -579,7 +579,7 @@ def test_decode_perf(
         dtype=dtype,
         cluster_axis=cluster_axis,
         worker_mode=ttnn.WorkerMode.DIRECT,
-        dispatch_algorithm=ttnn.DispatchAlgorithm.UNICAST,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
     )
 
     signpost(header="stop")
