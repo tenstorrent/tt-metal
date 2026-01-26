@@ -264,6 +264,8 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     }
 }
 
+bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
+
 void* PinnedMemoryImpl::lock() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
@@ -308,6 +310,8 @@ bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device
 bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usable_from_noc(device_id); }
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
+
+bool PinnedMemory::lock_may_block() const { return pImpl->lock_may_block(); }
 
 void* PinnedMemory::lock() { return pImpl->lock(); }
 
