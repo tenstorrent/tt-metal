@@ -32,7 +32,7 @@ struct ExecuteAllGatherMinimalMatmulAsync {
         uint32_t num_links = 1,
         std::optional<uint32_t> cluster_axis = std::nullopt,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-        uint32_t chunks_per_sync = 1,
+        const bool force_transpose = true,
         uint32_t num_workers_per_link = 1,
         uint32_t num_buffers_per_channel = 1);
 };

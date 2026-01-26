@@ -43,7 +43,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
-    const uint32_t chunks_per_sync,
+    const bool force_transpose,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel);
 
@@ -66,7 +66,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
-    const uint32_t chunks_per_sync,
+    const bool force_transpose,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel);
 
