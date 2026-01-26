@@ -118,36 +118,6 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     return fixed_asic_position_pinnings;
 }
 
-// Generate fixed ASIC position pinnings for T3K topology to ensure QSFP links align with fabric mesh corner nodes.
-// This is a performance optimization to ensure that MGD mapping does not bisect a device.
-//
-// * o o * < Corners pinned with *
-// * o o * < Corners pinned with *
-
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_t3k_fixed_asic_position_pinnings(
-    const MeshGraph& mesh_graph) {
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-
-    std::vector<AsicPosition> corner_asic_positions = {AsicPosition{0, 1}};
-
-    std::vector<FabricNodeId> corner_fabric_node_ids;
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] - 1});
-        corner_fabric_node_ids.emplace_back(
-            FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] * (mesh_graph.get_mesh_shape(mesh_id)[0] - 1)});
-        corner_fabric_node_ids.emplace_back(
-            FabricNodeId{mesh_id, (mesh_graph.get_mesh_shape(mesh_id)[1] * mesh_graph.get_mesh_shape(mesh_id)[0]) - 1});
-    }
-
-    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
-    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
-        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
-    }
-
-    return fixed_asic_position_pinnings;
-}
-
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -516,8 +486,6 @@ void ControlPlane::init_control_plane(
 
         if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
             fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
-        } else if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::T3K && total_num_chips % 8 == 0 && !is_1d) {
-            fixed_asic_position_pinnings = get_t3k_fixed_asic_position_pinnings(*this->mesh_graph_);
         }
 
         // Add MGD pinnings to the topology mapper
@@ -603,8 +571,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
     if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
         fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
-    } else if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::T3K && total_num_chips % 8 == 0 && !is_1d) {
-        fixed_asic_position_pinnings = get_t3k_fixed_asic_position_pinnings(*this->mesh_graph_);
     }
 
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
