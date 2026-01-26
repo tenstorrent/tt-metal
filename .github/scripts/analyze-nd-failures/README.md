@@ -142,9 +142,24 @@ Then run:
 # Use specific Claude model
 ./analyze_nd_failures.sh --model opus <job_urls>
 
+# Prevent overwriting existing analysis folders (append number suffix)
+./analyze_nd_failures.sh --no-overwrite <job_urls>
+
 # Combine options
-./analyze_nd_failures.sh --file urls.txt --model sonnet-1M --skip-download
+./analyze_nd_failures.sh --file urls.txt --model sonnet-1M --skip-download --no-overwrite
 ```
+
+#### Preventing Overwrites
+
+By default, running the same analysis twice will overwrite the previous results in the same folder. Use `--no-overwrite` to preserve previous analyses:
+
+- **Default behavior**: `singlecarddemotestsvitn300func_device_timeout/` gets overwritten
+- **With `--no-overwrite`**: Creates `singlecarddemotestsvitn300func_device_timeout_1/`, `_2/`, etc.
+
+This is useful when you want to:
+- Compare analyses from different time periods
+- Keep multiple analysis runs for the same failure
+- Track how analysis quality changes over time
 
 ## URL Formats
 
@@ -348,6 +363,21 @@ For a quick analysis of a simple failure:
 
 ```bash
 ./analyze_nd_failures.sh --model haiku <job_url>
+```
+
+### Example 5: Preserve Multiple Analysis Runs
+
+To keep multiple analysis runs for the same failure without overwriting:
+
+```bash
+# First run creates: singlecarddemotestsvitn300func_device_timeout/
+./analyze_nd_failures.sh --no-overwrite <job_url>
+
+# Second run creates: singlecarddemotestsvitn300func_device_timeout_1/
+./analyze_nd_failures.sh --no-overwrite <job_url>
+
+# Third run creates: singlecarddemotestsvitn300func_device_timeout_2/
+./analyze_nd_failures.sh --no-overwrite <job_url>
 ```
 
 ## Model Selection Guide
