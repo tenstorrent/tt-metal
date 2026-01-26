@@ -15,21 +15,6 @@ on:
           - nightly
           - hw-self-test
         default: "manual"
-      build-type:
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: "Release"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
       extra-tag:
         required: true
         type: string
@@ -119,6 +104,21 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: "Release"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run

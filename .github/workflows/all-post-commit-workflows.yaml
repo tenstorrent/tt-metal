@@ -19,6 +19,22 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
     inputs:
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
+      force-test-everything:
+        default: true
+        type: boolean
+        description: "Force test everything regardless of file changes"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         required: false
         default: Release
@@ -29,23 +45,8 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      with-retries:
-        default: false
-        type: boolean
-        description: "Re-run failed jobs (max 3)"
-      force-test-everything:
-        default: true
-        type: boolean
-        description: "Force test everything regardless of file changes"
       enable-lto:
+        required: false
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"

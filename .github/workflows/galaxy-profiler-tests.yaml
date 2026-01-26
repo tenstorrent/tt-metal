@@ -3,6 +3,14 @@ name: "(Galaxy) profiler tests"
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         required: false
         type: choice
@@ -14,14 +22,6 @@ on:
           - ASan
           - TSan
         description: "Build type configuration"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
       enable-lto:
         required: false
         type: boolean

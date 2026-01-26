@@ -15,6 +15,14 @@ on:
         description: "Enable Tracy ops recording for all tests (generates operations report)"
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         required: false
         type: choice
@@ -26,14 +34,6 @@ on:
           - ASan
           - TSan
         description: "Build type configuration"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
       enable-lto:
         required: false
         type: boolean
@@ -43,7 +43,12 @@ on:
     - cron: "0 13,18 * * 0,1,2,3,4,5,6" # frequency of functional models
     - cron: "0 5 * * 1,3,6" # frequency of perf models
 
-run-name: "(Single-card) Demo tests${{ (inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 5 * * 1,3,6')) && ' (with perf runs)' || ' (no perf)' }}${{ inputs.enable-ops-recording && ' [ops-recording]' || '' }}"
+run-name: >-
+  (Single-card) Demo tests${{
+  (inputs.run-perf-tests
+  || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 5 * * 1,3,6'))
+  && ' (with perf runs)' || ' (no perf)' }}${{
+  inputs.enable-ops-recording && ' [ops-recording]' || '' }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml

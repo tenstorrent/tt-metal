@@ -4,14 +4,14 @@ on:
   workflow_call:
     inputs:
       runner-label:
-          description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
-          required: false
-          type: string
-          default: '["P150"]'
+        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        required: false
+        type: string
+        default: '["P150"]'
       enable-watcher:
-          description: 'Enable watcher in BH Post commit'
-          default: false
-          type: boolean
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       runner-label:
@@ -19,6 +19,18 @@ on:
         required: false
         type: string
         default: '["P150"]'
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         description: 'Build type for the workflow'
         required: false
@@ -30,18 +42,6 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      enable-watcher:
-        description: 'Enable watcher in BH Post commit'
-        default: false
-        type: boolean
       enable-lto:
         default: false
         type: boolean
@@ -53,7 +53,12 @@ on:
   # push:
   #  branches: ["main"]
 
-run-name: ${{ inputs.runner-label == '["P100"]' && 'Blackhole post-commit tests (P100)' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)') || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') && 'Blackhole post-commit tests (P100 nightly)') || 'Blackhole post-commit tests' }}
+run-name: >-
+  ${{ inputs.runner-label == '["P100"]' && 'Blackhole post-commit tests (P100)'
+  || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)')
+  || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *')
+  && 'Blackhole post-commit tests (P100 nightly)')
+  || 'Blackhole post-commit tests' }}
 
 permissions:
   actions: read

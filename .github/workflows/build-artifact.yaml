@@ -147,10 +147,6 @@ on:
 
   workflow_dispatch:
     inputs:
-      build-type:
-        required: false
-        type: string
-        default: "Release"
       tracy:
         required: false
         type: boolean
@@ -166,14 +162,6 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Target Platform"
       architecture:
         required: false
         type: string
@@ -193,6 +181,18 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Target Platform"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
       enable-lto:
         required: false
         type: boolean

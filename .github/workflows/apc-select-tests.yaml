@@ -3,25 +3,6 @@ name: "(APC) Select and Run Post-Commit Tests"
 on:
   workflow_dispatch:
     inputs:
-      build-type:
-        description: "Build type"
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: Release
-      platform:
-        description: "Platform to build and test"
-        required: false
-        type: choice
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        default: "Ubuntu 22.04"
       tests-json:
         description: |
           JSON object specifying which tests to run.
@@ -49,6 +30,25 @@ on:
         required: false
         default: false
         type: boolean
+      platform:
+        description: "Platform to build and test"
+        required: false
+        type: choice
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        default: "Ubuntu 22.04"
+      build-type:
+        description: "Build type"
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
       enable-lto:
         description: "Enable Link Time Optimization (LTO)"
         required: false
