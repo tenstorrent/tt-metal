@@ -88,8 +88,10 @@ by an index ``(x, y)`` in this grid.
    Figure 1: Tensix Core Grid
 
 As shown in Figure 1, core coordinates use the ``x`` and ``y`` dimensions of the grid, rather than the
-``row`` and ``column`` dimensions. For example, core ``(1, 2)`` is the core in the third row and the second
-column, not the other way around. ``x`` coordinates range from 0 to ``C - 1``, where ``C`` is the number of
+``row`` and ``column`` dimensions. As an example, core ``(1, 2)`` is the core in the third row and the second
+column, not the other way around.
+
+``x`` coordinates range from 0 to ``C - 1``, where ``C`` is the number of
 grid columns. Similarly, ``y`` coordinates range from 0 to ``R - 1``, where ``R`` is the number of grid rows.
 While the exact coordinates are not important in many cases, they are useful when examining logs and debug
 messages. They also become relevant when examining performance in more detail.
@@ -151,8 +153,8 @@ The meaning of ``work_units`` is determined by the specific problem being solved
 strategy being used. For example, for matrix multiplication, ``work_units`` could be any of the following:
 
 * Number of elements in the output matrix. Since each output element can be computed in parallel,
-  we could choose to assign individual elements to cores. while possible, this would be a poor choice
-  when targetting Tenstorrent devices, since they can efficiently multiply tiles of input matrices.
+  we could choose to assign individual elements to cores. While possible, this would be a poor choice
+  when targetting Tenstorrent devices, since they can efficiently multiply whole tiles.
 * Number of tiles in the output matrix. Similar to the above, we could choose to assign individual
   tiles to cores.
 * Number of larger blocks in the output matrix. We could increase tile size, or use blocks
@@ -164,7 +166,7 @@ If we assume that work units are the output tiles, the function may be called as
 
    #include <tt-metalium/work_split.hpp>
 
-   auto core_grid = device->compute_with_storage_grid_size();
+   CoreCoord core_grid = device->compute_with_storage_grid_size();
    uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);
 
    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
@@ -174,8 +176,8 @@ The function returns a tuple containing several values:
 
 * ``uint32_t num_cores``: Number of cores used for the operation.
 * ``CoreRangeSet all_cores``: Set of all cores assigned to the operation.
-* ``CoreRangeSet core_group_1``: Primary group of cores, each handling more work.
-* ``CoreRangeSet core_group_2``: Secondary group of cores, each handling less work
+* ``CoreRangeSet core_group_1``: Primary group of cores, each handling ``work_per_core_1`` amount of work.
+* ``CoreRangeSet core_group_2``: Secondary group of cores, each handling ``work_per_core_2`` amount of work
   (empty if the work divides evenly).
 * ``uint32_t work_per_core_1``: Number of work units (e.g. output tiles) each core
   in the primary group processes.
@@ -186,9 +188,10 @@ The function returns a tuple containing several values:
 The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
 
 * ``all_cores`` is the set of cores assigned work for this operation, containing exactly ``num_cores`` cores.
-*  If there are more cores than work units, ``all_cores`` may contain fewer cores than ``core_grid``.
+* If there are more cores in ``core_grid`` than the number of work units,
+  ``all_cores`` may contain fewer cores than ``core_grid``.
 * ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
-* The total amount of work ``work_units``  is always fully assigned:
+* The total amount of work ``work_units`` is always fully assigned:
   ``work_per_core_1 * num_cores_in_core_group_1 + work_per_core_2 * num_cores_in_core_group_2 == work_units``.
 * The function automatically handles uneven work distribution; there is no need to manage edge cases manually.
 
@@ -209,23 +212,24 @@ of rectangular ``CoreRange`` objects. For example, ``all_cores`` contains every 
 ``core_group_1`` and ``core_group_2`` are disjoint subsets of those same cores. Rather than storing every core
 individually, each ``CoreRangeSet`` stores a vector of ``CoreRange`` objects.
 
-Each core is identified by a ``CoreCoord`` object, which is just a pair of integer coordinates ``(x, y)``
-on the device grid.
-Each ``CoreRange`` object is itself defined by two ``CoreCoord`` objects, ``start_coord`` and ``end_coord``, each containing
-coordinates of the opposite corners of a rectangle of cores. The range includes all ``(x, y)``
+Each ``CoreRange`` object is itself defined by two ``CoreCoord`` objects, ``start_coord`` and ``end_coord``,
+each containing coordinates of the opposite corners of a rectangle of cores. The range includes all ``(x, y)``
 cores where ``start_coord.x <= x <= end_coord.x`` and ``start_coord.y <= y <= end_coord.y``.
+The ``CoreCoord`` class is just a pair of integer coordinates ``(x, y)`` identifying a single core
+on the device grid.
 
 The ``CoreRangeSet`` class exposes a number of helpers, including:
 
 * ``num_cores()``: Returns the total number of logical cores covered by the ``CoreRangeSet``.
-* ``ranges()``: Returns a const reference to ``std::vector<CoreRange>`` to allow iterating over all ``CoreRange`` objects in the set.
+* ``ranges()``: Returns a const reference to a container of ``CoreRange`` objects to allow iterating over
+  all ``CoreRange`` objects in the set.
 * ``contains(CoreCoord)``: Returns ``true`` if and only if the given ``(x, y)`` core lies inside at least
   one of the ``CoreRange`` rectangles in the set, and ``false`` otherwise.
 
-The ``CoreRange`` class provides an iterator interface to iterate over all ``CoreCoord`` objects in the range.
+Finally, the ``CoreRange`` class provides an iterator interface to iterate over all ``CoreCoord`` objects in the range.
 
 
-It is important to only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`,
+It is important to only create kernels on cores that have been assigned work (i.e., those in ``all_cores`` or ``core_group_*``,
 and **not** over all cores in ``core_grid``).
 Creating kernels on unused cores can cause undefined behavior or crashes if kernels are created but runtime arguments are not
 set on the core.
@@ -237,6 +241,9 @@ Create Circular Buffers and Kernels on Multiple Cores
 Circular buffers (CBs) have to be created on each core participating in computation, which can be achieved simply by passing
 ``all_cores`` to the function creating circular buffers.
 Each participating core will use its CBs to store required tiles of matrices ``A``, ``B`` and ``C``.
+Note that the ``create_cb`` helper function from Lab 1 needs to be updated to accept a ``CoreRangeSet`` of cores,
+which can then be passed on to the ``CreateCircularBuffer`` function.
+Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function.
 
 Similarly, reader, compute, and writer kernels need to be created on all cores, and this is also achieved simply by passing
 ``all_cores`` to the function creating kernels.
@@ -246,37 +253,34 @@ Set Per-Core Runtime Arguments
 ------------------------------
 
 The way to assign **specific instances of work** to specific cores is through runtime arguments for each kernel instance.
-We need to determine what arguments are needed for each kernel instance so that kernel on each core has sufficient
-information to perform only those operations that are needed for the tiles assigned to that core.
+We need to determine what arguments are needed for each kernel instance so that kernels on each core get sufficient
+information to perform only those operations that are needed for the output tiles assigned to that core.
 The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
 needs to loop over the correct number of output tiles and inner-dimension tiles.
 
 All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
-Arguments that are the same for all cores can be passed as either compile-time arguments or runtime arguments.
+this is because their values willbe known only at runtime, when the work distribution is known.
+Arguments that are the same for all cores and are known at compile time can be passed as either compile-time arguments or runtime arguments.
 As discussed in Lab 1, the decision to use compile-time arguments vs. runtime arguments is based on a tradeoff between potential
-performance benefit from using compile-time arguments vs. kernels having to be recompiled for each core.
+performance benefit from using compile-time arguments vs. kernels having to be recompiled for each different set of argument values.
 
-To set runtime arguments, you will need to iterate over all core ranges in ``core_group_1`` and then iterate over all cores
-in the range and set the runtime arguments for each core. Similarly, you may need to iterate over all core ranges in
-``core_group_2`` to set different amount of work per core.
+To set core-specific runtime arguments, you will need to iterate over all core ranges in ``core_group_1`` and then iterate over all cores
+in the range and set the runtime arguments for each core. Similarly, you should also iterate over all core ranges in
+``core_group_2`` to set core-specific runtime arguments corresponding to the amount of work for the secondary group of cores.
 
 
 Inspecting and Choosing Cores
 *****************************
 
-As shown earlier, the number of compute cores on the device can be obtained using the
-``compute_with_storage_grid_size()`` TT-Metalium C++ API:
-
-.. code-block:: cpp
-
-   auto core_grid = device->compute_with_storage_grid_size();
-   uint32_t total_compute_cores = core_grid.x * core_grid.y;
+As shown earlier, the number of available compute cores on the device can be obtained using the
+``compute_with_storage_grid_size()`` TT-Metalium C++ API. To call this API, you need to get the ``device`` object,
+which can be obtained from the program state object (i.e. ``prog_state.mesh_device.get()``).
 
 In this lab, you will run matrix multiplication with varying number of cores.
 The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
 Any cores without kernels created on them will remain idle for that program (in real applications, they would be allocated to other tasks).
 
-To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then
+To use **all** available compute cores, you can pass the full available compute grid to the work-splitting helper, obtain ``all_cores``, and then
 create CBs and kernels on all cores in ``all_cores``, passing appropriate runtime arguments to the kernels.
 To use fewer cores, you can modify core grid to select only a subset of cores simply by modifying the
 ``x`` and ``y`` dimensions of the core grid before passing it to the work-splitting helper.
@@ -290,32 +294,21 @@ Creating a kernel on a core without setting runtime arguments can lead to undefi
 Exercise 1: Multi Core Matrix Multiplication
 ============================================
 
-In this exercise, you will:
+Perform the following steps::
 
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
-#. Verify correctness by comparing the result against the CPU reference implementation.
-#. Run the same workload using:
+#. Verify correctness by comparing the results against the reference matrix multiplication
+   you created in Exercise 1 of Lab 1.
+#. Run the multi-core implementation using:
 
    * Work distributed over a ``5x5`` core grid
    * Work distributed over a ``10x10`` core grid
    * Work distributed over **all** available compute cores.
 
 #. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
-#. Plot a speedup plot comparing the performance of the three runs relative to the single core implementation from Lab 1.
-
-Additional details
-------------------
-
-To call the ``compute_with_storage_grid_size()`` API, you need to get the ``device`` object,
-which can be obtained from the program state object (i.e. ``prog_state.mesh_device.get()``).
-
-You will need to create circular buffers for tiles of ``A``, ``B``, and ``C`` on all participating cores,
-instead of only on a single core.
-Note that the ``create_cb`` helper function needs to be updated to accept a ``CoreRangeSet`` of cores,
-which can then be passed on to the ``CreateCircularBuffer`` function.
-Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function.
-
-When profiling, you can use the device profiler from Lab 1. Ensure that you build in Release mode and that DPRINT is disabled.
+   Ensure that you build with Release option and that DPRINTs are disabled.
+#. Create a plot showing relationship between speedup and number of cores used.
+   The speedup should be expressed relative to performance of single core implementation from Lab 1.
 
 
 Background: Data Reuse in Multi Core Matrix Multiplication
@@ -330,16 +323,16 @@ inner dimension ``K`` for both the corresponding row of ``A`` and column of ``B`
 This approach is inefficient because tiles from input matrices are re-fetched
 from DRAM multiple times.
 
-Consider a concrete example with matrices ``A`` (``4x4`` tiles), ``B`` (``4x4`` tiles), producing
-``C`` (``4x4`` tiles). To compute output tiles ``C[0,0]`` and ``C[0,1]``:
+Consider a concrete example with matrices ``A`` and ``B`` of shape ``4x4`` tiles, producing
+resulting matrix ``C`` of shape ``4x4`` tiles. To compute output tiles ``C[0,0]`` and ``C[0,1]``:
 
-+----------------+----------------------------------------+----------------------------------------+
-| Output Tile    | Tiles Read from ``A``                      | Tiles Read from ``B``                      |
-+================+========================================+========================================+
-| C[0,0]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]``         | ``B[0,0]``, ``B[1,0]``, ``B[2,0]``, ``B[3,0]``         |
-+----------------+----------------------------------------+----------------------------------------+
-| C[0,1]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]``         | ``B[0,1]``, ``B[1,1]``, ``B[2,1]``, ``B[3,1]``         |
-+----------------+----------------------------------------+----------------------------------------+
++----------------+------------------------------------------------+------------------------------------------------+
+| Output Tile    | Tiles Read from ``A``                          | Tiles Read from ``B``                          |
++================+================================================+================================================+
+| C[0,0]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,0]``, ``B[1,0]``, ``B[2,0]``, ``B[3,0]`` |
++----------------+------------------------------------------------+------------------------------------------------+
+| C[0,1]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,1]``, ``B[1,1]``, ``B[2,1]``, ``B[3,1]`` |
++----------------+------------------------------------------------+------------------------------------------------+
 
 Notice that the entire row ``0`` of ``A`` is read twice; once for ``C[0,0]`` and once for ``C[0,1]``.
 In general, for an ``MxK`` matrix multiplied by a ``KxN`` matrix, producing ``MxN`` output tiles:
@@ -347,21 +340,22 @@ In general, for an ``MxK`` matrix multiplied by a ``KxN`` matrix, producing ``Mx
 * Each row of ``A`` is read ``N`` times (once per column of ``C`` in that row)
 * Each column of ``B`` is read ``M`` times (once per row of ``C`` in that column)
 
-This redundant DRAM traffic becomes the performance bottleneck, especially as matrix
+This redundant DRAM traffic can become the performance bottleneck, especially as matrix
 dimensions grow.
-A naive optimization would be to store the whole row of A in a temporary on-chip SRAM, and then
-use that buffer to compute all the output tiles in the row. However, this naive approach doesn't scale
-well to large matrices because the amount of on-chip memory is usually not sufficient to hold the entire
-row of A. Also, this approach only reuses data in rows of A, but not in columns of B.
+A simple optimization would be to store the whole row of ``A`` in a temporary on-chip SRAM, and then
+use it to compute all the output tiles in the row. However, this simple approach doesn't scale
+well to large matrices because the amount of available on-chip memory may not be sufficient to hold the entire
+row of ``A``. Also, this approach only reuses data in rows of ``A``, but not in columns of ``B``.
 
 Blocked Matrix Multiplication
 =============================
 
 Instead of considering one row at a time, a more general approach is to group output tiles into
-rectangular blocks and assign such rectangular blocks to cores. For example, consider Core 1 in Figure 2.
+rectangular blocks and assign such rectangular blocks to cores. For example, consider Core 1 in Figure 2
+discussed earlier.
 Core 1 needs the first row of ``A`` and the last column of ``B`` to compute the output tile in the top right
 corner of the output, and only for that tile. Therefore, this data cannot be reused for any other computation.
-If we distribute work across 9 cores instead, such that each core computes ``3x3`` output tiles, then each core
+If we distribute work across e.g. ``9`` cores instead, such that each core computes ``3x3`` output tiles, then each core
 can use a row of ``A`` to produce output of three tiles in the same row of the output. Similarly, each core
 can use a column of ``B`` to produce output of three tiles in the same column of the output.
 This is shown in Figure 3.
@@ -375,11 +369,12 @@ This is shown in Figure 3.
 
 Observe that there is no data reuse across cores; each core still needs to read input data for its own
 block of output tiles, some of which is the same as the data read by other cores.
-Also observe that this approach requires number of tiles to be a multiple of the number of cores in each dimension.
+Also observe that this approach requires number of tiles to be a multiple of the number of cores in each
+dimension of the core grid to ensure that blocks of tiles are rectangular, thus maximizing data reuse.
 
-Comparing Figure 3 to Figure 2, we went from using 11 cores to using 9 cores.
+Comparing Figure 3 to Figure 2, we went from using ``11`` cores to using ``9`` cores.
 This may be beneficial if the program is memory-bound, because performance benefit from data reuse
-may be far greater than any performance loss from having fewer cores for compute.
+may be far greater than any performance loss from having fewer compute cores.
 Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores in each dimension.
 
 If the program is compute-bound, we may choose to:
@@ -389,10 +384,10 @@ If the program is compute-bound, we may choose to:
 * Add more cores across one or both dimensions of the core grid, if higher number of cores
   is available and will divide the number of tiles evenly.
 
-Assigning rectangular blocks to output tiles doesn't resolve the problem that bringing e.g.
-entire row of ``A`` into on-chip SRAM is not possible because of limited on-chip memory.
-In fact, for data reuse to be fully effective with blocking, we need multiple rows of tiles
-of input in on-chip memory. The solution is to break down the ``K`` dimension into smaller chunks
+Assigning rectangular blocks to output tiles doesn't address the problem that bringing e.g.
+entire row of ``A`` into on-chip SRAM may not be possible due to limited on-chip memory.
+In fact, for data reuse to be fully effective with blocking, we need multiple rows of input tiles
+in on-chip memory at the same time. The solution is to break down the ``K`` dimension into smaller chunks
 of tiles and compute partial results for each chunk, which require only a subset of the input
 tiles that is small enough to fit into on-chip SRAM.
 Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
