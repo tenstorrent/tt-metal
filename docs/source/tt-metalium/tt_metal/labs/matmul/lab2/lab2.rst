@@ -81,16 +81,19 @@ In Tenstorrent architecture, the cores are organized into a 2D grid with each co
 by an index ``(x, y)`` in this grid.
 
 .. figure:: images/tensix_core_grid.png
-   :width: 900
+   :width: 800
    :alt: Tensix Core Grid
    :align: center
 
    Figure 1: Tensix Core Grid
 
 As shown in Figure 1, core coordinates use the ``x`` and ``y`` dimensions of the grid, rather than the
-``row`` and ``column`` dimensions. This is something to be cognizant of when interpreting the coordinates.
+``row`` and ``column`` dimensions. For example, core ``(1, 2)`` is the core in the third row and the second
+column, not the other way around. ``x`` coordinates range from 0 to ``C - 1``, where ``C`` is the number of
+grid columns. Similarly, ``y`` coordinates range from 0 to ``R - 1``, where ``R`` is the number of grid rows.
 While the exact coordinates are not important in many cases, they are useful when examining logs and debug
 messages. They also become relevant when examining performance in more detail.
+
 
 Determine Number of Available Tensix Cores
 ------------------------------------------
@@ -116,10 +119,10 @@ for producing ``num_output_tiles/num_cores`` output tiles.
 We will use a simple strategy of dividing the work evenly among the cores. We will also make a simplifying assumption
 that matrix dimensions are divisible by the tile size.
 For example, if the matrix dimensions are ``288x288`` and the tile size is ``32x32``, then the number of output
-tiles is ``9 * 9 = 81``. If we choose to implement the matrix multiplication on 11 cores (assuming other cores are
+tiles is ``9 * 9 = 81``. If we choose to implement the matrix multiplication on ``11`` cores (assuming other cores are
 needed for other tasks), then each core will be responsible for producing ``81 / 11 = 7.36`` output tiles.
 Since the number of output tiles must be an integer, we will round this up to ``8`` output tiles per core.
-As a result, ``10`` cores are assigned ``8`` output tiles each, and the ``11``th core processes the remaining one tile.
+As a result, ``10`` cores are assigned ``8`` output tiles each, and the last core processes the remaining one tile.
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
@@ -148,10 +151,11 @@ The meaning of ``work_units`` is determined by the specific problem being solved
 strategy being used. For example, for matrix multiplication, ``work_units`` could be any of the following:
 
 * Number of elements in the output matrix. Since each output element can be computed in parallel,
-  we could choose to assign individual elements to cores.
+  we could choose to assign individual elements to cores. while possible, this would be a poor choice
+  when targetting Tenstorrent devices, since they can efficiently multiply tiles of input matrices.
 * Number of tiles in the output matrix. Similar to the above, we could choose to assign individual
   tiles to cores.
-* Number of larger blocks in the output matrix. We could choose larger tiles, or even entire blocks
+* Number of larger blocks in the output matrix. We could increase tile size, or use blocks
   of tiles in the output matrix as units of work to be assigned to cores.
 
 If we assume that work units are the output tiles, the function may be called as follows:
@@ -168,54 +172,57 @@ If we assume that work units are the output tiles, the function may be called as
 
 The function returns a tuple containing several values:
 
-- ``uint32_t num_cores``: Number of cores used for the operation.
-- ``CoreRangeSet all_cores``: Set of all cores assigned to the operation.
-- ``CoreRangeSet core_group_1``: Primary group of cores, each handling more work.
-- ``CoreRangeSet core_group_2``: Secondary group of cores, each handling less work
+* ``uint32_t num_cores``: Number of cores used for the operation.
+* ``CoreRangeSet all_cores``: Set of all cores assigned to the operation.
+* ``CoreRangeSet core_group_1``: Primary group of cores, each handling more work.
+* ``CoreRangeSet core_group_2``: Secondary group of cores, each handling less work
   (empty if the work divides evenly).
-- ``uint32_t work_per_core_1``: Number of work units (e.g. output tiles) each core
+* ``uint32_t work_per_core_1``: Number of work units (e.g. output tiles) each core
   in the primary group processes.
-- ``uint32_t work_per_core_2``: Number of work units (e.g. output tiles) each core
+* ``uint32_t work_per_core_2``: Number of work units (e.g. output tiles) each core
   in the secondary group processes (0 if the work divides evenly).
+
+
+The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
+
+* ``all_cores`` is the set of cores assigned work for this operation, containing exactly ``num_cores`` cores.
+*  If there are more cores than work units, ``all_cores`` may contain fewer cores than ``core_grid``.
+* ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
+* The total amount of work ``work_units``  is always fully assigned:
+  ``work_per_core_1 * num_cores_in_core_group_1 + work_per_core_2 * num_cores_in_core_group_2 == work_units``.
+* The function automatically handles uneven work distribution; there is no need to manage edge cases manually.
+
+
+Given the earlier example of splitting ``81`` output tiles across ``11`` cores, ``split_work_to_cores``
+may distribute the work as follows:
+
+* ``num_cores`` = ``11`` (all cores are used)
+* ``all_cores`` = Set containing coordinates of all ``11`` cores
+* ``core_group_1`` = Set containing coordinates of the first ``10`` cores (each processes ``8`` tiles)
+* ``core_group_2`` = Set containing a single coordinate of the last core (processes ``1`` tile)
+* ``work_per_core_1`` = ``8`` (tiles per core in the primary group)
+* ``work_per_core_2`` = ``1`` (tiles for the secondary group core)
+
 
 A ``CoreRangeSet`` is a compact representation of an arbitrary set of logical cores, implemented as a collection
 of rectangular ``CoreRange`` objects. For example, ``all_cores`` contains every core that will do work, while
 ``core_group_1`` and ``core_group_2`` are disjoint subsets of those same cores. Rather than storing every core
 individually, each ``CoreRangeSet`` stores a vector of ``CoreRange`` objects.
 
+Each core is identified by a ``CoreCoord`` object, which is just a pair of integer coordinates ``(x, y)``
+on the device grid.
 Each ``CoreRange`` object is itself defined by two ``CoreCoord`` objects, ``start_coord`` and ``end_coord``, each containing
-``x`` and ``y`` coordinates of the opposite corners of an inclusive rectangle of cores (every ``(x, y)`` with
-``start_coord.x <= x <= end_coord.x`` and ``start_coord.y <= y <= end_coord.y`` is in the range).
-A ``CoreCoord`` is just a pair of integer coordinates ``(x, y)`` naming a single core on the device grid.
+coordinates of the opposite corners of a rectangle of cores. The range includes all ``(x, y)``
+cores where ``start_coord.x <= x <= end_coord.x`` and ``start_coord.y <= y <= end_coord.y``.
 
-``CoreRangeSet`` class exposes a number of helpers, including:
+The ``CoreRangeSet`` class exposes a number of helpers, including:
 
 * ``num_cores()``: Returns the total number of logical cores covered by the ``CoreRangeSet``.
-
 * ``ranges()``: Returns a const reference to ``std::vector<CoreRange>`` to allow iterating over all ``CoreRange`` objects in the set.
-
 * ``contains(CoreCoord)``: Returns ``true`` if and only if the given ``(x, y)`` core lies inside at least
   one of the ``CoreRange`` rectangles in the set, and ``false`` otherwise.
 
-.. note::
-
-    The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
-
-    - ``all_cores`` is the set of cores assigned work for this operation, containing exactly ``num_cores`` cores.
-    -  If there are more cores than work units, ``all_cores`` may contain fewer cores than ``core_grid``.
-    - ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
-    - The total amount of work ``work_units``  is always fully assigned:
-      ``work_per_core_1 * num_cores_in_core_group_1 + work_per_core_2 * num_cores_in_core_group_2 == work_units``.
-    - The function automatically handles uneven work distribution; there is no need to manage edge cases manually.
-
-Given the earlier example of splitting 81 output tiles across 11 cores, ``split_work_to_cores`` may distribute the work as follows:
-
-* ``num_cores`` = 11 (all 11 cores are used)
-* ``all_cores`` = all 11 cores
-* ``core_group_1`` = Set containing coordinates of the first 10 cores (each processes 8 tiles)
-* ``core_group_2`` = Set containing a single coordinate of the last core (processes 1 tile)
-* ``work_per_core_1`` = 8 (tiles per core in the primary group)
-* ``work_per_core_2`` = 1 (tiles for the secondary group core)
+The ``CoreRange`` class provides an iterator interface to iterate over all ``CoreCoord`` objects in the range.
 
 
 It is important to only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`,
@@ -267,7 +274,7 @@ As shown earlier, the number of compute cores on the device can be obtained usin
 
 In this lab, you will run matrix multiplication with varying number of cores.
 The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
-Any cores without kernels created on them will remain idle for that program. In real applications, they would be allocated to other tasks.
+Any cores without kernels created on them will remain idle for that program (in real applications, they would be allocated to other tasks).
 
 To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then
 create CBs and kernels on all cores in ``all_cores``, passing appropriate runtime arguments to the kernels.
@@ -320,25 +327,25 @@ Motivation
 In the basic multi-core implementation, each core computes one output tile at a time.
 For each output tile ``C[i,j]``, the reader kernel fetches **all** tiles along the
 inner dimension ``K`` for both the corresponding row of ``A`` and column of ``B``.
-This approach has a critical inefficiency: **tiles from input matrices are re-fetched
-from DRAM multiple times**.
+This approach is inefficient because tiles from input matrices are re-fetched
+from DRAM multiple times.
 
-Consider a concrete example with matrices A (4x4 tiles), B (4x4 tiles), producing
-C (4x4 tiles). To compute output tiles ``C[0,0]`` and ``C[0,1]``:
+Consider a concrete example with matrices ``A`` (``4x4`` tiles), ``B`` (``4x4`` tiles), producing
+``C`` (``4x4`` tiles). To compute output tiles ``C[0,0]`` and ``C[0,1]``:
 
 +----------------+----------------------------------------+----------------------------------------+
-| Output Tile    | Tiles Read from A                      | Tiles Read from B                      |
+| Output Tile    | Tiles Read from ``A``                      | Tiles Read from ``B``                      |
 +================+========================================+========================================+
-| C[0,0]         | A[0,0], A[0,1], A[0,2], A[0,3]         | B[0,0], B[1,0], B[2,0], B[3,0]         |
+| C[0,0]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]``         | ``B[0,0]``, ``B[1,0]``, ``B[2,0]``, ``B[3,0]``         |
 +----------------+----------------------------------------+----------------------------------------+
-| C[0,1]         | A[0,0], A[0,1], A[0,2], A[0,3]         | B[0,1], B[1,1], B[2,1], B[3,1]         |
+| C[0,1]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]``         | ``B[0,1]``, ``B[1,1]``, ``B[2,1]``, ``B[3,1]``         |
 +----------------+----------------------------------------+----------------------------------------+
 
-Notice that **the entire row 0 of A is read twice** -- once for C[0,0] and once for C[0,1].
-In general, for an MxK @ KxN matmul producing MxN output tiles:
+Notice that the entire row ``0`` of ``A`` is read twice; once for ``C[0,0]`` and once for ``C[0,1]``.
+In general, for an ``MxK`` matrix multiplied by a ``KxN`` matrix, producing ``MxN`` output tiles:
 
-- Each row of A is read N times (once per column of C in that row)
-- Each column of B is read M times (once per row of C in that column)
+* Each row of ``A`` is read ``N`` times (once per column of ``C`` in that row)
+* Each column of ``B`` is read ``M`` times (once per row of ``C`` in that column)
 
 This redundant DRAM traffic becomes the performance bottleneck, especially as matrix
 dimensions grow.
@@ -383,7 +390,7 @@ If the program is compute-bound, we may choose to:
   is available and will divide the number of tiles evenly.
 
 Assigning rectangular blocks to output tiles doesn't resolve the problem that bringing e.g.
-entire row of A into on-chip SRAM is not possible because of limited on-chip memory.
+entire row of ``A`` into on-chip SRAM is not possible because of limited on-chip memory.
 In fact, for data reuse to be fully effective with blocking, we need multiple rows of tiles
 of input in on-chip memory. The solution is to break down the ``K`` dimension into smaller chunks
 of tiles and compute partial results for each chunk, which require only a subset of the input
@@ -402,8 +409,8 @@ output tiles ``C_block`` consisting of ``M_block_tiles`` rows of tiles and ``N_b
 The division of the ``Mt`` and ``Nt`` dimensions into blocks is done simply by dividing
 the number of tiles in each dimension by the number of cores in that dimension of the core grid.
 
-To compute all tiles in a block, the core needs the matching ``M_block_tiles x Kt`` tile rows of A
-(we will call this ``A_block``) and the matching ``Kt x N_block_tiles`` tile columns of B
+To compute all tiles in a block, the core needs the matching ``M_block_tiles x Kt`` tile rows of ``A``
+(we will call this ``A_block``) and the matching ``Kt x N_block_tiles`` tile columns of ``B``
 (we will call this ``B_block``).
 Since this is too large to fit into on-chip SRAM, we split the ``Kt`` dimension into K-blocks of size ``K_block_tiles``,
 such that ``Kt = num_k_blocks * K_block_tiles``.
@@ -484,7 +491,7 @@ Visualizing the Data Reuse Opportunity
 ======================================
 
 The following diagram illustrates the basic approach versus the optimized approach
-for a 4x4 output tile matrix with K=4 inner dimension tiles::
+for a ``4x4`` output tile matrix with ``K=4`` inner dimension tiles::
 
     BASIC APPROACH: Process output tiles one at a time (high DRAM traffic)
     ======================================================================
