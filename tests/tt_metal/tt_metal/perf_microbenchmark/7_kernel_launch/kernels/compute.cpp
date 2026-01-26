@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
 
 void kernel_main() { uint32_t compile_arg0 = get_compile_time_arg_val(0); }

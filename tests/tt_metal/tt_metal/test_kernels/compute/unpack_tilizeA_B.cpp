@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/tilize.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint_tensix.h"
 #include "experimental/circular_buffer.h"
 

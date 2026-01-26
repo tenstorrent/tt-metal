@@ -6,11 +6,11 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/eltwise_unary/relu.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
 
 #include "../../deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 

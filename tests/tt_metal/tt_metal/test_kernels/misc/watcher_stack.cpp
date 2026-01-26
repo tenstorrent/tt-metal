@@ -10,7 +10,7 @@
 extern uint32_t __stack_base[];
 
 #if defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 namespace NAMESPACE {
 void MAIN {
 #else

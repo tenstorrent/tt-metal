@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 
 namespace NAMESPACE {
 void MAIN {

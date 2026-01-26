@@ -4,17 +4,17 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/untilize.h"
 #include "api/debug/assert.h"
 
 namespace NAMESPACE {

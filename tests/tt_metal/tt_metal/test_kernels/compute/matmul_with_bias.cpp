@@ -7,8 +7,8 @@
 #define BCAST_LLKOP ELWADD
 #define BCAST_DIM BroadcastType::ROW
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

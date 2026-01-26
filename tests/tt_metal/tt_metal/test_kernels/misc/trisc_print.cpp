@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #include "internal/debug/dprint_test_common.h"
 /*
  * Test printing from a kernel running on TRISC.

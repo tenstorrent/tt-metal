@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/untilize.h"
 
 namespace NAMESPACE {
 void MAIN {

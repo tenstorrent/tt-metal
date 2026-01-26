@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/transpose_wh.h"
 
 namespace NAMESPACE {
 void MAIN {

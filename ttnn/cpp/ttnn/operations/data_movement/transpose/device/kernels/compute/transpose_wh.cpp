@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/transpose_wh.h"
 
 namespace NAMESPACE {
 void MAIN {
