@@ -287,7 +287,8 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
         initialize_relay_linear_packed_cmd(relay_linear_packed_cmd_dst);
     }
 
-    this->memcpy((char*)relay_linear_packed_cmd_dst + sizeof(CQPrefetchCmdLarge), &sub_cmds[offset_idx], sub_cmds_sizeB);
+    this->memcpy(
+        (char*)relay_linear_packed_cmd_dst + sizeof(CQPrefetchCmdLarge), &sub_cmds[offset_idx], sub_cmds_sizeB);
 }
 
 template <bool hugepage_write>
