@@ -195,7 +195,7 @@ class CMakeBuild(build_ext):
     def get_build_env():
         return {
             **os.environ.copy(),
-            "CXX": "clang++-17",
+            "CXX": "clang++-20",
         }
 
     @staticmethod

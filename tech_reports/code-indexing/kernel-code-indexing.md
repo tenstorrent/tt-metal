@@ -96,7 +96,7 @@ options:
 ### VS Code:
 - `clangd` by default searches for compile_commands.json in the project root, but it can be changed. `settings.json` example:
 ```json
-    "clangd.path": "/usr/bin/clangd-17",
+    "clangd.path": "/usr/bin/clangd-20",
     "clangd.arguments": [
         "-background-index",
         "-pretty",
