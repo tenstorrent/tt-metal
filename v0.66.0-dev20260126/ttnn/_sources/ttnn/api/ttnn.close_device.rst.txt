@@ -1,0 +1,8 @@
+﻿ttnn.close\_device
+==================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.close_device:
+
+.. autofunction:: ttnn.close_device
