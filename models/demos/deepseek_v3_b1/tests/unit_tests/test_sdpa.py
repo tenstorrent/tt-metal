@@ -18,12 +18,17 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 @pytest.mark.parametrize("batch_size", [1])
 # @pytest.mark.parametrize("decode_position", [128 - 1, 2 * 1024 - 1, 4 * 1024 - 1, 8 * 1024 - 1, 32 * 1024 - 1])
-@pytest.mark.parametrize("decode_position", [128 - 1, 1024 - 1])
+@pytest.mark.parametrize("decode_position", [256 - 1, 2048 - 1])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
 @pytest.mark.parametrize("kv_sharded", [False, True], ids=["interleaved", "sharded"])
 def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_sharded):
     """Test FlashMLADecode op."""
     torch.manual_seed(0)
+
+    # Debug: Print optimal worker core for each DRAM bank from device API
+    optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    for bank_id, worker_core in enumerate(optimal_workers):
+        logger.info(f"DRAM bank {bank_id} -> optimal worker core ({worker_core.x}, {worker_core.y})")
 
     # Use 128 heads and 16 heads per core to test 8 groups of heads
     # SDPA has bug with 8x32 tile size, so can't use 64 and 8 for now

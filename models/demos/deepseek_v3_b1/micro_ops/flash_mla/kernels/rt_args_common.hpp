@@ -70,19 +70,20 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
     uint32_t k_chunk_start = window_start_chunk;
     uint32_t k_chunk_end = window_start_chunk;
 
-    // Distribute active chunks among cores
+    // Distribute chunks among cores in order (core 0 gets chunk 0, etc.)
+    // This matches optimal DRAM bank assignment where S1->chunk0, S2->chunk1, etc.
     if (num_cores_per_batch > int(num_chunks_value)) {
+        // More cores than chunks: each active core gets 1 chunk
         int chunks_per_core = (core_num < int(num_chunks_value)) ? 1 : 0;
-        k_chunk_start = window_start_chunk + (num_chunks_value - core_num - 1) * chunks_per_core;
-        k_chunk_end = window_start_chunk + (num_chunks_value - core_num) * chunks_per_core;
+        k_chunk_start = window_start_chunk + core_num * chunks_per_core;
+        k_chunk_end = k_chunk_start + chunks_per_core;
     } else {
+        // More chunks than cores: distribute chunks evenly
         int chunks_per_core = num_chunks_value / num_cores_per_batch;
         int residuals = num_chunks_value % num_cores_per_batch;
-        int reversed_core_num = num_cores_per_batch - core_num - 1;
-        k_chunk_start =
-            window_start_chunk + reversed_core_num * chunks_per_core + std::min(residuals, reversed_core_num);
+        k_chunk_start = window_start_chunk + core_num * chunks_per_core + std::min(residuals, core_num);
         k_chunk_end = k_chunk_start + chunks_per_core;
-        if (reversed_core_num < residuals) {
+        if (core_num < residuals) {
             k_chunk_end += 1;
         }
     }

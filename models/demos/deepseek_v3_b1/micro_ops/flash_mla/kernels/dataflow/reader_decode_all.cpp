@@ -204,9 +204,16 @@ void kernel_main() {
                     // Sender: read from DRAM
                     if constexpr (k_args.is_sharded) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
-                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
-                        noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_bytes);
+                        {
+                            DeviceZoneScopedN("mcast-sender-tensor-accessor");
+                            const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                            uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+                            uint32_t dram_x = NOC_UNICAST_ADDR_X(k_src_noc_addr);
+                            uint32_t dram_y = NOC_UNICAST_ADDR_Y(k_src_noc_addr);
+                            DPRINT << "shard_id=" << shard_id << " -> DRAM(" << dram_x << "," << dram_y << ")"
+                                   << ENDL();
+                            noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_bytes);
+                        }
                         noc_async_read_barrier();
                     } else {
                         DeviceZoneScopedN("mcast-sender-interleaved-read");
