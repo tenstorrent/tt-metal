@@ -52,7 +52,7 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(
-        args.mesh_socket, input_tensor, program_factory.index());
+        args.mesh_socket, args.recv_socket, input_tensor, program_factory.index());
 }
 
 }  // namespace ttnn::experimental::prim
@@ -60,10 +60,12 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 ttnn::experimental::prim::SendAsyncDeviceOperation::tensor_return_value_t send_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket) {
     using OperationType = ttnn::experimental::prim::SendAsyncDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket, recv_socket);
     const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

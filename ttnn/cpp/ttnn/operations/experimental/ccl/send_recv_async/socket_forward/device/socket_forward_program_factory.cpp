@@ -110,6 +110,7 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
+    constexpr uint32_t barrier_address = 638912;
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
@@ -117,6 +118,7 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
         fabric_max_payload_size,
         num_whole_packets_link_0,
         num_whole_packets_link_1,
+        barrier_address,
     };
 
     auto kernel_id = tt::tt_metal::CreateKernel(

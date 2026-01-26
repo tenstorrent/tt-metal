@@ -37,6 +37,8 @@ struct SendAsyncDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::experimental::prim::SendAsyncDeviceOperation::tensor_return_value_t send_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket = std::nullopt);
 
 }  // namespace ttnn::prim

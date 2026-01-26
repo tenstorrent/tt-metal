@@ -12,8 +12,10 @@
 namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteSendAsync::invoke(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return ttnn::prim::send_async(input_tensor, mesh_socket);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+    const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket) {
+    return ttnn::prim::send_async(input_tensor, mesh_socket, recv_socket);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

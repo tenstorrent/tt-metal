@@ -11,7 +11,6 @@ namespace ttnn::experimental::prim {
 
 struct SendAsyncSharedVariables {
     tt::tt_metal::CoreCoord sender_core_coord;
-    tt::tt_metal::KernelHandle worker_reader_kernel_id{};
     tt::tt_metal::KernelHandle worker_writer_kernel_id{};
 };
 

@@ -47,6 +47,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     const Tensor& tensor_args,
     std::vector<Tensor>& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
+    auto recv_socket = operation_attributes.recv_socket.value();
     const auto& input_tensor = tensor_args;
     auto* mesh_device = input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
@@ -59,6 +60,9 @@ SendAsyncMeshWorkloadFactory::create_at(
     CoreCoord receiver_core_coord;
     tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
+    auto upstream_device_coord = recv_socket.get_config().socket_connection_config[0].sender_core.device_coord;
+    tt::tt_fabric::FabricNodeId upstream_fabric_node_id =
+        recv_socket.get_fabric_node_id(tt::tt_metal::distributed::SocketEndpoint::SENDER, upstream_device_coord);
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
             sender_core_coord = connection.sender_core.core_coord;
@@ -105,7 +109,7 @@ SendAsyncMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
 
-    uint32_t packet_header_cb_num_pages = num_links;
+    uint32_t packet_header_cb_num_pages = num_links + 1;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto packet_header_cb_index = tt::CBIndex::c_1;
@@ -119,21 +123,8 @@ SendAsyncMeshWorkloadFactory::create_at(
 
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
-    std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,    // cb0_id
-        input_page_size,  // input_page_size
-    };
-    reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
-        sender_core_coord,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
-
-    std::vector<uint32_t> reader_rt_args = {input_tensor.buffer()->address()};
-    tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, sender_core_coord, reader_rt_args);
-
+    constexpr uint32_t barrier_address = 638912;
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,             // cb0_id
         packet_header_cb_index,    // fabric_packet_header_cb_id
@@ -142,7 +133,10 @@ SendAsyncMeshWorkloadFactory::create_at(
         fabric_max_payload_size,   // whole_packet_size (fabric_max_payload_size)
         num_whole_packets_link_0,  // num_whole_packets_link_0
         num_whole_packets_link_1,  // num_whole_packets_link_1
+        input_page_size,           // input_page_size
+        barrier_address,
     };
+    writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
     auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -154,7 +148,11 @@ SendAsyncMeshWorkloadFactory::create_at(
     uint32_t bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
         mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
 
-    std::vector<uint32_t> writer_rt_args = {mesh_socket.get_config_buffer()->address(), bank_id};
+    std::vector<uint32_t> writer_rt_args = {
+        input_tensor.buffer()->address(),
+        mesh_socket.get_config_buffer()->address(),
+        recv_socket.get_config_buffer()->address(),
+        bank_id};
 
     for (uint32_t i = 0; i < num_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
@@ -166,13 +164,21 @@ SendAsyncMeshWorkloadFactory::create_at(
             writer_rt_args);
     }
 
+    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, upstream_fabric_node_id);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        sender_fabric_node_id,
+        upstream_fabric_node_id,
+        bwd_link_indices[0],
+        program,
+        sender_core_coord,
+        writer_rt_args);
+
     tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord, writer_rt_args);
 
     return {
         std::move(program),
         shared_variables_t{
             .sender_core_coord = sender_core_coord,
-            .worker_reader_kernel_id = worker_reader_kernel_id,
             .worker_writer_kernel_id = worker_writer_kernel_id,
         }};
 }
@@ -180,24 +186,26 @@ SendAsyncMeshWorkloadFactory::create_at(
 void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const SendAsyncParams& operation_attributes,
-    const Tensor& tensor_args,
+    const Tensor& /*tensor_args*/,
     [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         auto& sender_core_coord = shared_vars.sender_core_coord;
-        const auto& worker_reader_kernel_id = shared_vars.worker_reader_kernel_id;
+        // const auto& worker_reader_kernel_id = shared_vars.worker_reader_kernel_id;
         const auto& worker_writer_kernel_id = shared_vars.worker_writer_kernel_id;
 
         const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& input_tensor = tensor_args;
+        const auto& recv_socket = operation_attributes.recv_socket.value();
+        // const auto& input_tensor = tensor_args;
 
-        auto& reader_runtime_args = GetRuntimeArgs(program, worker_reader_kernel_id, sender_core_coord);
+        // auto& reader_runtime_args = GetRuntimeArgs(program, worker_reader_kernel_id, sender_core_coord);
         auto& writer_runtime_args = GetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord);
 
-        reader_runtime_args[0] = input_tensor.buffer()->address();
-        writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+        // reader_runtime_args[0] = input_tensor.buffer()->address();
+        writer_runtime_args[1] = mesh_socket.get_config_buffer()->address();
+        writer_runtime_args[2] = recv_socket.get_config_buffer()->address();
     }
 }
 

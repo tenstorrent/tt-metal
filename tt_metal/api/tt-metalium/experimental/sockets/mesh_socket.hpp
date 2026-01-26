@@ -187,6 +187,7 @@ private:
 
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
+    // std::shared_ptr<MeshBuffer> barrier_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;

@@ -18,6 +18,7 @@ constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(2);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(5);
+constexpr uint32_t credit_address = get_compile_time_arg_val(6);
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -86,14 +87,31 @@ void kernel_main() {
 
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<false>(
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
+    // Initial Handshake
+    uint64_t remote_credit_addr =
+        get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
+    volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
+    while (*credit_addr == 0) {
+        invalidate_l1_cache();
+    }
+    downstream_data_packet_header_addr->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
+    downstream_fabric_connection.wait_for_empty_write_slot();
+    downstream_fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    // Done handshake
 
-    for (int i = 0; i < 750000000; i++) {
+    for (uint32_t i = 0; i < 100; ++i) {
+        DPRINT << "Reserving Pages " << i << ENDL();
         socket_reserve_pages(send_socket, 1);
+        DPRINT << "Reserved Pages " << i << ENDL();
         socket_wait_for_pages(recv_socket, 1);
+        DPRINT << "Pages received " << i << ENDL();
         auto l1_read_addr = recv_socket.read_ptr;
         uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
 
         // Forward data to downstream
+        DPRINT << "Forwarding data to downstream " << i << ENDL();
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection,
@@ -125,9 +143,11 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 aligned_partial_packet_size);
         }
+        DPRINT << "Done forwarding data to downstream " << i << ENDL();
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);
+        DPRINT << "Notifying sender" << ENDL();
         if ((i & 1) == 0) {
             fabric_socket_notify_sender_stateful(
                 recv_socket,
@@ -135,10 +155,14 @@ void kernel_main() {
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
         }
+        DPRINT << "Done notifying sender " << i << ENDL();
     }
+    DPRINT << "Updating socket config" << ENDL();
     update_socket_config(send_socket);
     update_socket_config(recv_socket);
+    DPRINT << "Closed socket config" << ENDL();
     upstream_fabric_connection.close();
     downstream_fabric_connection.close();
     downstream_fabric_connection_2.close();
+    DPRINT << "Closed fabric connections" << ENDL();
 }

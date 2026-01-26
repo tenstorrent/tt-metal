@@ -14,12 +14,17 @@ namespace ttnn::experimental::prim {
 
 struct SendAsyncParams {
     const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default contructor
-    SendAsyncParams(const tt::tt_metal::distributed::MeshSocket& mesh_socket) : mesh_socket(mesh_socket) {}
+    const std::optional<tt::tt_metal::distributed::MeshSocket> recv_socket = std::nullopt;
+    SendAsyncParams(
+        const tt::tt_metal::distributed::MeshSocket& mesh_socket,
+        const std::optional<tt::tt_metal::distributed::MeshSocket>& recv_socket = std::nullopt) :
+        mesh_socket(mesh_socket), recv_socket(recv_socket) {}
     // Add attributes method for reflection
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("mesh_socket", mesh_socket);
+        attrs.emplace_back("recv_socket", recv_socket);
         return attrs;
     }
 };
