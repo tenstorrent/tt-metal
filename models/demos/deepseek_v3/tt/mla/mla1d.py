@@ -781,28 +781,25 @@ class MLA1D(AbstractModule):
             or len(caches) == mesh_device.shape[0]
             and all(cache.shape == cache_shape for cache in caches)
         )
-        if caches is None:
-            caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
-
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
+            "kvpe_cache": cls._convert_cache(caches, cache_shape, mesh_device),
             "ccl": ccl,
         }
 
     @classmethod
     def _convert_cache(
         cls,
-        caches: tuple[torch.Tensor, ...],
+        caches: tuple[torch.Tensor, ...] | None,
+        cache_shape: tuple[int, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        cache_tensor = torch.concatenate(caches)
-        if torch.all(cache_tensor == 0):
-            cache_shape = list(cache_tensor.shape)
-            # ttnn.zeros doesn't accept a mesh_mapper, so we need to pass correct shape per device
-            cache_shape[0] = cache_shape[0] // (mesh_device.shape[1] * mesh_device.shape[0])
+        if caches is None:
+            cache_shape = list(cache_shape)
+            cache_shape[0] = even_int_div(cache_shape[0], mesh_device.shape[1])
+            # ttnn.zeros doesn't accept a mesh_mapper, so we need to pass correct shape per device. It replicates the tensor across the devices.
             return ttnn.zeros(
                 shape=cache_shape,
                 dtype=ttnn.bfloat8_b,
@@ -812,7 +809,7 @@ class MLA1D(AbstractModule):
             )
         else:
             return ttnn.as_tensor(
-                cache_tensor,
+                torch.concatenate(tuple(caches)),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
