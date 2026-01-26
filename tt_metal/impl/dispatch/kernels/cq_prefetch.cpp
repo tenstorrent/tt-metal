@@ -955,7 +955,8 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
 }
 
 template <bool set_src_noc_addr = false, bool set_trid = false>
-void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size, uint32_t trid = 0) {
+void noc_read_64bit_any_len(
+    uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size, uint32_t trid = 0) {
     // noc_read_state_init is unnecessary.
     if constexpr (set_src_noc_addr) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(
@@ -999,7 +1000,9 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
     uint32_t current_trid = TRID_SCRATCH_DB_READ_1;
 
-    static_assert(scratch_db_half_size / NOC_MAX_BURST_SIZE < NOC_MAX_TRANSACTION_ID_COUNT, "Full buffer size must not have more transactions than fit in one NOC transaction counter");
+    static_assert(
+        scratch_db_half_size / NOC_MAX_BURST_SIZE < NOC_MAX_TRANSACTION_ID_COUNT,
+        "Full buffer size must not have more transactions than fit in one NOC transaction counter");
     noc_async_read_barrier_with_trid(current_trid);
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
