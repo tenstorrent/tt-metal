@@ -782,13 +782,24 @@ class MLA1D(AbstractModule):
             and all(cache.shape == cache_shape for cache in caches)
         )
         if caches is None:
-            caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
+            # Generate KV cache directly on device to save host memory and time
+            total_cache_shape = (cache_shape[0] * mesh_device.shape[0], *cache_shape[1:])
+            kvpe_cache = ttnn.zeros(
+                total_cache_shape,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+            )
+        else:
+            kvpe_cache = cls._convert_cache(tuple(caches), mesh_device)
 
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
+            "kvpe_cache": kvpe_cache,
             "ccl": ccl,
         }
 
