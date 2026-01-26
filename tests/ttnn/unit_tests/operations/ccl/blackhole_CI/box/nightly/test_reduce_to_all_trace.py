@@ -92,7 +92,7 @@ def compute_reference_reduce_to_all(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 393232}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 548880}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_ring_trace"],
@@ -130,7 +130,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     tile = ttnn.Tile((8, 32))
 
     # mux cores
-    mux_cores = [ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6), ttnn.CoreCoord(2, 6), ttnn.CoreCoord(3, 6)]
+    mux_cores = [ttnn.CoreCoord(0, 9), ttnn.CoreCoord(1, 9), ttnn.CoreCoord(2, 9), ttnn.CoreCoord(3, 9)]
 
     # results in better perf compared to automating the generation of worker cores (other than data cores)
     extra_worker_cores = [
@@ -147,8 +147,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(3, 4)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(3, 5)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(3, 8)),
         }
     )
     shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)
@@ -343,13 +343,20 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,
         )
+        if use_barrier:
+            _ = ttnn.experimental.all_gather_async(
+                barrier_tensor,
+                dim=0,
+                multi_device_global_semaphore=barrier_semaphores,
+                topology=topology,
+            )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Capture main trace for perf measurement
     logger.info("Capturing main trace")
     print("Capturing trace for perf measurement...")
-    num_perf_iters = 30
+    num_perf_iters = 50
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_perf_iters):
         # Optional barrier: force all devices to sync BEFORE reduce_to_all
@@ -373,6 +380,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,
         )
+        if use_barrier:
+            _ = ttnn.experimental.all_gather_async(
+                barrier_tensor,
+                dim=0,
+                multi_device_global_semaphore=barrier_semaphores,
+                topology=topology,
+            )
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
