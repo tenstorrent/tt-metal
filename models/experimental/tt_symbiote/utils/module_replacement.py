@@ -82,19 +82,21 @@ def register_module_replacement_dict_with_module_names(
                             v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
             if isinstance(value, (list, tuple)):
-                for idx, v in enumerate(value):
+                ls_value = list(value)
+                for idx, v in enumerate(ls_value):
                     if isinstance(v, nn.Module) and v.__class__ in old_class_to_new_class_dict:
                         new_module = initialize_module(
                             v, old_class_to_new_class_dict, module_names, model_config, exclude_replacement
                         )
                         if new_module is not None:
-                            value[idx] = new_module
+                            ls_value[idx] = new_module
                             if isinstance(new_module, TTNNModule):
                                 result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
                             v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
+                setattr(model, attr_name, type(value)(ls_value))
     elif isinstance(model, TTNNModule):
         for attr_name in dir(model):
             if attr_name.startswith("_"):
@@ -118,19 +120,21 @@ def register_module_replacement_dict_with_module_names(
                             v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
             if isinstance(value, (list, tuple)):
-                for idx, v in enumerate(value):
+                ls_value = list(value)
+                for idx, v in enumerate(ls_value):
                     if isinstance(v, nn.Module) and v.__class__ in old_class_to_new_class_dict:
                         new_module = initialize_module(
                             v, old_class_to_new_class_dict, module_names, model_config, exclude_replacement
                         )
                         if new_module is not None:
-                            value[idx] = new_module
+                            ls_value[idx] = new_module
                             if isinstance(new_module, TTNNModule):
                                 result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
                             v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
+                setattr(model, attr_name, type(value)(ls_value))
 
 
 def register_module_replacement_dict(
