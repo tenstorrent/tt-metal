@@ -154,7 +154,8 @@ public:
 
     // Variant that allows specifying a different inline data size than pages * page_size
     // Always accounts for inline data (no template parameter needed)
-    void add_dispatch_write_paged_with_custom_inline_size(uint32_t /*page_size*/, uint32_t /*pages*/, uint32_t inline_data_sizeB) {
+    void add_dispatch_write_paged_with_custom_inline_size(
+        uint32_t /*page_size*/, uint32_t /*pages*/, uint32_t inline_data_sizeB) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         this->add_data(inline_data_sizeB);
