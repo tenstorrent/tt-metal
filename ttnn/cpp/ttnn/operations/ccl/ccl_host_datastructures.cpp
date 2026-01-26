@@ -4,7 +4,6 @@
 
 #include <string>
 
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 using namespace tt::tt_metal;
@@ -81,9 +80,9 @@ bool CCLOpConfig::is_input_sharded() const { return this->input_sharded; }
 
 bool CCLOpConfig::is_output_sharded() const { return this->output_sharded; }
 
-Tensor const& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
+const Tensor& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
 
-Tensor const& CCLOpConfig::get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
+const Tensor& CCLOpConfig::get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
 
 std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
     std::map<std::string, std::string> worker_defines;

@@ -7,9 +7,9 @@
 #include "core/compute_kernel_config.hpp"
 #include "device/rmsnorm_bw_device_operation.hpp"
 
-namespace ttml::metal::ops::rmsnorm_bw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> RMSNormBackwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
@@ -34,4 +34,4 @@ std::vector<std::optional<ttnn::Tensor>> RMSNormBackwardOperation::invoke(
     };
 }
 
-}  // namespace ttml::metal::ops::rmsnorm_bw
+}  // namespace ttml::metal
