@@ -679,7 +679,70 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             }
             constraints.add_required_constraint(fabric_node, valid_asic_ids);
         }
+    }
 
+    // Validate constraints and provide detailed error if validation fails
+    try {
+        // This will call validate_and_throw() internally if there are issues
+        // We catch it here to add context before rethrowing
+        const auto& all_valid_mappings = constraints.get_valid_mappings();
+
+        // Check for overconstrained nodes before validation
+        std::vector<FabricNodeId> overconstrained_nodes;
+        for (const auto& [fabric_node, valid_set] : all_valid_mappings) {
+            if (valid_set.empty()) {
+                overconstrained_nodes.push_back(fabric_node);
+            }
+        }
+
+        if (!overconstrained_nodes.empty()) {
+            // Log detailed constraint information before throwing
+            log_error(tt::LogFabric, "Constraint validation will fail for mesh_id={}", mesh_id.get());
+            log_error(tt::LogFabric, "Overconstrained fabric nodes: {}", overconstrained_nodes.size());
+
+            // Show host rank constraints
+            log_error(tt::LogFabric, "Host rank constraints applied:");
+            for (const auto& [fabric_node, host_rank] : fabric_node_id_to_mesh_rank) {
+                if (fabric_node.mesh_id == mesh_id) {
+                    auto it = all_valid_mappings.find(fabric_node);
+                    size_t valid_count = (it != all_valid_mappings.end()) ? it->second.size() : SIZE_MAX;
+                    log_error(
+                        tt::LogFabric,
+                        "  FabricNode {} -> host_rank {}, valid ASIC mappings: {}",
+                        fabric_node,
+                        host_rank.get(),
+                        valid_count == SIZE_MAX ? "unconstrained" : std::to_string(valid_count));
+                }
+            }
+
+            // Show pinning constraints if any
+            if (!mesh_pinnings.empty()) {
+                log_error(tt::LogFabric, "Pinning constraints applied:");
+                for (const auto& [fabric_node, positions] : mesh_pinnings) {
+                    auto it = all_valid_mappings.find(fabric_node);
+                    size_t valid_count = (it != all_valid_mappings.end()) ? it->second.size() : SIZE_MAX;
+                    std::string pos_str;
+                    for (size_t i = 0; i < positions.size(); ++i) {
+                        if (i > 0) {
+                            pos_str += ", ";
+                        }
+                        pos_str += fmt::format("(tray={}, loc={})", *positions[i].first, *positions[i].second);
+                    }
+                    log_error(
+                        tt::LogFabric,
+                        "  FabricNode {} -> positions [{}], valid ASIC mappings: {}",
+                        fabric_node,
+                        pos_str,
+                        valid_count == SIZE_MAX ? "unconstrained" : std::to_string(valid_count));
+                }
+            }
+        }
+    } catch (...) {
+        // Re-throw after logging - the validate_and_throw() will provide detailed error
+        throw;
+    }
+
+    if (!mesh_pinnings.empty()) {
         // Log pinnings
         std::vector<std::string> pinning_strs;
         for (const auto& [fabric_node, positions] : mesh_pinnings) {
