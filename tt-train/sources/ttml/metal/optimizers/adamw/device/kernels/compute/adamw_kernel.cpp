@@ -17,8 +17,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-namespace NAMESPACE {
-
 constexpr auto cb_param_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
@@ -41,7 +39,7 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 //   m_t = β₁ * m_{t-1} + (1 - β₁) * g          (momentum)
 //   v_t = β₂ * v_{t-1} + (1 - β₂) * g²         (variance)
 //   θ_t = θ_{t-1} - step_size * m_t / (√v̂_t + ε)
-void MAIN {
+void kernel_main() {
     // multiple kernels use this, can be moved to compute_utils.hpp
     constexpr uint32_t fp32_one = 0x3F800000U;  // hexadecimal encoding of 1.0f in uint32_t
 
@@ -195,4 +193,3 @@ void MAIN {
         cb_pop_front(cb_param_idx, block_size);
     }
 }
-}  // namespace NAMESPACE
