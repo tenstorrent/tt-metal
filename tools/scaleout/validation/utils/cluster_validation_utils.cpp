@@ -114,10 +114,11 @@ void execute_parallel_batches(
     auto process_future = [&](std::future<Result>& future, size_t index) {
         if constexpr (std::is_same_v<Result, void>) {
             future.get();
-        } else if (results) {
-            (*results)[index] = future.get();
         } else {
-            future.get();
+            auto value = future.get();
+            if (results) {
+                (*results)[index] = std::move(value);
+            }
         }
     };
 
@@ -131,9 +132,10 @@ void execute_parallel_batches(
             });
 
         std::exception_ptr first_exception;
-        for (size_t i = 0; i < futures.size(); ++i) {
+        size_t index = batch_start;
+        for (auto& future : futures) {
             try {
-                process_future(futures[i], batch_start + i);
+                process_future(future, index++);
             } catch (...) {
                 if (!first_exception) {
                     first_exception = std::current_exception();
@@ -237,7 +239,11 @@ void configure_local_kernels(
                     chips_with_writes.insert(neighbor_chip_id);
 
                     // Store kernel info for later
-                    kernel_infos.push_back({curr_chip_id, curr_coord, neighbor_chip_id, neighbor_coord});
+                    kernel_infos.push_back(KernelInfo{
+                        .chip_id = curr_chip_id,
+                        .coord = curr_coord,
+                        .neighbor_chip_id = neighbor_chip_id,
+                        .neighbor_coord = neighbor_coord});
 
                     kernel_coords[curr_chip_id].push_back(curr_coord);
                     kernel_coords[neighbor_chip_id].push_back(neighbor_coord);
@@ -373,7 +379,7 @@ void configure_cross_host_kernels(
             chips_with_writes.insert(my_chip);
 
             // Store kernel info for later
-            kernel_infos.push_back({my_chip, my_coord, sender});
+            kernel_infos.push_back(KernelInfo{.chip_id = my_chip, .coord = my_coord, .is_sender = sender});
         }
     }
 
@@ -1210,185 +1216,39 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
-
-    auto send_traffic_start_time = std::chrono::steady_clock::now();
-    float generate_inputs_duration = 0.0f;
-    float configure_local_kernels_duration = 0.0f;
-    float configure_cross_host_kernels_duration = 0.0f;
-    float execute_workloads_duration = 0.0f;
-    float all_reduce_duration = 0.0f;
-    float dump_link_stats_duration = 0.0f;
-
     for (int i = 0; i < num_iterations; i++) {
-        auto iteration_start_time = std::chrono::steady_clock::now();
-        float iter_generate_inputs_duration = 0.0f;
-        float iter_configure_local_kernels_duration = 0.0f;
-        float iter_configure_cross_host_kernels_duration = 0.0f;
-        float iter_execute_workloads_duration = 0.0f;
-        float iter_all_reduce_duration = 0.0f;
-        float iter_dump_link_stats_duration = 0.0f;
-
         for (const auto& traffic_config : traffic_configs) {
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
             std::size_t d_size = traffic_config.data_size;
 
             std::unordered_map<ChipId, tt::tt_metal::Program> programs;
-            auto generate_inputs_start_time = std::chrono::steady_clock::now();
             auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, d_size / sizeof(uint32_t));
-            auto generate_inputs_end_time = std::chrono::steady_clock::now();
-            float iter_generate_inputs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             generate_inputs_end_time - generate_inputs_start_time)
-                                             .count() /
-                                         1000.0f;
-            iter_generate_inputs_duration += iter_generate_inputs;
-            generate_inputs_duration += iter_generate_inputs;
-
-            auto configure_local_kernels_start_time = std::chrono::steady_clock::now();
             configure_local_kernels(ctx, inputs, programs, pkt_size_bytes, pkt_size_words, d_size, fwd);
-            auto configure_local_kernels_end_time = std::chrono::steady_clock::now();
-            float iter_configure_local_kernels =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    configure_local_kernels_end_time - configure_local_kernels_start_time)
-                    .count() /
-                1000.0f;
-            iter_configure_local_kernels_duration += iter_configure_local_kernels;
-            configure_local_kernels_duration += iter_configure_local_kernels;
 
-            auto configure_cross_host_kernels_start_time = std::chrono::steady_clock::now();
             configure_cross_host_kernels(ctx, inputs, programs, pkt_size_bytes, pkt_size_words, d_size, fwd);
-            auto configure_cross_host_kernels_end_time = std::chrono::steady_clock::now();
-            float iter_configure_cross_host_kernels =
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    configure_cross_host_kernels_end_time - configure_cross_host_kernels_start_time)
-                    .count() /
-                1000.0f;
-            iter_configure_cross_host_kernels_duration += iter_configure_cross_host_kernels;
-            configure_cross_host_kernels_duration += iter_configure_cross_host_kernels;
 
-            auto execute_workloads_start_time = std::chrono::steady_clock::now();
             WorkloadResult local_result = execute_workloads(programs, devices);
-            auto execute_workloads_end_time = std::chrono::steady_clock::now();
-            float iter_execute_workloads = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               execute_workloads_end_time - execute_workloads_start_time)
-                                               .count() /
-                                           1000.0f;
-            iter_execute_workloads_duration += iter_execute_workloads;
-            execute_workloads_duration += iter_execute_workloads;
             bool did_hang_locally = (local_result == WorkloadResult::TimedOut);
 
             // Check if any rank experienced a hang/timeout
-            auto all_reduce_start_time = std::chrono::steady_clock::now();
             bool any_rank_hung = false;
             distributed_context.all_reduce(
                 tt::stl::Span<bool>(&did_hang_locally, 1),
                 tt::stl::Span<bool>(&any_rank_hung, 1),
                 tt::tt_metal::distributed::multihost::ReduceOp::LOR);
-            auto all_reduce_end_time = std::chrono::steady_clock::now();
-            float iter_all_reduce =
-                std::chrono::duration_cast<std::chrono::milliseconds>(all_reduce_end_time - all_reduce_start_time)
-                    .count() /
-                1000.0f;
-            iter_all_reduce_duration += iter_all_reduce;
-            all_reduce_duration += iter_all_reduce;
 
             if (any_rank_hung) {
                 handle_workload_timeout(
                     ctx, statuses_per_link, inputs, d_size, pkt_size_bytes, log_ethernet_metrics, validation_config);
             }
 
-            auto dump_link_stats_start_time = std::chrono::steady_clock::now();
             dump_link_stats(ctx, inputs, statuses_per_link, d_size, pkt_size_bytes);
-            auto dump_link_stats_end_time = std::chrono::steady_clock::now();
-            float iter_dump_link_stats = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             dump_link_stats_end_time - dump_link_stats_start_time)
-                                             .count() /
-                                         1000.0f;
-            iter_dump_link_stats_duration += iter_dump_link_stats;
-            dump_link_stats_duration += iter_dump_link_stats;
             fwd = !fwd;  // Toggle direction to test bidirectional traffic across links
         }
-
-        auto iteration_end_time = std::chrono::steady_clock::now();
-        auto iteration_duration =
-            std::chrono::duration_cast<std::chrono::milliseconds>(iteration_end_time - iteration_start_time).count() /
-            1000.0f;
-        log_output_rank0(
-            "[PERF] Iteration " + std::to_string(i + 1) + " duration: " + std::to_string(iteration_duration) +
-            " seconds");
-        if (iter_generate_inputs_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - Generate inputs duration: " + std::to_string(iter_generate_inputs_duration) + " seconds");
-        }
-        if (iter_configure_local_kernels_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - Configure local kernels duration: " +
-                std::to_string(iter_configure_local_kernels_duration) + " seconds");
-        }
-        if (iter_configure_cross_host_kernels_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - Configure cross host kernels duration: " +
-                std::to_string(iter_configure_cross_host_kernels_duration) + " seconds");
-        }
-        if (iter_execute_workloads_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - Execute workloads duration: " + std::to_string(iter_execute_workloads_duration) +
-                " seconds");
-        }
-        if (iter_all_reduce_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - All reduce duration: " + std::to_string(iter_all_reduce_duration) + " seconds");
-        }
-        if (iter_dump_link_stats_duration > 0.0f) {
-            log_output_rank0(
-                "[PERF]   - Dump link stats duration: " + std::to_string(iter_dump_link_stats_duration) + " seconds");
-        }
     }
 
-    auto send_traffic_end_time = std::chrono::steady_clock::now();
-    auto send_traffic_duration =
-        std::chrono::duration_cast<std::chrono::seconds>(send_traffic_end_time - send_traffic_start_time).count();
-
-    auto process_link_statuses_start_time = std::chrono::steady_clock::now();
-    auto result = process_link_statuses(statuses_per_link, log_ethernet_metrics);
-    auto process_link_statuses_end_time = std::chrono::steady_clock::now();
-    auto process_link_statuses_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                              process_link_statuses_end_time - process_link_statuses_start_time)
-                                              .count() /
-                                          1000.0f;
-
-    log_output_rank0("[PERF] Send traffic total duration: " + std::to_string(send_traffic_duration) + " seconds");
-    if (generate_inputs_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF]   - Generate inputs duration: " + std::to_string(generate_inputs_duration) + " seconds");
-    }
-    if (configure_local_kernels_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF]   - Configure local kernels duration: " + std::to_string(configure_local_kernels_duration) +
-            " seconds");
-    }
-    if (configure_cross_host_kernels_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF]   - Configure cross host kernels duration: " +
-            std::to_string(configure_cross_host_kernels_duration) + " seconds");
-    }
-    if (execute_workloads_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF]   - Execute workloads duration: " + std::to_string(execute_workloads_duration) + " seconds");
-    }
-    if (all_reduce_duration > 0.0f) {
-        log_output_rank0("[PERF]   - All reduce duration: " + std::to_string(all_reduce_duration) + " seconds");
-    }
-    if (dump_link_stats_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF]   - Dump link stats duration: " + std::to_string(dump_link_stats_duration) + " seconds");
-    }
-    if (process_link_statuses_duration > 0.0f) {
-        log_output_rank0(
-            "[PERF] Process link statuses duration: " + std::to_string(process_link_statuses_duration) + " seconds");
-    }
-
-    return result;
+    return process_link_statuses(statuses_per_link, log_ethernet_metrics);
 }
 
 void point_to_point_barrier(const ResetPair& reset_pair) {
