@@ -128,7 +128,7 @@ void kernel_main() {
         }
         // Sum(|x|^p) - reduce single pre-accumulated tile
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_xpowadd, cb_one, cb_xpowsum, compute_kernel_lib::TileShape::single());
+            cb_xpowadd, cb_one, cb_xpowsum, compute_kernel_lib::InputBlockShape::single());
 
         power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
     }

@@ -305,12 +305,12 @@ void kernel_main() {
         // Compute cb_dysum
         // Sum[dy]
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_dyadd, cb_scaler, cb_dysum, compute_kernel_lib::TileShape::single());
+            cb_dyadd, cb_scaler, cb_dysum, compute_kernel_lib::InputBlockShape::single());
 
         // Compute cb_ydysum
         // Sum[y * dy]
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_ydyadd, cb_scaler, cb_ydysum, compute_kernel_lib::TileShape::single());
+            cb_ydyadd, cb_scaler, cb_ydysum, compute_kernel_lib::InputBlockShape::single());
 
         // Compute cb_recip_nrstd
         // rstd / n -> cb_tmp3
