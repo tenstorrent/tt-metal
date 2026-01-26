@@ -152,6 +152,10 @@ void JitBuildEnv::init(
         common_flags += "-g ";
     }
 
+    // Add path normalization for reproducible builds and ccache effectiveness
+    common_flags += fmt::format("-ffile-prefix-map={}=. ", this->root_);
+    common_flags += fmt::format("-fdebug-prefix-map={}=. ", this->root_);
+
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
