@@ -14,9 +14,9 @@ wheel.packages = ["sources/ttml/ttml"]
 build-dir = "../build"
 cmake.build-type = "Release"
 cmake.source-dir = ".."
-cmake.define.CMAKE_TOOLCHAIN_FILE = {env="CMAKE_TOOLCHAIN_FILE", default="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"}
-cmake.define.CMAKE_C_COMPILER_ID = {env="CMAKE_C_COMPILER", default="clang-20"}
-cmake.define.CMAKE_CXX_COMPILER_ID = {env="CMAKE_CXX_COMPILER", default="clang++-20"}
+cmake.define.CMAKE_TOOLCHAIN_FILE = {env="CMAKE_TOOLCHAIN_FILE", default="cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"}
+cmake.define.CMAKE_C_COMPILER = {env="CMAKE_C_COMPILER", default="clang-20"}
+cmake.define.CMAKE_CXX_COMPILER = {env="CMAKE_CXX_COMPILER", default="clang++-20"}
 cmake.define.CMAKE_CXX_COMPILER_LAUNCHER = {env="CMAKE_CXX_COMPILER_LAUNCHER", default="ccache"}
 cmake.targets = ["_ttml"]
 
