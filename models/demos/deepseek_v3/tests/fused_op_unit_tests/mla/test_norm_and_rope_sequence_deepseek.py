@@ -153,15 +153,18 @@ def run_norm_and_rope_sequence_with_trace(
 
     # Permute
     tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
+    # Shape after permute: [1, 32, 32, 576]
 
-    # Note: mesh_partition is multi-device only, skip for single device test
-    # For single device, shape after permute is [1, 32, 32, 576] (no mesh_partition)
-    # The model uses kvpe_num_cores = kvpe_shape[1] = USERS_PER_ROW / mesh_devices
-    # For single device: 32 / 1 = 32 cores (matching batch size)
+    # Simulate mesh_partition for single device test by slicing to multi-device shape
+    # In multi-device (8 chips), mesh_partition splits dim=1: [1, 32, 32, 576] → [1, 4, 32, 576] per device
+    # For single device, we slice to get the equivalent shape to match standalone test performance
+    tt_kvpe = tt_kvpe[:, :4, :, :]
+    # Shape after slice: [1, 4, 32, 576] (matching multi-device shape per device)
 
-    # Final reshard to height sharded - 32 cores (4x8 grid) matching the batch dimension
+    # Final reshard to height sharded - 4 cores (1x4 grid) matching multi-device config
+    # This matches test_to_memory_config_deepseek.py kvpe_reshard configuration
     kvpe_core_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}  # 4x8 grid = 32 cores
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}  # 1x4 grid = 4 cores
     )
     kvpe_shard_shape = [32, 576]
     kvpe_sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -210,6 +213,9 @@ def run_norm_and_rope_sequence_with_trace(
         # Permute
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
 
+        # Simulate mesh_partition by slicing to multi-device shape
+        tt_kvpe = tt_kvpe[:, :4, :, :]
+
         # Final reshard
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, kvpe_sharded_mem_config)
 
@@ -254,6 +260,9 @@ def run_norm_and_rope_sequence_with_trace(
 
         # Permute
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
+
+        # Simulate mesh_partition by slicing to multi-device shape
+        tt_kvpe = tt_kvpe[:, :4, :, :]
 
         # Final reshard
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, kvpe_sharded_mem_config)
@@ -303,7 +312,7 @@ def run_norm_and_rope_sequence_with_trace(
             [1, 1, 32, 512],  # KV nope input: [1, 1, bsz, kv_lora_rank]
             [1, 1, 32, 64],  # KV rope input: [1, 1, bsz, qk_rope_head_dim]
             [1, 1, 32, 1536],  # Q output (after norm): [1, 1, bsz, q_lora_rank]
-            [1, 32, 32, 576],  # KVPE output: [1, bsz_padded, bsz_padded, kv_lora_rank + qk_rope_head_dim]
+            [1, 4, 32, 576],  # KVPE output: [1, bsz_per_device, bsz_padded, kv_lora_rank + qk_rope_head_dim]
         ),
     ],
     ids=["norm_and_rope_sequence"],
@@ -314,7 +323,7 @@ def run_norm_and_rope_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 4202496,
+            "trace_region_size": 4505600,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
