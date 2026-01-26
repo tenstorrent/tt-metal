@@ -215,7 +215,7 @@ class LogProbsCalculator:
         chip_ids_tensor = ttnn.div(
             global_idx_tilized_tensor,
             size_per_device,
-            round_mode="floor",
+            rounding_mode="floor",
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             **self.common_args,
         )
