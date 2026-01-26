@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-
+#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
@@ -16,7 +16,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_sum_int_col() {
     for (size_t i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
@@ -35,7 +35,7 @@ inline void calculate_sum_int_col() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_sum_int_row() {
     for (size_t i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
@@ -50,10 +50,10 @@ inline void calculate_sum_int_row() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void sum_int_init() {}
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

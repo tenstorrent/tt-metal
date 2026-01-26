@@ -7,13 +7,15 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_defs.h"
 #include "ckernel_sfpu_topk.h"
 
 namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, APPROXIMATE>(sfpu::topk_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, APPROXIMATE>(
+        sfpu::topk_init<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise)>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
@@ -26,7 +28,10 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
     int i_start_step,
     int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
+        ckernel::sfpu::calculate_bitonic_topk_phases_steps<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            is_fp32_dest_acc_en,
+            STABLE_SORT>,
         dst_index,
         vector_mode,
         idir,
@@ -40,7 +45,11 @@ template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool idir = false, bool ST
 inline void llk_math_eltwise_unary_sfpu_topk_merge(
     uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, is_fp32_dest_acc_en, idir, STABLE_SORT>,
+        ckernel::sfpu::calculate_bitonic_topk_merge<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            is_fp32_dest_acc_en,
+            idir,
+            STABLE_SORT>,
         dst_index,
         vector_mode,
         m_iter,
@@ -57,7 +66,10 @@ inline void llk_math_eltwise_unary_sfpu_topk_rebuild(
     int skip_second,
     int vector_mode = (int)VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>,
+        ckernel::sfpu::calculate_bitonic_topk_rebuild<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            is_fp32_dest_acc_en,
+            STABLE_SORT>,
         dst_index,
         vector_mode,
         idir,

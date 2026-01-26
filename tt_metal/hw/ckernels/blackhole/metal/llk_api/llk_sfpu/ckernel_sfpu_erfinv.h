@@ -7,13 +7,14 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "llk_defs.h"
 
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out;
@@ -32,7 +33,7 @@ sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
@@ -58,16 +59,16 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
     sfpi::vFloat calculated_value = (temp * temp) - (log_value * OneDivA);
-    sfpi::vFloat intermediate_result = calculate_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat intermediate_result = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
     calculated_value = temp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = calculate_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat result = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
 
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_erfinv() {
     // SFPU microcode
     constexpr int ITERATIONS = 8;
@@ -83,7 +84,7 @@ inline void calculate_erfinv() {
         v_elseif(abs_v > 1.0f) {  // Nan not supported
             result = std::numeric_limits<float>::quiet_NaN();
         }
-        v_else { result = calculate_erfinv_body<true>(abs_v); }
+        v_else { result = calculate_erfinv_body<ApproximationMode::Fast>(abs_v); }
         v_endif;
 
         result = sfpi::setsgn(result, v);  // restore sign
@@ -93,9 +94,9 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void erfinv_init() {
-    log_init<false, false, false>();
+    log_init<ApproximationMode::Precise, false, false>();
 }
 
 }  // namespace sfpu

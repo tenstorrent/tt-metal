@@ -6,6 +6,7 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -60,20 +61,20 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void gelu_init() {
-    _init_gelu_<APPROXIMATION_MODE>();
+    _init_gelu_<APPROX_MODE>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void gelu_derivative_init() {
-    _init_gelu_derivative_<APPROXIMATION_MODE>();
+    _init_gelu_derivative_<APPROX_MODE>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
+        _calculate_gelu_<APPROX_MODE, ITERATIONS>();
     } else {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -87,9 +88,9 @@ inline void calculate_gelu() {
     }
     }
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+    _calculate_gelu_derivative_<APPROX_MODE, ITERATIONS>();
 }
 
 }  // namespace sfpu
