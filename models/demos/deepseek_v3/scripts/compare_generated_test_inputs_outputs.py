@@ -28,7 +28,7 @@ def compare_tensors(ref_tensor, tensor, layer_name, pcc, rtol, atol):
     return bool(is_passed_pcc), is_passed_close.item()
 
 
-def compare_inputs_outputs(ref_sample, sample, pcc, rtol, atol):
+def compare_inputs_outputs(ref_sample, sample, pcc, rtol, atol, prefix=""):
     """Takes output of def extract_layer_inputs_outputs as an input.
     Returns {
         "args": [is_passed],
@@ -42,6 +42,9 @@ def compare_inputs_outputs(ref_sample, sample, pcc, rtol, atol):
     assert len(ref_args) == len(args), f"Different args length: {len(ref_args)} and {len(args)}"
     assert set(ref_kwargs.keys()) == set(kwargs.keys()), f"Different kwargs: {ref_kwargs.keys()} and {kwargs.keys()}"
     assert type(ref_output) == type(output)
+
+    ref_layer_name = prefix + ref_layer_name
+    layer_name = prefix + layer_name
 
     compare_results = {
         "args": [],
@@ -116,25 +119,30 @@ def compare_files(reference_directory, directory, pcc, rtol, atol):
     non_passed_fn = []
     for fn in reference_files:
         logger.info(f"Comparing {fn} ...")
-        ref_pt = torch.load(os.path.join(reference_directory, fn), weights_only=False)
-        pt = torch.load(os.path.join(directory, fn), weights_only=False)
+        try:
+            ref_pt = torch.load(os.path.join(reference_directory, fn), weights_only=False)
+            pt = torch.load(os.path.join(directory, fn), weights_only=False)
 
-        passed = True
-        for ref_sample, sample in zip(extract_layer_inputs_outputs(ref_pt), extract_layer_inputs_outputs(pt)):
-            comparison_results = compare_inputs_outputs(ref_sample, sample, pcc, rtol, atol)
+            passed = True
+            for ref_sample, sample in zip(extract_layer_inputs_outputs(ref_pt), extract_layer_inputs_outputs(pt)):
+                comparison_results = compare_inputs_outputs(ref_sample, sample, pcc, rtol, atol, prefix=f"{fn}__")
 
-            sample_passed = True
-            for res in comparison_results.values():
-                if isinstance(res, dict):
-                    res = res.values()
-                sample_passed &= all(res)
-            passed &= sample_passed
+                sample_passed = True
+                for res in comparison_results.values():
+                    if isinstance(res, dict):
+                        res = res.values()
+                    sample_passed &= all(res)
+                passed &= sample_passed
 
-            logger.debug(f"Results for {ref_sample[0]}. Passed: {sample_passed}")
-            if not sample_passed:
-                logger.warning(f"{ref_sample[0]} failed")
-                logger.warning(json.dumps(comparison_results, indent=4))
-            logger.debug("-" * 40)
+                logger.debug(f"Results for {fn}__{ref_sample[0]}. Passed: {sample_passed}")
+                if not sample_passed:
+                    logger.error(f"{fn}__{ref_sample[0]} failed")
+                    logger.error(json.dumps(comparison_results, indent=4))
+                logger.debug("-" * 40)
+
+        except Exception as e:
+            logger.error(f"{fn} failed with {e}")
+            passed = False
 
         if not passed:
             non_passed_fn.append(fn)
