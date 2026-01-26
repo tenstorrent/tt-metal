@@ -50,6 +50,12 @@ Given one or more GitHub Actions job logs from failed runs, you must:
    - Feasibility (how easy to implement)
    - Risk (chance of introducing new bugs)
 
+7. **Identify Who Should Fix This**: Determine who is best suited to implement the fix by:
+   - Checking `.github/CODEOWNERS` for ownership of the affected files
+   - Using `git log <file>` to see who recently modified the relevant files
+   - Using `git blame <file>` to see who wrote the specific lines that need changing
+   - Looking for patterns in recent commits to identify active maintainers
+
 ## Analysis Guidelines
 
 ### What to Look For
@@ -159,6 +165,26 @@ For EACH fix, provide:
 - **Root cause**: [one sentence]
 - **Primary fix**: [which file, what change]
 - **Expected impact**: [estimated reduction in failure rate]
+
+## Recommended Contacts
+
+List the people best suited to review and implement this fix, based on code ownership and recent activity.
+
+### Code Owners (from .github/CODEOWNERS)
+| File | Owner(s) |
+|------|----------|
+| [file path] | @owner1, @owner2 |
+
+### Recent Contributors (from git history)
+| Person | Reason |
+|--------|--------|
+| @username | [e.g., "Last modified tt_metal/impl/device/device.cpp 2 weeks ago"] |
+| @username | [e.g., "Wrote the timeout handling code (git blame)"] |
+| @username | [e.g., "Most commits to this directory in last 3 months"] |
+
+### Suggested Reviewer
+**Primary**: @username - [reason why they're the best person]
+**Backup**: @username - [reason]
 ```
 
 ## Important Considerations
@@ -202,9 +228,17 @@ When analyzing multiple jobs that failed for the same reason:
 3. **Show before/after** - for each fix, show the current code and the proposed replacement
 4. **Be specific** - file paths, function names, line numbers, exact error messages
 5. **Self-contained** - someone with NO experience with these files should understand the problem and solution after reading your analysis
+6. **Include contacts** - use CODEOWNERS and git history to identify who should fix this
 
 Your entire response should be the analysis document in markdown format. Do NOT summarize or describe what you found - just output the document itself.
 
 ---
 
-Now analyze the provided job logs. Read the relevant source files from the codebase to understand the failure, then output your analysis document.
+Now analyze the provided job logs. Use these tools to gather information:
+- Read the relevant source files from the codebase to understand the failure
+- Check `.github/CODEOWNERS` to find file owners
+- Run `git log --oneline -10 <file>` to see recent changes to affected files
+- Run `git blame -L <start>,<end> <file>` to see who wrote specific lines
+- Run `git shortlog -sn --since="3 months ago" -- <directory>` to find active contributors
+
+Then output your analysis document.
