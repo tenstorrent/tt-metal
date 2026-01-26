@@ -72,6 +72,7 @@ namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
     const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_token_counts_tensor,
     const uint32_t hidden_size,
     const uint32_t batch_size,
     const uint32_t seq_size,
@@ -84,7 +85,6 @@ ttnn::Tensor selective_reduce_combine(
     const uint32_t num_data_parallel_cores,
     const CoreRangeSet worker_core_range_set,
     const CoreRangeSet mux_core_range_set,
-    const std::vector<ttnn::GlobalSemaphore> active_token_count_semaphores,
     const ttnn::MemoryConfig& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::ccl::moe::SelectiveReduceCombineDeviceOperation;
@@ -102,11 +102,11 @@ ttnn::Tensor selective_reduce_combine(
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_core_range_set = worker_core_range_set,
             .mux_core_range_set = mux_core_range_set,
-            .active_token_count_semaphores = active_token_count_semaphores,
             .output_memory_config = output_memory_config},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
             .dense_metadata_tensor = dense_metadata_tensor,
+            .dense_token_counts_tensor = dense_token_counts_tensor,
             .optional_output_tensor = optional_output_tensor});
 }
 }  // namespace ttnn::prim
