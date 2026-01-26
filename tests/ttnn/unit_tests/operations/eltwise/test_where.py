@@ -7,6 +7,7 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
+from models.common.utility_functions import is_watcher_enabled
 from math import isnan
 
 
@@ -803,6 +804,15 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant, condition):
+    if (
+        is_watcher_enabled()
+        and condition == 1
+        and variant == "TTS"
+        and scalar == 15.5
+        and dtype == torch.bfloat16
+        and shape == torch.Size([1, 7, 32, 96])
+    ):
+        pytest.skip("Skipping the hang with watcher enabled")
     torch.manual_seed(0)
     tor_dtype = dtype
 
