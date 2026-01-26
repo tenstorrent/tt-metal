@@ -104,16 +104,13 @@ jobs:
             toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
           - platform: "Ubuntu 22.04"
-            image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - platform: "Ubuntu 24.04"
-            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
           - platform: "Ubuntu 24.04"
-            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
@@ -126,13 +123,13 @@ jobs:
       publish-package: false
       skip-tt-train: true
       tracy: false
-      # Pass pre-built docker image tags based on image-key
+      # Pass pre-built docker image tags based on platform
       ci-build-docker-image: ${{
-        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-ci-build-tag) ||
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
         inputs.ubuntu-2204-ci-build-tag }}
       dev-docker-image: ${{
-        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-dev-tag) ||
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
         inputs.ubuntu-2204-dev-tag }}
       manylinux-docker-image: ${{
-        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-manylinux-tag) ||
+        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
         inputs.ubuntu-2204-manylinux-tag }}
