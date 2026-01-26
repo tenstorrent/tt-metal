@@ -126,36 +126,6 @@ constexpr uint32_t W2_TILES_PER_CORE_B[NUM_CORES] = {
     18,
 };
 
-constexpr uint32_t W0_W1_BLOCKS_PER_EXPERT_A[NUM_CORES] = {
-    96,
-    96,
-    80,
-    80,
-    80,
-    80,
-    80,
-    80,
-    96,
-    96,
-    80,
-    80,
-};
-
-constexpr uint32_t W0_W1_BLOCKS_PER_EXPERT_B[NUM_CORES] = {
-    96,
-    80,
-    80,
-    96,
-    80,
-    80,
-    96,
-    80,
-    80,
-    96,
-    80,
-    80,
-};
-
 constexpr uint32_t IN2_TILES_PER_STEP_A = *std::max_element(
     W0_W1_TILES_PER_CORE_PER_STEP_A[0], W0_W1_TILES_PER_CORE_PER_STEP_A[0] + NUM_CORES, [](uint32_t a, uint32_t b) {
         return a < b;
