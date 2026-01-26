@@ -472,17 +472,26 @@ main() {
         stashed=true
     fi
 
-    # Track if we created a branch (for cleanup)
+    # Track if we created a branch (for cleanup) and if PR was successful
     local branch_created=false
+    local pr_success=false
 
-    # Function to restore original state on failure
-    cleanup_on_failure() {
-        log_warn "Cleaning up after failure..."
+    # Function to restore original state (called on exit unless PR succeeded)
+    cleanup() {
+        # Always cd to repo root for git operations
+        cd "$REPO_ROOT" 2>/dev/null || true
+
+        # If PR was successful, don't clean up
+        if [[ "$pr_success" == "true" ]]; then
+            return 0
+        fi
+
+        log_warn "Cleaning up..."
 
         # Delete the branch we created if it exists
         if [[ "$branch_created" == "true" ]] && [[ -n "$branch_name" ]]; then
             log_info "Deleting branch '$branch_name'..."
-            git checkout "$original_branch" 2>/dev/null || git checkout "$base_branch" 2>/dev/null || true
+            git checkout "$original_branch" 2>/dev/null || git checkout "$base_branch" 2>/dev/null || git checkout main 2>/dev/null || true
             git branch -D "$branch_name" 2>/dev/null || true
         elif [[ -n "$original_branch" ]] && [[ "$original_branch" != "HEAD" ]]; then
             git checkout "$original_branch" 2>/dev/null || true
@@ -494,6 +503,9 @@ main() {
         fi
     }
 
+    # Set up trap to always clean up on exit
+    trap cleanup EXIT
+
     # Fetch latest from origin to ensure we have up-to-date refs
     log_info "Fetching latest from origin..."
     git fetch origin --prune
@@ -503,19 +515,16 @@ main() {
         log_error "Base branch 'origin/$base_branch' not found."
         log_error "Available remote branches:"
         git branch -r | head -10
-        cleanup_on_failure
         exit 1
     fi
 
-    # Check if branch already exists locally
+    # Delete local branch if it already exists (from previous failed run)
     if git show-ref --verify --quiet "refs/heads/$branch_name"; then
-        log_error "Branch '$branch_name' already exists locally."
-        log_error "Please delete it first: git branch -D $branch_name"
-        cleanup_on_failure
-        exit 1
+        log_warn "Branch '$branch_name' already exists locally. Deleting it..."
+        git branch -D "$branch_name" 2>/dev/null || true
     fi
 
-    # Check if branch already exists on remote
+    # Check if branch already exists on remote - append timestamp to make unique
     if git show-ref --verify --quiet "refs/remotes/origin/$branch_name"; then
         log_warn "Branch '$branch_name' already exists on remote."
         log_warn "Will create a unique local branch name."
@@ -527,7 +536,6 @@ main() {
     log_info "Creating branch '$branch_name' from 'origin/$base_branch'..."
     if ! git checkout -b "$branch_name" "origin/$base_branch"; then
         log_error "Failed to create branch from origin/$base_branch"
-        cleanup_on_failure
         exit 1
     fi
     branch_created=true
@@ -546,7 +554,6 @@ main() {
     if ! run_claude_implementation "$impl_prompt" "$impl_log" "$claude_model"; then
         log_error "Claude implementation failed"
         rm -f "$impl_prompt" "$impl_log"
-        cleanup_on_failure
         exit 1
     fi
 
@@ -565,18 +572,16 @@ main() {
         log_info "  git add -A && git commit -m 'Fix ND failure'"
         log_info "  git push -u origin $branch_name"
         log_info "  gh pr create --base $base_branch"
-        if [[ "$stashed" == "true" ]]; then
-            log_info ""
-            log_info "Note: Your original changes are stashed. To restore:"
-            log_info "  git checkout $original_branch && git stash pop"
-        fi
         rm -f "$impl_log"
+        # Cleanup will run via trap - branch deleted, original branch restored, stash popped
         exit 0
     fi
 
     # Create the PR
     local pr_url
     if pr_url=$(create_pull_request "$analysis_file" "$branch_name" "$base_branch" "$impl_log"); then
+        # PR created successfully - don't clean up
+        pr_success=true
         log_info "Success! PR URL: $pr_url"
         if [[ "$stashed" == "true" ]]; then
             log_info ""
@@ -586,7 +591,6 @@ main() {
     else
         log_error "Failed to create PR"
         rm -f "$impl_log"
-        cleanup_on_failure
         exit 1
     fi
 
