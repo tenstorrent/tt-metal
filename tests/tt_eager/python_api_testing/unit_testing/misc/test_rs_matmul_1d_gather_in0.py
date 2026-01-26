@@ -443,7 +443,7 @@ def run_multi_core_matmul_1d(
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
+        mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
