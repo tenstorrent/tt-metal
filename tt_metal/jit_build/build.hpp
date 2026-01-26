@@ -13,14 +13,14 @@
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
-#include "jit_build/jit_build_utils.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
 namespace tt::jit_build::utils {
 
 class FileGroupRenamer;
-}
+
+}  // namespace tt::jit_build::utils
 
 namespace tt::tt_metal {
 
