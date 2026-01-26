@@ -144,12 +144,12 @@ std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> SocketManager::cre
     std::shared_ptr<DistributedContext> distributed_ctx, const IntraMeshParameters& params) {
     auto mesh_device = ttml::autograd::ctx().get_device_ptr();
 
-    auto socket_mem_config = _make_socket_mem_config();
+    const auto socket_mem_config = _make_socket_mem_config();
     tt::tt_metal::distributed::SocketConfig socket_config(params.connections, socket_mem_config);
     socket_config.distributed_context = distributed_ctx;
 
     // Use create_socket_pair for intra-mesh communication
-    auto [send_socket, recv_socket] =
+    const auto [send_socket, recv_socket] =
         tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config);
 
     // Directly construct BidirectionalFabricSocket with the socket pair

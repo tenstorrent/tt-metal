@@ -15,7 +15,8 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor all_gather(
+    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -39,7 +40,7 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
-tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -87,7 +88,8 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optiona
     }
 }
 
-tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
+tt::tt_metal::Tensor reduce_scatter(
+    const tt::tt_metal::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
@@ -106,7 +108,9 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim,
 }
 
 tt::tt_metal::Tensor ring_shift(
-    const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis, RingShiftDirection direction) {
+    const tt::tt_metal::Tensor& tensor,
+    const std::optional<uint32_t> cluster_axis,
+    const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
@@ -121,7 +125,7 @@ tt::tt_metal::Tensor ring_shift(
         "cluster_axis must be either >= 0 and < {} for 2D mesh or nullopt for 1D mesh and linear topology",
         mesh_shape.dims());
 
-    const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 1;
+    const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 0;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
     TT_FATAL(ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", ring_size);
 
@@ -142,7 +146,7 @@ tt::tt_metal::Tensor ring_shift(
     odd_to_even_connections.reserve(num_devices / 2);
 
     const bool forward = (direction == RingShiftDirection::Forward);
-    for (auto sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+    for (const auto& sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         const uint32_t idx = sender_coord[cluster_axis_value];
         const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
 
@@ -156,15 +160,15 @@ tt::tt_metal::Tensor ring_shift(
     }
 
     // For intra-mesh, we use same distributed context and rank (same host)
-    core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
+    const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
     // Phase 1: Even positions send, odd positions receive
-    core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
+    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
 
     // Phase 2: Odd positions send, even positions receive
-    core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
+    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 
