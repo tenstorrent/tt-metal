@@ -363,12 +363,12 @@ If you haven't already done so, clone an appropriate release of the TT-Metalium 
 .. code-block:: bash
    git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 
-Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
+Make sure you are in the ``tt-metal`` directory and then follow the installation instructions at
+https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#source to build from source.
+Once the build is complete, run the example program:
 
 .. code-block:: bash
-   sudo ./install_dependencies.sh
-   export TT_METAL_HOME=$PWD
-   ./build_metal.sh
+
    ./build/ttnn/examples/example_lab_eltwise_binary
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
