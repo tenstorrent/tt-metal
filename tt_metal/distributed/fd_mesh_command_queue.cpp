@@ -134,14 +134,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    // If there was an exception in the reader thread, the device is likely in an unrecoverable
-    // state. Signal exit early and skip the blocking clear operation.
     bool skip_clear = thread_exception_state_.load();
-    if (skip_clear) {
-        std::lock_guard lock(reader_thread_cv_mutex_);
-        exit_condition_ = true;
-        reader_thread_cv_.notify_one();
-    }
 
     if (in_use_ && !skip_clear) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
