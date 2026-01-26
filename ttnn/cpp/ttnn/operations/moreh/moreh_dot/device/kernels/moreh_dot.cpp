@@ -26,13 +26,13 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
-            compute_kernel_lib::ReduceInputMode::STREAMING,
-            compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+            compute_kernel_lib::reduce_policies::StreamingPolicy,
+            compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
             tt::CBIndex::c_24,
             tt::CBIndex::c_2,
             is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
-            compute_kernel_lib::TileShape::single(),
-            {},
+            compute_kernel_lib::InputBlockShape::single(),
+            compute_kernel_lib::InputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
     }
 }
