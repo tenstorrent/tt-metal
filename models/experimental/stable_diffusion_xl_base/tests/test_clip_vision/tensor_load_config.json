@@ -1,0 +1,3908 @@
+{
+  "arg0": {
+    "tensor_idx": 0,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.norm_out.bias"
+  },
+  "arg1": {
+    "tensor_idx": 1,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.norm_out.weight"
+  },
+  "arg2": {
+    "tensor_idx": 2,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "resampler.proj_out.bias"
+  },
+  "arg3": {
+    "tensor_idx": 3,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.proj_out.weight"
+  },
+  "arg4": {
+    "tensor_idx": 4,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.latents"
+  },
+  "arg5": {
+    "tensor_idx": 5,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.attn.to_out.0.weight"
+  },
+  "arg6": {
+    "tensor_idx": 6,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.attn.to_v.weight"
+  },
+  "arg7": {
+    "tensor_idx": 7,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "resampler.layers.0.ln1.bias"
+  },
+  "arg8": {
+    "tensor_idx": 8,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "resampler.layers.0.ln1.weight"
+  },
+  "arg9": {
+    "tensor_idx": 9,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ln0.bias"
+  },
+  "arg10": {
+    "tensor_idx": 10,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ln0.weight"
+  },
+  "arg11": {
+    "tensor_idx": 11,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "resampler.proj_in.bias"
+  },
+  "arg12": {
+    "tensor_idx": 12,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.proj_in.weight"
+  },
+  "arg13": {
+    "tensor_idx": 13,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc2.bias"
+  },
+  "arg14": {
+    "tensor_idx": 14,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc2.weight"
+  },
+  "arg15": {
+    "tensor_idx": 15,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc1.bias"
+  },
+  "arg16": {
+    "tensor_idx": 16,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc1.weight"
+  },
+  "arg17": {
+    "tensor_idx": 17,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm2.bias"
+  },
+  "arg18": {
+    "tensor_idx": 18,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm2.weight"
+  },
+  "arg19": {
+    "tensor_idx": 19,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.bias"
+  },
+  "arg20": {
+    "tensor_idx": 20,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.weight"
+  },
+  "arg21": {
+    "tensor_idx": 21,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.bias"
+  },
+  "arg22": {
+    "tensor_idx": 22,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.weight"
+  },
+  "arg23": {
+    "tensor_idx": 23,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm1.bias"
+  },
+  "arg24": {
+    "tensor_idx": 24,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm1.weight"
+  },
+  "arg25": {
+    "tensor_idx": 25,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc2.bias"
+  },
+  "arg26": {
+    "tensor_idx": 26,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc2.weight"
+  },
+  "arg27": {
+    "tensor_idx": 27,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc1.bias"
+  },
+  "arg28": {
+    "tensor_idx": 28,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc1.weight"
+  },
+  "arg29": {
+    "tensor_idx": 29,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm2.bias"
+  },
+  "arg30": {
+    "tensor_idx": 30,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm2.weight"
+  },
+  "arg31": {
+    "tensor_idx": 31,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.bias"
+  },
+  "arg32": {
+    "tensor_idx": 32,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.weight"
+  },
+  "arg33": {
+    "tensor_idx": 33,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.bias"
+  },
+  "arg34": {
+    "tensor_idx": 34,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.weight"
+  },
+  "arg35": {
+    "tensor_idx": 35,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm1.bias"
+  },
+  "arg36": {
+    "tensor_idx": 36,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm1.weight"
+  },
+  "arg37": {
+    "tensor_idx": 37,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc2.bias"
+  },
+  "arg38": {
+    "tensor_idx": 38,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc2.weight"
+  },
+  "arg39": {
+    "tensor_idx": 39,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc1.bias"
+  },
+  "arg40": {
+    "tensor_idx": 40,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc1.weight"
+  },
+  "arg41": {
+    "tensor_idx": 41,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm2.bias"
+  },
+  "arg42": {
+    "tensor_idx": 42,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm2.weight"
+  },
+  "arg43": {
+    "tensor_idx": 43,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.bias"
+  },
+  "arg44": {
+    "tensor_idx": 44,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.weight"
+  },
+  "arg45": {
+    "tensor_idx": 45,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.bias"
+  },
+  "arg46": {
+    "tensor_idx": 46,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.weight"
+  },
+  "arg47": {
+    "tensor_idx": 47,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm1.bias"
+  },
+  "arg48": {
+    "tensor_idx": 48,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm1.weight"
+  },
+  "arg49": {
+    "tensor_idx": 49,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc2.bias"
+  },
+  "arg50": {
+    "tensor_idx": 50,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc2.weight"
+  },
+  "arg51": {
+    "tensor_idx": 51,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc1.bias"
+  },
+  "arg52": {
+    "tensor_idx": 52,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc1.weight"
+  },
+  "arg53": {
+    "tensor_idx": 53,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm2.bias"
+  },
+  "arg54": {
+    "tensor_idx": 54,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm2.weight"
+  },
+  "arg55": {
+    "tensor_idx": 55,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.bias"
+  },
+  "arg56": {
+    "tensor_idx": 56,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.weight"
+  },
+  "arg57": {
+    "tensor_idx": 57,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.bias"
+  },
+  "arg58": {
+    "tensor_idx": 58,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.weight"
+  },
+  "arg59": {
+    "tensor_idx": 59,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm1.bias"
+  },
+  "arg60": {
+    "tensor_idx": 60,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm1.weight"
+  },
+  "arg61": {
+    "tensor_idx": 61,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc2.bias"
+  },
+  "arg62": {
+    "tensor_idx": 62,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc2.weight"
+  },
+  "arg63": {
+    "tensor_idx": 63,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc1.bias"
+  },
+  "arg64": {
+    "tensor_idx": 64,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc1.weight"
+  },
+  "arg65": {
+    "tensor_idx": 65,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm2.bias"
+  },
+  "arg66": {
+    "tensor_idx": 66,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm2.weight"
+  },
+  "arg67": {
+    "tensor_idx": 67,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.bias"
+  },
+  "arg68": {
+    "tensor_idx": 68,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.weight"
+  },
+  "arg69": {
+    "tensor_idx": 69,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.bias"
+  },
+  "arg70": {
+    "tensor_idx": 70,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.weight"
+  },
+  "arg71": {
+    "tensor_idx": 71,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm1.bias"
+  },
+  "arg72": {
+    "tensor_idx": 72,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm1.weight"
+  },
+  "arg73": {
+    "tensor_idx": 73,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc2.bias"
+  },
+  "arg74": {
+    "tensor_idx": 74,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc2.weight"
+  },
+  "arg75": {
+    "tensor_idx": 75,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc1.bias"
+  },
+  "arg76": {
+    "tensor_idx": 76,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc1.weight"
+  },
+  "arg77": {
+    "tensor_idx": 77,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm2.bias"
+  },
+  "arg78": {
+    "tensor_idx": 78,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm2.weight"
+  },
+  "arg79": {
+    "tensor_idx": 79,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.bias"
+  },
+  "arg80": {
+    "tensor_idx": 80,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.weight"
+  },
+  "arg81": {
+    "tensor_idx": 81,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.bias"
+  },
+  "arg82": {
+    "tensor_idx": 82,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.weight"
+  },
+  "arg83": {
+    "tensor_idx": 83,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm1.bias"
+  },
+  "arg84": {
+    "tensor_idx": 84,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm1.weight"
+  },
+  "arg85": {
+    "tensor_idx": 85,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc2.bias"
+  },
+  "arg86": {
+    "tensor_idx": 86,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc2.weight"
+  },
+  "arg87": {
+    "tensor_idx": 87,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc1.bias"
+  },
+  "arg88": {
+    "tensor_idx": 88,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc1.weight"
+  },
+  "arg89": {
+    "tensor_idx": 89,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm2.bias"
+  },
+  "arg90": {
+    "tensor_idx": 90,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm2.weight"
+  },
+  "arg91": {
+    "tensor_idx": 91,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.bias"
+  },
+  "arg92": {
+    "tensor_idx": 92,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.weight"
+  },
+  "arg93": {
+    "tensor_idx": 93,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.bias"
+  },
+  "arg94": {
+    "tensor_idx": 94,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.weight"
+  },
+  "arg95": {
+    "tensor_idx": 95,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm1.bias"
+  },
+  "arg96": {
+    "tensor_idx": 96,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm1.weight"
+  },
+  "arg97": {
+    "tensor_idx": 97,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc2.bias"
+  },
+  "arg98": {
+    "tensor_idx": 98,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc2.weight"
+  },
+  "arg99": {
+    "tensor_idx": 99,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc1.bias"
+  },
+  "arg100": {
+    "tensor_idx": 100,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc1.weight"
+  },
+  "arg101": {
+    "tensor_idx": 101,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm2.bias"
+  },
+  "arg102": {
+    "tensor_idx": 102,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm2.weight"
+  },
+  "arg103": {
+    "tensor_idx": 103,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.bias"
+  },
+  "arg104": {
+    "tensor_idx": 104,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.weight"
+  },
+  "arg105": {
+    "tensor_idx": 105,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.bias"
+  },
+  "arg106": {
+    "tensor_idx": 106,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.weight"
+  },
+  "arg107": {
+    "tensor_idx": 107,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm1.bias"
+  },
+  "arg108": {
+    "tensor_idx": 108,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm1.weight"
+  },
+  "arg109": {
+    "tensor_idx": 109,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc2.bias"
+  },
+  "arg110": {
+    "tensor_idx": 110,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc2.weight"
+  },
+  "arg111": {
+    "tensor_idx": 111,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc1.bias"
+  },
+  "arg112": {
+    "tensor_idx": 112,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc1.weight"
+  },
+  "arg113": {
+    "tensor_idx": 113,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm2.bias"
+  },
+  "arg114": {
+    "tensor_idx": 114,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm2.weight"
+  },
+  "arg115": {
+    "tensor_idx": 115,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.bias"
+  },
+  "arg116": {
+    "tensor_idx": 116,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.weight"
+  },
+  "arg117": {
+    "tensor_idx": 117,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.bias"
+  },
+  "arg118": {
+    "tensor_idx": 118,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.weight"
+  },
+  "arg119": {
+    "tensor_idx": 119,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm1.bias"
+  },
+  "arg120": {
+    "tensor_idx": 120,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm1.weight"
+  },
+  "arg121": {
+    "tensor_idx": 121,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc2.bias"
+  },
+  "arg122": {
+    "tensor_idx": 122,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc2.weight"
+  },
+  "arg123": {
+    "tensor_idx": 123,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc1.bias"
+  },
+  "arg124": {
+    "tensor_idx": 124,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc1.weight"
+  },
+  "arg125": {
+    "tensor_idx": 125,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm2.bias"
+  },
+  "arg126": {
+    "tensor_idx": 126,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm2.weight"
+  },
+  "arg127": {
+    "tensor_idx": 127,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.bias"
+  },
+  "arg128": {
+    "tensor_idx": 128,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.weight"
+  },
+  "arg129": {
+    "tensor_idx": 129,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.bias"
+  },
+  "arg130": {
+    "tensor_idx": 130,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.weight"
+  },
+  "arg131": {
+    "tensor_idx": 131,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm1.bias"
+  },
+  "arg132": {
+    "tensor_idx": 132,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm1.weight"
+  },
+  "arg133": {
+    "tensor_idx": 133,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc2.bias"
+  },
+  "arg134": {
+    "tensor_idx": 134,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc2.weight"
+  },
+  "arg135": {
+    "tensor_idx": 135,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc1.bias"
+  },
+  "arg136": {
+    "tensor_idx": 136,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc1.weight"
+  },
+  "arg137": {
+    "tensor_idx": 137,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm2.bias"
+  },
+  "arg138": {
+    "tensor_idx": 138,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm2.weight"
+  },
+  "arg139": {
+    "tensor_idx": 139,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.bias"
+  },
+  "arg140": {
+    "tensor_idx": 140,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.weight"
+  },
+  "arg141": {
+    "tensor_idx": 141,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.bias"
+  },
+  "arg142": {
+    "tensor_idx": 142,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.weight"
+  },
+  "arg143": {
+    "tensor_idx": 143,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm1.bias"
+  },
+  "arg144": {
+    "tensor_idx": 144,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm1.weight"
+  },
+  "arg145": {
+    "tensor_idx": 145,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc2.bias"
+  },
+  "arg146": {
+    "tensor_idx": 146,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc2.weight"
+  },
+  "arg147": {
+    "tensor_idx": 147,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc1.bias"
+  },
+  "arg148": {
+    "tensor_idx": 148,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc1.weight"
+  },
+  "arg149": {
+    "tensor_idx": 149,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm2.bias"
+  },
+  "arg150": {
+    "tensor_idx": 150,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm2.weight"
+  },
+  "arg151": {
+    "tensor_idx": 151,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.bias"
+  },
+  "arg152": {
+    "tensor_idx": 152,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.weight"
+  },
+  "arg153": {
+    "tensor_idx": 153,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.bias"
+  },
+  "arg154": {
+    "tensor_idx": 154,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.weight"
+  },
+  "arg155": {
+    "tensor_idx": 155,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm1.bias"
+  },
+  "arg156": {
+    "tensor_idx": 156,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm1.weight"
+  },
+  "arg157": {
+    "tensor_idx": 157,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc2.bias"
+  },
+  "arg158": {
+    "tensor_idx": 158,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc2.weight"
+  },
+  "arg159": {
+    "tensor_idx": 159,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc1.bias"
+  },
+  "arg160": {
+    "tensor_idx": 160,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc1.weight"
+  },
+  "arg161": {
+    "tensor_idx": 161,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm2.bias"
+  },
+  "arg162": {
+    "tensor_idx": 162,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm2.weight"
+  },
+  "arg163": {
+    "tensor_idx": 163,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.bias"
+  },
+  "arg164": {
+    "tensor_idx": 164,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.weight"
+  },
+  "arg165": {
+    "tensor_idx": 165,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.bias"
+  },
+  "arg166": {
+    "tensor_idx": 166,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.weight"
+  },
+  "arg167": {
+    "tensor_idx": 167,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm1.bias"
+  },
+  "arg168": {
+    "tensor_idx": 168,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm1.weight"
+  },
+  "arg169": {
+    "tensor_idx": 169,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc2.bias"
+  },
+  "arg170": {
+    "tensor_idx": 170,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc2.weight"
+  },
+  "arg171": {
+    "tensor_idx": 171,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc1.bias"
+  },
+  "arg172": {
+    "tensor_idx": 172,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc1.weight"
+  },
+  "arg173": {
+    "tensor_idx": 173,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm2.bias"
+  },
+  "arg174": {
+    "tensor_idx": 174,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm2.weight"
+  },
+  "arg175": {
+    "tensor_idx": 175,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.bias"
+  },
+  "arg176": {
+    "tensor_idx": 176,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.weight"
+  },
+  "arg177": {
+    "tensor_idx": 177,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.bias"
+  },
+  "arg178": {
+    "tensor_idx": 178,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.weight"
+  },
+  "arg179": {
+    "tensor_idx": 179,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm1.bias"
+  },
+  "arg180": {
+    "tensor_idx": 180,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm1.weight"
+  },
+  "arg181": {
+    "tensor_idx": 181,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc2.bias"
+  },
+  "arg182": {
+    "tensor_idx": 182,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc2.weight"
+  },
+  "arg183": {
+    "tensor_idx": 183,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc1.bias"
+  },
+  "arg184": {
+    "tensor_idx": 184,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc1.weight"
+  },
+  "arg185": {
+    "tensor_idx": 185,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm2.bias"
+  },
+  "arg186": {
+    "tensor_idx": 186,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm2.weight"
+  },
+  "arg187": {
+    "tensor_idx": 187,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.bias"
+  },
+  "arg188": {
+    "tensor_idx": 188,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.weight"
+  },
+  "arg189": {
+    "tensor_idx": 189,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.bias"
+  },
+  "arg190": {
+    "tensor_idx": 190,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.weight"
+  },
+  "arg191": {
+    "tensor_idx": 191,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm1.bias"
+  },
+  "arg192": {
+    "tensor_idx": 192,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm1.weight"
+  },
+  "arg193": {
+    "tensor_idx": 193,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc2.bias"
+  },
+  "arg194": {
+    "tensor_idx": 194,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc2.weight"
+  },
+  "arg195": {
+    "tensor_idx": 195,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc1.bias"
+  },
+  "arg196": {
+    "tensor_idx": 196,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc1.weight"
+  },
+  "arg197": {
+    "tensor_idx": 197,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm2.bias"
+  },
+  "arg198": {
+    "tensor_idx": 198,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm2.weight"
+  },
+  "arg199": {
+    "tensor_idx": 199,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.bias"
+  },
+  "arg200": {
+    "tensor_idx": 200,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.weight"
+  },
+  "arg201": {
+    "tensor_idx": 201,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.bias"
+  },
+  "arg202": {
+    "tensor_idx": 202,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.weight"
+  },
+  "arg203": {
+    "tensor_idx": 203,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm1.bias"
+  },
+  "arg204": {
+    "tensor_idx": 204,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm1.weight"
+  },
+  "arg205": {
+    "tensor_idx": 205,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc2.bias"
+  },
+  "arg206": {
+    "tensor_idx": 206,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc2.weight"
+  },
+  "arg207": {
+    "tensor_idx": 207,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc1.bias"
+  },
+  "arg208": {
+    "tensor_idx": 208,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc1.weight"
+  },
+  "arg209": {
+    "tensor_idx": 209,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm2.bias"
+  },
+  "arg210": {
+    "tensor_idx": 210,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm2.weight"
+  },
+  "arg211": {
+    "tensor_idx": 211,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.bias"
+  },
+  "arg212": {
+    "tensor_idx": 212,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.weight"
+  },
+  "arg213": {
+    "tensor_idx": 213,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.bias"
+  },
+  "arg214": {
+    "tensor_idx": 214,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.weight"
+  },
+  "arg215": {
+    "tensor_idx": 215,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm1.bias"
+  },
+  "arg216": {
+    "tensor_idx": 216,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm1.weight"
+  },
+  "arg217": {
+    "tensor_idx": 217,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc2.bias"
+  },
+  "arg218": {
+    "tensor_idx": 218,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc2.weight"
+  },
+  "arg219": {
+    "tensor_idx": 219,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc1.bias"
+  },
+  "arg220": {
+    "tensor_idx": 220,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc1.weight"
+  },
+  "arg221": {
+    "tensor_idx": 221,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm2.bias"
+  },
+  "arg222": {
+    "tensor_idx": 222,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm2.weight"
+  },
+  "arg223": {
+    "tensor_idx": 223,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.bias"
+  },
+  "arg224": {
+    "tensor_idx": 224,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.weight"
+  },
+  "arg225": {
+    "tensor_idx": 225,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.bias"
+  },
+  "arg226": {
+    "tensor_idx": 226,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.weight"
+  },
+  "arg227": {
+    "tensor_idx": 227,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm1.bias"
+  },
+  "arg228": {
+    "tensor_idx": 228,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm1.weight"
+  },
+  "arg229": {
+    "tensor_idx": 229,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc2.bias"
+  },
+  "arg230": {
+    "tensor_idx": 230,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc2.weight"
+  },
+  "arg231": {
+    "tensor_idx": 231,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc1.bias"
+  },
+  "arg232": {
+    "tensor_idx": 232,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc1.weight"
+  },
+  "arg233": {
+    "tensor_idx": 233,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm2.bias"
+  },
+  "arg234": {
+    "tensor_idx": 234,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm2.weight"
+  },
+  "arg235": {
+    "tensor_idx": 235,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.bias"
+  },
+  "arg236": {
+    "tensor_idx": 236,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.weight"
+  },
+  "arg237": {
+    "tensor_idx": 237,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.bias"
+  },
+  "arg238": {
+    "tensor_idx": 238,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.weight"
+  },
+  "arg239": {
+    "tensor_idx": 239,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm1.bias"
+  },
+  "arg240": {
+    "tensor_idx": 240,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm1.weight"
+  },
+  "arg241": {
+    "tensor_idx": 241,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc2.bias"
+  },
+  "arg242": {
+    "tensor_idx": 242,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc2.weight"
+  },
+  "arg243": {
+    "tensor_idx": 243,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc1.bias"
+  },
+  "arg244": {
+    "tensor_idx": 244,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc1.weight"
+  },
+  "arg245": {
+    "tensor_idx": 245,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm2.bias"
+  },
+  "arg246": {
+    "tensor_idx": 246,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm2.weight"
+  },
+  "arg247": {
+    "tensor_idx": 247,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.bias"
+  },
+  "arg248": {
+    "tensor_idx": 248,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.weight"
+  },
+  "arg249": {
+    "tensor_idx": 249,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.bias"
+  },
+  "arg250": {
+    "tensor_idx": 250,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.weight"
+  },
+  "arg251": {
+    "tensor_idx": 251,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm1.bias"
+  },
+  "arg252": {
+    "tensor_idx": 252,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm1.weight"
+  },
+  "arg253": {
+    "tensor_idx": 253,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc2.bias"
+  },
+  "arg254": {
+    "tensor_idx": 254,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc2.weight"
+  },
+  "arg255": {
+    "tensor_idx": 255,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc1.bias"
+  },
+  "arg256": {
+    "tensor_idx": 256,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc1.weight"
+  },
+  "arg257": {
+    "tensor_idx": 257,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm2.bias"
+  },
+  "arg258": {
+    "tensor_idx": 258,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm2.weight"
+  },
+  "arg259": {
+    "tensor_idx": 259,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.bias"
+  },
+  "arg260": {
+    "tensor_idx": 260,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.weight"
+  },
+  "arg261": {
+    "tensor_idx": 261,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.bias"
+  },
+  "arg262": {
+    "tensor_idx": 262,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.weight"
+  },
+  "arg263": {
+    "tensor_idx": 263,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm1.bias"
+  },
+  "arg264": {
+    "tensor_idx": 264,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm1.weight"
+  },
+  "arg265": {
+    "tensor_idx": 265,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc2.bias"
+  },
+  "arg266": {
+    "tensor_idx": 266,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc2.weight"
+  },
+  "arg267": {
+    "tensor_idx": 267,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc1.bias"
+  },
+  "arg268": {
+    "tensor_idx": 268,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc1.weight"
+  },
+  "arg269": {
+    "tensor_idx": 269,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm2.bias"
+  },
+  "arg270": {
+    "tensor_idx": 270,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm2.weight"
+  },
+  "arg271": {
+    "tensor_idx": 271,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.bias"
+  },
+  "arg272": {
+    "tensor_idx": 272,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.weight"
+  },
+  "arg273": {
+    "tensor_idx": 273,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.bias"
+  },
+  "arg274": {
+    "tensor_idx": 274,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.weight"
+  },
+  "arg275": {
+    "tensor_idx": 275,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm1.bias"
+  },
+  "arg276": {
+    "tensor_idx": 276,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm1.weight"
+  },
+  "arg277": {
+    "tensor_idx": 277,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc2.bias"
+  },
+  "arg278": {
+    "tensor_idx": 278,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc2.weight"
+  },
+  "arg279": {
+    "tensor_idx": 279,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc1.bias"
+  },
+  "arg280": {
+    "tensor_idx": 280,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc1.weight"
+  },
+  "arg281": {
+    "tensor_idx": 281,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm2.bias"
+  },
+  "arg282": {
+    "tensor_idx": 282,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm2.weight"
+  },
+  "arg283": {
+    "tensor_idx": 283,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.bias"
+  },
+  "arg284": {
+    "tensor_idx": 284,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.weight"
+  },
+  "arg285": {
+    "tensor_idx": 285,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.bias"
+  },
+  "arg286": {
+    "tensor_idx": 286,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.weight"
+  },
+  "arg287": {
+    "tensor_idx": 287,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm1.bias"
+  },
+  "arg288": {
+    "tensor_idx": 288,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm1.weight"
+  },
+  "arg289": {
+    "tensor_idx": 289,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc2.bias"
+  },
+  "arg290": {
+    "tensor_idx": 290,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc2.weight"
+  },
+  "arg291": {
+    "tensor_idx": 291,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc1.bias"
+  },
+  "arg292": {
+    "tensor_idx": 292,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc1.weight"
+  },
+  "arg293": {
+    "tensor_idx": 293,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm2.bias"
+  },
+  "arg294": {
+    "tensor_idx": 294,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm2.weight"
+  },
+  "arg295": {
+    "tensor_idx": 295,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.bias"
+  },
+  "arg296": {
+    "tensor_idx": 296,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.weight"
+  },
+  "arg297": {
+    "tensor_idx": 297,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.bias"
+  },
+  "arg298": {
+    "tensor_idx": 298,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.weight"
+  },
+  "arg299": {
+    "tensor_idx": 299,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm1.bias"
+  },
+  "arg300": {
+    "tensor_idx": 300,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm1.weight"
+  },
+  "arg301": {
+    "tensor_idx": 301,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc2.bias"
+  },
+  "arg302": {
+    "tensor_idx": 302,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc2.weight"
+  },
+  "arg303": {
+    "tensor_idx": 303,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc1.bias"
+  },
+  "arg304": {
+    "tensor_idx": 304,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc1.weight"
+  },
+  "arg305": {
+    "tensor_idx": 305,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm2.bias"
+  },
+  "arg306": {
+    "tensor_idx": 306,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm2.weight"
+  },
+  "arg307": {
+    "tensor_idx": 307,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.bias"
+  },
+  "arg308": {
+    "tensor_idx": 308,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.weight"
+  },
+  "arg309": {
+    "tensor_idx": 309,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.bias"
+  },
+  "arg310": {
+    "tensor_idx": 310,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.weight"
+  },
+  "arg311": {
+    "tensor_idx": 311,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm1.bias"
+  },
+  "arg312": {
+    "tensor_idx": 312,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm1.weight"
+  },
+  "arg313": {
+    "tensor_idx": 313,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc2.bias"
+  },
+  "arg314": {
+    "tensor_idx": 314,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc2.weight"
+  },
+  "arg315": {
+    "tensor_idx": 315,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc1.bias"
+  },
+  "arg316": {
+    "tensor_idx": 316,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc1.weight"
+  },
+  "arg317": {
+    "tensor_idx": 317,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm2.bias"
+  },
+  "arg318": {
+    "tensor_idx": 318,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm2.weight"
+  },
+  "arg319": {
+    "tensor_idx": 319,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.bias"
+  },
+  "arg320": {
+    "tensor_idx": 320,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.weight"
+  },
+  "arg321": {
+    "tensor_idx": 321,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.bias"
+  },
+  "arg322": {
+    "tensor_idx": 322,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.weight"
+  },
+  "arg323": {
+    "tensor_idx": 323,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm1.bias"
+  },
+  "arg324": {
+    "tensor_idx": 324,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm1.weight"
+  },
+  "arg325": {
+    "tensor_idx": 325,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc2.bias"
+  },
+  "arg326": {
+    "tensor_idx": 326,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc2.weight"
+  },
+  "arg327": {
+    "tensor_idx": 327,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc1.bias"
+  },
+  "arg328": {
+    "tensor_idx": 328,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc1.weight"
+  },
+  "arg329": {
+    "tensor_idx": 329,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm2.bias"
+  },
+  "arg330": {
+    "tensor_idx": 330,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm2.weight"
+  },
+  "arg331": {
+    "tensor_idx": 331,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.bias"
+  },
+  "arg332": {
+    "tensor_idx": 332,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.weight"
+  },
+  "arg333": {
+    "tensor_idx": 333,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.bias"
+  },
+  "arg334": {
+    "tensor_idx": 334,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.weight"
+  },
+  "arg335": {
+    "tensor_idx": 335,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm1.bias"
+  },
+  "arg336": {
+    "tensor_idx": 336,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm1.weight"
+  },
+  "arg337": {
+    "tensor_idx": 337,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc2.bias"
+  },
+  "arg338": {
+    "tensor_idx": 338,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc2.weight"
+  },
+  "arg339": {
+    "tensor_idx": 339,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc1.bias"
+  },
+  "arg340": {
+    "tensor_idx": 340,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc1.weight"
+  },
+  "arg341": {
+    "tensor_idx": 341,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm2.bias"
+  },
+  "arg342": {
+    "tensor_idx": 342,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm2.weight"
+  },
+  "arg343": {
+    "tensor_idx": 343,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.bias"
+  },
+  "arg344": {
+    "tensor_idx": 344,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.weight"
+  },
+  "arg345": {
+    "tensor_idx": 345,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.bias"
+  },
+  "arg346": {
+    "tensor_idx": 346,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.weight"
+  },
+  "arg347": {
+    "tensor_idx": 347,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm1.bias"
+  },
+  "arg348": {
+    "tensor_idx": 348,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm1.weight"
+  },
+  "arg349": {
+    "tensor_idx": 349,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc2.bias"
+  },
+  "arg350": {
+    "tensor_idx": 350,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc2.weight"
+  },
+  "arg351": {
+    "tensor_idx": 351,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc1.bias"
+  },
+  "arg352": {
+    "tensor_idx": 352,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc1.weight"
+  },
+  "arg353": {
+    "tensor_idx": 353,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm2.bias"
+  },
+  "arg354": {
+    "tensor_idx": 354,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm2.weight"
+  },
+  "arg355": {
+    "tensor_idx": 355,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.bias"
+  },
+  "arg356": {
+    "tensor_idx": 356,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.weight"
+  },
+  "arg357": {
+    "tensor_idx": 357,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.bias"
+  },
+  "arg358": {
+    "tensor_idx": 358,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.weight"
+  },
+  "arg359": {
+    "tensor_idx": 359,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm1.bias"
+  },
+  "arg360": {
+    "tensor_idx": 360,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm1.weight"
+  },
+  "arg361": {
+    "tensor_idx": 361,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc2.bias"
+  },
+  "arg362": {
+    "tensor_idx": 362,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc2.weight"
+  },
+  "arg363": {
+    "tensor_idx": 363,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc1.bias"
+  },
+  "arg364": {
+    "tensor_idx": 364,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc1.weight"
+  },
+  "arg365": {
+    "tensor_idx": 365,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm2.bias"
+  },
+  "arg366": {
+    "tensor_idx": 366,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm2.weight"
+  },
+  "arg367": {
+    "tensor_idx": 367,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.bias"
+  },
+  "arg368": {
+    "tensor_idx": 368,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.weight"
+  },
+  "arg369": {
+    "tensor_idx": 369,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.bias"
+  },
+  "arg370": {
+    "tensor_idx": 370,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.weight"
+  },
+  "arg371": {
+    "tensor_idx": 371,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm1.bias"
+  },
+  "arg372": {
+    "tensor_idx": 372,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm1.weight"
+  },
+  "arg373": {
+    "tensor_idx": 373,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc2.bias"
+  },
+  "arg374": {
+    "tensor_idx": 374,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc2.weight"
+  },
+  "arg375": {
+    "tensor_idx": 375,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc1.bias"
+  },
+  "arg376": {
+    "tensor_idx": 376,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc1.weight"
+  },
+  "arg377": {
+    "tensor_idx": 377,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm2.bias"
+  },
+  "arg378": {
+    "tensor_idx": 378,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm2.weight"
+  },
+  "arg379": {
+    "tensor_idx": 379,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.bias"
+  },
+  "arg380": {
+    "tensor_idx": 380,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.weight"
+  },
+  "arg381": {
+    "tensor_idx": 381,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.bias"
+  },
+  "arg382": {
+    "tensor_idx": 382,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.weight"
+  },
+  "arg383": {
+    "tensor_idx": 383,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm1.bias"
+  },
+  "arg384": {
+    "tensor_idx": 384,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm1.weight"
+  },
+  "arg385": {
+    "tensor_idx": 385,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.pre_layrnorm.bias"
+  },
+  "arg386": {
+    "tensor_idx": 386,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "image_encoder.vision_model.pre_layrnorm.weight"
+  },
+  "arg387": {
+    "tensor_idx": 387,
+    "layout": "ROW_MAJOR",
+    "dtype": "INT32",
+    "on_device": false,
+    "weight_name": "__POSITION_IDS__"
+  },
+  "arg388": {
+    "tensor_idx": 388,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.embeddings.position_embedding.weight"
+  },
+  "arg389": {
+    "tensor_idx": 389,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.embeddings.patch_embedding.weight"
+  },
+  "arg390": {
+    "tensor_idx": 390,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "__INPUT__"
+  },
+  "arg391": {
+    "tensor_idx": 391,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.embeddings.class_embedding"
+  },
+  "arg392": {
+    "tensor_idx": 392,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.bias"
+  },
+  "arg393": {
+    "tensor_idx": 393,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.weight"
+  },
+  "arg394": {
+    "tensor_idx": 394,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.bias"
+  },
+  "arg395": {
+    "tensor_idx": 395,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.weight"
+  },
+  "arg396": {
+    "tensor_idx": 396,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.bias"
+  },
+  "arg397": {
+    "tensor_idx": 397,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.weight"
+  },
+  "arg398": {
+    "tensor_idx": 398,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.bias"
+  },
+  "arg399": {
+    "tensor_idx": 399,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.weight"
+  },
+  "arg400": {
+    "tensor_idx": 400,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.bias"
+  },
+  "arg401": {
+    "tensor_idx": 401,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.weight"
+  },
+  "arg402": {
+    "tensor_idx": 402,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.bias"
+  },
+  "arg403": {
+    "tensor_idx": 403,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.weight"
+  },
+  "arg404": {
+    "tensor_idx": 404,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.bias"
+  },
+  "arg405": {
+    "tensor_idx": 405,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.weight"
+  },
+  "arg406": {
+    "tensor_idx": 406,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.bias"
+  },
+  "arg407": {
+    "tensor_idx": 407,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.weight"
+  },
+  "arg408": {
+    "tensor_idx": 408,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.bias"
+  },
+  "arg409": {
+    "tensor_idx": 409,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.weight"
+  },
+  "arg410": {
+    "tensor_idx": 410,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.bias"
+  },
+  "arg411": {
+    "tensor_idx": 411,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.weight"
+  },
+  "arg412": {
+    "tensor_idx": 412,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.bias"
+  },
+  "arg413": {
+    "tensor_idx": 413,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.weight"
+  },
+  "arg414": {
+    "tensor_idx": 414,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.bias"
+  },
+  "arg415": {
+    "tensor_idx": 415,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.weight"
+  },
+  "arg416": {
+    "tensor_idx": 416,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.bias"
+  },
+  "arg417": {
+    "tensor_idx": 417,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.weight"
+  },
+  "arg418": {
+    "tensor_idx": 418,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.bias"
+  },
+  "arg419": {
+    "tensor_idx": 419,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.weight"
+  },
+  "arg420": {
+    "tensor_idx": 420,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.bias"
+  },
+  "arg421": {
+    "tensor_idx": 421,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.weight"
+  },
+  "arg422": {
+    "tensor_idx": 422,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.bias"
+  },
+  "arg423": {
+    "tensor_idx": 423,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.weight"
+  },
+  "arg424": {
+    "tensor_idx": 424,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.bias"
+  },
+  "arg425": {
+    "tensor_idx": 425,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.weight"
+  },
+  "arg426": {
+    "tensor_idx": 426,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.bias"
+  },
+  "arg427": {
+    "tensor_idx": 427,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.weight"
+  },
+  "arg428": {
+    "tensor_idx": 428,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.bias"
+  },
+  "arg429": {
+    "tensor_idx": 429,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.weight"
+  },
+  "arg430": {
+    "tensor_idx": 430,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.bias"
+  },
+  "arg431": {
+    "tensor_idx": 431,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.weight"
+  },
+  "arg432": {
+    "tensor_idx": 432,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.bias"
+  },
+  "arg433": {
+    "tensor_idx": 433,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.weight"
+  },
+  "arg434": {
+    "tensor_idx": 434,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.bias"
+  },
+  "arg435": {
+    "tensor_idx": 435,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.weight"
+  },
+  "arg436": {
+    "tensor_idx": 436,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.bias"
+  },
+  "arg437": {
+    "tensor_idx": 437,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.weight"
+  },
+  "arg438": {
+    "tensor_idx": 438,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.bias"
+  },
+  "arg439": {
+    "tensor_idx": 439,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.weight"
+  },
+  "arg440": {
+    "tensor_idx": 440,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.bias"
+  },
+  "arg441": {
+    "tensor_idx": 441,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.weight"
+  },
+  "arg442": {
+    "tensor_idx": 442,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.bias"
+  },
+  "arg443": {
+    "tensor_idx": 443,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.weight"
+  },
+  "arg444": {
+    "tensor_idx": 444,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.bias"
+  },
+  "arg445": {
+    "tensor_idx": 445,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.weight"
+  },
+  "arg446": {
+    "tensor_idx": 446,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.bias"
+  },
+  "arg447": {
+    "tensor_idx": 447,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.weight"
+  },
+  "arg448": {
+    "tensor_idx": 448,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.bias"
+  },
+  "arg449": {
+    "tensor_idx": 449,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.weight"
+  },
+  "arg450": {
+    "tensor_idx": 450,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.bias"
+  },
+  "arg451": {
+    "tensor_idx": 451,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.weight"
+  },
+  "arg452": {
+    "tensor_idx": 452,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.bias"
+  },
+  "arg453": {
+    "tensor_idx": 453,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.weight"
+  },
+  "arg454": {
+    "tensor_idx": 454,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.bias"
+  },
+  "arg455": {
+    "tensor_idx": 455,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.weight"
+  },
+  "arg456": {
+    "tensor_idx": 456,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.bias"
+  },
+  "arg457": {
+    "tensor_idx": 457,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.weight"
+  },
+  "arg458": {
+    "tensor_idx": 458,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.bias"
+  },
+  "arg459": {
+    "tensor_idx": 459,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.weight"
+  },
+  "arg460": {
+    "tensor_idx": 460,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.bias"
+  },
+  "arg461": {
+    "tensor_idx": 461,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.weight"
+  },
+  "arg462": {
+    "tensor_idx": 462,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.bias"
+  },
+  "arg463": {
+    "tensor_idx": 463,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.weight"
+  },
+  "arg464": {
+    "tensor_idx": 464,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.bias"
+  },
+  "arg465": {
+    "tensor_idx": 465,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.weight"
+  },
+  "arg466": {
+    "tensor_idx": 466,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.bias"
+  },
+  "arg467": {
+    "tensor_idx": 467,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.weight"
+  },
+  "arg468": {
+    "tensor_idx": 468,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.bias"
+  },
+  "arg469": {
+    "tensor_idx": 469,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.weight"
+  },
+  "arg470": {
+    "tensor_idx": 470,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.bias"
+  },
+  "arg471": {
+    "tensor_idx": 471,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.weight"
+  },
+  "arg472": {
+    "tensor_idx": 472,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.bias"
+  },
+  "arg473": {
+    "tensor_idx": 473,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.weight"
+  },
+  "arg474": {
+    "tensor_idx": 474,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.bias"
+  },
+  "arg475": {
+    "tensor_idx": 475,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.weight"
+  },
+  "arg476": {
+    "tensor_idx": 476,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.bias"
+  },
+  "arg477": {
+    "tensor_idx": 477,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.weight"
+  },
+  "arg478": {
+    "tensor_idx": 478,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.bias"
+  },
+  "arg479": {
+    "tensor_idx": 479,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.weight"
+  },
+  "arg480": {
+    "tensor_idx": 480,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.bias"
+  },
+  "arg481": {
+    "tensor_idx": 481,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.weight"
+  },
+  "arg482": {
+    "tensor_idx": 482,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.bias"
+  },
+  "arg483": {
+    "tensor_idx": 483,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.weight"
+  },
+  "arg484": {
+    "tensor_idx": 484,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.bias"
+  },
+  "arg485": {
+    "tensor_idx": 485,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.weight"
+  },
+  "arg486": {
+    "tensor_idx": 486,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.bias"
+  },
+  "arg487": {
+    "tensor_idx": 487,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.weight"
+  },
+  "arg488": {
+    "tensor_idx": 488,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.bias"
+  },
+  "arg489": {
+    "tensor_idx": 489,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.weight"
+  },
+  "arg490": {
+    "tensor_idx": 490,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.bias"
+  },
+  "arg491": {
+    "tensor_idx": 491,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.weight"
+  },
+  "arg492": {
+    "tensor_idx": 492,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.bias"
+  },
+  "arg493": {
+    "tensor_idx": 493,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.weight"
+  },
+  "arg494": {
+    "tensor_idx": 494,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.bias"
+  },
+  "arg495": {
+    "tensor_idx": 495,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.weight"
+  },
+  "arg496": {
+    "tensor_idx": 496,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.bias"
+  },
+  "arg497": {
+    "tensor_idx": 497,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.weight"
+  },
+  "arg498": {
+    "tensor_idx": 498,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.bias"
+  },
+  "arg499": {
+    "tensor_idx": 499,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.weight"
+  },
+  "arg500": {
+    "tensor_idx": 500,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.bias"
+  },
+  "arg501": {
+    "tensor_idx": 501,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.weight"
+  },
+  "arg502": {
+    "tensor_idx": 502,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.bias"
+  },
+  "arg503": {
+    "tensor_idx": 503,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.weight"
+  },
+  "arg504": {
+    "tensor_idx": 504,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.bias"
+  },
+  "arg505": {
+    "tensor_idx": 505,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.weight"
+  },
+  "arg506": {
+    "tensor_idx": 506,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.bias"
+  },
+  "arg507": {
+    "tensor_idx": 507,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.weight"
+  },
+  "arg508": {
+    "tensor_idx": 508,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.bias"
+  },
+  "arg509": {
+    "tensor_idx": 509,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.weight"
+  },
+  "arg510": {
+    "tensor_idx": 510,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.bias"
+  },
+  "arg511": {
+    "tensor_idx": 511,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.weight"
+  },
+  "arg512": {
+    "tensor_idx": 512,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.bias"
+  },
+  "arg513": {
+    "tensor_idx": 513,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.weight"
+  },
+  "arg514": {
+    "tensor_idx": 514,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.bias"
+  },
+  "arg515": {
+    "tensor_idx": 515,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.weight"
+  },
+  "arg516": {
+    "tensor_idx": 516,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.attn.to_k.weight"
+  },
+  "arg517": {
+    "tensor_idx": 517,
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false,
+    "weight_name": "resampler.layers.0.attn.to_q.weight"
+  },
+  "arg518": {
+    "tensor_idx": 518,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ff.1.net.2.weight"
+  },
+  "arg519": {
+    "tensor_idx": 519,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ff.1.net.0.proj.weight"
+  },
+  "arg520": {
+    "tensor_idx": 520,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ff.0.bias"
+  },
+  "arg521": {
+    "tensor_idx": 521,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.0.ff.0.weight"
+  },
+  "arg522": {
+    "tensor_idx": 522,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.attn.to_out.0.weight"
+  },
+  "arg523": {
+    "tensor_idx": 523,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.attn.to_v.weight"
+  },
+  "arg524": {
+    "tensor_idx": 524,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ln1.bias"
+  },
+  "arg525": {
+    "tensor_idx": 525,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ln1.weight"
+  },
+  "arg526": {
+    "tensor_idx": 526,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ln0.bias"
+  },
+  "arg527": {
+    "tensor_idx": 527,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ln0.weight"
+  },
+  "arg528": {
+    "tensor_idx": 528,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.attn.to_k.weight"
+  },
+  "arg529": {
+    "tensor_idx": 529,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.attn.to_q.weight"
+  },
+  "arg530": {
+    "tensor_idx": 530,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ff.1.net.2.weight"
+  },
+  "arg531": {
+    "tensor_idx": 531,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ff.1.net.0.proj.weight"
+  },
+  "arg532": {
+    "tensor_idx": 532,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ff.0.bias"
+  },
+  "arg533": {
+    "tensor_idx": 533,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.1.ff.0.weight"
+  },
+  "arg534": {
+    "tensor_idx": 534,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.attn.to_out.0.weight"
+  },
+  "arg535": {
+    "tensor_idx": 535,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.attn.to_v.weight"
+  },
+  "arg536": {
+    "tensor_idx": 536,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ln1.bias"
+  },
+  "arg537": {
+    "tensor_idx": 537,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ln1.weight"
+  },
+  "arg538": {
+    "tensor_idx": 538,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ln0.bias"
+  },
+  "arg539": {
+    "tensor_idx": 539,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ln0.weight"
+  },
+  "arg540": {
+    "tensor_idx": 540,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.attn.to_k.weight"
+  },
+  "arg541": {
+    "tensor_idx": 541,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.attn.to_q.weight"
+  },
+  "arg542": {
+    "tensor_idx": 542,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ff.1.net.2.weight"
+  },
+  "arg543": {
+    "tensor_idx": 543,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ff.1.net.0.proj.weight"
+  },
+  "arg544": {
+    "tensor_idx": 544,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ff.0.bias"
+  },
+  "arg545": {
+    "tensor_idx": 545,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.2.ff.0.weight"
+  },
+  "arg546": {
+    "tensor_idx": 546,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.attn.to_out.0.weight"
+  },
+  "arg547": {
+    "tensor_idx": 547,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.attn.to_v.weight"
+  },
+  "arg548": {
+    "tensor_idx": 548,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ln1.bias"
+  },
+  "arg549": {
+    "tensor_idx": 549,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ln1.weight"
+  },
+  "arg550": {
+    "tensor_idx": 550,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ln0.bias"
+  },
+  "arg551": {
+    "tensor_idx": 551,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ln0.weight"
+  },
+  "arg552": {
+    "tensor_idx": 552,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.attn.to_k.weight"
+  },
+  "arg553": {
+    "tensor_idx": 553,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.attn.to_q.weight"
+  },
+  "arg554": {
+    "tensor_idx": 554,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ff.1.net.2.weight"
+  },
+  "arg555": {
+    "tensor_idx": 555,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ff.1.net.0.proj.weight"
+  },
+  "arg556": {
+    "tensor_idx": 556,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ff.0.bias"
+  },
+  "arg557": {
+    "tensor_idx": 557,
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true,
+    "weight_name": "resampler.layers.3.ff.0.weight"
+  }
+}
