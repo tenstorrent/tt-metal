@@ -130,7 +130,8 @@ void kernel_main() {
             if constexpr (tilize_in0) {
                 reconfig_data_format_srca(in0_cb_id);
                 pack_reconfig_data_format(tilized_in0_cb_id);
-                compute_kernel_lib::tilize(in0_cb_id, in0_block_w, tilized_in0_cb_id, in0_num_subblocks_read);
+                compute_kernel_lib::tilize<TilizeConfig<InputCB<in0_cb_id>, OutputCB<tilized_in0_cb_id>>>(
+                    in0_block_w, in0_num_subblocks_read);
             }
             reconfig_data_format_srca(tilized_in0_cb_id);
             pack_reconfig_data_format(eltwise_mul_partials_cb);
