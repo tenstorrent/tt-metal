@@ -516,8 +516,8 @@ void populate_interleaved_buffer_write_dispatch_cmds(
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
     
-    // Check if pinned source address is 64-byte aligned (required for add_prefetch_relay_paged)
-    constexpr uint64_t relay_alignment = 64;
+    // Check if pinned source address is aligned (required for add_prefetch_relay_paged)
+    const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     const uint64_t alignment_offset = use_pinned_transfer ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
     const bool needs_alignment_prefix = (alignment_offset != 0);
     
@@ -675,7 +675,7 @@ void issue_buffer_dispatch_command_sequence(
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
     // Check if pinned source address needs alignment prefix
-    constexpr uint64_t relay_alignment = 64;
+    const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     const uint64_t alignment_offset = use_pinned_memory ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
     const bool needs_alignment_prefix = (alignment_offset != 0);
     const uint64_t alignment_prefix_bytes = needs_alignment_prefix ? (relay_alignment - alignment_offset) : 0;
@@ -906,7 +906,8 @@ void write_to_device_buffer(
             auto region = buffer.root_buffer_region();
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
-            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::HOST) != 0) {
+            // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
+            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) != 0) {
                 log_info(
                     tt::LogMetal,
                     "Pinned source memory start address {:#x} must be aligned {} B",
