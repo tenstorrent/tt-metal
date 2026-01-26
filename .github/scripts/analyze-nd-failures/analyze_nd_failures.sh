@@ -373,12 +373,13 @@ run_claude_analysis() {
         log_info "Using timeout (10 minute limit)"
         if command -v stdbuf &> /dev/null; then
             # Use stdbuf to unbuffer output for better capture
-            if ! stdbuf -oL -eL timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
+            # Use --dangerously-skip-permissions to allow Claude to read source files
+            if ! stdbuf -oL -eL timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
                 exit_code=$?
             fi
         else
             # Fallback without stdbuf
-            if ! timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
+            if ! timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | tee "$output_file"; then
                 exit_code=$?
             fi
         fi
@@ -390,11 +391,11 @@ run_claude_analysis() {
     else
         # No timeout - run directly
         if command -v stdbuf &> /dev/null; then
-            if ! stdbuf -oL -eL sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
+            if ! stdbuf -oL -eL sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
                 exit_code=$?
             fi
         else
-            if ! sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
+            if ! sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | tee "$output_file"; then
                 exit_code=$?
             fi
         fi
