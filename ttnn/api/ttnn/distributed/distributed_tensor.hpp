@@ -66,9 +66,6 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
     MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis = std::nullopt);
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
-    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis);
-
 // Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
 public:

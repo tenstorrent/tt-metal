@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,11 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
@@ -29,17 +31,23 @@ auto check_32_chips() {
 }
 
 class GalaxyRingShiftTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         if (!check_32_chips()) {
             GTEST_SKIP() << "Skipping Galaxy specific tests";
         }
+        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+        ttml::ttnn_fixed::distributed::enable_fabric(32);
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
+        ttml::autograd::ctx().set_seed(42);
+        ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
     }
 };
 
 static void TestRingShift(
-    const uint32_t mesh_rows,
-    const uint32_t mesh_cols,
     const size_t batch,
     const size_t seq,
     const size_t hidden,
@@ -51,14 +59,11 @@ static void TestRingShift(
     const float atol = 1e-5F) {
     using namespace ttml;
 
-    const uint32_t num_devices = mesh_rows * mesh_cols;
-
-    // Setup device
-    ttnn_fixed::distributed::enable_fabric(num_devices);
-    autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols));
-    autograd::ctx().set_seed(42);
-
     auto* device = &autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    const uint32_t num_devices = mesh_shape.mesh_size();
+    const uint32_t mesh_rows = mesh_shape[0];
+    const uint32_t mesh_cols = mesh_shape[1];
 
     // Create input tensor with unique values - full tensor that will be sharded
     std::vector<float> test_data_vec(batch * seq * hidden);
@@ -152,43 +157,38 @@ static void TestRingShift(
             }
         }
     }
-
-    autograd::ctx().close_device();
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
     // hidden=64 sharded across 8 cols -> 8 per device
-    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
+    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
     // batch=4 sharded across 4 rows -> 1 per device
-    TestRingShift(4, 8, 4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, /*forward=*/true);
+    TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, /*forward=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardBig) {
-    TestRingShift(
-        4, 8, 16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/false);
+    TestRingShift(16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/false);
 }
 
 TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp8Cp8Bs16) {
-    TestRingShift(
-        4, 8, 16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
+    TestRingShift(16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardAlongColumns) {
-    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false);
+    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardWithGradient) {
-    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
+    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardWithGradient) {
-    TestRingShift(4, 8, 1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/true);
+    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/true);
 }
 
 TEST_F(GalaxyRingShiftTest, BackwardBig) {
-    TestRingShift(
-        4, 8, 16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
+    TestRingShift(16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
 }
