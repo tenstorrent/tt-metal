@@ -78,17 +78,17 @@ CATEGORIES = {
     "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", Colors.RED, "Unhealthy links"),
     # Connectivity issues
     "missing_ports": (
-        r"missing port/cable connections|Port Connections found in FSD but missing",
+        r"missing port/cable connections",
         Colors.BLUE,
         "Missing port connections",
     ),
     "missing_channels": (
-        r"missing channel connections|Channel Connections found in FSD but missing",
+        r"missing channel connections",
         Colors.BLUE,
         "Missing channel connections",
     ),
     "extra_connections": (
-        r"extra port/cable connections|Connections found in GSD but not in FSD",
+        r"extra port/cable connections|extra channel connections",
         Colors.YELLOW,
         "Extra connections",
     ),
@@ -108,22 +108,14 @@ CATEGORIES = {
 # Patterns for detecting other issues (will be mapped to inconclusive)
 # These are detected but not reported as separate categories - they indicate
 # issues that require manual log review and triage
-# Note: Link retrains are not included - they are considered normal on Blackhole systems
 DETECTION_PATTERNS = {
     "unrecoverable": (r"Encountered unrecoverable state", Colors.RED),
     "validation_failed": (r"Cluster validation failed", Colors.RED),
-    "pcie_error": (r"PCIe error|AER:.*aer_status|\[Hardware Error\]", Colors.RED),  # Detected but mapped to inconclusive
     "device_error": (r"Error starting devices|Error details:", Colors.RED),
-    "timeout": (r"Timeout \(\d+ ms\) waiting for physical cores", Colors.YELLOW),
-    "discovery_failed": (r"Physical Discovery.*failed|Discovery Complete.*0 chips", Colors.RED),
-    # link_retrain removed - not a failure mode on Blackhole systems
-    # Note: crc_error and uncorrected_cw are detected but not reported separately.
-    # Links with these metrics are already captured in the "unhealthy links" category,
-    # so no separate recommendations are needed - the top-level link health check covers these.
-    "crc_error": (r"CRC Error|crc_error_count > 0", Colors.YELLOW),
-    "uncorrected_cw": (r"Uncorrected CW|uncorrected_codeword", Colors.YELLOW),
-    "data_mismatch": (r"Data Mismatch|mismatched_words|num_mismatched", Colors.RED),
-    "fw_mismatch": (r"FW Bundle version mismatch|ERISC FW version.*mismatch", Colors.MAGENTA),
+    "discovery_failed": (r"Physical Discovery.*failed", Colors.RED),
+    "crc_error": (r"CRC Error", Colors.YELLOW),
+    "uncorrected_cw": (r"Uncorrected CW", Colors.YELLOW),
+    "data_mismatch": (r"Data Mismatch", Colors.RED),
     "stack_trace": (r"TT_FATAL|TT_THROW|std::runtime_error", Colors.RED),
     "truncated": (r"Sending traffic across detected links", Colors.YELLOW),
 }
@@ -821,7 +813,6 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
 
     # Use registry pattern to generate recommendations
     # Process categories in a consistent order
-    # Note: missing_ports and missing_channels share the same generator, so we only call it once
     processed_generators = set()
     category_order = ["missing_ports", "missing_channels", "extra_connections", "workload_timeout", 
                       "dram_failure", "arc_timeout", "mpi_error", "ssh_error", "unhealthy", "inconclusive"]
