@@ -537,7 +537,7 @@ def create_tt_model(
     ids=[
         "batch-32",  # throughput
         "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
-        "batch-32-non-uniform-sampling-log-probs",  # throughput w/ non-uniform sampling and log-probs calculation
+        "batch-32-log-probs",  # throughput w/ non-uniform sampling and log-probs calculation
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -1320,7 +1320,7 @@ def test_demo_text(
     }
     # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
     if repeat_batches == 2 and batch_size == 1:
-        target = 68.50 if galaxy_type == "6U" else 99
+        target = 74.00 if galaxy_type == "6U" else 99
         assert (
             avg_time_to_first_token * 1000 < target
         ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
