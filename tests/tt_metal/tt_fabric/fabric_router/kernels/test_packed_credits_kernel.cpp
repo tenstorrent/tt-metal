@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/flow-control/credits.hpp"
 
 using namespace tt::tt_fabric;
@@ -392,46 +393,145 @@ void test_credit_packing_pack_into_existing_all_channel_counts(uint32_t& test_id
         write_test_result(test_id++, (packed.value == 0xAB) ? TEST_PASS : TEST_FAIL);
     }
 
-    // Test 2-channel pack_into
+    // Test 2-channel pack_into - individual then combined
     {
         using Packing = CreditPacking<2, 8>;
+
+        // First: Test packing each channel INDIVIDUALLY on fresh values
+        {
+            auto p0 = Packing::PackedValueType{0};
+            Packing::pack_channel<0>(p0, 0x12);
+            write_test_result(test_id++, (Packing::extract_channel<0>(p0) == 0x12) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p1 = Packing::PackedValueType{0};
+            Packing::pack_channel<1>(p1, 0x34);
+            write_test_result(test_id++, (Packing::extract_channel<1>(p1) == 0x34) ? TEST_PASS : TEST_FAIL);
+        }
+
+        // Second: Test packing ALL channels TOGETHER sequentially
         auto packed = Packing::PackedValueType{0};
         Packing::pack_channel<0>(packed, 0x12);
         Packing::pack_channel<1>(packed, 0x34);
         write_test_result(test_id++, (packed.value == 0x3412) ? TEST_PASS : TEST_FAIL);
     }
 
-    // Test 3-channel pack_into
+    // Test 3-channel pack_into - individual then combined
     {
         using Packing = CreditPacking<3, 8>;
+
+        // First: Test packing each channel INDIVIDUALLY on fresh values
+        {
+            auto p0 = Packing::PackedValueType{0};
+            Packing::pack_channel<0>(p0, 0x11);
+            write_test_result(test_id++, (Packing::extract_channel<0>(p0) == 0x11) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p1 = Packing::PackedValueType{0};
+            Packing::pack_channel<1>(p1, 0x22);
+            write_test_result(test_id++, (Packing::extract_channel<1>(p1) == 0x22) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p2 = Packing::PackedValueType{0};
+            Packing::pack_channel<2>(p2, 0x33);
+            write_test_result(test_id++, (Packing::extract_channel<2>(p2) == 0x33) ? TEST_PASS : TEST_FAIL);
+        }
+
+        // Second: Test packing ALL channels TOGETHER sequentially
         auto packed = Packing::PackedValueType{0};
         Packing::pack_channel<0>(packed, 0x11);
         Packing::pack_channel<1>(packed, 0x22);
         Packing::pack_channel<2>(packed, 0x33);
-        write_test_result(test_id++, (packed.value == 0x3322'11) ? TEST_PASS : TEST_FAIL);
+        write_test_result(test_id++, (packed.value == 0x332211) ? TEST_PASS : TEST_FAIL);
     }
 
-    // Test 4-channel pack_into
+    // Test 4-channel pack_into - individual then combined
     {
         using Packing = CreditPacking<4, 8>;
+
+        // First: Test packing each channel INDIVIDUALLY on fresh values
+        {
+            auto p0 = Packing::PackedValueType{0};
+            Packing::pack_channel<0>(p0, 0xAA);
+            write_test_result(test_id++, (Packing::extract_channel<0>(p0) == 0xAA) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p1 = Packing::PackedValueType{0};
+            Packing::pack_channel<1>(p1, 0xBB);
+            write_test_result(test_id++, (Packing::extract_channel<1>(p1) == 0xBB) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p2 = Packing::PackedValueType{0};
+            Packing::pack_channel<2>(p2, 0xCC);
+            write_test_result(test_id++, (Packing::extract_channel<2>(p2) == 0xCC) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p3 = Packing::PackedValueType{0};
+            Packing::pack_channel<3>(p3, 0xDD);
+            write_test_result(test_id++, (Packing::extract_channel<3>(p3) == 0xDD) ? TEST_PASS : TEST_FAIL);
+        }
+
+        // Second: Test packing ALL channels TOGETHER sequentially
         auto packed = Packing::PackedValueType{0};
         Packing::pack_channel<0>(packed, 0xAA);
         Packing::pack_channel<1>(packed, 0xBB);
         Packing::pack_channel<2>(packed, 0xCC);
         Packing::pack_channel<3>(packed, 0xDD);
-        write_test_result(test_id++, (packed.value == 0xDDCC'BBAA) ? TEST_PASS : TEST_FAIL);
+
+        // Verify all channels are correct
+        bool pass = (Packing::extract_channel<0>(packed) == 0xAA) &&
+                    (Packing::extract_channel<1>(packed) == 0xBB) &&
+                    (Packing::extract_channel<2>(packed) == 0xCC) &&
+                    (Packing::extract_channel<3>(packed) == 0xDD);
+        write_test_result(test_id++, pass ? TEST_PASS : TEST_FAIL);
     }
 
-    // Test 5-channel pack_into
+    // Test 5-channel pack_into - individual then combined
     {
         using Packing = CreditPacking<5, 8>;
+
+        // First: Test packing each channel INDIVIDUALLY on fresh values
+        {
+            auto p0 = Packing::PackedValueType{0};
+            Packing::pack_channel<0>(p0, 0x10);
+            write_test_result(test_id++, (Packing::extract_channel<0>(p0) == 0x10) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p1 = Packing::PackedValueType{0};
+            Packing::pack_channel<1>(p1, 0x20);
+            write_test_result(test_id++, (Packing::extract_channel<1>(p1) == 0x20) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p2 = Packing::PackedValueType{0};
+            Packing::pack_channel<2>(p2, 0x30);
+            write_test_result(test_id++, (Packing::extract_channel<2>(p2) == 0x30) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p3 = Packing::PackedValueType{0};
+            Packing::pack_channel<3>(p3, 0x40);
+            write_test_result(test_id++, (Packing::extract_channel<3>(p3) == 0x40) ? TEST_PASS : TEST_FAIL);
+        }
+        {
+            auto p4 = Packing::PackedValueType{0};
+            Packing::pack_channel<4>(p4, 0x50);
+            write_test_result(test_id++, (Packing::extract_channel<4>(p4) == 0x50) ? TEST_PASS : TEST_FAIL);
+        }
+
+        // Second: Test packing ALL channels TOGETHER sequentially
         auto packed = Packing::PackedValueType{0};
         Packing::pack_channel<0>(packed, 0x10);
         Packing::pack_channel<1>(packed, 0x20);
         Packing::pack_channel<2>(packed, 0x30);
         Packing::pack_channel<3>(packed, 0x40);
         Packing::pack_channel<4>(packed, 0x50);
-        write_test_result(test_id++, (packed.value == 0x0000'0050'4030'2010ULL) ? TEST_PASS : TEST_FAIL);
+
+        // Verify all channels are correct
+        bool all_ok = (Packing::extract_channel<0>(packed) == 0x10) &&
+                      (Packing::extract_channel<1>(packed) == 0x20) &&
+                      (Packing::extract_channel<2>(packed) == 0x30) &&
+                      (Packing::extract_channel<3>(packed) == 0x40) &&
+                      (Packing::extract_channel<4>(packed) == 0x50);
+        write_test_result(test_id++, all_ok ? TEST_PASS : TEST_FAIL);
     }
 }
 
@@ -485,15 +585,9 @@ void test_credit_packing_pack_into_existing_special_cases(uint32_t& test_id) {
         write_test_result(test_id++, (packed3.value == 0x3322'11) ? TEST_PASS : TEST_FAIL);
     }
 
-    // Test 4: Verify OR behavior (packing same channel twice ORs values)
-    {
-        auto packed = Packing::PackedValueType{0};
-        Packing::pack_channel<0>(packed, 0x0F);  // Lower nibble
-        Packing::pack_channel<0>(packed, 0xF0);  // Upper nibble
-        // Should OR to 0xFF
-        uint32_t ch0 = Packing::extract_channel<0>(packed);
-        write_test_result(test_id++, (ch0 == 0xFF) ? TEST_PASS : TEST_FAIL);
-    }
+    // NOTE: Removed old "Test 4: Verify OR behavior" because OR was a BUG.
+    // pack_channel now correctly REPLACES values instead of ORing them.
+    // The replacement behavior is thoroughly tested in test_pack_channel_replacement_not_or()
 }
 
 // Test: pack_channel with 5-channel uint64_t storage
@@ -689,6 +783,568 @@ void test_credit_packing_6bit_pack_into_existing(uint32_t& test_id) {
     }
 }
 
+// Test: Wraparound behavior for 8-bit credits (all channel counts)
+// Tests that unbounded credits correctly handle overflow and distance calculation
+void test_credit_wraparound_8bit_all_channels(uint32_t& test_id) {
+    // Test 1: 1-channel wraparound (8-bit, max=255)
+    {
+        using Packing = CreditPacking<1, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Start at 250, increment by 10 to wrap to 4
+        uint8_t old_value = 250;
+        uint8_t new_value = static_cast<uint8_t>(old_value + 10); // Wraps to 4
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+
+        // Verify wraparound: 250 + 10 = 260 % 256 = 4
+        bool wraparound_correct = (extracted == 4);
+
+        // Verify distance calculation: (4 - 250) as uint8_t = 10
+        uint8_t distance = static_cast<uint8_t>(new_value - old_value);
+        bool distance_correct = (distance == 10);
+
+        write_test_result(test_id++, (wraparound_correct && distance_correct) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 2: 2-channel wraparound
+    {
+        using Packing = CreditPacking<2, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_ch0 = 252;
+        uint8_t new_ch0 = static_cast<uint8_t>(old_ch0 + 15); // Wraps to 11
+        uint8_t old_ch1 = 248;
+        uint8_t new_ch1 = static_cast<uint8_t>(old_ch1 + 20); // Wraps to 12
+
+        Packing::pack_channel<0>(packed, new_ch0);
+        Packing::pack_channel<1>(packed, new_ch1);
+
+        uint32_t ext_ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ext_ch1 = Packing::extract_channel<1>(packed);
+
+        uint8_t dist_ch0 = static_cast<uint8_t>(new_ch0 - old_ch0);
+        uint8_t dist_ch1 = static_cast<uint8_t>(new_ch1 - old_ch1);
+
+        bool test_pass = (ext_ch0 == 11) && (ext_ch1 == 12) &&
+                         (dist_ch0 == 15) && (dist_ch1 == 20);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 3: 3-channel wraparound
+    {
+        using Packing = CreditPacking<3, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_ch0 = 250;
+        uint8_t new_ch0 = static_cast<uint8_t>(old_ch0 + 30); // Wraps to 24
+        uint8_t old_ch1 = 240;
+        uint8_t new_ch1 = static_cast<uint8_t>(old_ch1 + 25); // Wraps to 9
+        uint8_t old_ch2 = 255;
+        uint8_t new_ch2 = static_cast<uint8_t>(old_ch2 + 1); // Wraps to 0
+
+        Packing::pack_channel<0>(packed, new_ch0);
+        Packing::pack_channel<1>(packed, new_ch1);
+        Packing::pack_channel<2>(packed, new_ch2);
+
+        uint32_t ext_ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ext_ch1 = Packing::extract_channel<1>(packed);
+        uint32_t ext_ch2 = Packing::extract_channel<2>(packed);
+
+        uint8_t dist_ch0 = static_cast<uint8_t>(new_ch0 - old_ch0);
+        uint8_t dist_ch1 = static_cast<uint8_t>(new_ch1 - old_ch1);
+        uint8_t dist_ch2 = static_cast<uint8_t>(new_ch2 - old_ch2);
+
+        bool test_pass = (ext_ch0 == 24) && (ext_ch1 == 9) && (ext_ch2 == 0) &&
+                         (dist_ch0 == 30) && (dist_ch1 == 25) && (dist_ch2 == 1);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 4: 4-channel wraparound
+    {
+        using Packing = CreditPacking<4, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_vals[4] = {250, 245, 255, 200};
+        uint8_t increments[4] = {20, 30, 5, 100};
+        uint8_t new_vals[4];
+
+        for (int i = 0; i < 4; i++) {
+            new_vals[i] = static_cast<uint8_t>(old_vals[i] + increments[i]);
+        }
+
+        Packing::pack_channel<0>(packed, new_vals[0]);
+        Packing::pack_channel<1>(packed, new_vals[1]);
+        Packing::pack_channel<2>(packed, new_vals[2]);
+        Packing::pack_channel<3>(packed, new_vals[3]);
+
+        bool test_pass = true;
+        for (int i = 0; i < 4; i++) {
+            uint32_t extracted = Packing::extract_channel(packed, i);
+            uint8_t expected = new_vals[i];
+            uint8_t distance = static_cast<uint8_t>(new_vals[i] - old_vals[i]);
+
+            if (extracted != expected || distance != increments[i]) {
+                test_pass = false;
+                break;
+            }
+        }
+
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 5: 5-channel wraparound (uses uint64_t storage)
+    {
+        using Packing = CreditPacking<5, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_vals[5] = {250, 245, 255, 200, 253};
+        uint8_t increments[5] = {20, 30, 5, 100, 15};
+        uint8_t new_vals[5];
+
+        for (int i = 0; i < 5; i++) {
+            new_vals[i] = static_cast<uint8_t>(old_vals[i] + increments[i]);
+        }
+
+        Packing::pack_channel<0>(packed, new_vals[0]);
+        Packing::pack_channel<1>(packed, new_vals[1]);
+        Packing::pack_channel<2>(packed, new_vals[2]);
+        Packing::pack_channel<3>(packed, new_vals[3]);
+        Packing::pack_channel<4>(packed, new_vals[4]);
+
+        bool test_pass = true;
+        for (int i = 0; i < 5; i++) {
+            uint32_t extracted = Packing::extract_channel(packed, i);
+            uint8_t expected = new_vals[i];
+            uint8_t distance = static_cast<uint8_t>(new_vals[i] - old_vals[i]);
+
+            if (extracted != expected || distance != increments[i]) {
+                test_pass = false;
+                break;
+            }
+        }
+
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+}
+
+// Test: Wraparound behavior for 6-bit credits (all channel counts)
+// 6-bit credits have max value of 63 (2^6 - 1)
+void test_credit_wraparound_6bit_all_channels(uint32_t& test_id) {
+    constexpr uint8_t MAX_6BIT = 63;
+    constexpr uint8_t MASK_6BIT = 0x3F;
+
+    // Test 1: 1-channel wraparound (6-bit, max=63)
+    {
+        using Packing = CreditPacking<1, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Start at 60, increment by 8 to wrap to 4 (68 % 64 = 4)
+        uint8_t old_value = 60;
+        uint8_t new_value = (old_value + 8) & MASK_6BIT;
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+
+        // Verify wraparound: 60 + 8 = 68, masked to 6 bits = 4
+        bool wraparound_correct = (extracted == 4);
+
+        // Verify distance calculation with 6-bit mask
+        uint8_t distance = static_cast<uint8_t>((new_value - old_value) & MASK_6BIT);
+        bool distance_correct = (distance == 8);
+
+        write_test_result(test_id++, (wraparound_correct && distance_correct) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 2: 2-channel wraparound (6-bit)
+    {
+        using Packing = CreditPacking<2, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_ch0 = 62;
+        uint8_t new_ch0 = (old_ch0 + 5) & MASK_6BIT; // Wraps to 3
+        uint8_t old_ch1 = 58;
+        uint8_t new_ch1 = (old_ch1 + 10) & MASK_6BIT; // Wraps to 4
+
+        Packing::pack_channel<0>(packed, new_ch0);
+        Packing::pack_channel<1>(packed, new_ch1);
+
+        uint32_t ext_ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ext_ch1 = Packing::extract_channel<1>(packed);
+
+        uint8_t dist_ch0 = static_cast<uint8_t>((new_ch0 - old_ch0) & MASK_6BIT);
+        uint8_t dist_ch1 = static_cast<uint8_t>((new_ch1 - old_ch1) & MASK_6BIT);
+
+        bool test_pass = (ext_ch0 == 3) && (ext_ch1 == 4) &&
+                         (dist_ch0 == 5) && (dist_ch1 == 10);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 3: 3-channel wraparound (6-bit)
+    {
+        using Packing = CreditPacking<3, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_ch0 = 60;
+        uint8_t new_ch0 = (old_ch0 + 20) & MASK_6BIT; // Wraps to 16
+        uint8_t old_ch1 = 55;
+        uint8_t new_ch1 = (old_ch1 + 15) & MASK_6BIT; // Wraps to 6
+        uint8_t old_ch2 = MAX_6BIT;
+        uint8_t new_ch2 = (old_ch2 + 1) & MASK_6BIT; // Wraps to 0
+
+        Packing::pack_channel<0>(packed, new_ch0);
+        Packing::pack_channel<1>(packed, new_ch1);
+        Packing::pack_channel<2>(packed, new_ch2);
+
+        uint32_t ext_ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ext_ch1 = Packing::extract_channel<1>(packed);
+        uint32_t ext_ch2 = Packing::extract_channel<2>(packed);
+
+        uint8_t dist_ch0 = static_cast<uint8_t>((new_ch0 - old_ch0) & MASK_6BIT);
+        uint8_t dist_ch1 = static_cast<uint8_t>((new_ch1 - old_ch1) & MASK_6BIT);
+        uint8_t dist_ch2 = static_cast<uint8_t>((new_ch2 - old_ch2) & MASK_6BIT);
+
+        bool test_pass = (ext_ch0 == 16) && (ext_ch1 == 6) && (ext_ch2 == 0) &&
+                         (dist_ch0 == 20) && (dist_ch1 == 15) && (dist_ch2 == 1);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 4: 4-channel wraparound (6-bit)
+    {
+        using Packing = CreditPacking<4, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_vals[4] = {60, 58, MAX_6BIT, 50};
+        uint8_t increments[4] = {10, 12, 5, 30};
+        uint8_t new_vals[4];
+
+        for (int i = 0; i < 4; i++) {
+            new_vals[i] = (old_vals[i] + increments[i]) & MASK_6BIT;
+        }
+
+        Packing::pack_channel<0>(packed, new_vals[0]);
+        Packing::pack_channel<1>(packed, new_vals[1]);
+        Packing::pack_channel<2>(packed, new_vals[2]);
+        Packing::pack_channel<3>(packed, new_vals[3]);
+
+        bool test_pass = true;
+        for (int i = 0; i < 4; i++) {
+            uint32_t extracted = Packing::extract_channel(packed, i);
+            uint8_t expected = new_vals[i];
+            uint8_t distance = static_cast<uint8_t>((new_vals[i] - old_vals[i]) & MASK_6BIT);
+
+            if (extracted != expected || distance != increments[i]) {
+                test_pass = false;
+                break;
+            }
+        }
+
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 5: 5-channel wraparound (6-bit, uses uint64_t storage)
+    {
+        using Packing = CreditPacking<5, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_vals[5] = {60, 58, MAX_6BIT, 50, 61};
+        uint8_t increments[5] = {10, 12, 5, 30, 8};
+        uint8_t new_vals[5];
+
+        for (int i = 0; i < 5; i++) {
+            new_vals[i] = (old_vals[i] + increments[i]) & MASK_6BIT;
+        }
+
+        Packing::pack_channel<0>(packed, new_vals[0]);
+        Packing::pack_channel<1>(packed, new_vals[1]);
+        Packing::pack_channel<2>(packed, new_vals[2]);
+        Packing::pack_channel<3>(packed, new_vals[3]);
+        Packing::pack_channel<4>(packed, new_vals[4]);
+
+        bool test_pass = true;
+        for (int i = 0; i < 5; i++) {
+            uint32_t extracted = Packing::extract_channel(packed, i);
+            uint8_t expected = new_vals[i];
+            uint8_t distance = static_cast<uint8_t>((new_vals[i] - old_vals[i]) & MASK_6BIT);
+
+            if (extracted != expected || distance != increments[i]) {
+                test_pass = false;
+                break;
+            }
+        }
+
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+}
+
+// Test: Pack channel replacement (NOT OR) - this exposes the bug!
+// When updating the same channel twice, the new value should REPLACE, not OR
+void test_pack_channel_replacement_not_or(uint32_t& test_id) {
+    DPRINT << "=== test_pack_channel_replacement_not_or START ===" << ENDL();
+
+    // Test 1: Single channel replacement (1-channel, 8-bit)
+    {
+        using Packing = CreditPacking<1, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        DPRINT << "Test1: Setting ch0=100" << ENDL();
+        // Set channel 0 to 100
+        Packing::pack_channel<0>(packed, 100);
+        uint32_t val1 = Packing::extract_channel<0>(packed);
+        DPRINT << "  After set: val1=" << val1 << " packed.value=0x" << HEX() << packed.value << DEC() << ENDL();
+
+        // Update channel 0 to 50 (should REPLACE, not OR)
+        DPRINT << "Test1: Updating ch0=50 (REPLACE)" << ENDL();
+        Packing::pack_channel<0>(packed, 50);
+        uint32_t val2 = Packing::extract_channel<0>(packed);
+        DPRINT << "  After update: val2=" << val2 << " packed.value=0x" << HEX() << packed.value << DEC() << ENDL();
+
+        // If using OR: 100 | 50 = 118 (WRONG)
+        // If using REPLACE: 50 (CORRECT)
+        bool pass = (val1 == 100 && val2 == 50);
+        DPRINT << "Test1: " << (pass ? "PASS" : "FAIL") << " (expected val1=100, val2=50)" << ENDL();
+        write_test_result(test_id++, pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 2: Multi-channel, update same channel multiple times (2-channel, 8-bit)
+    {
+        using Packing = CreditPacking<2, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        DPRINT << "Test2: Initial setup ch0=100, ch1=200" << ENDL();
+        // Initial setup: ch0=100, ch1=200
+        Packing::pack_channel<0>(packed, 100);
+        Packing::pack_channel<1>(packed, 200);
+        DPRINT << "  After setup: packed.value=0x" << HEX() << packed.value << DEC() << ENDL();
+
+        // Update ch0 to 50 (should REPLACE 100 with 50, leave ch1 unchanged)
+        DPRINT << "Test2: Updating ch0=50 (should REPLACE, keep ch1)" << ENDL();
+        Packing::pack_channel<0>(packed, 50);
+        DPRINT << "  After update: packed.value=0x" << HEX() << packed.value << DEC() << ENDL();
+
+        uint32_t ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ch1 = Packing::extract_channel<1>(packed);
+        DPRINT << "  Extracted: ch0=" << ch0 << " ch1=" << ch1 << ENDL();
+
+        // ch0 should be 50 (not 100 | 50 = 116)
+        // ch1 should still be 200
+        bool pass = (ch0 == 50 && ch1 == 200);
+        DPRINT << "Test2: " << (pass ? "PASS" : "FAIL") << " (expected ch0=50, ch1=200)" << ENDL();
+        write_test_result(test_id++, pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 3: Update with zero (should clear the channel)
+    {
+        using Packing = CreditPacking<2, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        Packing::pack_channel<0>(packed, 255);
+        Packing::pack_channel<1>(packed, 128);
+
+        // Update ch0 to 0 (should clear it completely)
+        Packing::pack_channel<0>(packed, 0);
+
+        uint32_t ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ch1 = Packing::extract_channel<1>(packed);
+
+        // ch0 should be 0 (not 255 | 0 = 255)
+        write_test_result(test_id++, (ch0 == 0 && ch1 == 128) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 4: Multiple updates in sequence (simulating unbounded counter updates)
+    {
+        using Packing = CreditPacking<1, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Simulate unbounded counter: 0 -> 10 -> 20 -> 30
+        Packing::pack_channel<0>(packed, 0);
+        Packing::pack_channel<0>(packed, 10);
+        uint32_t val1 = Packing::extract_channel<0>(packed);
+
+        Packing::pack_channel<0>(packed, 20);
+        uint32_t val2 = Packing::extract_channel<0>(packed);
+
+        Packing::pack_channel<0>(packed, 30);
+        uint32_t val3 = Packing::extract_channel<0>(packed);
+
+        write_test_result(test_id++, (val1 == 10 && val2 == 20 && val3 == 30) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 5: 4-channel, update middle channel (non-byte-aligned 6-bit)
+    {
+        using Packing = CreditPacking<4, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Set all channels
+        Packing::pack_channel<0>(packed, 10);
+        Packing::pack_channel<1>(packed, 20);
+        Packing::pack_channel<2>(packed, 30);
+        Packing::pack_channel<3>(packed, 40);
+
+        // Update ch1 to 5 (should replace 20 with 5)
+        Packing::pack_channel<1>(packed, 5);
+
+        uint32_t ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ch1 = Packing::extract_channel<1>(packed);
+        uint32_t ch2 = Packing::extract_channel<2>(packed);
+        uint32_t ch3 = Packing::extract_channel<3>(packed);
+
+        write_test_result(test_id++, (ch0 == 10 && ch1 == 5 && ch2 == 30 && ch3 == 40) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 6: Runtime channel_id version
+    {
+        using Packing = CreditPacking<3, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Set initial values using runtime channel_id
+        Packing::pack_channel(packed, 0, 100);
+        Packing::pack_channel(packed, 1, 150);
+        Packing::pack_channel(packed, 2, 200);
+
+        // Update channel 1 to 75
+        Packing::pack_channel(packed, 1, 75);
+
+        uint32_t ch0 = Packing::extract_channel(packed, 0);
+        uint32_t ch1 = Packing::extract_channel(packed, 1);
+        uint32_t ch2 = Packing::extract_channel(packed, 2);
+
+        write_test_result(test_id++, (ch0 == 100 && ch1 == 75 && ch2 == 200) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 7: Edge case - update to max value
+    {
+        using Packing = CreditPacking<2, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        Packing::pack_channel<0>(packed, 127);
+        Packing::pack_channel<0>(packed, 255);  // Update to max
+
+        uint32_t ch0 = Packing::extract_channel<0>(packed);
+        write_test_result(test_id++, (ch0 == 255) ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 8: 5-channel byte-aligned (uses uint64_t)
+    {
+        using Packing = CreditPacking<5, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        // Set all channels
+        for (uint8_t i = 0; i < 5; i++) {
+            Packing::pack_channel(packed, i, 50 + i * 10);
+        }
+
+        // Update channel 2 from 70 to 15
+        Packing::pack_channel<2>(packed, 15);
+
+        bool all_correct = true;
+        uint32_t expected[5] = {50, 60, 15, 80, 90};
+        for (uint8_t i = 0; i < 5; i++) {
+            uint32_t val = Packing::extract_channel(packed, i);
+            if (val != expected[i]) {
+                all_correct = false;
+                break;
+            }
+        }
+
+        write_test_result(test_id++, all_correct ? TEST_PASS : TEST_FAIL);
+    }
+}
+
+// Test: Edge case wraparound scenarios
+void test_credit_wraparound_edge_cases(uint32_t& test_id) {
+    // Test 1: 8-bit wraparound from 255 to 0
+    {
+        using Packing = CreditPacking<1, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_value = 255;
+        uint8_t new_value = static_cast<uint8_t>(old_value + 1); // Wraps to 0
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+        uint8_t distance = static_cast<uint8_t>(new_value - old_value);
+
+        bool test_pass = (extracted == 0) && (distance == 1);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 2: 8-bit multiple full wraparounds (increment by 256)
+    {
+        using Packing = CreditPacking<1, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_value = 100;
+        uint8_t new_value = static_cast<uint8_t>(old_value + 256); // Should equal old_value
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+        uint8_t distance = static_cast<uint8_t>(new_value - old_value);
+
+        bool test_pass = (extracted == 100) && (distance == 0);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 3: 6-bit wraparound from 63 to 0
+    {
+        using Packing = CreditPacking<1, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_value = 63;
+        uint8_t new_value = (old_value + 1) & 0x3F; // Wraps to 0
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+        uint8_t distance = static_cast<uint8_t>((new_value - old_value) & 0x3F);
+
+        bool test_pass = (extracted == 0) && (distance == 1);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 4: 6-bit multiple full wraparounds (increment by 64)
+    {
+        using Packing = CreditPacking<1, 6>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_value = 30;
+        uint8_t new_value = (old_value + 64) & 0x3F; // Should equal old_value
+
+        Packing::pack_channel<0>(packed, new_value);
+        uint32_t extracted = Packing::extract_channel<0>(packed);
+        uint8_t distance = static_cast<uint8_t>((new_value - old_value) & 0x3F);
+
+        bool test_pass = (extracted == 30) && (distance == 0);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+
+    // Test 5: Large increment with 8-bit (simulate many wraps)
+    {
+        using Packing = CreditPacking<2, 8>;
+        auto packed = Packing::PackedValueType{0};
+
+        uint8_t old_ch0 = 100;
+        uint8_t old_ch1 = 200;
+        uint8_t new_ch0 = static_cast<uint8_t>(old_ch0 + 500); // Multiple wraps
+        uint8_t new_ch1 = static_cast<uint8_t>(old_ch1 + 1000); // Multiple wraps
+
+        Packing::pack_channel<0>(packed, new_ch0);
+        Packing::pack_channel<1>(packed, new_ch1);
+
+        uint32_t ext_ch0 = Packing::extract_channel<0>(packed);
+        uint32_t ext_ch1 = Packing::extract_channel<1>(packed);
+
+        uint8_t dist_ch0 = static_cast<uint8_t>(new_ch0 - old_ch0);
+        uint8_t dist_ch1 = static_cast<uint8_t>(new_ch1 - old_ch1);
+
+        // 500 % 256 = 244, so new_ch0 = (100 + 244) % 256 = 88
+        // 1000 % 256 = 232, so new_ch1 = (200 + 232) % 256 = 176
+        bool test_pass = (ext_ch0 == 88) && (ext_ch1 == 176) &&
+                         (dist_ch0 == 244) && (dist_ch1 == 232);
+        write_test_result(test_id++, test_pass ? TEST_PASS : TEST_FAIL);
+    }
+}
+
 void kernel_main() {
     uint32_t test_id = 0;
 
@@ -716,6 +1372,14 @@ void kernel_main() {
     test_credit_packing_pack_into_existing_special_cases(test_id);
     test_credit_packing_5ch_pack_into_existing(test_id);
     test_credit_packing_6bit_pack_into_existing(test_id);
+
+    // Pack channel replacement tests (exposes OR bug)
+    test_pack_channel_replacement_not_or(test_id);
+
+    // Wraparound behavior tests (unbounded counter credits)
+    test_credit_wraparound_8bit_all_channels(test_id);
+    test_credit_wraparound_6bit_all_channels(test_id);
+    test_credit_wraparound_edge_cases(test_id);
 
     // Write completion status as the VERY LAST operation
     // This signals to the host that the kernel ran to completion

@@ -149,6 +149,7 @@ void RunPackedCreditsTests(BaseFabricFixture* fixture) {
 
     EXPECT_TRUE(all_tests_passed) << "Some packed credit tests failed";
     EXPECT_GT(num_passed, 0) << "No tests ran successfully";
+
 }
 
 TEST_F(Fabric1DFixture, TestPackedCredits1D) {

@@ -614,6 +614,13 @@ FORCE_INLINE void send_next_data(
     // Determine target stream ID based on sender channel (handles multi-register case)
     constexpr uint32_t target_stream_id = get_sender_target_stream_id<sender_channel_index, to_receiver_pkts_sent_id>();
     const uint32_t packets_to_forward = build_packet_forward_value<sender_channel_index, to_receiver_pkts_sent_id>();
+
+    DPRINT << "SEND_PKT: ch=" << (uint32_t)sender_channel_index
+           << " payload_sz=" << payload_size_bytes
+           << " target_stream=" << target_stream_id
+           << " packed_credit=" << HEX() << packets_to_forward
+           << " remote_free_slots=" << remote_receiver_num_free_slots << ENDL();
+
     remote_update_ptr_val<target_stream_id, sender_txq_id>(static_cast<int32_t>(packets_to_forward));
 }
 
@@ -1385,26 +1392,32 @@ constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }
 void run_routing_without_noc_sync_coordinated_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+        // DPRINT << "CTX_MASTER_START: erisc0 signaling RETRAIN_INTENT" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT));
         // Wait for erisc1 to ack
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                // DPRINT << "CTX_MASTER_TERM: termination during wait for INTENT_ACK" << ENDL();
                 return;
             }
         }
+        // DPRINT << "CTX_MASTER_ACK: erisc1 acked, running base FW" << ENDL();
         run_routing_without_noc_sync();
+        // DPRINT << "CTX_MASTER_DONE: base FW complete, signaling RETRAIN_COMPLETE" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
         // Wait for erisc1 to ack
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                // DPRINT << "CTX_MASTER_TERM: termination during wait for COMPLETE_ACK" << ENDL();
                 return;
             }
         }
         // Resume normal operation
+        // DPRINT << "CTX_MASTER_RESUME: erisc1 acked, resuming NORMAL_EXECUTION" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
     }
@@ -1414,22 +1427,27 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
     if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
         if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() ==
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
+            // DPRINT << "CTX_SLAVE_START: erisc1 detected RETRAIN_INTENT, acking" << ENDL();
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                    static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
                 if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    // DPRINT << "CTX_SLAVE_TERM: termination during wait for RETRAIN_COMPLETE" << ENDL();
                     return;
                 }
             }
+            // DPRINT << "CTX_SLAVE_DONE: erisc0 completed, acking COMPLETE_ACK" << ENDL();
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK));
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                    static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
                 if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    // DPRINT << "CTX_SLAVE_TERM: termination during wait for NORMAL_EXECUTION" << ENDL();
                     return;
                 }
             }
+            // DPRINT << "CTX_SLAVE_RESUME: erisc0 resumed, back to NORMAL_EXECUTION" << ENDL();
         }
     }
 }
@@ -1640,6 +1658,10 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
     if (completions_since_last_check) {
+        DPRINT << "SEND_PROC_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
+               << " completions=" << completions_since_last_check
+               << " old_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots
+               << " new_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots + completions_since_last_check << ENDL();
         WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
@@ -1662,6 +1684,10 @@ FORCE_INLINE
             auto acks_since_last_check = extract_sender_channel_acks<sender_channel_index>(packed_acks);
             if (acks_since_last_check > 0) {
                 uint32_t acks_to_decrement = build_ack_decrement_value<sender_channel_index>(acks_since_last_check);
+                DPRINT << "SEND_PROC_ACK_LOOP: ch=" << (uint32_t)sender_channel_index
+                       << " packed_acks=" << HEX() << packed_acks
+                       << " extracted=" << acks_since_last_check
+                       << " acks_to_dec=" << HEX() << acks_to_decrement << ENDL();
                 sender_channel_from_receiver_credits.increment_num_processed_acks<sender_channel_index>(acks_to_decrement);
                 send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                     local_sender_channel_worker_interface,
@@ -1782,14 +1808,32 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             auto packed_num_packets_raw = packed_num_packets.get();
 
             if constexpr (enable_first_level_ack) {
-                receiver_channel_pointers.m.unsent_first_level_acks += packed_num_packets_raw;
+                // Don't accumulate here - ACKs will be sent per-packet during consumption
             }
             // Use the credit view's optimized sum instead of helper function
-            receiver_channel_pointers.m.unsent_messages += credits_view.get_total();
+            uint32_t new_credits = credits_view.get_total();
+            uint32_t old_unsent = receiver_channel_pointers.m.unsent_messages;
+            receiver_channel_pointers.m.unsent_messages += new_credits;
+
+            DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
+                   << " new_credits=" << new_credits
+                   << " old_unsent=" << (uint32_t)old_unsent
+                   << " new_unsent=" << (uint32_t)receiver_channel_pointers.m.unsent_messages
+                   << " packed_to_clear=" << HEX() << packed_num_packets.get() << ENDL();
 
             // Clear the register(s) by decrementing with the packed value
             // The updater handles single vs multi-register splitting automatically
             credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
+
+            asm volatile("nop");
+            asm volatile("nop");
+            asm volatile("nop");
+            asm volatile("nop");
+            asm volatile("nop");
+
+            // Verify the register was cleared
+            auto after_clear = credits_view.get_total();
+            DPRINT << "RECV_CLEARED_REG: remaining_credits=" << after_clear << ENDL();
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
@@ -1815,8 +1859,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-        // Store src_ch_id for BH (counter-based) or when not using packed credits
-        if constexpr (!skip_src_ch_id_update && !USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+        // Store src_ch_id for all modes - needed for both ACKs and completions
+        if constexpr (!skip_src_ch_id_update) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
@@ -1881,8 +1925,26 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+                uint8_t before = receiver_channel_pointers.m.unsent_messages;
                 receiver_channel_pointers.m.unsent_messages--;
+                DPRINT << "RECV_CONSUME_PKT: unsent_msgs=" << (uint32_t)before << "->" << (uint32_t)receiver_channel_pointers.m.unsent_messages << ENDL();
+
+                // Send first-level ACK per packet to specific channel (WH packed mode)
+                if constexpr (enable_first_level_ack) {
+                    uint8_t src_ch_id;
+                    if constexpr (skip_src_ch_id_update) {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                    } else {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+                    }
+                    DPRINT << "RECV_PKT_ACK: rx_buf=" << (uint32_t)receiver_buffer_index
+                           << " src_ch=" << (uint32_t)src_ch_id << ENDL();
+                    // Send ACK to specific channel
+                    receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                        receiver_channel_response_credit_sender, src_ch_id, 1);
+                }
             } else {
+                DPRINT << "RECV_CONSUME_PKT: decrement stream register" << ENDL();
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
                 if constexpr (enable_first_level_ack) {
@@ -1892,6 +1954,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     } else {
                         src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
                     }
+                    DPRINT << "RECV_PKT_ACK: rx_buf=" << (uint32_t)receiver_buffer_index
+                           << " src_ch=" << (uint32_t)src_ch_id << ENDL();
                     // Send first-level ACK via receiver_send_received_ack (counter-based for BH)
                     receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                         receiver_channel_response_credit_sender, src_ch_id, 1);
@@ -1903,25 +1967,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
-    // For WH with enable_first_level_ack (packed credits), send accumulated ACKs to channel 0
-    // For BH, ACKs are sent immediately per packet above via receiver_send_received_ack
-    if constexpr (enable_first_level_ack) {
-        static_assert(
-            !enable_first_level_ack || USE_PACKED_FIRST_LEVEL_ACK_CREDITS,
-            "enable_first_level_ack requires USE_PACKED_FIRST_LEVEL_ACK_CREDITS");
-        if (receiver_channel_pointers.m.unsent_first_level_acks) {
-            // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
-            bool can_send = true;
-            if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-                can_send = !internal_::eth_txq_is_busy(receiver_txq_id);
-            }
-            if (can_send) {
-                receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                    receiver_channel_response_credit_sender, 0 /*ignored*/, receiver_channel_pointers.m.unsent_first_level_acks);
-                receiver_channel_pointers.m.unsent_first_level_acks = 0;
-            }
-        }
-    }
+    // ACKs are now sent immediately per packet above for both packed and non-packed modes
 
     // flush and completion are fused, so we only need to update one of the counters
     // update completion since other parts of the code check against completion
@@ -1936,17 +1982,15 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     }
     if (can_send_completion) {
         uint8_t src_ch_id;
-        if constexpr (USE_PACKED_COMPLETION_ACK_CREDITS) {
-            // WH with enable_first_level_ack: Send to channel 0 (packed register)
-            src_ch_id = 0;
+        // Get the actual source channel ID from the packet for both packed and non-packed modes
+        if constexpr (skip_src_ch_id_update) {
+            src_ch_id = receiver_channel_pointers.get_src_chan_id();
         } else {
-            // BH or !enable_first_level_ack: Send to specific sender channel via counter
-            if constexpr (skip_src_ch_id_update) {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-            }
+            src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
         }
+        DPRINT << "RECV_PKT_COMPL: rx_buf=" << (uint32_t)receiver_buffer_index
+               << " src_ch=" << (uint32_t)src_ch_id
+               << " compl_counter=" << (uint32_t)completion_counter.get_buffer_index() << ENDL();
         WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
         // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
         receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
@@ -1954,6 +1998,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
     }
+
+
+    receiver_channel_response_credit_sender.try_flush_credits();
+
     return progress;
 };
 
@@ -2126,7 +2174,20 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     uint64_t loop_start_cycles;
+    uint64_t loop_iteration_count = 0;
+
+    // DPRINT << "MAIN_LOOP_START: erisc_id=" << MY_ERISC_ID
+    //        << " term_sig_ptr=" << HEX() << (uint32_t)termination_signal_ptr << ENDL();
+
     while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        loop_iteration_count++;
+
+        // Periodic heartbeat every 10000 iterations
+        // if ((loop_iteration_count % 10000) == 0) {
+        //     DPRINT << "MAIN_LOOP_ALIVE: erisc_id=" << MY_ERISC_ID
+        //            << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
+        // }
+
         did_something = false;
 
         uint32_t tx_progress = 0;
@@ -2322,6 +2383,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 fabric_telemetry);
         }
 
+        // Periodically try to flush receiver->sender credits (acks and completions)
+        // This ensures credits reach the sender even if ethernet queue was busy during increment
+        // for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        // }
+
         if constexpr (enable_context_switch) {
             // shouldn't do noc counter sync since we are not incrementing them
             if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2329,12 +2395,18 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     did_nothing_count = 0;
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
+                        // DPRINT << "CTX_SWITCH_IDLE: did_nothing=" << did_nothing_count
+                        //        << " interval=" << SWITCH_INTERVAL
+                        //        << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
                         did_nothing_count = 0;
                         run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    // DPRINT << "CTX_SWITCH: count=" << did_nothing_count
+                    //        << " interval=" << SWITCH_INTERVAL
+                    //        << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
                     did_nothing_count = 0;
                     run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                 }
@@ -2354,6 +2426,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
     }
+
+    DPRINT << "MAIN_LOOP_EXIT: erisc_id=" << MY_ERISC_ID
+           << " total_iters=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF)
+           << " termination_detected" << ENDL();
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>

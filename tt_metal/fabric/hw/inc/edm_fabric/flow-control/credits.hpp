@@ -44,7 +44,8 @@ template <uint8_t NUM_CHANNELS_IN_THIS_VC, uint32_t MAX_BUFFER_SLOTS, size_t str
 struct PackedCredits {
     // Calculate credit bit width (byte-aligned when possible)
     static constexpr uint32_t MAX_SLOTS_PER_CHANNEL = 64;  // let's us pack 4 credits per register
-    static constexpr bool credits_are_byte_aligned = NUM_CHANNELS_IN_THIS_VC <= 3;
+    // 8-bit credits are always byte-aligned, regardless of channel count (even 5 channels uses 2 words)
+    static constexpr bool credits_are_byte_aligned = (NUM_CHANNELS_IN_THIS_VC <= 3);
     static constexpr uint32_t MIN_BITS = log2_ceil(MAX_BUFFER_SLOTS + 1);
     static constexpr uint32_t CREDIT_WIDTH = credits_are_byte_aligned ? 8 : MIN_BITS;
     static constexpr uint32_t TWO_CREDIT_WIDTHS = 2 * CREDIT_WIDTH;
@@ -346,7 +347,8 @@ struct CreditPacking {
     using storage_type = typename PackedValueType::storage_type;
 
     // Check if credits are byte-aligned (for optimization)
-    static constexpr bool credits_are_byte_aligned = (CREDIT_WIDTH == 8) && (NUM_CHANNELS <= 4);
+    // 8-bit credits are always byte-aligned, regardless of channel count
+    static constexpr bool credits_are_byte_aligned = (CREDIT_WIDTH == 8);
 
 private:
     // Helper union for byte/half access optimization (used locally in functions)
@@ -511,15 +513,34 @@ public:
     /**
      * Pack a single channel's credit value into an existing container
      * Returns the modified container
+     *
+     * IMPORTANT: This REPLACES the channel value, not ORs it.
+     * This is critical for unbounded counters where the same channel is updated multiple times.
      */
     FORCE_INLINE static PackedValueType pack_channel(PackedValueType& packed, uint8_t channel_id, uint32_t value) {
-        packed.value |= static_cast<storage_type>(value) << bit_offset(channel_id);
+        if constexpr (credits_are_byte_aligned) {
+            // Byte-aligned: use efficient byte store
+            uint8_t* bytes = reinterpret_cast<uint8_t*>(&packed.value);
+            bytes[channel_id] = static_cast<uint8_t>(value);
+        } else {
+            // Non-byte-aligned: mask out old value and set new value
+            storage_type channel_mask = static_cast<storage_type>(CREDIT_MASK) << bit_offset(channel_id);
+            packed.value = (packed.value & ~channel_mask) | (static_cast<storage_type>(value) << bit_offset(channel_id));
+        }
         return packed;
     }
 
     template <uint8_t CHANNEL>
     FORCE_INLINE static PackedValueType pack_channel(PackedValueType& packed, uint32_t value) {
-        packed.value |= static_cast<storage_type>(value) << bit_offset(CHANNEL);
+        if constexpr (credits_are_byte_aligned) {
+            // Byte-aligned: use efficient byte store
+            uint8_t* bytes = reinterpret_cast<uint8_t*>(&packed.value);
+            bytes[CHANNEL] = static_cast<uint8_t>(value);
+        } else {
+            // Non-byte-aligned: mask out old value and set new value
+            constexpr storage_type channel_mask = static_cast<storage_type>(CREDIT_MASK) << bit_offset<CHANNEL>();
+            packed.value = (packed.value & ~channel_mask) | (static_cast<storage_type>(value) << bit_offset<CHANNEL>());
+        }
         return packed;
     }
 
@@ -637,7 +658,11 @@ struct OverlayRegStorage {
      * Decrement by packed value - writes negative delta for atomic decrement
      */
     FORCE_INLINE static void decrement_packed(storage_type packed_value) {
-        increment_local_update_ptr_val(stream_id, -static_cast<int32_t>(packed_value));
+        int32_t delta = -static_cast<int32_t>(packed_value);
+        DPRINT << "OVERLAY_DECR: stream=" << stream_id
+               << " packed=" << HEX() << packed_value
+               << " delta=" << delta << ENDL();
+        increment_local_update_ptr_val(stream_id, delta);
     }
 };
 
@@ -746,6 +771,10 @@ public:
 
         constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
         uint32_t reg1_part = static_cast<uint32_t>(packed_value >> reg1_shift);
+
+        DPRINT << "MULTI_OVERLAY_DECR: packed=" << HEX() << packed_value
+               << " reg0_part=" << HEX() << reg0_part << " delta=" << -static_cast<int32_t>(reg0_part)
+               << " reg1_part=" << HEX() << reg1_part << " delta=" << -static_cast<int32_t>(reg1_part) << ENDL();
 
         // Write negative deltas to decrement atomically
         write_register<0>(-static_cast<int32_t>(reg0_part));
@@ -898,16 +927,16 @@ public:
      * - Memory: read-modify-write
      */
     FORCE_INLINE void increment_channel(uint8_t channel_id, uint32_t delta) {
-        uint32_t packed_delta = Packing::pack_channel(channel_id, delta);
+        typename Packing::storage_type packed_delta = Packing::pack_channel(channel_id, delta).get();
 
         if constexpr (is_overlay_storage<StorageBackend>::value) {
             // Atomic increment for overlay registers
-            this->storage.atomic_increment(packed_delta);
+            this->storage.atomic_increment(static_cast<uint32_t>(packed_delta));
         } else {
             // Read-modify-write for memory
-            uint32_t current = this->storage.read();
-            uint32_t new_value = current + packed_delta;
-            this->storage.write(new_value);
+            typename Packing::storage_type current = this->storage.read();
+            typename Packing::storage_type new_value = current + packed_delta;
+            this->storage.write(static_cast<uint32_t>(new_value));
         }
     }
 
@@ -950,9 +979,9 @@ public:
     template <typename T = StorageBackend>
     FORCE_INLINE typename std::enable_if<!is_overlay_storage<T>::value, void>::type
     set_channel(uint8_t channel_id, uint32_t value) {
-        uint32_t current = this->storage.read();
-        uint32_t channel_mask = Packing::CREDIT_MASK << Packing::bit_offset(channel_id);
-        uint32_t new_value = (current & ~channel_mask) | Packing::pack_channel(channel_id, value);
+        typename Packing::storage_type current = this->storage.read();
+        typename Packing::storage_type channel_mask = static_cast<typename Packing::storage_type>(Packing::CREDIT_MASK) << Packing::bit_offset(channel_id);
+        typename Packing::storage_type new_value = (current & ~channel_mask) | Packing::pack_channel(channel_id, value).get();
         this->storage.write(new_value);
     }
 
