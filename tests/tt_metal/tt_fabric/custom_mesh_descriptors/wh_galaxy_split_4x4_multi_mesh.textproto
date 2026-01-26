@@ -24,7 +24,7 @@ graph_descriptors {
     channels { count: 2 }
   }
 }
-pinnings{
+pinnings {
   logical_fabric_node_id {
     mesh_id: 0
     chip_id: 0
@@ -44,7 +44,7 @@ pinnings {
     asic_location: 4
   }
 }
-pinnings{
+pinnings {
   logical_fabric_node_id {
     mesh_id: 1
     chip_id: 0
