@@ -108,62 +108,20 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
         {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
         {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
         {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
         {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
         {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
         {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},  // Set to 3
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.tray_id = 2, .entry_node_asic_location = 4, .exit_node_asic_location = 3}};
 
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-
-        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
-        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
-    };
-
+    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
     for (auto stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
-        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index);
+        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,
             tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
@@ -218,7 +176,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - During steady state, this represents the average pipeline stage throughput.
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
-    constexpr uint32_t NUM_ITERS = 1000000;
+    // constexpr uint32_t NUM_ITERS = 1000000;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const distributed::multihost::Rank pipeline_start_rank{0};
@@ -262,18 +220,30 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         distributed_context->barrier();
     };
 
-    uint64_t start_time = 0;
-    uint64_t end_time = 0;
-
     const bool is_pipeline_start = (*distributed_context->rank() == *pipeline_start_rank);
-    const bool is_pipeline_end = (*distributed_context->rank() == *pipeline_end_rank);
-    const bool is_intermediate = !is_pipeline_start && !is_pipeline_end;
+
+    // Create Barrier Buffer
+    auto barrier_buffer_size = 32;
+    CoreRangeSet barrier_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    auto shard_params = ShardSpecBuffer(barrier_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    distributed::DeviceLocalBufferConfig barrier_buffer_specs = {
+        .page_size = barrier_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    auto barrier_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = barrier_buffer_size}, barrier_buffer_specs, mesh_device_.get());
+    // Write 0 to barrier buffer
+    std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
+    distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), barrier_buffer, barrier_data, true);
+    std::cout << "Barrier buffer address: " << barrier_buffer->address() << std::endl;
 
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
         distributed::MeshCoordinate start_coord = pipeline_stages[*pipeline_start_rank].entry_node_coord;
-
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
         auto fwd_connection = distributed::SocketConnection(
@@ -286,6 +256,30 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             distributed::multihost::Rank(downstream_mesh_id));
         auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
+        auto pipeline_end_stage = *(distributed_context->size());
+        auto [my_recv, upstream_send] =
+            get_connecting_coords(pipeline_stages, pipeline_end_stage, pipeline_end_stage - 1);
+        std::cout << "Start: " << start_coord << " My Sender: " << my_sender << " Downstream Recv: " << downstream_recv
+                  << " Receiver: " << my_recv << " Upstream Send: " << upstream_send << std::endl;
+        std::cout << "Receiver Device: " << mesh_device_->get_device(my_recv)->id()
+                  << " Receiver Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_recv)
+                  << " Start Device: " << mesh_device_->get_device(start_coord)->id()
+                  << " Start Coord Fabric Node Id: " << mesh_device_->get_fabric_node_id(start_coord) << std::endl;
+        // std::cout << "Start Device: " << mesh_device_->get_device(start_coord)->id() << " Sender Device: " <<
+        // mesh_device_->get_device(my_sender)->id() << std::endl; std::cout << "Mesh 0 receiver: " <<
+        // mesh_device_->get_device(my_recv)->id() << std::endl; std::cout << "My sender: " << my_sender << " Downstream
+        // Recv: " << downstream_recv << std::endl; std::cout << "My recv: " << my_recv << " Upstream Send: " <<
+        // upstream_send << std::endl; std::cout << "Start Coord: " << start_coord << std::endl;
+
+        auto bwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(upstream_send, logical_coord),
+            distributed::MeshCoreCoord(my_recv, logical_coord));
+        auto recv_socket_config = distributed::SocketConfig(
+            {bwd_connection}, socket_mem_config, pipeline_end_rank, distributed_context->rank());
+        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+
+        auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
+
         auto input_tensor = ttnn::distributed::distribute_tensor(
                                 ttnn::experimental::view(
                                     ttnn::arange(0, num_elems, 1, tensor_spec.data_type()), tensor_spec.logical_shape())
@@ -294,16 +288,14 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
                                 std::nullopt)
                                 .to_device(mesh_device_.get(), tensor_spec.memory_config());
 
+        // std::cout << "Sockets Created" << std::endl;
         // Warmup iteration
-        std::cout << "Start on " << mesh_device_->get_device(start_coord)->id()
-                  << "to: " << mesh_device_->get_device(my_sender)->id() << std::endl;
-        ttnn::experimental::send_async(input_tensor, intermed_send);
+        // Forward data to sender over intermed_send. Recv data over intermed_recv_2
+        ttnn::experimental::send_async(input_tensor, intermed_send, intermed_recv_2);
+        // Forward data to downstream over send_socket.
         ttnn::experimental::socket_forward(input_tensor, intermed_recv, send_socket, XFER_SIZE);
-        barrier();
-
-        // Timed iteration
-        ttnn::experimental::send_async(input_tensor, intermed_send);
-        ttnn::experimental::socket_forward(input_tensor, intermed_recv, send_socket, XFER_SIZE);
+        // Recv data over recv_socket. Forward data to start over intermed_send_2.
+        ttnn::experimental::socket_forward(input_tensor, recv_socket, intermed_send_2, XFER_SIZE);
     } else {
         auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, my_mesh_id, upstream_mesh_id);
 
@@ -320,62 +312,42 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         distributed::MeshSocket send_socket;
         distributed::MeshSocket intermed_send;
         distributed::MeshSocket intermed_recv;
-        if (is_intermediate) {
-            auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
 
-            auto fwd_connection = distributed::SocketConnection(
-                distributed::MeshCoreCoord(my_sender, logical_coord),
-                distributed::MeshCoreCoord(downstream_recv, logical_coord));
-            auto send_socket_config = distributed::SocketConfig(
-                {fwd_connection},
-                socket_mem_config,
-                distributed_context->rank(),
-                distributed::multihost::Rank(downstream_mesh_id));
-            send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
+        std::cout << "My Recv: " << my_recv << " Upstream Send: " << upstream_send << " My Sender: " << my_sender
+                  << " Downstream Recv: " << downstream_recv << std::endl;
+        std::cout << "My Recv Device: " << mesh_device_->get_device(my_recv)->id()
+                  << " My Recv Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_recv)
+                  << " My Sender Device: " << mesh_device_->get_device(my_sender)->id()
+                  << " My Sender Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_sender)
+                  << " Downstream Recv Device: " << mesh_device_->get_device(downstream_recv)->id()
+                  << " Downstream Recv Fabric Node Id: " << mesh_device_->get_fabric_node_id(downstream_recv)
+                  << std::endl;
+        // std::cout << ""
+        // std::cout << "Recv Device: " << mesh_device_->get_device(my_recv)->id() << " Sender Device: " <<
+        // mesh_device_->get_device(my_sender)->id() << std::endl; std::cout << "Second Recv: " << my_recv << " Upstream
+        // Send: " << upstream_send << std::endl; std::cout << "Second Sender: " << my_sender << " Downstream Recv: " <<
+        // downstream_recv << std::endl;
 
-            std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
-        } else {
-            // Pipeline end
-            distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
-            std::cout << "Receive on: " << mesh_device_->get_device(my_recv)->id()
-                      << " to: " << mesh_device_->get_device(end_coord)->id() << std::endl;
-            std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, end_coord);
-        }
+        auto downstream_socket_rank = (distributed_context->rank() == pipeline_end_rank) ? 0 : downstream_mesh_id;
+        auto fwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(my_sender, logical_coord),
+            distributed::MeshCoreCoord(downstream_recv, logical_coord));
+        auto send_socket_config = distributed::SocketConfig(
+            {fwd_connection},
+            socket_mem_config,
+            distributed_context->rank(),
+            distributed::multihost::Rank(downstream_socket_rank));  // Hardcoded to 1st rank for now
+        send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
+        std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
         Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
-
+        std::cout << "Sockets Created" << std::endl;
         // Warmup iteration
         ttnn::experimental::socket_forward(output_tensor, recv_socket, intermed_send, XFER_SIZE);
-        if (is_intermediate) {
-            ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
-        } else {
-            ttnn::experimental::recv_async(output_tensor, intermed_recv);
-        }
-        barrier();
-
-        // Timed iteration
-        if (is_pipeline_end) {
-            start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::high_resolution_clock::now().time_since_epoch())
-                             .count();
-        }
-        ttnn::experimental::socket_forward(output_tensor, recv_socket, intermed_send, XFER_SIZE);
-        if (is_intermediate) {
-            ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
-        } else {
-            ttnn::experimental::recv_async(output_tensor, intermed_recv);
-        }
+        ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
     }
     barrier();
-
-    if (is_pipeline_end) {
-        end_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::high_resolution_clock::now().time_since_epoch())
-                       .count();
-        std::cout << "Time taken to forward: " << NUM_ITERS << " Packets: " << end_time - start_time << " us"
-                  << std::endl;
-        std::cout << "Time per iteration: " << (end_time - start_time) / NUM_ITERS << " us" << std::endl;
-    }
 }
 
 }  // namespace tt::tt_metal

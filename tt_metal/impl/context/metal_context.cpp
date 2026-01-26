@@ -914,9 +914,9 @@ void MetalContext::reset_cores(ChipId device_id) {
                 if (rtoptions_.get_enable_2_erisc_mode()) {
                     erisc_send_exit_signal(
                         device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-                    // std::cout << "Returning to base firmware: " << virtual_core.str() << std::endl;
+                    std::cout << "Returning to base firmware: " << virtual_core.str() << std::endl;
                     llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core, 25000);
-                    // std::cout << "Base firmware returned: " << virtual_core.str() << std::endl;
+                    std::cout << "Base firmware returned: " << virtual_core.str() << std::endl;
                 }
                 // Only send reset to subordinate cores
                 // Assert all cores except ERISC0, which is running base firmware.

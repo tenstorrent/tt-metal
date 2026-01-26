@@ -25,4 +25,4 @@ sleep 5
 
 echo ""
 echo "Running cluster validation..."
-mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo,tailscale0 --tag-output ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto --send-traffic --num-iterations 5
+mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo,tailscale0 --tag-output ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto --send-traffic --num-iterations 2

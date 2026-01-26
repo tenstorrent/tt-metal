@@ -348,22 +348,15 @@ class ClosetBoxFabricFixture : public Fixture {
     }
 
     std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
-        return {get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(),
-                get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k(), get_eth_coords_for_2x4_t3k()};
+        return {
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k()};
     }
 };
 
