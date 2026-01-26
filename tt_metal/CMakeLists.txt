@@ -27,7 +27,7 @@ add_custom_target(
 )
 
 # Load public API headers from subdirectory
-# Create the FILE_SET with TYPE and BASE_DIRS first
+# Create the FILE_SET with TYPE and BASE_DIRS first, before subdirectories add files to it
 target_sources(
     tt_metal
     PUBLIC
@@ -35,7 +35,9 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
 )
+# Subdirectories will add their headers to the FILE_SET
 add_subdirectory(api/tt-metalium)
+# Add private implementation sources (not part of FILE_SET)
 target_sources(
     tt_metal
     PRIVATE
