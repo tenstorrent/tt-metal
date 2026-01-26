@@ -566,6 +566,29 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
 
     print(f"📊 Found {len(json_files)} operation trace files")
 
+    # Create metadata file with source and machine info
+    # This will be used when importing traces with --from-trace-dir
+    metadata = {
+        "test_source": test_path,
+        "timestamp": datetime.now().isoformat(),
+        "machine_info": get_machine_info(),
+        "trace_count": len(json_files),
+    }
+
+    # Check for HF_MODEL and LLAMA_DIR environment variables
+    if "models/tt_transformers/demo/simple_text_demo.py" in test_path:
+        hf_model = os.environ.get("HF_MODEL")
+        llama_dir = os.environ.get("LLAMA_DIR")
+        if hf_model:
+            metadata["HF_MODEL"] = hf_model
+        if llama_dir:
+            metadata["LLAMA_DIR"] = llama_dir
+
+    # Write metadata file
+    metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
+    with open(metadata_file, "w") as f:
+        json.dump(metadata, f, indent=2)
+
     return {
         "success": result.returncode == 0,
         "exit_code": result.returncode,
@@ -602,6 +625,12 @@ Examples (Standalone Python scripts):
         "--store", "--keep-traces", action="store_true", help="Keep individual trace files (default: delete them)"
     )
     parser.add_argument("-d", "--debug", action="store_true", help="Show live test output in terminal")
+    parser.add_argument(
+        "--from-trace-dir",
+        type=str,
+        help="Process existing trace directory and add to master JSON (skips test execution). "
+        "Useful for importing traces collected on other machines with --store flag.",
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -612,25 +641,56 @@ Examples (Standalone Python scripts):
     else:
         args, extra_args = parser.parse_known_args()
 
-    if not args.test_path:
-        print("❌ Error: test_path is required")
+    # Either test_path or from_trace_dir must be provided
+    if not args.test_path and not args.from_trace_dir:
+        print("❌ Error: Either test_path or --from-trace-dir is required")
+        parser.print_help()
+        return 1
+
+    if args.from_trace_dir and args.test_path:
+        print("❌ Error: Cannot specify both test_path and --from-trace-dir")
         parser.print_help()
         return 1
 
     print("🚀 TTNN Operations Tracer (New Simple Tracer)")
     print("=" * 50)
-    print(f"📁 {os.path.basename(args.test_path)}")
-    if args.store:
-        print(f"💾 Keeping individual trace files")
-    if args.debug:
-        print(f"🐛 Debug mode enabled")
-    if extra_args:
-        print(f"📎 Extra arguments: {' '.join(extra_args)}")
+
+    # Handle two modes: run test or process existing traces
+    if args.from_trace_dir:
+        print(f"📂 Processing existing traces from: {args.from_trace_dir}")
+        if not os.path.isdir(args.from_trace_dir):
+            print(f"❌ Error: Trace directory not found: {args.from_trace_dir}")
+            return 1
+        trace_dir = args.from_trace_dir
+        test_source = os.path.basename(args.from_trace_dir)
+        # Find all JSON files in the trace directory
+        trace_files = [os.path.join(trace_dir, f) for f in os.listdir(trace_dir) if f.endswith(".json")]
+        if not trace_files:
+            print(f"❌ Error: No JSON trace files found in {args.from_trace_dir}")
+            return 1
+        result = {
+            "success": True,
+            "trace_files": sorted(trace_files),
+            "trace_dir": trace_dir,
+            "keep_traces": True,  # Always keep when processing existing traces
+        }
+        print(f"✅ Found {len(trace_files)} trace files")
+    else:
+        print(f"📁 {os.path.basename(args.test_path)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled")
+        if extra_args:
+            print(f"📎 Extra arguments: {' '.join(extra_args)}")
+        test_source = args.test_path
+
     print("=" * 50)
 
     try:
-        # Run test with tracing
-        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
+        # Run test with tracing (unless processing existing traces)
+        if not args.from_trace_dir:
+            result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
 
         print("\n" + "=" * 50)
         print("📋 RESULTS")
@@ -644,27 +704,75 @@ Examples (Standalone Python scripts):
             excluded_operations = get_excluded_operations()
             machine_info = get_machine_info()
 
-            # Extract test source name
-            test_source = args.test_path
-            if os.path.isabs(test_source) and BASE_DIR in test_source:
-                test_source = os.path.relpath(test_source, BASE_DIR)
+            # Extract test source name and possibly override machine_info from metadata
+            if args.from_trace_dir:
+                # Try to load metadata file if it exists
+                metadata_file = os.path.join(args.from_trace_dir, "_trace_metadata.json")
+                if os.path.exists(metadata_file):
+                    try:
+                        with open(metadata_file, "r") as f:
+                            metadata = json.load(f)
 
-            # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
-            # Only capture for models/tt_transformers/demo/simple_text_demo.py
-            # This helps identify which specific HuggingFace model or Llama directory was used
-            if "models/tt_transformers/demo/simple_text_demo.py" in test_source:
-                hf_model = os.environ.get("HF_MODEL")
-                llama_dir = os.environ.get("LLAMA_DIR")
+                        # Use test_source from metadata
+                        test_source = metadata.get(
+                            "test_source", os.path.basename(os.path.abspath(args.from_trace_dir))
+                        )
 
-                # Append whichever environment variables are available
-                env_tags = []
-                if hf_model:
-                    env_tags.append(f"[HF_MODEL:{hf_model}]")
-                if llama_dir:
-                    env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
+                        # Convert to relative path if needed
+                        if os.path.isabs(test_source) and BASE_DIR in test_source:
+                            test_source = os.path.relpath(test_source, BASE_DIR)
 
-                if env_tags:
-                    test_source = f"{test_source} {' '.join(env_tags)}"
+                        # Append HF_MODEL/LLAMA_DIR from metadata if present
+                        env_tags = []
+                        if "HF_MODEL" in metadata:
+                            env_tags.append(f"[HF_MODEL:{metadata['HF_MODEL']}]")
+                        if "LLAMA_DIR" in metadata:
+                            env_tags.append(f"[LLAMA_DIR:{metadata['LLAMA_DIR']}]")
+                        if env_tags:
+                            test_source = f"{test_source} {' '.join(env_tags)}"
+
+                        # Use machine_info from metadata if present
+                        if "machine_info" in metadata:
+                            machine_info = metadata["machine_info"]
+                            print(f"📋 Loaded metadata from trace directory")
+                            print(f"   Original source: {metadata.get('test_source')}")
+                            if "machine_info" in metadata and metadata["machine_info"]:
+                                machine_desc = (
+                                    metadata["machine_info"][0]
+                                    if isinstance(metadata["machine_info"], list)
+                                    else metadata["machine_info"]
+                                )
+                                if isinstance(machine_desc, dict):
+                                    print(
+                                        f"   Machine: {machine_desc.get('board_type')} {machine_desc.get('device_series')}"
+                                    )
+                    except Exception as e:
+                        print(f"⚠️ Could not load metadata file: {e}")
+                        test_source = os.path.basename(os.path.abspath(args.from_trace_dir))
+                else:
+                    # Fallback to directory name if no metadata
+                    test_source = os.path.basename(os.path.abspath(args.from_trace_dir))
+            else:
+                test_source = args.test_path
+                if os.path.isabs(test_source) and BASE_DIR in test_source:
+                    test_source = os.path.relpath(test_source, BASE_DIR)
+
+                # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
+                # Only capture for models/tt_transformers/demo/simple_text_demo.py
+                # This helps identify which specific HuggingFace model or Llama directory was used
+                if "models/tt_transformers/demo/simple_text_demo.py" in test_source:
+                    hf_model = os.environ.get("HF_MODEL")
+                    llama_dir = os.environ.get("LLAMA_DIR")
+
+                    # Append whichever environment variables are available
+                    env_tags = []
+                    if hf_model:
+                        env_tags.append(f"[HF_MODEL:{hf_model}]")
+                    if llama_dir:
+                        env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
+
+                    if env_tags:
+                        test_source = f"{test_source} {' '.join(env_tags)}"
 
             # Convert and filter operations
             all_operations = []
@@ -725,7 +833,8 @@ Examples (Standalone Python scripts):
             print(f"   Source: {test_source}")
 
             # Cleanup individual trace files and subdirectory if not storing
-            if not result["keep_traces"]:
+            # Never cleanup when processing existing traces (--from-trace-dir)
+            if not args.from_trace_dir and not result["keep_traces"]:
                 print("\n🧹 Cleaning up individual trace files...")
                 cleaned_count = 0
                 for trace_file in tqdm(result["trace_files"], desc="Removing files", unit="file"):

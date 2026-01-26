@@ -251,6 +251,17 @@ python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inf
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
+
+# Import traces from another machine
+# 1. On Machine A: Trace with --store to keep JSON files
+python model_tracer/generic_ops_tracer.py test.py --store
+# This creates: generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/
+
+# 2. Copy trace directory to Machine B
+# scp -r generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/ machine_b:/tmp/traces/
+
+# 3. On Machine B: Import the traces
+python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_name>_<timestamp>
 ```
 
 **Detection Logic:**

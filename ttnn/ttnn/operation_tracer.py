@@ -266,6 +266,27 @@ def serialize_operation_parameters(
                     if storage_type_value is not None:
                         tensor_data["storage_type"] = str(storage_type_value)
 
+                # Get memory config if available (it's a method)
+                if hasattr(value, "memory_config"):
+                    try:
+                        memory_config_value = value.memory_config()
+                        if memory_config_value is not None:
+                            # Try to use tensor_utils serializer first
+                            serializers = _get_tensor_utils_serializers()
+                            if serializers and "memory_config_to_dict" in serializers:
+                                try:
+                                    tensor_data["memory_config"] = serializers["memory_config_to_dict"](
+                                        memory_config_value
+                                    )
+                                except Exception:
+                                    # Fallback to repr if serializer fails
+                                    tensor_data["memory_config"] = repr(memory_config_value)
+                            else:
+                                # No serializer available, use repr
+                                tensor_data["memory_config"] = repr(memory_config_value)
+                    except Exception:
+                        pass
+
                 tensor_counter += 1
                 return tensor_data
 
