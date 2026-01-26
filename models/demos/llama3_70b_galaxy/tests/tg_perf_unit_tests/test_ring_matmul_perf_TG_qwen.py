@@ -34,7 +34,7 @@ def test_ring_mm_tg_qwen_perf(
     subdir = "qwen_tg_perf"
     command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_qwen_perf -k {mm_type}"
     cols = ["DEVICE KERNEL"]
-    op_name = "Matmul"
+    op_name = "MatmulDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)
