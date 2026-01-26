@@ -60,8 +60,14 @@ void MAIN {
         tt::compute::common::print_full_tile(cb_zero_index, 0, false);
 #endif
 
-        add_tiles_init(cb_srcC_index, cb_zero_index, acc_to_dest);
-        add_tiles(cb_srcC_index, cb_zero_index, 0, 0, dst0);
+        // Load C and add with result in DST[0] + cb_srcC_index -> DST[0]
+        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            cb_srcC_index);
+        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            cb_srcC_index, 0, 0);
+
+        // add_tiles_init(cb_srcC_index, cb_zero_index, acc_to_dest);
+        // add_tiles(cb_srcC_index, cb_zero_index, 0, 0, dst0);
 
         tile_regs_commit();
         cb_pop_front(cb_srcC_index, 1);
