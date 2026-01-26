@@ -32,12 +32,18 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
+    // Config for untilizing matmul result to row-major for row accumulation
+    using UntilizeMatmulResult = UntilizeConfig<WidthInTiles<onetile>, InputCB<cb_intermed0>, OutputCB<cb_intermed1>>;
+
+    // Config for re-tilizing accumulated rows back to tile format for output
+    using RetilizeAccumulatedRows =
+        TilizeConfig<InputCB<cb_intermed2>, OutputCB<out_cb_id>, TilizeFlags::DT_RECONFIG, PreviousCB<cb_in1>>;
+
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
-        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
-            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
-            {
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {
+            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
                     tile_regs_acquire();
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
@@ -58,27 +64,20 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
 
-                    // untilize tile and write to CBIndex::c_25
+                    // Untilize matmul result for row-by-row accumulation
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    compute_kernel_lib::untilize<onetile, cb_intermed0, cb_intermed1>(1);
+                    compute_kernel_lib::untilize<UntilizeMatmulResult>(1);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
                 }
                 cb_pop_front(cb_in0, Kt);
 
-                // cb_intermed2 comes from reader; untilized row-major tile
+                // Reader has accumulated rows into cb_intermed2 (row-major)
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
-                // tilize CB::intermed2 and write to CBIndex::c_16
-                compute_kernel_lib::tilize<true, true, false, true>(
-                    cb_intermed2,  // new_cb (input)
-                    onetile,       // block_w (1 tile)
-                    out_cb_id,     // output CB
-                    1,             // num_blocks (1 iteration)
-                    1,             // subblock_h (default)
-                    cb_in1         // old_cb (for DT restoration)
-                );
+                // Re-tilize accumulated rows to tile format for output
+                compute_kernel_lib::tilize<RetilizeAccumulatedRows>(onetile, 1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
