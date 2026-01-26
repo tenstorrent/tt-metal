@@ -48,8 +48,8 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 4;    // parameterize?
-    constexpr auto num_buffers_header_only_channels = 4;  // parameterize?
+    constexpr auto num_buffers_full_size_channels = 10;    // parameterize?
+    constexpr auto num_buffers_header_only_channels = 10;  // parameterize?
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
