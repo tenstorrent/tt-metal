@@ -58,3 +58,10 @@ inline std::string get_umd_arch_name() {
 }
 
 }  // namespace tt::test_utils
+
+#define SKIP_FOR_WATCHER(...)                                                                 \
+    do {                                                                                      \
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {       \
+            GTEST_SKIP() << "Skipping test because watcher is enabled" __VA_OPT__(<< ": " <<) __VA_ARGS__; \
+        }                                                                                     \
+    } while (0)
