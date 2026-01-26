@@ -247,7 +247,7 @@ void kernel_main() {
     const uint64_t r1_neighbor_dst_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_dst_addr);
     const uint64_t r1_neighbor_sem_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_sem_addr);
     r1_header->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r1_neighbor_dst_noc, r1_neighbor_sem_noc, 1, true},
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r1_neighbor_dst_noc, r1_neighbor_sem_noc, 1, false},
         align(total_payload_size, l1_alignment));
 
     {
@@ -357,7 +357,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("R2-MUX-SEND");
         r2_header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r2_neighbor_dst_noc, r2_neighbor_sem_noc, 1, true},
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r2_neighbor_dst_noc, r2_neighbor_sem_noc, 1, false},
             align(total_payload_size, l1_alignment));
 
         // Send R2 via R2 mux (immediate - mux already connected!)
