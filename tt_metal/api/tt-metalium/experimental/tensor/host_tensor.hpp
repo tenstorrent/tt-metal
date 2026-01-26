@@ -61,11 +61,41 @@ public:
     HostTensor();
     ~HostTensor();
 
+    /**
+     * Copy constructor.
+     *
+     * Semantics:
+     * - Configs are deep copied.
+     * - Underlying data has the copy semantics of the HostBuffer
+     */
     HostTensor(const HostTensor&);
+
+    /**
+     * Copy assignment operator.
+     *
+     * Semantics:
+     * - Configs are deep copied.
+     * - Underlying data has the copy semantics of the HostBuffer
+     */
     HostTensor& operator=(const HostTensor&);
 
-    HostTensor(HostTensor&&) noexcept;
-    HostTensor& operator=(HostTensor&&) noexcept;
+    /**
+     * Move constructor.
+     *
+     * Takes over properties of the other HostTensor.
+     * The other HostTensor has the same state as an default-constructed HostTensor.
+     *
+     * TODO: Is this over specifiying the move-from object? We might not be able to guarantee the noexcept here.
+     */
+    HostTensor(HostTensor&& other) noexcept;
+
+    /**
+     * Move assignment operator.
+     *
+     * Takes over properties of the other HostTensor.
+     * The other HostTensor has the same state as an default-constructed HostTensor.
+     */
+    HostTensor& operator=(HostTensor&& other) noexcept;
 
     // End special member functions
 

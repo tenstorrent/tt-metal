@@ -21,37 +21,48 @@
 
 namespace tt::tt_metal {
 
+// Default TensorAttributes for empty tensors
+// TODO: lower this as a default constructor for TensorAttributes?
+const TensorAttributes DEFAULT_TENSOR_ATTRIBUTES(
+    HostStorage(HostBuffer()),
+    TensorSpec(Shape(), TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig())),
+    TensorTopology{});
+
 // Special Member Functions
 
 // Main Constructor
 HostTensor::HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology topology) :
     impl(std::make_unique<TensorAttributes>(Storage(HostStorage(buffer)), std::move(spec), std::move(topology))) {}
 
-// The default tensor spec for an empty Tensor
-TensorSpec DEFAULT_TENSOR_SPEC(Shape(), TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig()));
-
 /*
  * Implementation note:
  * This might be better implmeneted as an empty std::unique_ptr?
  * expectation is this will always be assigned over.
  * it's just we will have to check for nullptr everywhere.
+ * Right now we pay by assigning DEFAULT_TENSOR_ATTRIBUTES to the moved-from HostTensor and always allocate.
  */
-HostTensor::HostTensor() : HostTensor(HostBuffer(), DEFAULT_TENSOR_SPEC, TensorTopology{}) {}
+HostTensor::HostTensor() : impl(std::make_unique<TensorAttributes>(DEFAULT_TENSOR_ATTRIBUTES)) {}
 HostTensor::~HostTensor() = default;
 
-// Deep copy (of the config and topology?)
 HostTensor::HostTensor(const HostTensor& other) : impl(std::make_unique<TensorAttributes>(*other.impl)) {}
-
 HostTensor& HostTensor::operator=(const HostTensor& other) {
     if (this != &other) {
-        impl = std::make_unique<TensorAttributes>(*other.impl);
+        *impl = *other.impl;
     }
     return *this;
 }
 
-// Move - default works for unique_ptr, this means operating anything on a move-from HostTensor is undefined?
-HostTensor::HostTensor(HostTensor&&) noexcept = default;
-HostTensor& HostTensor::operator=(HostTensor&&) noexcept = default;
+HostTensor::HostTensor(HostTensor&& other) noexcept : HostTensor() {
+    std::swap(impl, other.impl);
+    *other.impl = DEFAULT_TENSOR_ATTRIBUTES;
+}
+HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
+    if (this != &other) {
+        std::swap(impl, other.impl);
+        *other.impl = DEFAULT_TENSOR_ATTRIBUTES;
+    }
+    return *this;
+}
 
 // Getter Implementations (following tensor.cpp:607-650)
 
@@ -73,10 +84,7 @@ const std::optional<NdShardSpec>& HostTensor::nd_shard_spec() const { return mem
 
 const TensorTopology& HostTensor::tensor_topology() const { return impl->get_tensor_topology(); }
 
-// Should just change the return type to some flavor of vector
 Strides HostTensor::strides() const { return impl->get_tensor_spec().compute_strides(); }
-
-// Computed Getters (following tensor.cpp:411-461)
 
 HostTensor::volumn_type HostTensor::logical_volume() const { return logical_shape().volume(); }
 
