@@ -48,8 +48,8 @@ while getopts ":f:s:g:b:t:pr:nac:" opt; do
   esac
 done
 
-export CXX=clang++-17
-export CC=clang-17
+export CXX=clang++-20
+export CC=clang-20
 
 # Either test or script_path must be specified, but not both
 if [ -n "$script_path" ] && [ -n "$test" ]; then
