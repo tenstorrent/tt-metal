@@ -115,10 +115,7 @@ When you encounter issues that require escalation, use the following contacts an
 
 **Analyzing validation logs:**
 
-After running `run_validation_*.sh`, use the analysis script:
-```bash
-./tools/scaleout/exabox/analyze_validation_results.sh validation_output/
-```
+For instructions on using the analysis script, available flags, and what to expect from the output, see the [Physical Validation section in the README](./README.md#physical-validation).
 
 The script categorizes each log file and gives you a summary with success rate. Here's what each category means and where to look next:
 
