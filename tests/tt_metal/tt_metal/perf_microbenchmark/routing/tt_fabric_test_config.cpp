@@ -135,6 +135,13 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
     }
+    if (sender_yaml["noc_id"]) {
+        config.noc_id = static_cast<tt::tt_metal::NOC>(parse_scalar<uint8_t>(sender_yaml["noc_id"]));
+        TT_FATAL(
+            config.noc_id == 0 || config.noc_id == 1,
+            "Expected NOC ID 0 or 1, got: {}",
+            static_cast<uint8_t>(config.noc_id.value()));
+    }
     if (sender_yaml["link_id"]) {
         config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
     }
@@ -343,6 +350,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
         fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
     } else {
         fabric_setup.num_links = 1;
+    }
+
+    if (fabric_setup_yaml["max_packet_size"]) {
+        fabric_setup.max_packet_size = parse_scalar<uint32_t>(fabric_setup_yaml["max_packet_size"]);
     }
 
     // Handle torus_config for Torus topology
@@ -934,6 +945,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     SenderConfig resolved_sender;
     resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
     resolved_sender.core = parsed_sender.core;
+    resolved_sender.noc_id = parsed_sender.noc_id;
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
 
     resolved_sender.patterns.reserve(parsed_sender.patterns.size());

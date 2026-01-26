@@ -1073,7 +1073,11 @@ protected:
             per_iter_total += cmd.size_bytes();
         }
 
-        const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
+        // For the barrier wait command
+        DeviceCommandCalculator cmd_calc;
+        cmd_calc.add_dispatch_wait();
+
+        const uint64_t total_cmd_bytes = num_iterations * per_iter_total + cmd_calc.write_offset_bytes();
         log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
 
         // PHASE 3: Reserve and write commands
@@ -1112,8 +1116,6 @@ protected:
         // Without this, there can be occasional timeouts in MetalContext::initialize_and_launch_firmware()
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
-        DeviceCommandCalculator cmd_calc;
-        cmd_calc.add_dispatch_wait();
         HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
         cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());

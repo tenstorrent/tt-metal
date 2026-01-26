@@ -26,9 +26,9 @@ jobs:
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json --benchmark_repetitions=2
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json
-            timeout: 15
+            timeout: 30
           - name: "WH N300 dispatch bandwidth nightly"
             arch: wormhole_b0
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
@@ -52,9 +52,9 @@ jobs:
             runs-on: ["pipeline-perf", "P150", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json --benchmark_repetitions=2
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py -g tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_blackhole_golden.json pgm_bench.json
-            timeout: 15
+            timeout: 30
           - name: "BH P150 dispatch bandwidth nightly"
             arch: blackhole
             runs-on: ["pipeline-perf", "P150", "in-service"]

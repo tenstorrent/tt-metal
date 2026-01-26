@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
 
-namespace ttnn::operations::data_movement::repeat::program {
+namespace ttnn::prim {
 
 struct RepeatProgramFactoryLastDim {
     using shared_variables_t = RepeatSharedVariables;
@@ -24,4 +24,4 @@ struct RepeatProgramFactoryLastDim {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::repeat::program
+}  // namespace ttnn::prim

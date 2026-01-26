@@ -112,6 +112,18 @@ def generate_supported_rank_bindings():
         2: [4],
         3: [2],
     }
+    # Process Rank ID To Tray ID Mapping for 4x4 + 2x4 + 2x4 (3 mesh) configuration
+    WH_GLX_4X4_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1, 2],  # 4x4 mesh needs 2 trays (16 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [4],  # 2x4 mesh needs 1 tray (8 devices)
+    }
+    # Process Rank ID To Tray ID Mapping for 2x4 + 2x4 + 2x8 (3 mesh) configuration
+    WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1],  # 2x4 mesh needs 1 tray (8 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [2, 4],  # 2x8 mesh needs 2 trays (16 devices)
+    }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
     DUAL_MESH_RANK_BINDINGS = [
@@ -197,6 +209,44 @@ def generate_supported_rank_bindings():
         },
     ]
 
+    # Rank bindings for Tri Mesh Setup: 4x4 + 2x4 + 2x4 (1 process per mesh, 3 meshes)
+    TRI_MESH_4X4_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Tri Mesh Setup: 2x4 + 2x4 + 2x8 (1 process per mesh, 3 meshes)
+    TRI_MESH_2X8_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+    ]
+
     mapping_file = "tray_to_pcie_device_mapping.yaml"
     generate_tray_to_pcie_device_mapping(mapping_file)
     with open(mapping_file, "r") as f:
@@ -230,6 +280,20 @@ def generate_supported_rank_bindings():
         WH_GLX_2X4_CYCLIC_RANK_TO_TRAY_MAPPING,
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_2x4_mesh_graph_descriptor.textproto",
         "2x4_multi_mesh_cyclic_rank_binding.yaml",
+    )
+    generate_rank_binding_yaml(
+        tray_to_pcie_device_mapping,
+        TRI_MESH_4X4_2X4_RANK_BINDINGS,
+        WH_GLX_4X4_2X4_3_MESH_RANK_TO_TRAY_MAPPING,
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_2x4_3_mesh.textproto",
+        "4x4_2x4_3_mesh_rank_binding.yaml",
+    )
+    generate_rank_binding_yaml(
+        tray_to_pcie_device_mapping,
+        TRI_MESH_2X8_2X4_RANK_BINDINGS,
+        WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING,
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_2x8_2x4_3_mesh.textproto",
+        "2x8_2x4_3_mesh_rank_binding.yaml",
     )
 
 

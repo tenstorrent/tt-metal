@@ -745,7 +745,14 @@ TEST_P(MatmulOpIfTest, Matmul) {
             false,  // transpose_b
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
-            matmul_program_config);
+            matmul_program_config,
+            std::nullopt,   // activation
+            std::nullopt,   // compute_kernel_config
+            std::nullopt,   // core_grid
+            std::nullopt,   // output_tile
+            std::nullopt,   // optional_output_tensor
+            std::nullopt,   // global_cb
+            std::nullopt);  // sub_device_id
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
@@ -800,9 +807,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest
-    : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
-      public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
+class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
+                       public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {
     const auto& conv2d_config = GetParam();
@@ -877,7 +883,7 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
 INSTANTIATE_TEST_SUITE_P(
     Conv2dConfigVariations,
     Conv2dOpIfTest,
-    ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+    ::testing::Values(std::nullopt, ttnn::prim::Conv2dConfig{.deallocate_activation = true}));
 
 // ============================================================================
 // Transformer tests
