@@ -254,7 +254,6 @@ def test_move_sharded_to_interleaved_rejected(device):
 
 def test_move_interleaved_to_sharded(device):
     """Test move from interleaved to sharded layout."""
-    from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
     torch.manual_seed(42)
     shape = [1, 1, 128, 64]
