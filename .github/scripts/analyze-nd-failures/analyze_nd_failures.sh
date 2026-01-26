@@ -360,6 +360,33 @@ create_run_directory_name() {
     echo "$dir_name"
 }
 
+# Function to ensure unique directory name (append number if exists and no_overwrite is true)
+ensure_unique_directory_name() {
+    local base_name=$1
+    local no_overwrite=$2
+    local full_path="${BASE_OUTPUT_DIR}/${base_name}"
+
+    # If overwrite is allowed or directory doesn't exist, return base name
+    if [[ "$no_overwrite" == "false" ]] || [[ ! -d "$full_path" ]]; then
+        echo "$base_name"
+        return 0
+    fi
+
+    # Directory exists and no_overwrite is true - find next available number
+    local counter=1
+    local candidate_name="${base_name}_${counter}"
+    local candidate_path="${BASE_OUTPUT_DIR}/${candidate_name}"
+
+    while [[ -d "$candidate_path" ]]; do
+        counter=$((counter + 1))
+        candidate_name="${base_name}_${counter}"
+        candidate_path="${BASE_OUTPUT_DIR}/${candidate_name}"
+    done
+
+    log_info "Directory '$base_name' already exists, using '$candidate_name' instead"
+    echo "$candidate_name"
+}
+
 # Function to create analysis prompt with context
 create_analysis_prompt() {
     local context_dir=$1
@@ -443,33 +470,56 @@ run_claude_analysis() {
         chmod -R u+rwX "$output_dir" 2>/dev/null || true
     fi
 
-    # Build the Claude command
-    # Use -p flag for non-interactive/pipe mode (print and exit)
-    # Use --dangerously-skip-permissions to allow Claude to read source files
-    local claude_cmd="cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions"
-
     local exit_code=0
     local temp_output
     temp_output=$(mktemp)
 
+    # Make temp file writable by claude user
+    chmod 666 "$temp_output"
+
     log_info "Running Claude as user: $CLAUDE_USER"
 
-    if command -v timeout &> /dev/null; then
-        log_info "Using timeout (10 minute limit)"
-        if ! timeout 600 bash -c "$(declare -f run_as_claude_user); CLAUDE_USER='$CLAUDE_USER'; run_as_claude_user \"$claude_cmd\"" 2>&1 | tee "$temp_output"; then
-            exit_code=$?
-        fi
+    # Build and run the Claude command
+    # Use -p flag for non-interactive/pipe mode (print and exit)
+    # Use --dangerously-skip-permissions to allow Claude to read source files
+    if [[ $(id -u) -eq 0 ]]; then
+        # Running as root - use runuser to switch to claude user
+        if command -v timeout &> /dev/null; then
+            log_info "Using timeout (10 minute limit)"
+            if ! timeout 600 runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+                exit_code=$?
+            fi
 
-        if [[ $exit_code -eq 124 ]]; then
-            log_error "Claude analysis timed out after 10 minutes"
-            cp "$temp_output" "$output_file" 2>/dev/null || true
-            rm -f "$temp_output"
-            return 1
+            if [[ $exit_code -eq 124 ]]; then
+                log_error "Claude analysis timed out after 10 minutes"
+                cp "$temp_output" "$output_file" 2>/dev/null || true
+                rm -f "$temp_output"
+                return 1
+            fi
+        else
+            # No timeout available
+            if ! runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+                exit_code=$?
+            fi
         fi
     else
-        # No timeout - run directly
-        if ! run_as_claude_user "$claude_cmd" 2>&1 | tee "$temp_output"; then
-            exit_code=$?
+        # Not running as root - run directly
+        if command -v timeout &> /dev/null; then
+            log_info "Using timeout (10 minute limit)"
+            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+                exit_code=$?
+            fi
+
+            if [[ $exit_code -eq 124 ]]; then
+                log_error "Claude analysis timed out after 10 minutes"
+                cp "$temp_output" "$output_file" 2>/dev/null || true
+                rm -f "$temp_output"
+                return 1
+            fi
+        else
+            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+                exit_code=$?
+            fi
         fi
     fi
 
@@ -505,6 +555,7 @@ main() {
     local skip_download=false
     local keep_output=false
     local claude_model="sonnet"  # Default model
+    local no_overwrite=false
 
     # Parse arguments
     local custom_output_dir=""
@@ -533,6 +584,10 @@ main() {
                 keep_output=true
                 shift
                 ;;
+            --no-overwrite)
+                no_overwrite=true
+                shift
+                ;;
             --help|-h)
                 echo "Usage: $0 [OPTIONS] <job_url_1> [job_url_2] ... [job_url_n]"
                 echo ""
@@ -542,6 +597,7 @@ main() {
                 echo "  --model, -m <model>    Claude model to use: haiku, sonnet, sonnet-1M, opus (default: sonnet)"
                 echo "  --skip-download        Skip downloading logs (use existing downloads)"
                 echo "  --keep-output          Keep output and downloaded folders (don't clean up)"
+                echo "  --no-overwrite         If output folder exists, append number suffix instead of overwriting"
                 echo "  --help, -h             Show this help message"
                 echo ""
                 echo "Examples:"
@@ -627,8 +683,12 @@ main() {
         log_info "Processing: $(basename "$job_dir")"
 
         # Create run-specific directory name
+        local base_dir_name
+        base_dir_name=$(create_run_directory_name "$job_dir")
+
+        # Ensure unique name if --no-overwrite is set
         local run_dir_name
-        run_dir_name=$(create_run_directory_name "$job_dir")
+        run_dir_name=$(ensure_unique_directory_name "$base_dir_name" "$no_overwrite")
 
         # Create the run-specific directory structure
         local run_output_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/analysis_output"
