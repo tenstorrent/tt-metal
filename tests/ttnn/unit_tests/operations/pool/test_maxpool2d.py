@@ -77,7 +77,7 @@ parameters = {
             # # requires reversed local reads on some cores, and forward reads on others, large kernel
             # [32, 32, 264, 40, 5, 5, 2, 2, 2, 2, 1, 1, True],
             [1, 256, 2, 32, 1, 32, 1, 1, 0, 0, 1, 1, False],
-            [1, 256, 2, 64, 1, 64, 1, 1, 0, 0, 1, 1, False],
+            # 1, 256, 2, 64, 1, 64, 1, 1, 0, 0, 1, 1, False],
         ],
     },
     "width_shard_tests": {

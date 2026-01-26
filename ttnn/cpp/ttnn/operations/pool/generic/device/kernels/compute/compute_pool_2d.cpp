@@ -182,7 +182,7 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
-                // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
+                // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 7));
                 if constexpr (return_indices) {
                     reconfig_data_format_srca(curr_in_cb_id);
                     copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);

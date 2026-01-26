@@ -117,8 +117,8 @@ FactoryParameters get_factory_parameters(
     Pool2DType pool_type,
     bool return_indices,
     const Layout& output_layout) {
-    uint32_t multi_buffering_factor = 2;
-    bool split_reader = true;
+    uint32_t multi_buffering_factor = 1;
+    bool split_reader = false;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
