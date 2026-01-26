@@ -10,7 +10,8 @@
 #include "eltwise_utils_sfpu.hpp"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t scalar_value = get_arg_val<uint32_t>(3);
     const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
@@ -79,3 +80,4 @@ void kernel_main() {
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

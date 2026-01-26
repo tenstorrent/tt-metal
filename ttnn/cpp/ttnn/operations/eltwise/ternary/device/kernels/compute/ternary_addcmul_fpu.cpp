@@ -8,7 +8,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/addcmul.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
 
@@ -66,3 +67,4 @@ void kernel_main() {
         cb_pop_front(cb_in0, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

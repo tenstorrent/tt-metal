@@ -20,7 +20,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // typically 1
@@ -154,3 +155,4 @@ void kernel_main() {
         cb_pop_front(cb_eff_c, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

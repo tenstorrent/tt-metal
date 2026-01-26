@@ -9,7 +9,8 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -55,3 +56,4 @@ void kernel_main() {
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

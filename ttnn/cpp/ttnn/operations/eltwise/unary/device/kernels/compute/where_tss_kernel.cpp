@@ -12,7 +12,8 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);
     const auto true_value = reinterpret_cast<const float*>(&packed_scalar1);
@@ -53,3 +54,4 @@ void kernel_main() {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
+}  // namespace NAMESPACE

@@ -10,7 +10,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_unary/addcmul.h"
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
 
@@ -130,3 +131,4 @@ void kernel_main() {
         cb_pop_front(cb_eff_c, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

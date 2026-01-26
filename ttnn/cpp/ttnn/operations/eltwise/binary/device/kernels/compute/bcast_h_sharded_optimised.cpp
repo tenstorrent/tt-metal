@@ -5,7 +5,8 @@
 #include <cstdint>
 #include "compute_kernel_api/bcast.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     constexpr uint32_t onetile = 1;
     uint32_t NC = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -38,3 +39,4 @@ void kernel_main() {
     cb_pop_front(tt::CBIndex::c_0, Wt * Ht);
     cb_push_back(tt::CBIndex::c_2, Wt * Ht);
 }
+}  // namespace NAMESPACE

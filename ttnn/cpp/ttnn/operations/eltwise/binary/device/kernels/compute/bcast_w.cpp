@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/bcast.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t w = 0;
     constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
@@ -36,3 +37,4 @@ void kernel_main() {
         }
     }
 }
+}  // namespace NAMESPACE

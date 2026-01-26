@@ -11,7 +11,8 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/addcmul.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
@@ -57,3 +58,4 @@ void kernel_main() {
         cb_pop_front(cb_in2, num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE

@@ -11,7 +11,8 @@
 #include "compute_kernel_api/logsigmoid.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     // Compile-time arguments
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
@@ -58,3 +59,4 @@ void kernel_main() {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
+}  // namespace NAMESPACE

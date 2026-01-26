@@ -16,7 +16,8 @@
 #include "compute_kernel_api/copy_dest_values.h"
 #include "compute_kernel_api.h"
 
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);
 
@@ -101,3 +102,4 @@ void kernel_main() {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
+}  // namespace NAMESPACE

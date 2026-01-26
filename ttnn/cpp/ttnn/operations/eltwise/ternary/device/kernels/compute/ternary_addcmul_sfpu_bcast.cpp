@@ -8,6 +8,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/addcmul.h"
 
+namespace NAMESPACE {
+
 ALWI void process_tile(
     tt::CBIndex cb_in0,
     tt::CBIndex cb_in1,
@@ -94,7 +96,7 @@ ALWI void process_tile(
 #endif
 }
 
-void kernel_main() {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -124,3 +126,4 @@ void kernel_main() {
         process_tile(cb_in0, cb_in1, cb_in2, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 }
+}  // namespace NAMESPACE

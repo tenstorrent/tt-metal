@@ -10,6 +10,8 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+namespace NAMESPACE {
+
 ALWI void process_tile(
     tt::CBIndex cb_in0,
     tt::CBIndex cb_in1,
@@ -84,7 +86,7 @@ ALWI void process_tile(
     cb_pop_front(CB_BCAST, num_tiles_per_cycle);
 }
 
-void kernel_main() {
+void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -124,3 +126,4 @@ void kernel_main() {
             num_tiles_per_cycle);
     }
 }
+}  // namespace NAMESPACE
