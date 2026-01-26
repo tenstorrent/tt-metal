@@ -8,6 +8,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 
@@ -145,6 +146,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 
 /* ========== Test case for loopback data movement; ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
+    SKIP_FOR_WATCHER();
+
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 

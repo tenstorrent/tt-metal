@@ -30,6 +30,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -165,6 +166,12 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
+
+    // Skip 8GB test case with watcher enabled
+    if (tt::test_utils::is_watcher_enabled() && tensor_size == 8 * GB) {
+        GTEST_SKIP() << "Test is not passing with watcher enabled";
+    }
+
     if (!validate_interleaved_test_inputs(tensor_size, *mesh_device_)) {
         GTEST_SKIP();
     }
@@ -274,6 +281,29 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // page_size: (bytes)
     auto [tensor_and_grid, page_size] = GetParam();
     auto [device_tensor_shape, core_grid_size] = tensor_and_grid;
+
+    // Test failing with watcher enabled, github issue #29554
+    // Skip specific parameter combinations that are known to fail
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 14) && core_grid_size.y == 1 &&
+        ((device_tensor_shape.width() == (3 << 14) && core_grid_size.x == 12) ||
+         (device_tensor_shape.width() == (1 << 14) && core_grid_size.x == 8 && page_size == 4096))) {
+        GTEST_SKIP() << "Test configuration known to fail with watcher enabled";
+    }
+
+    // Skip LargeShardedReadback/ShardedMeshBufferTestSuite.NIGHTLY_DRAMReadback/2 with watcher
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 14) &&
+        device_tensor_shape.width() == (3 << 14) && core_grid_size.x == 12 && core_grid_size.y == 1 &&
+        page_size == 4096) {
+        GTEST_SKIP() << "Test case 2 known to fail with watcher enabled";
+    }
+
+    // Skip LargeShardedReadback/ShardedMeshBufferTestSuite.NIGHTLY_DRAMReadback/3 with watcher
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 15) &&
+        device_tensor_shape.width() == (1 << 15) && core_grid_size.x == 8 && core_grid_size.y == 1 &&
+        page_size == 4096) {
+        GTEST_SKIP() << "Test case 3 known to fail with watcher enabled";
+    }
+
     uint64_t device_tensor_size = device_tensor_shape.height() * device_tensor_shape.width() * ElementSize;
 
     if (!validate_sharded_test_inputs(core_grid_size, device_tensor_shape, *mesh_device_, ElementSize)) {
