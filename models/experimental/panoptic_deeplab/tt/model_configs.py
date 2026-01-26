@@ -119,9 +119,6 @@ class ModelOptimisations:
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
 
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
-
         # Default overrides applied to all layers
         self.default_overrides = {
             "weights_dtype": conv_w_dtype,
@@ -149,11 +146,14 @@ class ModelOptimisations:
 
         self.layer_overrides = {}
 
-        # Create the appropriate optimization strategy
-        if self.is_20_core:
+        compute_grid = device.compute_with_storage_grid_size()
+        # Create the appropriate optimizer based on the device's core grid size
+        if compute_grid.x == 5 and compute_grid.y == 4:
             self.optimiser = TwentyCoreOptimiser(self)
-        else:
+        elif compute_grid.x == 11 and compute_grid.y == 10:
             self.optimiser = HundredTenCoreOptimiser(self)
+        else:
+            raise NotImplementedError("No optimiser implemented for this core grid size.")
 
     # =========================================================================
     # CORE API METHODS
