@@ -296,14 +296,18 @@ while [[ "$found" == "false" ]]; do
       fi
 
       if [ -n "$script_path" ]; then
-        echo "Run: $script_path"
-        run_cmd="$script_path"
+        echo "Running script: $script_path"
+        # Use 'bash -l <script>' for script files (no execute permission needed)
+        run_cmd_prefix="bash -l"
+        run_cmd_arg="$script_path"
       else
-        echo "Run: $test"
-        run_cmd="$test"
+        echo "Running command: $test"
+        # Use 'bash -lc <cmd>' for command strings
+        run_cmd_prefix="bash -lc"
+        run_cmd_arg="$test"
       fi
 
-      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
+      if timeout -k 10s "${timeout_duration_iteration}m" $run_cmd_prefix "$run_cmd_arg" 2>&1 | tee "$output_file"; then
         if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
           echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
           skip_count=$((skip_count+1))
@@ -384,14 +388,18 @@ while [[ "$found" == "false" ]]; do
       echo "Devices reset"
 
       if [ -n "$script_path" ]; then
-        echo "Run: $script_path"
-        run_cmd="$script_path"
+        echo "Running script: $script_path"
+        # Use 'bash -l <script>' for script files (no execute permission needed)
+        run_cmd_prefix="bash -l"
+        run_cmd_arg="$script_path"
       else
-        echo "Run: $test"
-        run_cmd="$test"
+        echo "Running command: $test"
+        # Use 'bash -lc <cmd>' for command strings
+        run_cmd_prefix="bash -lc"
+        run_cmd_arg="$test"
       fi
 
-      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
+      if timeout -k 10s "${timeout_duration_iteration}m" $run_cmd_prefix "$run_cmd_arg" 2>&1 | tee "$output_file"; then
         timeout_rc=0
         echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true

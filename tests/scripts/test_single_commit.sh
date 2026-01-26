@@ -171,7 +171,9 @@ if [ "$nd_mode" = true ]; then
       tt-smi -r >/dev/null 2>&1 || true
     fi
 
-    if timeout -k 10s "${timeout_minutes}m" bash -lc "$script_path" 2>&1 | tee "$output_file"; then
+    echo "Running test script: $script_path"
+    # Use 'bash -l <script>' instead of 'bash -lc <script>' to avoid needing execute permission
+    if timeout -k 10s "${timeout_minutes}m" bash -l "$script_path" 2>&1 | tee "$output_file"; then
       if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
         echo "Attempt $run_idx: detected skip"
         skip_count=$((skip_count+1))
@@ -212,7 +214,9 @@ else
     echo "Resetting devices..."
     tt-smi -r >/dev/null 2>&1 || true
 
-    if timeout -k 10s "${timeout_minutes}m" bash -lc "$script_path" 2>&1 | tee "$output_file"; then
+    echo "Running test script: $script_path"
+    # Use 'bash -l <script>' instead of 'bash -lc <script>' to avoid needing execute permission
+    if timeout -k 10s "${timeout_minutes}m" bash -l "$script_path" 2>&1 | tee "$output_file"; then
       timeout_rc=0
       break
     else
