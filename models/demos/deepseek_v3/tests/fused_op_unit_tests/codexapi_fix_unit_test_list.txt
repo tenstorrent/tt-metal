@@ -1,1 +1,0 @@
-pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_op.py::test_ds_moe_op -k "prefill and 8192"
