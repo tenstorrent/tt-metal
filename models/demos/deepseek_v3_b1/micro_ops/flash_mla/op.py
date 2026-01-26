@@ -59,30 +59,47 @@ class FlashMLAOptimalGridNOC0:
     S1→1, S2→3, S3→2, S4→0, S5→5, S6→7, S7→6, S8→4
     """
 
-    # S block definitions: (name, cores, dram_bank)
+    # S block definitions: (cores, optimal_dram_bank)
+    # S1-S4: left side (cols 0-3), S5-S8: right side (cols 7-10)
     BLOCKS = (
-        ("S1", ((0, 1), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (2, 2), (3, 2)), 1),
-        ("S2", ((0, 3), (1, 3), (2, 3), (3, 3), (0, 4), (1, 4), (2, 4), (3, 4)), 3),
-        ("S3", ((0, 7), (1, 7), (2, 7), (3, 7), (0, 8), (1, 8), (2, 8), (3, 8)), 2),
-        ("S4", ((0, 9), (1, 9), (2, 9), (3, 9), (0, 0), (1, 0), (2, 0), (3, 0)), 0),
-        ("S5", ((7, 1), (8, 1), (9, 1), (10, 1), (7, 2), (8, 2), (9, 2), (10, 2)), 5),
-        ("S6", ((7, 4), (8, 4), (9, 4), (10, 4), (7, 5), (8, 5), (9, 5), (10, 5)), 7),
-        ("S7", ((7, 6), (8, 6), (9, 6), (10, 6), (7, 7), (8, 7), (9, 7), (10, 7)), 6),
-        ("S8", ((7, 9), (8, 9), (9, 9), (10, 9), (7, 0), (8, 0), (9, 0), (10, 0)), 4),
+        (((0, 1), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (2, 2), (3, 2)), 1),  # S1
+        (((0, 3), (1, 3), (2, 3), (3, 3), (0, 4), (1, 4), (2, 4), (3, 4)), 3),  # S2
+        (((0, 7), (1, 7), (2, 7), (3, 7), (0, 8), (1, 8), (2, 8), (3, 8)), 2),  # S3
+        (((0, 9), (1, 9), (2, 9), (3, 9), (0, 0), (1, 0), (2, 0), (3, 0)), 0),  # S4
+        (((7, 1), (8, 1), (9, 1), (10, 1), (7, 2), (8, 2), (9, 2), (10, 2)), 5),  # S5
+        (((7, 4), (8, 4), (9, 4), (10, 4), (7, 5), (8, 5), (9, 5), (10, 5)), 7),  # S6
+        (((7, 6), (8, 6), (9, 6), (10, 6), (7, 7), (8, 7), (9, 7), (10, 7)), 6),  # S7
+        (((7, 9), (8, 9), (9, 9), (10, 9), (7, 0), (8, 0), (9, 0), (10, 0)), 4),  # S8
     )
 
     NUM_BLOCKS = len(BLOCKS)
-    CORES_PER_BLOCK = len(BLOCKS[0][1])
+    CORES_PER_BLOCK = len(BLOCKS[0][0])
+
+    # Optimal DRAM bank order for KV cache sharding (matches S block work assignment)
+    OPTIMAL_DRAM_BANK_ORDER = tuple(block[1] for block in BLOCKS)  # (1, 3, 2, 0, 5, 7, 6, 4)
+
+    @classmethod
+    def optimal_dram_grid(cls) -> "ttnn.CoreRangeSet":
+        """
+        Get optimal DRAM CoreRangeSet for KV cache sharding.
+        The order matches S block work assignment for optimal locality.
+        """
+        # DRAM banks map to coords (bank_id, 0) for 1D DRAM grid
+        core_ranges = [
+            ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
+            for bank_id in cls.OPTIMAL_DRAM_BANK_ORDER
+        ]
+        return ttnn.CoreRangeSet(core_ranges)
 
     @classmethod
     def get_cores(cls, s_block_idx: int) -> tuple:
         """Get cores for S block at index."""
-        return cls.BLOCKS[s_block_idx][1]
+        return cls.BLOCKS[s_block_idx][0]
 
     @classmethod
     def output_cores(cls, s_block_idx: int, num_cores: int) -> tuple:
         """Get the first N cores from an S block (output/Q shard cores)."""
-        return cls.BLOCKS[s_block_idx][1][:num_cores]
+        return cls.BLOCKS[s_block_idx][0][:num_cores]
 
     @classmethod
     def physical_multicast_coords(cls, device, s_block_idx: int) -> tuple:
@@ -93,7 +110,7 @@ class FlashMLAOptimalGridNOC0:
         Uses first core as start and last core as end. NOC is a torus architecture
         so wraparound multicast (e.g., S4, S8) works correctly.
         """
-        cores = cls.BLOCKS[s_block_idx][1]
+        cores = cls.BLOCKS[s_block_idx][0]
         first_x, first_y = cores[0]
         last_x, last_y = cores[-1]
 
