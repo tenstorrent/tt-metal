@@ -448,22 +448,21 @@ void kernel_main() {
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
 
-    // Multicast coordinates for signaling tilizer cores
-    constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
-    constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
-    constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
-    constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
-    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
+    // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t e_t_buffer_ready_semaphore_id = get_named_compile_time_arg_val("e_t_buffer_ready_semaphore_id");
-    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+
     constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
     constexpr uint32_t drain_core_noc_x = get_named_compile_time_arg_val("drain_core_noc_x");
     constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
     constexpr uint32_t remote_counts_cb_id = get_named_compile_time_arg_val("remote_counts_cb_id");
     constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
-    constexpr uint32_t tile_height = 32;
-    constexpr uint32_t tile_width = 32;
+
+    // T multicast coordinates
+    constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
+    constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
+    constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
+    constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
+    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
 
     // Multicast coordinates for signalling MM cores
     constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
@@ -471,17 +470,18 @@ void kernel_main() {
     constexpr uint32_t matmul_mcast_end_x = get_named_compile_time_arg_val("matmul_mcast_end_x");
     constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
-    constexpr uint32_t matmul_metadata_ready_semaphore_id =
-        get_named_compile_time_arg_val("matmul_metadata_ready_semaphore_id");
+    constexpr uint32_t num_matmul_bounding_box_cores = get_named_compile_time_arg_val("num_matmul_bounding_box_cores");
 
-    // Multicast coordinates for signalling UT cores
-    constexpr uint32_t untilize_mcast_start_x = get_named_compile_time_arg_val("untilize_mcast_start_x");
-    constexpr uint32_t untilize_mcast_start_y = get_named_compile_time_arg_val("untilize_mcast_start_y");
-    constexpr uint32_t untilize_mcast_end_x = get_named_compile_time_arg_val("untilize_mcast_end_x");
-    constexpr uint32_t untilize_mcast_end_y = get_named_compile_time_arg_val("untilize_mcast_end_y");
-    constexpr uint32_t num_untilize_cores = get_named_compile_time_arg_val("num_untilize_cores");
-    constexpr uint32_t untilize_metadata_ready_semaphore_id =
-        get_named_compile_time_arg_val("untilize_metadata_ready_semaphore_id");
+    // Semaphores
+    constexpr uint32_t partial_metadata_ready_semaphore_id =
+        get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
+    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+
+    uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
+    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
+
+    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_width = 32;
 
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     // e_t buffer entry size (16B aligned for NOC DMA)
@@ -770,9 +770,9 @@ void kernel_main() {
         // ========== Step 5: Drain receives counts from non-drain cores and consolidates ==========
         if (num_tilizer_cores > 1) {
             // Wait for all non-drain cores to send their counts
-            volatile tt_l1_ptr uint32_t* metadata_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-            noc_semaphore_wait(metadata_sem, num_tilizer_cores - 1);
+            noc_semaphore_wait(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(partial_metadata_ready_semaphore_addr),
+                num_tilizer_cores - 1);
 
             // Read counts from each non-drain core and consolidate their buffers
             // tilizer_noc_x and tilizer_noc_y arrays were populated from runtime args earlier
@@ -881,7 +881,7 @@ void kernel_main() {
         uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
         uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
 
-        // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain cores
+        // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain-sync cores
         if (num_tilizer_cores > 1) {
             // Get the multicast NOC address for all tilizer cores
             uint64_t e_t_mcast_addr = get_safe_multicast_noc_addr(
@@ -921,101 +921,58 @@ void kernel_main() {
 
             // Signal non-drain cores via semaphore multicast
             // First, set the local semaphore to 1 - this is the value that will be multicast
-            volatile tt_l1_ptr uint32_t* local_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(e_t_buffer_ready_semaphore_id));
-            *local_sem = 1;
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
             uint64_t semaphore_mcast_addr = get_safe_multicast_noc_addr(
                 tilizer_mcast_start_x,
                 tilizer_mcast_start_y,
                 tilizer_mcast_end_x,
                 tilizer_mcast_end_y,
-                get_semaphore(e_t_buffer_ready_semaphore_id));
+                metadata_ready_semaphore_addr);
 
             // Multicast the value 1 to all non-drain tilizer cores
-            noc_semaphore_set_multicast(
-                get_semaphore(e_t_buffer_ready_semaphore_id), semaphore_mcast_addr, num_tilizer_cores - 1);
+            noc_semaphore_set_multicast(metadata_ready_semaphore_addr, semaphore_mcast_addr, num_tilizer_cores - 1);
         }
 
         /*
-         * Send metadata to MM and UT cores;
-         * 1) Send number of tokens to MM and UT
-         * 2) Send token indices to UT
-         * 3) Signal via semaphore to MM and UT
+         * Send metadata to MM cores;
+         * 1) Send number of tokens to MM
+         * 2) Signal via semaphore to MM that metadata has arrived
          */
 
         // == 1 ==
 
-        // get mcast address(es)
+        // get mcast address
         uint64_t matmul_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
-            per_expert_total_tokens_cb_read_ptr);  // TODO: (GR) needs to be the target address (where MM receives it)
-        uint64_t untilize_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
-            untilize_mcast_start_x,
-            untilize_mcast_start_y,
-            untilize_mcast_end_x,
-            untilize_mcast_end_y,
-            per_expert_total_tokens_cb_read_ptr);  // TODO: (GR) needs to be the target address (where UT receives it)
+            per_expert_total_tokens_cb_read_ptr);
 
         // multicast data
         noc_async_write_multicast(
             per_expert_total_tokens_cb_read_ptr,
             matmul_per_expert_total_tokens_mcast_addr,
             experts_per_device * sizeof(uint32_t),
-            num_matmul_cores);
-        noc_async_write_multicast(
-            per_expert_total_tokens_cb_read_ptr,
-            untilize_per_expert_total_tokens_mcast_addr,
-            experts_per_device * sizeof(uint32_t),
-            num_untilize_cores);
+            num_matmul_bounding_box_cores);
 
         // == 2 ==
 
+        // set local semaphore value
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
         // get mcast address
-        uint64_t untilize_e_t_mcast_addr = get_safe_multicast_noc_addr(
-            untilize_mcast_start_x,
-            untilize_mcast_start_y,
-            untilize_mcast_end_x,
-            untilize_mcast_end_y,
-            e_t_cb_read_ptr);  // TODO: (GR) needs to be the target address (where UT receives it)
-
-        // multicast data
-        noc_async_write_multicast(e_t_cb_read_ptr, untilize_e_t_mcast_addr, e_t_buffer_total_size, num_untilize_cores);
-
-        // == 3 ==
-        // NOTE: technically we don't need two separate semaphores for this, leaving them separate for now
-        // in case we want to get creative with when we send off the metadata
-
-        // get semaphore addresses
-        uint32_t matmul_metadata_ready_semaphore_addr = get_semaphore(matmul_metadata_ready_semaphore_id);
-        uint32_t untilize_metadata_ready_semaphore_addr = get_semaphore(untilize_metadata_ready_semaphore_id);
-
-        // set local semaphore values
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_metadata_ready_semaphore_addr), 1);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(untilize_metadata_ready_semaphore_addr), 1);
-
-        // get mcast address(es)
         uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
-            matmul_metadata_ready_semaphore_addr);
-        uint64_t untilize_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-            untilize_mcast_start_x,
-            untilize_mcast_start_y,
-            untilize_mcast_end_x,
-            untilize_mcast_end_y,
-            untilize_metadata_ready_semaphore_addr);
+            metadata_ready_semaphore_addr);
 
-        // multicast semaphore(s)
+        // multicast semaphore
         noc_semaphore_set_multicast(
-            matmul_metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, num_matmul_cores);
-        noc_semaphore_set_multicast(
-            untilize_metadata_ready_semaphore_addr, untilize_metadata_ready_semaphore_mcast_addr, num_untilize_cores);
+            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, num_matmul_bounding_box_cores);
 
     }  // End of is_drain_tilizer_core block
     else {
@@ -1046,14 +1003,12 @@ void kernel_main() {
 
         // Signal drain core via semaphore increment
         uint64_t drain_semaphore_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, get_semaphore(metadata_ready_semaphore_id));
+            get_noc_addr(drain_core_noc_x, drain_core_noc_y, partial_metadata_ready_semaphore_addr);
         noc_semaphore_inc(drain_semaphore_noc_addr, 1);
 
         // ========== NON-DRAIN TILIZER CORE: Wait for drain core to multicast data ==========
         // Wait for the semaphore signal from drain core
-        volatile tt_l1_ptr uint32_t* semaphore_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(e_t_buffer_ready_semaphore_id));
-        noc_semaphore_wait(semaphore_addr, 1);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
         // Read per-expert counts from the CB (multicast by drain core)
         // The data was written directly to our CB by the multicast

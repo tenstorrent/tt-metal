@@ -108,17 +108,11 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    uint32_t tokens_per_chunk,
-    const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
-    const std::optional<CoreRangeSet>& matmul_core_range_set,
-    const std::optional<CoreRangeSet>& combine_core_range_set) {
+    uint32_t tokens_per_chunk) {
     return {
         operation_attributes_t{
             .axis = axis,
             .tokens_per_chunk = tokens_per_chunk,
-            .selective_tilize_core_range_set = selective_tilize_core_range_set,
-            .matmul_core_range_set = matmul_core_range_set,
-            .combine_core_range_set = combine_core_range_set,
         },
         tensor_args_t{
             .input_tensor = input_tensor,

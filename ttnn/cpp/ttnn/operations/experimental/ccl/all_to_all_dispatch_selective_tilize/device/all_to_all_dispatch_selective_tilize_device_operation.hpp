@@ -23,19 +23,8 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
     struct operation_attributes_t {
         const std::optional<uint32_t> axis;
         const uint32_t tokens_per_chunk;
-        const std::optional<CoreRangeSet> selective_tilize_core_range_set;
-        const std::optional<CoreRangeSet> matmul_core_range_set;
-        const std::optional<CoreRangeSet> combine_core_range_set;
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "axis",
-            "tokens_per_chunk",
-            "selective_tilize_core_range_set",
-            "matmul_core_range_set",
-            "combine_core_range_set");
-        auto attribute_values() const {
-            return std::forward_as_tuple(
-                axis, tokens_per_chunk, selective_tilize_core_range_set, matmul_core_range_set, combine_core_range_set);
-        };
+        static constexpr auto attribute_names = std::forward_as_tuple("axis", "tokens_per_chunk");
+        auto attribute_values() const { return std::forward_as_tuple(axis, tokens_per_chunk); };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -103,10 +92,7 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        uint32_t tokens_per_chunk,
-        const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
-        const std::optional<CoreRangeSet>& matmul_core_range_set,
-        const std::optional<CoreRangeSet>& combine_core_range_set);
+        uint32_t tokens_per_chunk);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

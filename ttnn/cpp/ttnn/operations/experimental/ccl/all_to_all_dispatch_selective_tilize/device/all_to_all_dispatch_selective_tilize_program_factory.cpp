@@ -36,6 +36,40 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
+// T, MM, T + MM
+std::tuple<
+    std::vector<CoreCoord>,
+    std::vector<CoreCoord>,
+    CoreRangeSet,
+    CoreRangeSet,
+    CoreRangeSet,
+    CoreRange,
+    CoreRange>
+get_cores(MeshDevice* mesh_device) {
+    const std::vector<CoreCoord> t_cores = {CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3)};
+    const std::vector<CoreCoord> mm_cores =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+
+    const CoreRangeSet t_core_range_set = CoreRangeSet(t_cores);
+    const CoreRangeSet mm_core_range_set = CoreRangeSet(mm_cores);
+    const CoreRangeSet t_mm_core_range_set = t_core_range_set.merge(mm_core_range_set);
+
+    const CoreRange t_bounding_box = t_core_range_set.bounding_box();
+    const CoreRange mm_bounding_box = mm_core_range_set.bounding_box();
+
+    TT_FATAL(!t_bounding_box.intersects(mm_bounding_box), "tilize and matmul bounding boxes cannot overlap");
+
+    return {
+        t_cores,
+        mm_cores,
+        t_core_range_set,
+        mm_core_range_set,
+        t_mm_core_range_set,
+        t_bounding_box,
+        mm_bounding_box,
+    };
+}
+
 }  // namespace detail
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::cached_mesh_workload_t
@@ -199,13 +233,34 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     //     scores_page_size,
     //     aligned_scores_page_size);
 
-    CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value();
+    ////// CORES //////
 
-    uint32_t num_cores = selective_tilize_core_range_set.num_cores();
+    // Get cores to use for tilize and matmul
+    const auto
+        [t_cores, mm_cores, t_core_range_set, mm_core_range_set, t_mm_core_range_set, t_bounding_box, mm_bounding_box] =
+            detail::get_cores(mesh_device);
+
+    const uint32_t t_num_cores = t_core_range_set.num_cores();
+    const uint32_t mm_num_cores = mm_core_range_set.num_cores();
+    const uint32_t mm_bounding_box_num_cores = mm_bounding_box.size();
+
+    // Logical mcast bounding box coordinates
+    const CoreCoord t_mcast_start_logical = t_bounding_box.start_coord;
+    const CoreCoord t_mcast_end_logical = t_bounding_box.end_coord;
+    const CoreCoord mm_mcast_start_logical = mm_bounding_box.start_coord;
+    const CoreCoord mm_mcast_end_logical = mm_bounding_box.end_coord;
+
+    // Convert to physical NOC coordinates
+    const CoreCoord t_mcast_start_physical = mesh_device->worker_core_from_logical_core(t_mcast_start_logical);
+    const CoreCoord t_mcast_end_physical = mesh_device->worker_core_from_logical_core(t_mcast_end_logical);
+    const CoreCoord mm_mcast_start_physical = mesh_device->worker_core_from_logical_core(mm_mcast_start_logical);
+    const CoreCoord mm_mcast_end_physical = mesh_device->worker_core_from_logical_core(mm_mcast_end_logical);
+
+    ////// WORK SPLIT //////
 
     // Split token subregions across tilizer cores (similar to sender subtoken splitting)
     // Each tilizer core handles a portion of the hidden dimension for each token
-    uint32_t tilizer_subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, num_cores), l1_alignment);
+    uint32_t tilizer_subtoken_bytes_aligned = tt::align(tt::div_up(aligned_input_page_size, t_num_cores), l1_alignment);
     uint32_t tilizer_subtoken_units_of_work = tt::div_up(aligned_input_page_size, tilizer_subtoken_bytes_aligned);
 
     auto
@@ -215,78 +270,55 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
          tilizer_cores_group_2,
          tilizer_units_per_core_g1,
          tilizer_units_per_core_g2] =
-            tt::tt_metal::split_work_to_cores(selective_tilize_core_range_set, tilizer_subtoken_units_of_work);
+            tt::tt_metal::split_work_to_cores(t_core_range_set, tilizer_subtoken_units_of_work);
+
+    ////// SEMAPHORES //////
+
+    // T:
+    // - Signal from non-drain-sync cores to drain-sync core that partial metadata results are ready
+    // MM:
+    // - N/A
+    auto partial_metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_core_range_set, INVALID);
+
+    // T:
+    // - Signal from drain-sync core to non-drain-sync cores that final metadata results are ready
+    // MM:
+    // - T drain=sync core signals to MM cores that final metadata results are ready
+    auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+
+    // T:
+    // - MMs signal to Ts that space for new chunk is free
+    // MM:
+    // - Ts signal to MMs that chunk has arrived
+    // NOTE:
+    // - Need a semaphore per expert to avoid race conditions without requiring T cores to synchronize with eachother
+    //   and MM cores to synchronize with each other
+    constexpr uint32_t supported_num_experts_per_device = 2;
+    TT_FATAL(
+        experts_per_device <= supported_num_experts_per_device,
+        "requires a semaphore per expert, expected {} experts per device but got {}",
+        supported_num_experts_per_device,
+        experts_per_device);
+
+    auto e0_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+    auto e1_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+
+    ////// CBs //////
 
     uint32_t max_tilizer_subtoken_size =
         std::max(tilizer_units_per_core_g1, tilizer_units_per_core_g2) * tilizer_subtoken_bytes_aligned;
 
-    uint32_t num_tilizer_cores = selective_tilize_core_range_set.num_cores();
-    auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set, std::nullopt, true);
     constexpr uint32_t buffering_factor = 2;
     uint32_t tokens_per_chunk = operation_attributes.tokens_per_chunk;
 
-    // Create semaphores for synchronizing the drain tilizer to non-drain tilizers
-    auto e_t_buffer_ready_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, INVALID);
-    // Semaphore for non-drain tilizers to signal drain tilizer that metadata processing is complete
-    // Non-drain cores increment this after writing their counts to remote_counts_cb
-    auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, INVALID);
-    // Semaphore for drain tilizer to signal non-drain tilizers that E-D table computation is complete
-    // auto combine_and_matmul_core_range_set =
-    // operation_attributes.matmul_core_range_set.merge(operation_attributes.combine_core_range_set)
-
-    /*
-     * Create semaphores for signalling to MM and UT cores that the metadata has arrived
-     */
-    auto matmul_metadata_ready_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, operation_attributes.matmul_core_range_set.value(), INVALID);
-    auto untilize_metadata_ready_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, operation_attributes.combine_core_range_set.value(), INVALID);
-
-    // Get the bounding box of tilizer cores for multicast from drain tilizer to non-drain tilizers
-    // Used for E-D table computed signal
-    auto tilizer_bbox = selective_tilize_core_range_set.bounding_box();
-    CoreCoord tilizer_mcast_start_logical = tilizer_bbox.start_coord;
-    CoreCoord tilizer_mcast_end_logical = tilizer_bbox.end_coord;
-
-    auto matmul_bbox = operation_attributes.matmul_core_range_set.value().bounding_box();
-    CoreCoord matmul_mcast_start_logical = matmul_bbox.start_coord;
-    CoreCoord matmul_mcast_end_logical = matmul_bbox.end_coord;
-
-    auto combine_bbox = operation_attributes.combine_core_range_set.value().bounding_box();
-    CoreCoord combine_mcast_start_logical = combine_bbox.start_coord;
-    CoreCoord combine_mcast_end_logical = combine_bbox.end_coord;
-
-    // Convert to physical NOC coordinates
-    auto tilizer_mcast_start_physical = mesh_device->worker_core_from_logical_core(tilizer_mcast_start_logical);
-    auto tilizer_mcast_end_physical = mesh_device->worker_core_from_logical_core(tilizer_mcast_end_logical);
-    auto matmul_mcast_start_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_start_logical);
-    auto matmul_mcast_end_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_end_logical);
-    auto combine_mcast_start_physical = mesh_device->worker_core_from_logical_core(combine_mcast_start_logical);
-    auto combine_mcast_end_physical = mesh_device->worker_core_from_logical_core(combine_mcast_end_logical);
-
-    // For NOC 0: start = (min_x, min_y), end = (max_x, max_y)
-    // For NOC 1: coordinates are swapped
-    // We'll use NOC 0 by default, but pass both orderings and let the kernel handle it
-    // Or we can determine the NOC here and swap if needed
-    // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
-
-    // Store physical NOC coordinates of all tilizer cores for cross-core communication
-    // Used by drain core to read from non-drain cores, and non-drain to write to drain
-    std::vector<CoreCoord> tilizer_cores_physical;
-    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
-        tilizer_cores_physical.push_back(mesh_device->worker_core_from_logical_core(selective_tilize_cores.at(i)));
-    }
-    // Drain core is always the first tilizer core (index 0)
-    CoreCoord drain_core_physical = tilizer_cores_physical.at(0);
-
     // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
-    constexpr uint32_t e_t_entry_size = 16;  // 16B per token entry for NOC alignment
+    // 16B per token entry for NOC alignment
+    constexpr uint32_t e_t_entry_size = 16;
 
     tt::tt_metal::create_cb(
         e_t_buffer_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tokens * e_t_entry_size,  // total tokens * 16B per entry
         experts_per_device,       // number of experts on the device
         tt::DataFormat::UInt32);
@@ -295,7 +327,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         aligned_indices_page_size,
         indices_pages,  // double buffer buffer packets
         indices_data_format,
@@ -305,7 +337,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         scores_tensor_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         aligned_indices_page_size,
         scores_pages,
         scores_data_format,
@@ -314,19 +346,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // For each batch's tokens, we need to read the relevant experts from the mapping tensor
     // For in range (tokens) every time tokens/batch increments, read in new mapping tensor page
     tt::tt_metal::create_cb(
-        mapping_tensor_cb_id,
-        program,
-        selective_tilize_core_range_set,
-        aligned_mapping_page_size,
-        mapping_pages,
-        mapping_data_format);
+        mapping_tensor_cb_id, program, t_core_range_set, aligned_mapping_page_size, mapping_pages, mapping_data_format);
 
     // Tilizer input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
     // Each tilizer core reads its subtoken portion of incoming tokens
     tt::tt_metal::create_cb(
         tilizer_input_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         max_tilizer_subtoken_size,
         operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
         input_data_format);
@@ -334,7 +361,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         expert_activation_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment),
         tokens,
         tt::DataFormat::UInt32);
@@ -342,7 +369,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         per_expert_total_tokens_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         sizeof(uint32_t),  // at most 512 for decode
         experts_per_device,
         tt::DataFormat::UInt32);
@@ -354,7 +381,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         brisc_e_t_buffer_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         (tokens / 2) * e_t_entry_size * experts_per_device,  // full buffer with 16B entries
         1,
         tt::DataFormat::UInt32);
@@ -364,7 +391,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         brisc_expert_counts_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         sizeof(uint32_t) * experts_per_device,  // all counts in one page
         1,
         tt::DataFormat::UInt32);
@@ -376,32 +403,27 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         brisc_expert_activation_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         brisc_activation_row_size * (tokens / 2),  // full buffer in one page
         1,
         tt::DataFormat::UInt32);
 
     // BRISC's activated token count (single uint32_t to communicate to NCRISC)
     tt::tt_metal::create_cb(
-        brisc_activated_count_cb_id,
-        program,
-        selective_tilize_core_range_set,
-        sizeof(uint32_t),
-        1,
-        tt::DataFormat::UInt32);
+        brisc_activated_count_cb_id, program, t_core_range_set, sizeof(uint32_t), 1, tt::DataFormat::UInt32);
 
     // CB for receiving counts from non-drain tilizer cores (only used on drain core)
     // Each non-drain core sends: [e_t_count_expert0, e_t_count_expert1, activated_count]
-    // Layout: 3 values per core × (num_tilizer_cores - 1) cores, 16B aligned per core's data
+    // Layout: 3 values per core × (t_num_cores - 1) cores, 16B aligned per core's data
     uint32_t remote_counts_cb_id = tt::CBIndex::c_13;
     uint32_t counts_per_remote_core = experts_per_device + 1;  // e_t counts + activated count
     uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
     tt::tt_metal::create_cb(
         remote_counts_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         remote_counts_entry_size,
-        num_tilizer_cores - 1,  // one entry per non-drain core
+        t_num_cores - 1,  // one entry per non-drain core
         tt::DataFormat::UInt32);
 
     // CB for passing total_chunks from writer to compute kernel
@@ -409,7 +431,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         total_chunks_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         sizeof(uint32_t),
         1,  // single page
         tt::DataFormat::UInt32);
@@ -427,10 +449,26 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         tilizer_output_cb_id,
         program,
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tokens_per_chunk * tile_width_bytes,
         max_tiles_per_chunk * buffering_factor,  // double-buffered
         input_data_format);
+
+    // For NOC 0: start = (min_x, min_y), end = (max_x, max_y)
+    // For NOC 1: coordinates are swapped
+    // We'll use NOC 0 by default, but pass both orderings and let the kernel handle it
+    // Or we can determine the NOC here and swap if needed
+    // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
+
+    // Store physical NOC coordinates of all tilizer cores for cross-core communication
+    // Used by drain core to read from non-drain cores, and non-drain to write to drain
+    std::vector<CoreCoord> tilizer_cores_physical;
+    for (uint32_t i = 0; i < t_num_cores; i++) {
+        tilizer_cores_physical.push_back(mesh_device->worker_core_from_logical_core(t_cores.at(i)));
+    }
+
+    // Drain core is always the first tilizer core (index 0)
+    CoreCoord drain_core_physical = tilizer_cores_physical.at(0);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"tilizer_input_cb_id", tilizer_input_cb_id},
@@ -483,35 +521,33 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
 
         // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
-        {"tilizer_mcast_start_x", (uint32_t)tilizer_mcast_start_physical.x},
-        {"tilizer_mcast_start_y", (uint32_t)tilizer_mcast_start_physical.y},
-        {"tilizer_mcast_end_x", (uint32_t)tilizer_mcast_end_physical.x},
-        {"tilizer_mcast_end_y", (uint32_t)tilizer_mcast_end_physical.y},
-        {"num_tilizer_cores", num_tilizer_cores},
         {"max_tiles_per_chunk", max_tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
-        {"e_t_buffer_ready_semaphore_id", e_t_buffer_ready_semaphore_id},
-        {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
-        {"tokens_per_tilizer_core", tokens / num_tilizer_cores},
+        {"tokens_per_tilizer_core", tokens / t_num_cores},
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
         {"expert_activation_output_page_size", detail::get_page_size_st(expert_activation_output_tensor)},
 
-        // Multicast coordinates for signalling MM cores
-        {"matmul_mcast_start_x", (uint32_t)matmul_mcast_start_physical.x},
-        {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
-        {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
-        {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
-        {"num_matmul_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
-        {"matmul_metadata_ready_semaphore_id", matmul_metadata_ready_semaphore_id},
+        // T multicast coordinates
+        {"tilizer_mcast_start_x", (uint32_t)t_mcast_start_physical.x},
+        {"tilizer_mcast_start_y", (uint32_t)t_mcast_start_physical.y},
+        {"tilizer_mcast_end_x", (uint32_t)t_mcast_end_physical.x},
+        {"tilizer_mcast_end_y", (uint32_t)t_mcast_end_physical.y},
+        {"num_tilizer_cores", t_num_cores},
 
-        // Multicast coordinates for signalling UT cores
-        {"untilize_mcast_start_x", (uint32_t)combine_mcast_start_physical.x},
-        {"untilize_mcast_start_y", (uint32_t)combine_mcast_start_physical.y},
-        {"untilize_mcast_end_x", (uint32_t)combine_mcast_end_physical.x},
-        {"untilize_mcast_end_y", (uint32_t)combine_mcast_end_physical.y},
-        {"num_untilize_cores", operation_attributes.combine_core_range_set.value().num_cores()},
-        {"untilize_metadata_ready_semaphore_id", untilize_metadata_ready_semaphore_id},
+        // MM multicast coordinates
+        {"matmul_mcast_start_x", (uint32_t)mm_mcast_start_physical.x},
+        {"matmul_mcast_start_y", (uint32_t)mm_mcast_start_physical.y},
+        {"matmul_mcast_end_x", (uint32_t)mm_mcast_end_physical.x},
+        {"matmul_mcast_end_y", (uint32_t)mm_mcast_end_physical.y},
+        {"num_matmul_cores", mm_num_cores},
+        {"num_matmul_bounding_box_cores", mm_bounding_box_num_cores},
+
+        // Semaphores
+        {"partial_metadata_ready_semaphore_id", partial_metadata_ready_semaphore_id},
+        {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
+        {"e0_chunk_ready_semaphore_id", e0_chunk_ready_semaphore_id},
+        {"e1_chunk_ready_semaphore_id", e1_chunk_ready_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -526,14 +562,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "reader_tilizer.cpp",
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_tilizer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
         "writer_tilizer.cpp",
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     // Compute kernel compile-time args for tilization
@@ -553,7 +589,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/compute/"
         "compute_tilizer.cpp",
-        selective_tilize_core_range_set,
+        t_core_range_set,
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilizer_named_compile_time_args});
 
     std::vector<uint32_t> selective_tilize_runtime_args = {
@@ -584,13 +620,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     // NOC coordinates for all tilizer cores (for cross-core communication)
     // Runtime args starting at index 11: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
-    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+    for (uint32_t i = 0; i < t_num_cores; i++) {
         selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).x);
         selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).y);
     }
 
     // Calculate tokens per tilizer core for parallel metadata processing
-    uint32_t tokens_per_tilizer_core = tokens / num_tilizer_cores;
+    uint32_t tokens_per_tilizer_core = tokens / t_num_cores;
 
     std::vector<CoreCoord> drain_tilizer_cores;
     uint32_t tilizer_subtoken_offset = 0;
@@ -598,21 +634,21 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Compute kernel runtime args (separate from reader/writer)
     std::vector<uint32_t> compute_tilizer_runtime_args = {0};  // [0]: max_tiles_per_chunk (set per-core below)
 
-    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+    for (uint32_t i = 0; i < t_num_cores; i++) {
         // First tilizer core is the drain tilizer core (has indices/scores sharded to it)
         selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = (i == 0) ? 1 : 0;
 
         // Set token range for this core's metadata processing
         // Each core processes a contiguous range of tokens
         uint32_t core_token_start = i * tokens_per_tilizer_core;
-        uint32_t core_token_end = (i == num_tilizer_cores - 1) ? tokens : (i + 1) * tokens_per_tilizer_core;
+        uint32_t core_token_end = (i == t_num_cores - 1) ? tokens : (i + 1) * tokens_per_tilizer_core;
         selective_tilize_runtime_args.at(core_token_start_idx) = core_token_start;
         selective_tilize_runtime_args.at(core_token_end_idx) = core_token_end;
         selective_tilize_runtime_args.at(tilizer_core_idx_idx) = i;
 
         // Set work split parameters based on which group the core is in
         uint32_t tilizer_subtoken_size = 0;
-        if (tilizer_cores_group_1.contains(selective_tilize_cores.at(i))) {
+        if (tilizer_cores_group_1.contains(t_cores.at(i))) {
             selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
             tilizer_subtoken_size = tilizer_units_per_core_g1 * tilizer_subtoken_bytes_aligned;
             // Clamp to not exceed the total token size
@@ -621,7 +657,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             }
             selective_tilize_runtime_args.at(tilizer_subtoken_size_idx) = tilizer_subtoken_size;
             tilizer_subtoken_offset += tilizer_subtoken_size;
-        } else if (tilizer_cores_group_2.contains(selective_tilize_cores.at(i))) {
+        } else if (tilizer_cores_group_2.contains(t_cores.at(i))) {
             selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
             tilizer_subtoken_size = tilizer_units_per_core_g2 * tilizer_subtoken_bytes_aligned;
             // Clamp to not exceed the total token size
@@ -635,12 +671,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         // Set compute kernel runtime args - max_tiles_per_chunk based on tilizer_subtoken_size
         compute_tilizer_runtime_args.at(0) = tilizer_subtoken_size / tile_width_bytes;
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, selective_tilize_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(
-            program, writer_tilizer_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(
-            program, compute_tilizer_kernel_id, selective_tilize_cores.at(i), compute_tilizer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, selective_tilize_kernel_id, t_cores.at(i), selective_tilize_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_tilizer_kernel_id, t_cores.at(i), selective_tilize_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_tilizer_kernel_id, t_cores.at(i), compute_tilizer_runtime_args);
     }
 
     return {
@@ -649,7 +682,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
             .selective_tilize_kernel_id = selective_tilize_kernel_id,
             .writer_tilizer_kernel_id = writer_tilizer_kernel_id,
             .compute_tilizer_kernel_id = compute_tilizer_kernel_id,
-            .selective_tilize_cores = selective_tilize_cores,
+            .selective_tilize_cores = t_cores,
         }};
 }
 

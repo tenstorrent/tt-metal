@@ -408,46 +408,12 @@ def test_selective_tilize_no_trace(
     #   Rows 1-4, cols 0-7: Matmul part 2 (32 cores) -> total matmul = 36
     #   Rows 5-8, cols 0-7: Combine (32 cores)
 
-    # Drain tilizer core is core (0,0) where indices and scores are sharded
+    # Drain tilizer core is core (5,0) where indices and scores are sharded
     drain_tilizer_core = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(0, 0),
-            ),
-        }
-    )
-
-    # Tilize: 4 cores on row 0, columns 0-3
-    selective_tilize_core_range_set = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(3, 0),
-            ),
-        }
-    )
-
-    # Matmul: 36 cores = row 0 cols 4-7 (4 cores) + rows 1-4 all cols (32 cores)
-    matmul_core_range_set = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(4, 0),
-                ttnn.CoreCoord(7, 0),
-            ),
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 1),
-                ttnn.CoreCoord(7, 4),
-            ),
-        }
-    )
-
-    # Combine: 32 cores on rows 5-8, all columns
-    combine_core_range_set = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 5),
-                ttnn.CoreCoord(7, 8),
+                ttnn.CoreCoord(5, 0),
+                ttnn.CoreCoord(5, 0),
             ),
         }
     )
@@ -530,9 +496,6 @@ def test_selective_tilize_no_trace(
         tt_expert_mapping,
         cluster_axis=cluster_axis,
         tokens_per_chunk=tokens_per_chunk,
-        selective_tilize_core_range_set=selective_tilize_core_range_set,
-        matmul_core_range_set=matmul_core_range_set,
-        combine_core_range_set=combine_core_range_set,
     )
 
     logger.info(f"Output tensor shape: {output_tensor.shape}")
