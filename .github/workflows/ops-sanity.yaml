@@ -23,6 +23,21 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      enable-lto:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       build-artifact-name:
@@ -39,8 +54,35 @@ on:
         type: string
         default: "Ubuntu 22.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # Parse platform dropdown to extract distro/version
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          default-version: '22.04'  # ops-sanity defaults to 22.04
+
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -90,14 +132,15 @@ jobs:
   build-artifact:
     # This job will ONLY run if the build-artifact-name input is NOT provided.
     if: ${{ inputs.build-artifact-name == '' }}
-    needs: load-test-matrix
+    needs: [load-test-matrix, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: false
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
   tests:
