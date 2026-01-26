@@ -259,6 +259,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         }
         return SliceRmProgramFactory{};
     }
+#if 1
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = input_single_tile_size;
@@ -279,6 +280,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     if (enough_space_width || enough_space_height) {
         return SliceTileInterleavedProgramFactory{};
     }
+#endif
 
     return SliceTileProgramFactory{};
 }

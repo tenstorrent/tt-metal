@@ -24,14 +24,14 @@ void kernel_main() {
 
     auto write_block = [&](uint32_t num_tiles, uint32_t start_id, uint32_t id_step, uint32_t size_tile) {
         cb_wait_front(cb_id, num_tiles);
-        uint32_t l1_write_addr = get_read_ptr(cb_id);
+        uint32_t l1_read_addr = get_read_ptr(cb_id);
         uint32_t id = start_id;
         for (uint32_t k = 0; k < num_tiles; k++) {
             uint64_t out_noc_addr = get_noc_addr(id, s);
 
-            noc_async_write(l1_write_addr, out_noc_addr, size_tile);
+            noc_async_write(l1_read_addr, out_noc_addr, size_tile);
 
-            l1_write_addr += size_tile;
+            l1_read_addr += size_tile;
             id += id_step;
         }
 

@@ -192,6 +192,20 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
             num_blocks_arg = num_blocks_per_core_cliff;
         }
 
+        // Validate block_coord doesn't exceed src_shape_blocks bounds before calculating source tile_id
+        // This prevents NOC address overflow from invalid tile_id calculations
+        for (uint32_t dim = 0; dim < block_coord.size(); ++dim) {
+            if (block_coord[dim] >= src_shape_blocks[dim]) {
+                TT_FATAL(
+                    false,
+                    "block_coord[{}] ({}) >= src_shape_blocks[{}] ({}). "
+                    "This indicates a bug in block_coord calculation or wrapping logic.",
+                    dim,
+                    block_coord[dim],
+                    dim,
+                    src_shape_blocks[dim]);
+            }
+        }
         uint32_t src_block_tile_id = calc_block_tile_id(
             block_coord, src_shape_blocks, block_start, row_wise, src_block_dim_size, src_block_dim_start);
         uint32_t out_block_tile_id =

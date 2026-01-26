@@ -91,6 +91,8 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
     uint32_t src_block_id_start,
     uint32_t num_blocks,
     uint32_t block_id_stride,
+    uint32_t num_tiles,
+    uint32_t tile_id_stride,
     const std::vector<uint32_t>& shape_blocks,       // runtime "shape_blocks" (output iteration space)
     const std::vector<uint32_t>& block_id_gap,       // runtime "block_id_gap" (src_block_id_gap)
     const std::vector<uint32_t>& block_coord_start,  // runtime "block_coord"
@@ -128,6 +130,11 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
     }
 
     for (uint32_t i = 0; i < num_blocks; i++) {
+        uint32_t tile_id = src_block_id_start;
+        for (uint32_t k = 0; k < num_tiles; k++) {
+            tile_id += tile_id_stride;
+        }
+#if 0
         if (print_debug) {
             // Print src_block_id and its corresponding 3d coordinate based on src_real_shape, not src_shape_blocks.
             if (src_shape_blocks.size() == 3) {
@@ -138,7 +145,7 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
                 std::cout << "src_block_id: " << src_block_id << "\n";
             }
         }
-
+#endif
         r.src_block_ids_used.push_back(src_block_id);
         src_block_id += block_id_stride;
 
@@ -320,31 +327,28 @@ int main() {
 #else
     Shape input = {768, 768, 128};
     Shape output = {686, 686, 128};
-    Shape slice_start = {0, 0, 0};
+    Shape start = {0, 0, 0};
 #endif
+    // Pad H/W and start H/W to multiples of tile, like typical tiled paths
+    auto pad32 = [](uint32_t v) { return (v % 32) ? (v + (32 - v % 32)) : v; };
+    input[1] = pad32(input[1]);
+    input[2] = pad32(input[2]);
+    output[1] = pad32(output[1]);
+    output[2] = pad32(output[2]);
+    start[1] = pad32(start[1]);
+    start[2] = pad32(start[2]);
 
-    if (input[rank - 1] % 32) {
-        input[rank - 1] += (32 - input[rank - 1] % 32);
-    }
-    if (input[rank - 2] % 32) {
-        input[rank - 2] += (32 - input[rank - 2] % 32);
-    }
-    if (output[rank - 1] % 32) {
-        output[rank - 1] += (32 - output[rank - 1] % 32);
-    }
-    if (output[rank - 2] % 32) {
-        output[rank - 2] += (32 - output[rank - 2] % 32);
-    }
-    if (start[rank - 1] % 32) {
-        start[rank - 1] += (32 - start[rank - 1] % 32);
-    }
-    if (start[rank - 2] % 32) {
-        start[rank - 2] += (32 - start[rank - 2] % 32);
-    }
+    std::cout << "input  = [" << input[0] << " " << input[1] << ", " << input[2] << "]\n";
+    std::cout << "output = [" << output[0] << " " << output[1] << ", " << output[2] << "]\n";
+    std::cout << "start  = [" << start[0] << " " << start[1] << ", " << start[2] << "]\n";
 
-    std::cout << "input  = [" << input[0] << ", " << input[1] << ", " << input[2] << "]\n";
-    std::cout << "output = [" << output[0] << ", " << output[1] << ", " << output[2] << "]\n";
-    std::cout << "start  = [" << start[0] << ", " << start[1] << ", " << start[2] << "]\n";
+    std::cout << "Tile Dimension" << "\n";
+    std::cout << "input tiles = [" << input[0] << " " << input[1] / TILE_HEIGHT << " " << input[2] / TILE_WIDTH
+              << "]\n";
+    std::cout << "output tiles = [" << output[0] << " " << output[1] / TILE_HEIGHT << " " << output[2] / TILE_WIDTH
+              << "]\n";
+    std::cout << "start tiles  = [" << start[0] << " " << start[1] / TILE_HEIGHT << " " << start[2] / TILE_WIDTH
+              << "]\n";
 
     // Example choice (your real code picks based on CB capacity).
     bool row_wise = (output[rank - 1] > output[rank - 2]) ? true : false;
@@ -393,14 +397,15 @@ int main() {
     // Reader-kernel src_block_id progression verification (ignore actual read_block I/O)
     const uint32_t src_tiles_per_row = input[rank - 1] / TILE_WIDTH;
     const uint32_t src_block_id_stride = row_wise ? src_tiles_per_row : 1;  // compile-time block_id_stride
-
+    const uint32_t tile_id_stride = row_wise ? 1 : src_tiles_per_row;
     for (size_t core_i = 0; core_i < r.per_core.size(); ++core_i) {
         const auto& pc = r.per_core[core_i];
         std::array<uint32_t, 3> src_block_tile_pos, out_block_tile_pos;
         src_block_tile_pos = tile_id_to_3d_tile_coord(pc.src_block_tile_id, input);
         out_block_tile_pos = tile_id_to_3d_tile_coord(pc.out_block_tile_id, output);
+        uint32_t num_tiles = (row_wise ? output[rank - 1] : output[rank - 2]) / TILE_WIDTH;
 
-        bool print_debug = ((core_i == 9) || (core_i == 8));
+        bool print_debug = true;
 
         if (print_debug) {
             std::cout << "core " << pc.core_index << " num_blocks=" << pc.num_blocks_arg << " block_coord=["
@@ -416,11 +421,13 @@ int main() {
             /*src_block_id_start=*/pc.src_block_tile_id,
             /*num_blocks=*/pc.num_blocks_arg,
             /*block_id_stride=*/src_block_id_stride,
+            /*num_tiles=*/1,
+            /*tile_id_stride=*/1,
             /*shape_blocks=*/r.out_shape_blocks,
             /*block_id_gap=*/r.src_block_id_gap,
             /*block_coord_start=*/pc.block_coord,
             /*src_shape_blocks=*/input,
-            /*print_debug=*/print_debug);
+            /*print_debug=*/false);
 
         // Optional sanity check: the next core's start should match this core's "final" state
         // (because host advances block_coord by num_blocks_arg and re-computes src_block_tile_id).

@@ -7,16 +7,21 @@
 // Focus: verify how start_id + id_per_dim drive src_tile_id (ignoring the actual noc reads).
 //
 // Build:
-//   g++ -std=c++20 -O2 -Wall -Wextra -pedantic _test/sample_unpad_dims_reader_start_id.cpp -o sample_unpad
+//   g++ -std=c++2a -O2 -Wall -Wextra -pedantic sample_unpad_dims_reader_start_id.cpp -o exe_unpad
 
 #include <array>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
 static constexpr uint32_t TILE_WIDTH = 32;
 static constexpr uint32_t TILE_HEIGHT = 32;
+
+unsigned char* input_image;
+unsigned char* output_image;
 
 using Shape = std::vector<uint32_t>;  // padded shapes (rank >= 2)
 
@@ -136,13 +141,33 @@ static PerCoreReaderArgs compute_per_core_reader_args_like_ttnn(
     return args;
 }
 
+static void write_pgm(
+    const std::string& path, uint32_t width, uint32_t height, const std::vector<unsigned char>& image) {
+    if (static_cast<uint64_t>(width) * static_cast<uint64_t>(height) != image.size()) {
+        throw std::runtime_error("write_pgm: width*height does not match image size");
+    }
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("write_pgm: failed to open output file: " + path);
+    }
+
+    // PGM (P5) binary grayscale
+    out << "P5\n" << width << " " << height << "\n255\n";
+    out.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
+    if (!out) {
+        throw std::runtime_error("write_pgm: failed to write image data");
+    }
+}
+
 // Mirrors the kernel's src_tile_id + id_per_dim update logic exactly (ignoring noc reads).
 static std::vector<uint32_t> simulate_reader_kernel_src_tile_ids(
     uint32_t start_id,
     uint32_t num_tiles,
     std::vector<uint32_t> id_per_dim,
     const std::vector<uint32_t>& num_unpadded_tiles_per_dim,
-    const std::vector<uint32_t>& num_padded_tiles_per_dim) {
+    const std::vector<uint32_t>& num_padded_tiles_per_dim,
+    std::vector<unsigned char>* image) {
     const uint32_t num_dims = static_cast<uint32_t>(num_unpadded_tiles_per_dim.size());
     std::vector<uint32_t> ids;
     ids.reserve(num_tiles);
@@ -150,6 +175,13 @@ static std::vector<uint32_t> simulate_reader_kernel_src_tile_ids(
     uint32_t src_tile_id = start_id;
     for (uint32_t i = 0; i < num_tiles; ++i) {
         ids.push_back(src_tile_id);
+        if (image != nullptr) {
+            if (src_tile_id >= image->size()) {
+                throw std::runtime_error("tile_id out of bounds for image: " + std::to_string(src_tile_id));
+            }
+            (*image)[src_tile_id] = 255;
+        }
+        // std::cout << "src_tile_id=" << src_tile_id << "\n";
         src_tile_id++;
         for (uint32_t j = 0; j < num_dims; ++j) {
             id_per_dim[j]++;
@@ -185,6 +217,19 @@ int main() {
     output[2] = pad32(output[2]);
     slice_start[1] = pad32(slice_start[1]);
     slice_start[2] = pad32(slice_start[2]);
+
+    // Build an "image" whose number of pixels equals the capacity of the input array.
+    // width  = input[2]
+    // height = input[0] * input[1]
+    const uint64_t image_width = input[2] / TILE_WIDTH * input[1] / TILE_HEIGHT;
+    const uint64_t image_height = input[0];
+    const uint64_t image_num_pixels = image_width * image_height;
+    // if (image_num_pixels > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    //     throw std::runtime_error("image too large to allocate");
+    // }
+    std::cout << "image size : " << image_width << " " << image_height << "\n";
+    std::vector<unsigned char> image(static_cast<size_t>(image_num_pixels), 0);
+    output_image = image.data();
 
     const auto st = compute_common_reader_state(input, output, slice_start);
 
@@ -254,7 +299,8 @@ int main() {
             per_core.num_tiles,
             per_core.id_per_dim,
             st.num_unpadded_tiles_per_dim,
-            st.num_padded_tiles_per_dim);
+            st.num_padded_tiles_per_dim,
+            &image);
 
         std::cout << "core " << core << " num_tiles_written=" << num_tiles_written << " start_id=" << per_core.start_id
                   << " num_tiles=" << per_core.num_tiles << "\n";
@@ -267,4 +313,8 @@ int main() {
         last_ids = std::move(ids);
         num_tiles_written += capped_tiles;
     }
+
+    // Save the image to disk (PGM format).
+    // write_pgm("_test/img_id_coverage_branch_main.pgm", static_cast<uint32_t>(image_width),
+    // static_cast<uint32_t>(image_height), image);
 }

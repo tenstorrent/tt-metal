@@ -31,6 +31,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_tiles; k++) {
             uint64_t src_noc_addr = get_noc_addr(id, s);
             noc_async_read(src_noc_addr, l1_write_addr, size_tile);
+
             l1_write_addr += size_tile;
             id += id_step;
         }
