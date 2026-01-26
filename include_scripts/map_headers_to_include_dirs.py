@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -172,8 +173,86 @@ def resolve_headers_relative(data: list[dict], root: str, include_dirs: list[tup
     }
 
 
-def output_json(includes: set[str], static_result: dict, relative_result: dict, include_dirs: list[tuple[str, str]]):
+def find_host_side_includes(root: str) -> dict[str, list[str]]:
+    """
+    Scan host-side C++ files to find which headers they include.
+    Returns dict: {header: [host_file_paths]}
+    """
+    exclude_dirs = ["build_", ".git", "__pycache__", "docs"]
+    host_includes = defaultdict(list)
+
+    print("Scanning for host-side files...", file=sys.stderr)
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip excluded directories
+        dirnames[:] = [d for d in dirnames if not any(excl in d for excl in exclude_dirs)]
+
+        for filename in filenames:
+            if not (filename.endswith(('.cpp', '.cc', '.h', '.hpp'))):
+                continue
+
+            filepath = Path(dirpath) / filename
+            try:
+                rel_path = str(filepath.relative_to(root))
+            except ValueError:
+                continue
+
+            # Skip jit_build (host code but not relevant for header sharing)
+            if rel_path.startswith('tt_metal/jit_build/'):
+                continue
+
+            try:
+                content = filepath.read_text(encoding='utf-8', errors='replace')
+            except Exception:
+                continue
+
+            # Skip device kernels (they're in device_data already)
+            if re.search(r'\bvoid\s+(kernel_main|MAIN)\b', content):
+                continue
+
+            # Extract includes
+            for match in re.finditer(r'^\s*#include\s*[<"]([^>"]+)[>"]', content, re.MULTILINE):
+                header = match.group(1)
+                host_includes[header].append(rel_path)
+
+    print(f"Scanned host-side files", file=sys.stderr)
+    return dict(host_includes)
+
+
+def categorize_headers_by_usage(includes: set[str], static_result: dict, relative_result: dict, host_includes: dict) -> dict:
+    """
+    Categorize headers by whether they're device-only or shared with host.
+    """
+    all_device_headers = (
+        set(static_result['resolved'].keys()) |
+        set(relative_result['resolved_by_dot'].keys()) |
+        set(relative_result['resolved_by_dotdot'].keys())
+    )
+
+    shared_headers = {}
+    device_only_headers = []
+
+    for header in all_device_headers:
+        if header in host_includes:
+            shared_headers[header] = {
+                "host_file_count": len(host_includes[header]),
+                "host_files_sample": host_includes[header][:5]  # Keep first 5 as sample
+            }
+        else:
+            device_only_headers.append(header)
+
+    return {
+        "shared_headers": shared_headers,
+        "device_only_headers": device_only_headers
+    }
+
+
+def output_json(includes: set[str], static_result: dict, relative_result: dict, include_dirs: list[tuple[str, str]], root: str):
     """Output analysis as JSON."""
+    # Check host usage
+    host_includes = find_host_side_includes(root)
+    usage_categorization = categorize_headers_by_usage(includes, static_result, relative_result, host_includes)
+
     result = {
         "summary": {
             "total_unique_includes": len(includes),
@@ -181,12 +260,15 @@ def output_json(includes: set[str], static_result: dict, relative_result: dict, 
             "resolved_by_static_dirs": len(static_result['resolved']),
             "resolved_by_dot": len(relative_result['resolved_by_dot']),
             "resolved_by_dotdot": len(relative_result['resolved_by_dotdot']),
-            "still_unresolved": len(relative_result['still_unresolved'])
+            "still_unresolved": len(relative_result['still_unresolved']),
+            "shared_with_host": len(usage_categorization['shared_headers']),
+            "device_only": len(usage_categorization['device_only_headers'])
         },
         "headers_by_directory": {
             name: static_result["by_directory"].get(name, [])
             for name, _ in include_dirs
         },
+        "host_usage": usage_categorization,
         "resolved_by_dot": {
             header: [{"source": src, "resolved_path": path} for src, path in sources]
             for header, sources in relative_result['resolved_by_dot'].items()
@@ -238,7 +320,7 @@ def main():
     includes = extract_unique_includes(data)
     static_result = resolve_headers_static(includes, include_dirs)
     relative_result = resolve_headers_relative(data, root, include_dirs)
-    output_json(includes, static_result, relative_result, include_dirs)
+    output_json(includes, static_result, relative_result, include_dirs, root)
 
 
 if __name__ == "__main__":
