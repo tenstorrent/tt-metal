@@ -306,6 +306,8 @@ void MetalContext::initialize(
         cluster_->set_internal_routing_info_for_ethernet_cores(true);
     }
 
+    rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
+
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
         dprint_server_->attach_devices();

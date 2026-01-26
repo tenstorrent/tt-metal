@@ -18,6 +18,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <experimental/fabric/control_plane.hpp>
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -1595,8 +1596,6 @@ bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
 }
 
 bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std::string& env_var) {
-    // Map node IDs back to chip IDs
-    // Supports formats: (M0, D0),(M1,D1) or (M0, D0) or "(M0, D0)"
     char* env_var_str = std::getenv(env_var.c_str());
     bool specified = env_var_str != nullptr;
     while (env_var_str != nullptr && *env_var_str != '\0') {
@@ -1701,6 +1700,20 @@ void RunTimeOptions::set_experimental_device_debug_dump_enabled(bool enabled) {
         profiler_enabled = false;
         profiler_noc_events_enabled = false;
         experimental_device_debug_dump_enabled = false;
+    }
+}
+
+void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        auto& target = feature_targets[i];
+        if (!target.node_ids.empty()) {
+            // Convert each FabricNodeId to a physical chip ID
+            for (const auto& node_id : target.node_ids) {
+                ChipId chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
+                target.chip_ids.push_back(static_cast<int>(chip_id));
+            }
+            target.node_ids.clear();
+        }
     }
 }
 
