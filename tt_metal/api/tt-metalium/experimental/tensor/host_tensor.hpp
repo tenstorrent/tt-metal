@@ -160,7 +160,7 @@ public:
 
     // "Extra helper functions"
     // Shape is a weird class to return, isn't a vector sufficient?
-    Shape strides() const;
+    Strides strides() const;
 
     // Host buffer is always allocated:
     // bool is_allocated() const;

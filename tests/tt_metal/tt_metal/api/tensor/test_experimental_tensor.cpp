@@ -23,16 +23,13 @@ TEST(ExperimentalTensorTest, DefaultConstructedHostTensor) {
     EXPECT_EQ(tensor.logical_volume(), Shape().volume())
         << "logical_volume() should return the volume of the empty shape";
 
-    // TODO: padded shape should be empty?
-    auto expected_padded_shape = Shape({32, 32});
     const auto& padded_shape = tensor.padded_shape();
-    EXPECT_EQ(padded_shape, expected_padded_shape) << "Padded shape should be minimum 32x32";
-    EXPECT_EQ(tensor.padded_volume(), expected_padded_shape.volume())
-        << "padded_volume() should return the volume of the padded shape";
+    EXPECT_EQ(padded_shape, Shape()) << "Padded shape should be empty for default constructed tensor";
+    EXPECT_EQ(tensor.padded_volume(), Shape().volume())
+        << "padded_volume() should return the volume of the empty shape";
 
-    // TODO: Strides should be empty for empty shape, but currently they are not
     auto strides = tensor.strides();
-    EXPECT_EQ(strides, Shape({32, 1})) << "Strides should be [32, 1] for default constructed tensor";
+    EXPECT_EQ(strides, Shape()) << "Strides should be empty for default constructed tensor";
 
     // Data, layout, memory config
     EXPECT_EQ(tensor.dtype(), DataType::INVALID) << "Default constructed HostTensor should have INVALID data type";
@@ -48,7 +45,8 @@ TEST(ExperimentalTensorTest, DefaultConstructedHostTensor) {
     EXPECT_EQ(tensor.get_host_buffer(), HostBuffer()) << "get_host_buffer() should return an empty buffer";
 
     // Tensor topology
-    EXPECT_NO_THROW(tensor.tensor_topology()) << "tensor_topology() should be accessible";
+    EXPECT_EQ(tensor.tensor_topology(), TensorTopology())
+        << "tensor_topology() should be empty for default constructed tensor";
 
     // String conversion
     EXPECT_NO_THROW({ tensor.write_to_string(); }) << "write_to_string() should not throw";

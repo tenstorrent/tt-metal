@@ -80,9 +80,35 @@ private:
     Tile tile_;
 };
 
+class InvalidPageConfig {
+public:
+    InvalidPageConfig() = default;
+
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
+
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
+        DataType dtype,
+        const MemoryConfig& memory_config,
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
+
+    Tile get_tile() const;
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
+    bool operator==(const InvalidPageConfig&) const = default;
+    bool operator!=(const InvalidPageConfig&) const = default;
+
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
+};
+
 class PageConfig {
 public:
-    using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
+    using Config = std::variant<RowMajorPageConfig, TilePageConfig, InvalidPageConfig>;
 
     PageConfig(const Config& config);
     PageConfig(Layout layout);

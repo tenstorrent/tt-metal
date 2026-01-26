@@ -47,6 +47,8 @@ PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
         // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
         config_ = RowMajorPageConfig(tile.value_or(Tile()));
+    } else if (layout == Layout::INVALID) {
+        config_ = InvalidPageConfig();
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
     }
@@ -83,6 +85,9 @@ size_t PageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype
 Layout PageConfig::get_layout() const {
     if (std::holds_alternative<RowMajorPageConfig>(config_)) {
         return Layout::ROW_MAJOR;
+    }
+    if (std::holds_alternative<InvalidPageConfig>(config_)) {
+        return Layout::INVALID;
     }
     return Layout::TILE;
 }
@@ -224,5 +229,30 @@ Alignment RowMajorPageConfig::get_recommended_shard_shape_alignment(DataType dty
         static_cast<unsigned long>(element_size_bytes));
     return Alignment({static_cast<uint32_t>(alignment_bytes / element_size_bytes)});
 }
+
+Alignment InvalidPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& /*memory_config*/) const {
+    return Alignment({});
+}
+
+void InvalidPageConfig::validate_alignment(
+    const Alignment& /*alignment*/, DataType /*dtype*/, const MemoryConfig& /*memory_config*/) const {
+    // No validation for invalid layout
+}
+
+Shape2D InvalidPageConfig::get_page_shape(
+    const Shape2D& /*physical_size*/,
+    DataType /*dtype*/,
+    const MemoryConfig& /*memory_config*/,
+    const std::optional<Shape2D>& /*physical_shard_size*/) const {
+    return Shape2D(0, 0);
+}
+
+size_t InvalidPageConfig::get_page_size_bytes(const Shape2D& /*page_shape*/, DataType /*dtype*/) const { return 0; }
+
+Tile InvalidPageConfig::get_tile() const { return Tile(); }
+
+Alignment InvalidPageConfig::get_required_shard_shape_alignment() const { return Alignment({}); }
+
+Alignment InvalidPageConfig::get_recommended_shard_shape_alignment(DataType /*dtype*/) const { return Alignment({}); }
 
 }  // namespace tt::tt_metal

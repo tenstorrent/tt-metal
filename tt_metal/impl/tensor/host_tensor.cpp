@@ -72,12 +72,7 @@ const std::optional<NdShardSpec>& HostTensor::nd_shard_spec() const { return mem
 const TensorTopology& HostTensor::tensor_topology() const { return impl->get_tensor_topology(); }
 
 // Should just change the return type to some flavor of vector
-Shape HostTensor::strides() const {
-    // This is a copy just to convert from size_t to uint32_t...
-    // Stinky!
-    auto s = compute_strides(padded_shape());
-    return Shape(ttsl::SmallVector<uint32_t>(s.begin(), s.end()));
-}
+Strides HostTensor::strides() const { return impl->get_tensor_spec().compute_strides(); }
 
 // Computed Getters (following tensor.cpp:411-461)
 
