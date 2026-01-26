@@ -62,7 +62,7 @@ jobs:
           # channel_id: Slack channel ID to fetch messages from
           channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           update_mode: ${{ inputs.update_mode || 'update' }}
-          start_date: ${{ inputs.start_date || steps.calc-date.outputs.start_date }}
+          start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
 
       - name: Install infra dependencies
