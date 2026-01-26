@@ -36,11 +36,13 @@ auto check_32_chips() {
 class GalaxyRingShiftTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
-        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-        ttml::ttnn_fixed::distributed::enable_fabric(32);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
-        ttml::autograd::ctx().set_seed(42);
-        ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+        if (check_32_chips()) {
+            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            ttml::ttnn_fixed::distributed::enable_fabric(32);
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
+            ttml::autograd::ctx().set_seed(42);
+            ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
+        }
     }
     static void SetUp() {
         if (!check_32_chips()) {
@@ -48,7 +50,9 @@ public:
         }
     }
     static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
+        if (check_32_chips()) {
+            ttml::autograd::ctx().close_device();
+        }
     }
 };
 
