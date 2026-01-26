@@ -1187,7 +1187,7 @@ class MLA1D(AbstractModule):
         # the current perf of this op is 45 µs
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         # 1,32,1(32),576 L1 interleaved
-        # the current perf of this op is 24 µs
+        # the current perf of this op is 31 µs
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
         # 1,32,1(32),576 L1 interleaved
         # the current perf of this op is 2.54 µs
