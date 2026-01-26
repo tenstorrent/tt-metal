@@ -31,7 +31,6 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
     """Prepare weights and bias for TTNN."""
     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
     groups = conv3d_module.groups
-    print(f"w.shape:{w.shape}")
 
     if not prepare_weights_:
         tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
@@ -65,27 +64,20 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
             # Place these weights in the correct "diagonal" block of the padded tensor
             padded_w[oc_start:oc_end, ic_start:ic_end, :, :, :] = weight_group_g
         w = padded_w
-        print(f"w_prepared.shape:{w.shape}")
 
     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    print(f"w_permute.shape:{w.shape}")
     ALIGN_PAD = alignment - C % alignment
-    print(f"C: {C}, alignment: {alignment}, ALIGN_PAD: {ALIGN_PAD}")
     if C % alignment != 0:
         w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
 
-    print(f"w_padd.shape:{w.shape}")
     # Reshape weights so that num_C_in_blocks is the first dimension
     kD, kH, kW, C_in_aligned, out_channels = w.shape
     C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
     num_C_in_blocks = C_in_aligned // C_in_block
     assert num_C_in_blocks * C_in_block == C_in_aligned
     w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    print(f"w_reshape.shape:{w.shape}")
     w = w.permute(3, 0, 1, 2, 4, 5)
-    print(f"w_permute_2.shape:{w.shape}")
     w = w.reshape(-1, out_channels)
-    print(f"w_reshape_2.shape:{w.shape}")
 
     tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
     tt_bias = ttnn.from_torch(
