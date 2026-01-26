@@ -12,13 +12,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import (
+    is_watcher_enabled,
+)
 import math
 import numpy as np
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def nearest_n(x, n):
@@ -1135,6 +1133,26 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
 ):
+    if (
+        is_watcher_enabled()
+        and kv_dtype == ttnn.bfloat8_b
+        and q_dtype == ttnn.bfloat16
+        and cur_pos_tensor == True
+        and (
+            (b == 8 and nh == 16 and nkv == 4 and s == 4096 and d == 128 and grid_size == (8, 2))
+            or (
+                block_size == 64
+                and b == 1
+                and nh == 8
+                and nkv == 1
+                and s == 131072
+                and d == 128
+                and grid_size == (8, 4)
+            )
+        )
+    ):
+        pytest.skip("Test is not passing with watcher enabled github issue #29225")
+
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
         pytest.skip("Skipping test for seq_len=128k with block_size!=64")
