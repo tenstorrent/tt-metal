@@ -63,7 +63,14 @@ MeshDeviceViewImpl::MeshDeviceViewImpl(
     const MeshShape& shape,
     const std::vector<MaybeRemote<IDevice*>>& devices,
     const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
-    devices_(shape, devices), fabric_node_ids_(shape, fabric_node_ids), mesh_id_(fabric_node_ids.front().mesh_id) {
+    devices_(shape, devices), fabric_node_ids_(shape, fabric_node_ids), mesh_id_([&fabric_node_ids, &shape]() {
+        TT_FATAL(
+            !fabric_node_ids.empty(),
+            "Cannot create MeshDeviceView with empty fabric_node_ids. "
+            "MeshShape {} must have at least one device (mesh_size > 0).",
+            shape);
+        return fabric_node_ids.front().mesh_id;
+    }()) {
     if (devices_.shape().dims() == 2) {
         shape_2d_ = Shape2D(devices_.shape()[0], devices_.shape()[1]);
     }
