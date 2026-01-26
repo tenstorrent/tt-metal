@@ -49,6 +49,11 @@ bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs
 
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
 
+std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id) {
+    os << *mesh_id;
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     using ::operator<<;  // Enable ADL for StrongType operator<<
     os << "M" << fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
