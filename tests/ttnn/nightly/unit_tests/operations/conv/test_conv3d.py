@@ -55,8 +55,11 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(3, 64, 8, 8, 8), 64, (3, 3, 3), (1, 1, 1), 2, (0, 1, 1), "zeros"],
     ],
 )
+@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 @pytest.mark.timeout(1000)
-def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
+def test_conv3d_sweep_blocks(
+    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, prepare_weights_
+):
     """
     For a specific shape, sweep through different block sizes.
     Constrain the sweep such that the num_patches in a block doesn't exceed 64
@@ -93,7 +96,9 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
         # Prepare weights with specified C_in_block
         if prev_C_in_block != C_in_block:
             # Only prepare if changing C_in_block
-            tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+            tt_weight, tt_bias = prepare_weights(
+                conv3d_module, C, out_channels, device, C_in_block=C_in_block, prepare_weights_=prepare_weights_
+            )
             prev_C_in_block = C_in_block
 
         config = create_conv3d_config(
@@ -108,6 +113,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
         tt_output = ttnn.experimental.conv3d(
             input_tensor=tt_input,
             weight_tensor=tt_weight,
+            device=device,
             bias_tensor=tt_bias,
             dtype=ttnn.bfloat16,
             output_channels=out_channels,
@@ -115,7 +121,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             stride=stride,
             padding=padding,
             padding_mode=padding_mode,
-            groups=1,
+            groups=groups,
             config=config,
             compute_kernel_config=kernel_config,
         )
@@ -198,6 +204,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
     ],
     ids=["variant1", "variant2", "variant3", "variant4", "variant5", "variant6"],
 )
+@pytest.mark.parametrize("prepare_weights_", [True, False], ids=["prepare_weights_True", "prepare_weights_False"])
 def test_conv3d_mochi_shapes(
     device,
     input_shape,
@@ -208,6 +215,7 @@ def test_conv3d_mochi_shapes(
     padding,
     padding_mode,
     blocking,
+    prepare_weights_,
     is_ci_env,
 ):
     if out_channels == 128 or out_channels == 256:
@@ -221,7 +229,9 @@ def test_conv3d_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    tt_weight, tt_bias = prepare_weights(
+        conv3d_module, C, out_channels, device, C_in_block=C_in_block, prepare_weights_=prepare_weights_
+    )
 
     config = create_conv3d_config(
         T_out_block=T_out_block,
@@ -235,6 +245,7 @@ def test_conv3d_mochi_shapes(
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
+        device=device,
         bias_tensor=tt_bias,
         dtype=ttnn.bfloat16,
         output_channels=out_channels,
@@ -242,7 +253,7 @@ def test_conv3d_mochi_shapes(
         stride=stride,
         padding=padding,
         padding_mode=padding_mode,
-        groups=1,
+        groups=groups,
         config=config,
         compute_kernel_config=kernel_config,
     )
