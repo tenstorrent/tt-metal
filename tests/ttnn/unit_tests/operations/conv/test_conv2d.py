@@ -69,8 +69,6 @@ def test_conv_features(
     if (
         is_watcher_enabled()
         and output_layout == ttnn.TILE_LAYOUT
-        and filter == 3
-        and padding == (1, 2, 2, 3)
         and output_channels == 353
         and input_channels == 384
         and shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
