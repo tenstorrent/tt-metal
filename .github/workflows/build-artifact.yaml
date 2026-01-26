@@ -221,14 +221,11 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    needs: parse-platform
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      # Use parsed platform values
-      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:

@@ -3,14 +3,11 @@ name: "Build tt-metal docker artifact"
 on:
   workflow_call:
     inputs:
-      distro:
+      platform:
         required: false
         type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
+        default: "Ubuntu 22.04"
+        description: "Platform to build Docker images for"
       architecture:
         required: false
         type: string
@@ -80,8 +77,6 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          distro: ${{ inputs.distro }}
-          version: ${{ inputs.version }}
 
       - name: Set environment variables
         run: |

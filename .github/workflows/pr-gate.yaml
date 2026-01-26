@@ -95,13 +95,11 @@ jobs:
 
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:
-    needs: parse-platform
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: amd64
 
   asan-build:
