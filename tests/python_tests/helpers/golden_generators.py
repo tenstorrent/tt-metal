@@ -1249,10 +1249,12 @@ class UnarySFPUGolden:
             MathOperation.Cos: self._cos,
             MathOperation.Log: self._log,
             MathOperation.Reciprocal: self._reciprocal,
+            MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
             MathOperation.Sin: self._sin,
             MathOperation.Sqrt: self._sqrt,
             MathOperation.Square: self._square,
+            MathOperation.Tanh: self._tanh,
             MathOperation.Celu: self._celu,
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
@@ -1429,6 +1431,9 @@ class UnarySFPUGolden:
         # Never not finite, values range from [-1, 1]
         return math.sin(x)
 
+    def _relu(self, x):
+        return max(0.0, x)
+
     def _rsqrt(self, x):
         if x < 0.0:
             return self.handle_infinite_numbers(float("nan"))
@@ -1445,6 +1450,9 @@ class UnarySFPUGolden:
         if not math.isfinite(x * x):
             return self.handle_infinite_numbers(math.inf)
         return x * x
+
+    def _tanh(self, x):
+        return math.tanh(x)
 
     def _celu(self, x):
         input_tensor = (
