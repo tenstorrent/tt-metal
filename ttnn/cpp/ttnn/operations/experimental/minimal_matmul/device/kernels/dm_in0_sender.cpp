@@ -31,11 +31,6 @@ void kernel_main() {
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
     constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
-    // TOOD: Add fused ternary op support in kernel
-    // constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
-    // constexpr uint32_t in4_tile_size = get_compile_time_arg_val(20);
-    // constexpr uint32_t in5_tile_size = get_compile_time_arg_val(21);
-
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
@@ -325,18 +320,6 @@ void kernel_main() {
 
                 uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
                 uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
-
-                // Iterate over M and N dimensions of current block
-                // for (uint32_t m_tile_id = m_tile; m_tile_id < m_tile_end; m_tile_id++) {
-                //     for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                //         uint32_t tile_id = m_tile_id * N_tiles + n_tile_id;
-                //         noc_async_read_tile(tile_id, ternary_a_reader, l1_write_addr_ternary_a);
-                //         noc_async_read_tile(tile_id, ternary_b_reader, l1_write_addr_ternary_b);
-                //         l1_write_addr_ternary_a += ternary_a_tile_size;
-                //         l1_write_addr_ternary_b += ternary_b_tile_size;
-                //     }
-                // }
-                // noc_async_read_barrier();
 
                 read_ternary_block_sync<M_block_tiles, N_block_tiles>(
                     ternary_a_reader,
