@@ -204,7 +204,7 @@ class DeepseekGenerator:
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self._prepare_model_states(kv_cache_override=kv_cache_override)
-            logger.info("Preloading weights parallelly (prefill)...")
+            logger.info("Preloading weights in parallel (prefill)...")
             preload_weights_parallel(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -230,7 +230,7 @@ class DeepseekGenerator:
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
-            logger.info("Preloading weights parallelly (decode)...")
+            logger.info("Preloading weights in parallel (decode)...")
             preload_weights_parallel(
                 self.model_decode_cfg,
                 self.model_weight_config,

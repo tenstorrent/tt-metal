@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import concurrent.futures
 import functools
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
@@ -9,8 +10,6 @@ from types import NoneType
 from typing import Any, overload
 
 from loguru import logger
-
-import concurrent.futures
 from tqdm import tqdm
 
 import ttnn
@@ -137,8 +136,9 @@ def preload_weights_parallel(
 ):
     """
     Preload weights in parallel into the cache.
-    This function identifies all unique (SavedWeight, Device) pairs from the config
-    and loads them using a thread pool.
+    This function identifies all unique SavedWeight paths that are not yet present
+    in ``cached_ttnn_weights`` and loads them using a thread pool, with the target
+    device for each load derived from the merged model state/config.
     """
     # The states are merged to create a single unified model state.
     unified_model_state = functools.reduce(
@@ -181,7 +181,7 @@ def preload_weights_parallel(
     if not weights_to_load:
         return
 
-    logger.info(f"Parallelly preloading {len(weights_to_load)} weights using {max_workers} workers...")
+    logger.info(f"Preloading {len(weights_to_load)} weights in parallel using {max_workers} workers...")
 
     # Load in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
