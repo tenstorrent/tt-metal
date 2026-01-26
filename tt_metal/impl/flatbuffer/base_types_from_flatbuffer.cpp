@@ -11,6 +11,12 @@ DataMovementProcessor from_flatbuffer(flatbuffer::DataMovementProcessor in) {
     switch (in) {
         case flatbuffer::DataMovementProcessor::RISCV_0: return DataMovementProcessor::RISCV_0;
         case flatbuffer::DataMovementProcessor::RISCV_1: return DataMovementProcessor::RISCV_1;
+        case flatbuffer::DataMovementProcessor::RISCV_2: return DataMovementProcessor::RISCV_2;
+        case flatbuffer::DataMovementProcessor::RISCV_3: return DataMovementProcessor::RISCV_3;
+        case flatbuffer::DataMovementProcessor::RISCV_4: return DataMovementProcessor::RISCV_4;
+        case flatbuffer::DataMovementProcessor::RISCV_5: return DataMovementProcessor::RISCV_5;
+        case flatbuffer::DataMovementProcessor::RISCV_6: return DataMovementProcessor::RISCV_6;
+        case flatbuffer::DataMovementProcessor::RISCV_7: return DataMovementProcessor::RISCV_7;
     }
     TT_THROW("Unsupported DataMovementProcessor from flatbuffer.");
 }
