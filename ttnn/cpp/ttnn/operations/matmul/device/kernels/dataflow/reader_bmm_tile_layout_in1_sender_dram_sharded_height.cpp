@@ -12,6 +12,28 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "api/debug/dprint.h"
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -36,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(5);            // M * K
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(6);           // B / num_cores
     constexpr uint32_t in1_tensor_stride_batch_bytes = get_compile_time_arg_val(7);  // bytes per batch in in1
-    constexpr uint32_t out_tensor_stride_batch_bytes = get_compile_time_arg_val(8);  // bytes per batch in output
+    // constexpr uint32_t out_tensor_stride_batch_bytes = get_compile_time_arg_val(8);  // no longer needed
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in3_page_size = get_compile_time_arg_val(9);
@@ -47,9 +69,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_4;
-    constexpr uint32_t cb_id_out_reshard = tt::CBIndex::c_6;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t out_single_tile_size_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
     // DRAM read setup
@@ -82,6 +102,10 @@ void kernel_main() {
 
             noc_async_read_barrier();
             cb_push_back(cb_id_in1, in1_block_num_tiles);
+            // DPRINT << "Reader BMM Tile Layout In1 Sender Dram Sharded Height" << ENDL();
+            // print_full_tile(cb_id_in1, 0);
+            // print_full_tile(cb_id_in1, 1);
+            // This looks normal - it's full (b+1)
             l1_read_addr_in1 += in1_block_size_bytes;
         }
 
@@ -97,19 +121,15 @@ void kernel_main() {
 #endif
 
         // Wait for compute to finish this batch
+        // CB4 is now directly backed by the output buffer, so compute writes directly there
+        // No copy needed - just wait for compute to finish and pop
         cb_wait_front(cb_id_out, out_block_num_tiles);
 
-#ifndef SKIP_WRITE_BACK
-        // Write output to sharded L1 buffer
-        uint32_t l1_read_addr_out = get_read_ptr(cb_id_out);
-        uint32_t l1_write_addr_out = get_write_ptr(cb_id_out_reshard) + batch * out_tensor_stride_batch_bytes;
-
-        // Copy output to reshard buffer (local write for batch-sharded - no cross-core transfer)
-        noc_async_write(
-            l1_read_addr_out, get_noc_addr(l1_write_addr_out), out_block_num_tiles * out_single_tile_size_bytes);
-        noc_async_write_barrier();
-#endif
-
+        // Note: We don't need to copy to CB6 anymore since CB4 is backed by the output buffer
+        // The compute already wrote to the correct location via CB4
+        DPRINT << "Printing output tiles" << ENDL();
+        print_full_tile(cb_id_out, 0);
+        // print_full_tile(cb_id_out, 1);
         cb_pop_front(cb_id_out, out_block_num_tiles);
     }
 }

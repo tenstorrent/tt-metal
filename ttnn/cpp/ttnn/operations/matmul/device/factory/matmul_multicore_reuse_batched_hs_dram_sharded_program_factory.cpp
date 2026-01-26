@@ -106,20 +106,14 @@ create_program_batch_sharded(
 
     tt_metal::Program program{};
 
-    // For batch sharding, workers must match the L1 shard grid (input_all_storage_cores)
-    // because the sharded CBs are tied to those core locations
-    std::vector<CoreCoord> all_worker_cores_ordered;
-    for (const auto& core_range : input_all_storage_cores.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                all_worker_cores_ordered.push_back(CoreCoord{x, y});
-            }
-        }
-    }
-    CoreRangeSet all_worker_cores = input_all_storage_cores;
-
-    // NOC for DRAM reads
+    // For batch sharding, workers run on the L1 shard grid (input_all_storage_cores)
+    // because the sharded CBs are tied to those core locations.
+    // Use row_major=true for core enumeration (works correctly with 1D grids).
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+
+    // Get cores in row-major order (x varies first, then y)
+    std::vector<CoreCoord> all_worker_cores_ordered = corerange_to_cores(input_all_storage_cores, std::nullopt, true);
+    CoreRangeSet all_worker_cores = input_all_storage_cores;
 
     uint32_t num_cores = all_worker_cores_ordered.size();
     uint32_t num_dram_banks = device->num_dram_channels();
@@ -171,7 +165,6 @@ create_program_batch_sharded(
 
     // output: M x K tiles
     uint32_t out_block_tiles = per_core_M * per_core_K;
-    uint32_t out_CB_size = out_block_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
 
     // Sharded input buffer (in0 in L1)
@@ -249,14 +242,18 @@ create_program_batch_sharded(
     }
 
     // CB 4 & 5: output and intermediate
+    // CB 4 is directly mapped to the output buffer (no separate reshard step)
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
+    tt::tt_metal::CBHandle cb_output;
     if (interm0_data_format != output_data_format) {
+        // Need separate CBs for output and intermediate
         tt_metal::CircularBufferConfig output_cb_config =
-            tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, output_data_format}})
+            tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_cb_index, output_data_format}})
                 .set_page_size(output_cb_index, output_single_tile_size)
-                .set_tile_dims(output_cb_index, output_tile);
-        tt_metal::CreateCircularBuffer(program, worker_cores_crs, output_cb_config);
+                .set_tile_dims(output_cb_index, output_tile)
+                .set_globally_allocated_address(*out_buffer);
+        cb_output = tt_metal::CreateCircularBuffer(program, worker_cores_crs, output_cb_config);
 
         tt_metal::CircularBufferConfig interm0_cb_config =
             tt_metal::CircularBufferConfig(interm0_CB_size, {{interm0_cb_index, interm0_data_format}})
@@ -264,25 +261,20 @@ create_program_batch_sharded(
                 .set_tile_dims(interm0_cb_index, output_tile);
         tt_metal::CreateCircularBuffer(program, worker_cores_crs, interm0_cb_config);
     } else {
+        // Output and intermediate share the same buffer - directly map to output buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         tt_metal::CircularBufferConfig output_cb_config =
-            tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
+            tt_metal::CircularBufferConfig(out_reshard_CB_size, output_cb_data_format_spec)
                 .set_page_size(output_cb_index, output_single_tile_size)
                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                 .set_tile_dims(output_cb_index, output_tile)
-                .set_tile_dims(interm0_cb_index, output_tile);
-        tt_metal::CreateCircularBuffer(program, worker_cores_crs, output_cb_config);
+                .set_tile_dims(interm0_cb_index, output_tile)
+                .set_globally_allocated_address(*out_buffer);
+        cb_output = tt_metal::CreateCircularBuffer(program, worker_cores_crs, output_cb_config);
     }
 
-    // CB 6: output reshard buffer
-    uint32_t output_reshard_cb_index = tt::CBIndex::c_6;
-    tt_metal::CircularBufferConfig output_reshard_cb_config =
-        tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, output_data_format}})
-            .set_page_size(output_reshard_cb_index, output_single_tile_size)
-            .set_tile_dims(output_reshard_cb_index, output_tile)
-            .set_globally_allocated_address(*out_buffer);
-    auto cb_output_reshard = tt_metal::CreateCircularBuffer(program, worker_cores_crs, output_reshard_cb_config);
+    // CB 6 is no longer needed - we write directly to CB 4 which is backed by the output buffer
 
     // Kernel defines
     std::map<std::string, std::string> mm_kernel_defines;
@@ -318,7 +310,9 @@ create_program_batch_sharded(
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
-    mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
+    // Note: We intentionally do NOT define MATMUL_DRAM_SHARDED here.
+    // When defined, compute writes to CB5 instead of CB4, which doesn't match our writer.
+    // The 1D DRAM sharded factory also doesn't define it.
 
     // in0 reader compile time args
     std::vector<uint32_t> in0_reader_compile_args = {
@@ -377,6 +371,11 @@ create_program_batch_sharded(
     // Create kernels
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
+    for (auto core_range : worker_cores_crs.ranges()) {
+        for (auto core : core_range) {
+            std::cout << "CoreX: " << core.x << " CoreY: " << core.y << std::endl;
+        }
+    }
     auto mm_kernel_in0_reader_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -411,12 +410,12 @@ create_program_batch_sharded(
             .defines = mm_kernel_defines});
 
     // Set runtime args for each worker
-    // Worker i reads from DRAM bank i (1:1 mapping between workers and banks)
+    // Worker i (in corerange_to_cores order) has L1 shard i, so read from DRAM bank i
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
-        uint32_t bank_id = i;  // Worker i reads from bank i
+        uint32_t bank_id = i;  // Worker i reads from bank i (linear mapping)
 
         // in0 reader runtime args
         std::vector<uint32_t> in0_reader_runtime_args = {
@@ -445,7 +444,7 @@ create_program_batch_sharded(
     return {
         std::move(program),
         MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t{
-            writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard}};
+            writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output}};
 }
 
 }  // namespace reuse_batched_hs_dram_sharded_optimized_helpers

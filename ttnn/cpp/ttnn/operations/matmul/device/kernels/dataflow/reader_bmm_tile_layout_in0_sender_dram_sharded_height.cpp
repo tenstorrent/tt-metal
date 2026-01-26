@@ -11,6 +11,28 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "api/debug/dprint.h"
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -33,10 +55,15 @@ void kernel_main() {
     uint32_t l1_read_addr = get_read_ptr(cb_id_in2);
 
     // Process each batch
+    DPRINT << "num_batches_per_core: " << num_batches_per_core << ENDL();
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
         uint32_t batch_read_addr = l1_read_addr + batch * in0_tensor_stride_batch_bytes;
 
         // Process K blocks within each batch
+        // DPRINT << "num_blocks: " << num_blocks << ENDL();
+        // DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+        // DPRINT << "in0_block_size_bytes: " << in0_block_size_bytes << ENDL();
+
         for (uint32_t block = 0; block < num_blocks; ++block) {
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
@@ -47,6 +74,10 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
+            // DPRINT << "Reader BMM Tile Layout In0 Sender Dram Sharded Height" << ENDL();
+            // print_full_tile(cb_id_in0, 0);
+            // print_full_tile(cb_id_in0, 1);
+            // This looks normal - identity matrix and then zeros
             batch_read_addr += in0_block_size_bytes;
         }
     }
