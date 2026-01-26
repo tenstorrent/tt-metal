@@ -9,9 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::data_movement::pad {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct PadParams {
     ttnn::Shape output_logical_shape;
     ttnn::Shape output_padded_shape;
     ttnn::Shape input_tensor_start;
@@ -20,12 +20,9 @@ struct operation_attributes_t {
     bool use_multicore{};
 };
 
-struct tensor_args_t {
+struct PadInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
-
-}  // namespace ttnn::operations::data_movement::pad
+}  // namespace ttnn::prim

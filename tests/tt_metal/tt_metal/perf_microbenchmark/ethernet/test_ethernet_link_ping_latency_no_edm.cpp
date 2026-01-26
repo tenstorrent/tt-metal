@@ -3,7 +3,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cassert>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
@@ -50,8 +49,12 @@ public:
     N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
-            tt::tt_metal::GetNumPCIeDevices() >= 1) {
+        bool is_wormhole_n300 =
+            (arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 2 && tt::tt_metal::GetNumPCIeDevices() >= 1);
+        bool is_blackhole_multi_device =
+            (arch_ == tt::ARCH::BLACKHOLE && num_devices_ >= 2 && tt::tt_metal::GetNumPCIeDevices() >= 1);
+
+        if (is_wormhole_n300 || is_blackhole_multi_device) {
             std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             auto reserved_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -60,7 +63,7 @@ public:
                 devices_[id] = device;
             }
         } else {
-            TT_THROW("This suite can only be run on N300 Wormhole devices");
+            TT_THROW("This suite can only be run on multi-device Wormhole or Blackhole systems");
         }
         device_open = true;
     }
@@ -198,7 +201,7 @@ int main(int argc, char** argv) {
     // argv[1]: num_samples
     // argv[2]: sample_page_size
     // argv[3]: max_channels_per_direction
-    assert(argc >= 4);
+    TT_FATAL(argc >= 4, "Usage: {} <num_sample_counts> <sample_page_size> <max_channels_per_direction>", argv[0]);
     std::size_t arg_idx = 1;
     std::size_t num_sample_counts = std::stoi(argv[arg_idx++]);
     log_trace(tt::LogTest, "num_sample_counts: {}", std::stoi(argv[arg_idx]));
@@ -230,8 +233,8 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
-    if (arch != tt::ARCH::WORMHOLE_B0) {
-        log_info(tt::LogTest, "Test must be run on WH");
+    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+        log_info(tt::LogTest, "Test must be run on Wormhole or Blackhole");
         return 0;
     }
 

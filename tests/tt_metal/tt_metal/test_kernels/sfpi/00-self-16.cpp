@@ -7,8 +7,7 @@
 #include <sfpi.h>
 
 using namespace sfpi;
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #if COMPILE_FOR_TRISC == 1  // compute
 #include "pre.inc"
     FAIL_IF(vInt(1) != vInt(1));
@@ -19,4 +18,3 @@ void MAIN {
 #include "post.inc"
 #endif
 }
-}  // namespace NAMESPACE

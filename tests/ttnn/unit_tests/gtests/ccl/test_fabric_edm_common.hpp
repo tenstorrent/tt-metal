@@ -359,7 +359,7 @@ inline ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& s
 
 bool RunPipelinedWorkersTest(
 
-    ttnn::Shape tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const size_t split_dim,
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -436,8 +436,16 @@ bool RunPipelinedWorkersTest(
         device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
-    TT_ASSERT(device_tensors.size() == num_tensors);
-    TT_ASSERT(device_tensors.size() == host_tensors.size());
+    TT_FATAL(
+        device_tensors.size() == num_tensors,
+        "device_tensors size {} does not match expected {}",
+        device_tensors.size(),
+        num_tensors);
+    TT_FATAL(
+        device_tensors.size() == host_tensors.size(),
+        "device_tensors size {} does not match host_tensors size {}",
+        device_tensors.size(),
+        host_tensors.size());
 
     // MAIN STUFF
 

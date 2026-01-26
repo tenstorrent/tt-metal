@@ -62,6 +62,7 @@ class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
+class MeshDeviceImpl;
 
 namespace multihost {
 class DistributedContext;
@@ -70,94 +71,14 @@ class DistributedContext;
 using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
+    friend class MeshDeviceImpl;
+
 private:
-    // Resource management class / RAII wrapper for *physical devices* of the mesh
-    class ScopedDevices {
-    private:
-        std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<ChipId, IDevice*> opened_local_devices_;
+    MeshDevice() = default;
 
-    public:
-        // Constructor acquires physical resources
-        ScopedDevices(
-            size_t l1_small_size,
-            size_t trace_region_size,
-            size_t num_command_queues,
-            size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config,
-            const MeshDeviceConfig& config);
-        ScopedDevices(
-            const std::vector<MaybeRemote<int>>& all_device_ids,
-            const std::vector<MaybeRemote<int>>& active_device_ids,
-            size_t l1_small_size,
-            size_t trace_region_size,
-            size_t num_command_queues,
-            size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config);
-
-        // Destructor releases physical resources
-        ~ScopedDevices();
-        ScopedDevices(const ScopedDevices&) = delete;
-        ScopedDevices& operator=(const ScopedDevices&) = delete;
-
-        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
-        const std::vector<IDevice*>& local_root_devices() const;
-
-        const std::map<ChipId, IDevice*>& opened_local_devices() const;
-
-        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
-    };
-
-    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
-    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
-    // on the device may not be thread safe.
-    std::mutex api_mutex_;
-    bool is_internal_state_initialized = false;
-    std::shared_ptr<ScopedDevices> scoped_devices_;
-    int mesh_id_;
-    std::unique_ptr<MeshDeviceView> view_;
-    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
-    std::shared_ptr<MeshDevice> parent_mesh_;
-    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
-
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
-
-    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-    uint32_t trace_buffers_size_ = 0;
-    uint32_t max_num_eth_cores_ = 0;
-    std::shared_ptr<ThreadPool> dispatch_thread_pool_;
-    std::shared_ptr<ThreadPool> reader_thread_pool_;
-    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
-    std::size_t num_virtual_eth_cores_ = 0;
-    std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
-    // This is a reference device used to query properties that are the same for all devices in the mesh.
-    IDevice* reference_device() const;
-    // Recursively quiesce all submeshes.
-    void quiesce_internal();
-
-    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
-    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
-    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
-    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
-
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
-    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
-
-    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
-
-    // Distributed context used to synchronize operations done by all ranks on the given mesh device.
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    std::unique_ptr<MeshDeviceImpl> pimpl_;
 
 public:
-    MeshDevice(
-        std::shared_ptr<ScopedDevices> mesh_handle,
-        std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;
@@ -276,7 +197,13 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
+        "28-02-2026.")]]
     IDevice* get_device(ChipId physical_device_id) const;
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
+        "28-02-2026.")]]
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
@@ -292,6 +219,9 @@ public:
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.
+    [[deprecated(
+        "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
+        "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
@@ -368,6 +298,10 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Only for internal and testing purposes
+    const MeshDeviceImpl& impl() const { return *pimpl_; }
+    MeshDeviceImpl& impl() { return *pimpl_; }
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

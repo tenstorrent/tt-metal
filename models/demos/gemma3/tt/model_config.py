@@ -89,6 +89,7 @@ class ModelArgs(TTModelArgs):
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
+        self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -876,9 +877,7 @@ class ModelArgs(TTModelArgs):
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
-        model_specific_ceil_warmup_lengths = {
-            # e.g. "gemma-3-4b": 4096
-        }
+        model_specific_ceil_warmup_lengths = {"gemma-3-4b": 65536}
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
         if max_seq_len_to_warmup > self.capped_warmup_seq_len:
@@ -918,18 +917,15 @@ class ModelArgs(TTModelArgs):
         model_name = self.base_model_name
         device_name = self.device_name
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
+        if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        else:
+            return []
 
     def _set_model_specific_params(self):
         self.rms_norm_add_unit_offset = True

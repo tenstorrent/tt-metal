@@ -14,10 +14,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::slice::program {
+namespace ttnn::prim {
 
 SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -192,10 +192,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
 }
 
 void SliceRmStrideProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = output;
     const auto& program = cached_program.program;
@@ -212,4 +209,4 @@ void SliceRmStrideProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::slice::program
+}  // namespace ttnn::prim

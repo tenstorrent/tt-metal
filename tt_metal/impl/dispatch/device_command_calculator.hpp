@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <stdint.h>
 #include <type_traits>
 #include <utility>
@@ -30,6 +32,11 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_prefetch_relay_linear_h() {
         this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
@@ -63,6 +70,23 @@ public:
             }
         } else {
             // Need to make sure next command that flushes prefetch is written to correctly aligned location
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
+
+    // Calculator sizing for CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h linear write)
+    // Mirrors add_dispatch_write_linear for sizing/alignment purposes.
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(uint32_t data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
+
+        if constexpr (flush_prefetch) {
+            if constexpr (inline_data) {
+                this->add_data(data_sizeB);
+                this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+            }
+        } else {
             this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }

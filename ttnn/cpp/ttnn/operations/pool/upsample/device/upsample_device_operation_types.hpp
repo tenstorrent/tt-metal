@@ -8,22 +8,15 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
-namespace ttnn::operations::pool::upsample {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
-    int scale_factor_h = 0;
-    int scale_factor_w = 0;
+struct UpsampleParams {
+    float scale_factor_h = 1.0f;
+    float scale_factor_w = 1.0f;
     std::string mode = "nearest";
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    std::optional<sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt;
+    std::optional<ttnn::operations::sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt;
 };
 
-struct tensor_args_t {
-   Tensor input_tensor;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::pool::upsample
+}  // namespace ttnn::prim

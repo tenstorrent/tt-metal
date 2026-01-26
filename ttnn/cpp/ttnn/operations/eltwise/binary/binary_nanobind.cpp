@@ -2107,7 +2107,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
                const Tensor& input_tensor,
                float exponent,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) -> ttnn::Tensor {
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
@@ -2386,7 +2386,7 @@ void py_module(nb::module_& mod) {
         R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32, UINT32)doc");
+        R"doc(INT32, UINT32, UINT16)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         mod,
@@ -2394,7 +2394,7 @@ void py_module(nb::module_& mod) {
         R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32, UINT32)doc");
+        R"doc(INT32, UINT32, UINT16)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         mod,

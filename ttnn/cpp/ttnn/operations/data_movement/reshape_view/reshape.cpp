@@ -17,7 +17,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "reshape.hpp"
@@ -26,6 +26,38 @@
 
 namespace ttnn::operations::data_movement {
 namespace detail {
+
+MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
+    // This function recomputes the shard spec as reshape op's original input
+    // tensor is sometimes not compatible with the output shard's config
+
+    auto output_mem_config = memory_config;
+    if (memory_config.shard_spec().has_value()) {
+        const auto& input_shard_spec = memory_config.shard_spec().value();
+
+        // Update specs for output tensor
+        auto orientation = input_shard_spec.orientation;
+
+        if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto core_range = input_shard_spec.grid.bounding_box();
+            auto updated_spec = output_shape.block_sharded(core_range, orientation);
+            output_mem_config = updated_spec.memory_config();
+        } else if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            auto core_range = input_shard_spec.grid;
+            auto updated_spec = output_shape.height_sharded(core_range, orientation);
+            output_mem_config = updated_spec.memory_config();
+        } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            auto core_range = input_shard_spec.grid;
+            auto updated_spec = output_shape.width_sharded(core_range, orientation);
+            output_mem_config = updated_spec.memory_config();
+        } else {
+            TT_FATAL(false, "Shard spec must be either block, height, or width sharded");
+        }
+    } else {
+        TT_FATAL(false, "Shard spec has no value");
+    }
+    return output_mem_config;
+}
 
 ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
@@ -47,12 +79,16 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = ttnn::prim::reshape(
+    auto temp_tensor2 = ttnn::prim::reshape_view(
         temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
+
+        // Recompute the shard spec for the output tensor shape
+        auto output_mem_config = recompute_shard_spec_for_output(memory_config, temp_tensor2.tensor_spec());
+
+        return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
     }
     return temp_tensor2;
 }
@@ -212,7 +248,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    auto output_tensor_3d = ttnn::prim::reshape(
+    auto output_tensor_3d = ttnn::prim::reshape_view(
         tensor3d,
         requested_shape_3d,
         requested_padded_shape_3d,
@@ -222,7 +258,11 @@ ttnn::Tensor reshape_tiled(
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, memory_config, std::nullopt);
+
+        // Recompute the shard spec for the output tensor shape
+        auto output_mem_config = detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
+
+        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
