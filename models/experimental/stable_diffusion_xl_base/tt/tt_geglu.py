@@ -6,6 +6,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+import tracy
 
 
 class TtGEGLU(LightweightModule):
@@ -37,6 +38,7 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
+        tracy.signpost("GEGLU Linear 1 Start")
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
@@ -45,7 +47,9 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
+        tracy.signpost("GEGLU Linear 1 End")
 
+        tracy.signpost("GEGLU Linear 2 Start")
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
@@ -54,6 +58,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )
+        tracy.signpost("GEGLU Linear 2 End")
 
         ttnn.deallocate(input_tensor)
         hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False, fast_and_approximate_mode=True)

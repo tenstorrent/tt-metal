@@ -10,6 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
+import tracy
 
 
 class TtTransformer2DModel(LightweightModule):
@@ -104,6 +105,7 @@ class TtTransformer2DModel(LightweightModule):
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        tracy.signpost("Transformer2DModel Linear In Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
@@ -112,10 +114,10 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=self.memory_config_in,
         )
-
+        tracy.signpost("Transformer2DModel Linear In End")
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
-
+        tracy.signpost("Transformer2DModel Linear Out Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,
@@ -124,7 +126,7 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_out,
             memory_config=self.memory_config_out,
         )
-
+        tracy.signpost("Transformer2DModel Linear Out End")
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 
         return hidden_states
