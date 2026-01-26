@@ -353,4 +353,40 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
     }
 }
 
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 257;
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 85,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = false,
+                .use_2_0 = true,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
 }  // namespace tt::tt_metal
