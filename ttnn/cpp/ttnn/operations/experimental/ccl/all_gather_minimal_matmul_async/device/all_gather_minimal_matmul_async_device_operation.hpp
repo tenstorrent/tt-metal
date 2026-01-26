@@ -79,7 +79,7 @@ struct AllGatherMinimalMatmulAsyncOp {
     std::optional<uint32_t> cluster_axis;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
     bool using_persistent_buffers;
-    uint32_t chunks_per_sync;
+    bool force_transpose;
     uint32_t num_workers_per_link;
     uint32_t num_buffers_per_channel;
 
@@ -96,7 +96,7 @@ struct AllGatherMinimalMatmulAsyncOp {
         std::optional<uint32_t> cluster_axis,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
-        uint32_t chunks_per_sync,
+        bool force_transpose,
         uint32_t num_workers_per_link,
         uint32_t num_buffers_per_channel) :
         config(config),
@@ -111,7 +111,7 @@ struct AllGatherMinimalMatmulAsyncOp {
         cluster_axis(cluster_axis),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
-        chunks_per_sync(chunks_per_sync),
+        force_transpose(force_transpose),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
@@ -123,7 +123,7 @@ struct AllGatherMinimalMatmulAsyncOp {
         "using_persistent_buffers",
         "cluster_axis",
         "semaphore",
-        "chunks_per_sync",
+        "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel");
 
@@ -136,7 +136,7 @@ struct AllGatherMinimalMatmulAsyncOp {
             this->using_persistent_buffers,
             this->cluster_axis,
             this->semaphore,
-            this->chunks_per_sync,
+            this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel);
     }
