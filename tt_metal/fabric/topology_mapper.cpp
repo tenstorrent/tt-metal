@@ -1789,7 +1789,7 @@ void TopologyMapper::verify_topology_mapping() const {
                              (local_asics_from_psd_set.find(info.asic_id) != local_asics_from_psd_set.end());
 
         // Check 1: For local chips, verify ASIC ID exists in cluster.get_unique_chip_ids()
-        if (is_local_chip && local_asic_ids.find(info.asic_id) == local_asic_ids.end()) {
+        if (is_local_chip && !local_asic_ids.contains(info.asic_id)) {
             TT_FATAL(
                 false,
                 "TopologyMapper verification failed: Local ASIC ID {} (fabric_node_id={}, hostname={}) not found in "
