@@ -17,6 +17,7 @@ namespace ttnn::operations::experimental::conv3d {
 ttnn::Tensor ExecuteConv3d::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    ttnn::MeshDevice* device,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const ttnn::experimental::prim::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
@@ -32,15 +33,17 @@ ttnn::Tensor ExecuteConv3d::invoke(
     Tensor prepared_weight_tensor = weight_tensor;
     switch (prepared_weight_tensor.logical_shape().rank()) {
         case 5:
+            TT_FATAL(prepared_weight_tensor.device() == nullptr, "Unprepared weight tensor must be on host");
             prepared_weight_tensor = ttnn::operations::experimental::conv3d::prepare_weights(
-                prepared_weight_tensor, groups_, config.C_in_block);
+                prepared_weight_tensor, groups_, config.C_in_block, device);
             break;
         case 2: break;
         default: TT_THROW("Unsupported weight tensor rank: {}", prepared_weight_tensor.logical_shape().rank());
     }
 
     if (prepared_weight_tensor.layout() != Layout::TILE) {
-        prepared_weight_tensor = prepared_weight_tensor.to_layout(Layout::TILE);
+        // prepared_weight_tensor = prepared_weight_tensor.to_layout(Layout::TILE);
+        prepared_weight_tensor = ttnn::to_layout(prepared_weight_tensor, ttnn::Layout::TILE);
     }
     return ttnn::prim::conv3d(
         input_tensor,

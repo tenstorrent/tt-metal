@@ -23,6 +23,10 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 Tensor prepare_weights(
-    const ttnn::Tensor& conv3d_module_weight, uint32_t groups, uint32_t C_in_block = 0, uint32_t alignment = 32);
+    const ttnn::Tensor& conv3d_module_weight,
+    uint32_t groups,
+    uint32_t C_in_block = 0,
+    MeshDevice* device = nullptr,
+    uint32_t alignment = 32);
 
 }  // namespace ttnn::operations::experimental::conv3d
