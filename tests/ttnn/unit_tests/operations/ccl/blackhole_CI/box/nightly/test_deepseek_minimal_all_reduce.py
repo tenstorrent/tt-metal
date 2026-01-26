@@ -729,13 +729,13 @@ def run_deepseek_minimal_all_reduce_with_residual_impl(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         },
     ],
     indirect=["device_params"],
-    ids=["fabric_1d_trace"],
+    ids=["fabric_2d_trace"],
 )
 def test_deepseek_minimal_all_reduce_with_residual_trace(
     bh_2d_mesh_device,

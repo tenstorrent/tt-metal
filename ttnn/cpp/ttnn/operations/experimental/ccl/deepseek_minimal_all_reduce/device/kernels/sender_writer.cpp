@@ -48,7 +48,8 @@ void kernel_main() {
     cb_push_back(packet_header_cb_id, 1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
+    fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
+    packet_header_ptr->to_chip_unicast(dst_num_hops);
 
     //  wait for receiver to signal it is ready
     if constexpr (!using_persistent_buffer) {

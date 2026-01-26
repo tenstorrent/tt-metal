@@ -50,7 +50,9 @@ void kernel_main() {
 
     if constexpr (!using_persistent_buffer) {
         auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
+        fabric_set_unicast_route(fabric_connection, sem_header_ptr, 0);
+        sem_header_ptr->to_chip_unicast(sender_num_hops);
+
         sem_header_ptr->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
 
