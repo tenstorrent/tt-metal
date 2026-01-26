@@ -78,7 +78,7 @@ jobs:
           fi
           # Print the JSON output
           echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
-          echo "$filtered_output"
+          echo "${filtered_output}"
           echo "matrix=${filtered_output}" >> $GITHUB_OUTPUT
 
   t3000-demo-tests:
