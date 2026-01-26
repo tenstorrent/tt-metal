@@ -75,7 +75,6 @@ def test_cross_attention_transformer_text_inference(
     decode_pcc_required = 0.965
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
-    model_args.is_90b = True
     model_repo_name = os.getenv("HF_MODEL")
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
