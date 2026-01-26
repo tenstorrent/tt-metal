@@ -581,6 +581,13 @@ public:
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) override {
+        printf(
+            "[Pool2D DRAM slicing] Processing slice output [%u,%u] to [%u,%u]\n",
+            std::get<0>(output_slice_start),
+            std::get<1>(output_slice_start),
+            std::get<0>(output_slice_end),
+            std::get<1>(output_slice_end));
+
         auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
             get_input_slice_and_padding(output_slice_start, output_slice_end);
         auto [input_slice_start, input_slice_end] = input_slice;
@@ -593,7 +600,17 @@ public:
         if (this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0) {
             this_ceil_mode = true;
         }
-        return pool2d_L1(
+
+        printf(
+            "[Pool2D DRAM slicing] Calling pool2d_L1 for slice with input %dx%d, kernel %ux%u, stride %ux%u\n",
+            input_slice_height,
+            input_slice_width,
+            kernel_size[0],
+            kernel_size[1],
+            stride[0],
+            stride[1]);
+
+        auto result = pool2d_L1(
             sliced_input_tensor,
             pool_type,
             batch_size,
@@ -617,6 +634,9 @@ public:
             output_layout,
             this_ceil_pad,
             config_tensor_in_dram);
+
+        printf("[Pool2D DRAM slicing] Completed pool2d_L1 for slice\n");
+        return result;
     }
 
     std::string name() const override { return "Pool2D"; }
@@ -646,6 +666,19 @@ static std::vector<Tensor> pool2d_DRAM(
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false) {
+    printf("\n========== POOL2D_DRAM ENTERED ==========\n");
+    printf("Input: batch=%u, h=%u, w=%u, c=%u\n", batch_size, input_h, input_w, channels);
+    printf("Kernel: %ux%u, Stride: %ux%u, Padding: LTRB\n", kernel_size[0], kernel_size[1], stride[0], stride[1]);
+    printf(
+        "Input tensor: is_dram=%d, is_l1=%d\n",
+        input_tensor.memory_config().is_dram(),
+        input_tensor.memory_config().is_l1());
+    printf("dram_slice_config provided: %s\n", dram_slice_config_.has_value() ? "yes" : "no");
+    if (dram_slice_config_.has_value()) {
+        printf("  - num_slices: %u\n", dram_slice_config_->num_slices);
+    }
+    fflush(stdout);
+
     // Note: We allow return_indices=True to proceed here so we can check if it fits in a single slice.
     // The verification happens after slice configuration is determined.
     // The check for L1_FULL or manual num_slices==1 is now handled in determine_pool2d_execution_path.
@@ -691,7 +724,10 @@ static std::vector<Tensor> pool2d_DRAM(
     Op2DSliceConfig dram_slice_config;
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
+        printf("Using provided slice config: num_slices=%u\n", dram_slice_config.num_slices);
     } else {
+        printf("Calling determine_slice_config for automatic slicing...\n");
+        fflush(stdout);
         dram_slice_config = op_slicing::determine_slice_config(
             &pool_slice_attr,
             ttnn::Shape{batch_size, input_h, input_w, channels},
@@ -699,7 +735,92 @@ static std::vector<Tensor> pool2d_DRAM(
             dram_slice_config_,
             output_layout,
             input_tensor.device());
+        printf("Auto-determined num_slices=%u\n", dram_slice_config.num_slices);
+        printf("HIT1\n");
     }
+    fflush(stdout);
+
+    printf("HIT2\n");
+
+    // Validate that kernel size can fit in the slices
+    // We need to check that each slice (especially the smallest one) is large enough for the kernel
+    const uint32_t output_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height
+                                                                                            : output_width;
+    const uint32_t kernel_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? kernel_size[0]
+                                                                                            : kernel_size[1];
+    const uint32_t stride_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? stride[0] : stride[1];
+    const uint32_t dilation_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? dilation[0] : dilation[1];
+    const uint32_t effective_kernel_size = (kernel_sliced_dim - 1) * dilation_sliced_dim + 1;
+
+    // Check each output slice to find the minimum input slice size
+    // Output slices are distributed as evenly as possible across num_slices
+    uint32_t min_input_slice_in_sliced_dim = UINT32_MAX;
+    for (uint32_t slice_idx = 0; slice_idx < dram_slice_config.num_slices; ++slice_idx) {
+        // Calculate output slice boundaries for this slice
+        uint32_t output_slice_start = (slice_idx * output_sliced_dim) / dram_slice_config.num_slices;
+        uint32_t output_slice_end = ((slice_idx + 1) * output_sliced_dim) / dram_slice_config.num_slices;
+
+        // Calculate required input slice size for this output slice
+        // input_slice_end = (output_slice_end - 1) * stride + effective_kernel_size - padding
+        // input_slice_start = output_slice_start * stride - padding
+        // But we need to consider actual clamping to input boundaries
+        int input_slice_start =
+            static_cast<int>(output_slice_start * stride_sliced_dim) -
+            static_cast<int>(
+                padding_4d
+                    [dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? 0 : 2]);
+        int input_slice_end =
+            static_cast<int>((output_slice_end - 1) * stride_sliced_dim) -
+            static_cast<int>(
+                padding_4d
+                    [dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? 0 : 2]) +
+            static_cast<int>(effective_kernel_size);
+
+        const uint32_t input_sliced_dim =
+            dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? input_h : input_w;
+
+        // Clamp to actual input boundaries
+        input_slice_start = std::max(0, input_slice_start);
+        input_slice_end = std::min(static_cast<int>(input_sliced_dim), input_slice_end);
+
+        uint32_t input_slice_size = static_cast<uint32_t>(input_slice_end - input_slice_start);
+        min_input_slice_in_sliced_dim = std::min(min_input_slice_in_sliced_dim, input_slice_size);
+    }
+
+    printf(
+        "min_input_slice_in_sliced_dim=%u, effective_kernel_size=%u\n",
+        min_input_slice_in_sliced_dim,
+        effective_kernel_size);
+
+    TT_FATAL(
+        min_input_slice_in_sliced_dim >= effective_kernel_size,
+        "Cannot fit Pool2D operation in L1 memory with DRAM slicing. The smallest input slice (size={}) "
+        "in the {} dimension is smaller than the effective kernel size ({}). "
+        "Kernel: {}x{}, Stride: {}x{}, Dilation: {}x{}, Num slices: {}, Slicing dimension: {}. "
+        "Input shape: {}x{}, Output shape: {}x{}, Channels: {}. "
+        "This means the tensor cannot be processed even with DRAM slicing. "
+        "Consider: (1) reducing kernel size, (2) reducing dilation, (3) increasing stride, "
+        "or (4) if possible, increasing available L1 memory to reduce the number of slices needed.",
+        min_input_slice_in_sliced_dim,
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        effective_kernel_size,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation[0],
+        dilation[1],
+        dram_slice_config.num_slices,
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        input_h,
+        input_w,
+        output_height,
+        output_width,
+        channels);
 
     // Verify that return_indices operations can fit in a single slice
     TT_FATAL(
@@ -708,8 +829,13 @@ static std::vector<Tensor> pool2d_DRAM(
         "DRAM pooling with return_indices=True and multiple slices is not supported yet. ",
         dram_slice_config.num_slices);
 
+    printf("[Pool2D DRAM] Calculated num_slices=%u\n", dram_slice_config.num_slices);
+
     // If automatic determination resulted in num_slices=1, use L1 path for efficiency
     if (dram_slice_config.num_slices == 1) {
+        printf("REDIRECTING to L1 path (num_slices==1)\n");
+        printf("========== POOL2D_DRAM EXITING (REDIRECT TO L1) ==========\n\n");
+        fflush(stdout);
         return pool2d_L1(
             input_tensor,
             pool_type,
@@ -763,8 +889,16 @@ static std::vector<Tensor> pool2d_DRAM(
     // If return_indices=true, we either fatal (num_slices>1) or take L1 path (num_slices==1)
 
     TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
+    printf("PROCEEDING with DRAM slicing: num_slices=%u\n", dram_slice_config.num_slices);
+    printf("Calling run_sliced_op...\n");
+    fflush(stdout);
+
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
+
+    printf("run_sliced_op COMPLETED\n");
+    printf("========== POOL2D_DRAM RETURNING ==========\n\n");
+    fflush(stdout);
 
     return {dram_output_tensor};
 }
@@ -779,23 +913,36 @@ enum class Pool2dExecutionPath {
 // slice configuration and input tensor properties
 Pool2dExecutionPath determine_pool2d_execution_path(
     const ttnn::Tensor& input_tensor, const std::optional<const Op2DSliceConfig>& slice_config) {
+    bool is_l1 = input_tensor.memory_config().is_l1();
+    bool is_dram = input_tensor.memory_config().is_dram();
+
+    printf(
+        "[Pool2D] Execution path determination: tensor is_l1=%d, is_dram=%d, slice_config=%s\n",
+        is_l1,
+        is_dram,
+        slice_config.has_value() ? "provided" : "none");
+
     // If slice config explicitly specifies L1_FULL, use L1 path
     if (slice_config.has_value() && slice_config->slice_type == Op2DSliceConfig::SliceType::L1_FULL) {
+        printf("[Pool2D] Taking L1 path (L1_FULL explicitly requested)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // If slice config explicitly sets num_slices==1, use L1 path (user knows it fits)
     if (slice_config.has_value() && slice_config->num_slices == 1) {
+        printf("[Pool2D] Taking L1 path (num_slices==1 explicitly set)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // If input is in L1 (not DRAM), use L1 path - tensor already fits in L1
     // We should never move an L1 tensor to DRAM just to slice it
-    if (input_tensor.memory_config().is_l1()) {
+    if (is_l1) {
+        printf("[Pool2D] Taking L1 path (tensor already in L1)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // Otherwise, tensor is in DRAM, use DRAM slicing path
+    printf("[Pool2D] Taking DRAM slicing path (tensor in DRAM)\n");
     return Pool2dExecutionPath::DRAM;
 }
 
@@ -872,7 +1019,8 @@ static std::vector<Tensor> pool2d(
 
     auto exec_path = determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);
     if (exec_path == Pool2dExecutionPath::L1) {
-        return pool2d_L1(
+        printf("[Pool2D] Calling pool2d_L1\n");
+        auto result = pool2d_L1(
             input_tensor_4d,
             pool_type,
             batch_size,
@@ -896,8 +1044,11 @@ static std::vector<Tensor> pool2d(
             output_layout,
             std::nullopt,
             config_tensor_in_dram);
+        printf("[Pool2D] Completed pool2d_L1, returning\n");
+        return result;
     }
-    return pool2d_DRAM(
+    printf("[Pool2D] Calling pool2d_DRAM\n");
+    auto result = pool2d_DRAM(
         input_tensor_4d,
         pool_type,
         batch_size,
@@ -921,6 +1072,8 @@ static std::vector<Tensor> pool2d(
         dtype,
         output_layout,
         config_tensor_in_dram);
+    printf("[Pool2D] Completed pool2d_DRAM, returning\n");
+    return result;
 }
 
 std::vector<Tensor> MaxPool2DOp::invoke(
@@ -943,7 +1096,8 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
-    return pool2d(
+    printf("[MaxPool2DOp] Calling pool2d\n");
+    auto result = pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
         batch_size,
@@ -967,6 +1121,8 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         dtype,
         output_layout,
         config_tensor_in_dram);
+    printf("[MaxPool2DOp] Completed pool2d, returning %zu tensors\n", result.size());
+    return result;
 }
 
 Tensor AvgPool2DOp::invoke(
