@@ -249,7 +249,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMinimalMatmulAsyncOp::cre
         this->semaphore,
         this->barrier_semaphore,
         this->using_persistent_buffers,
-        this->chunks_per_sync,
+        this->force_transpose,
         this->num_workers_per_link,
         this->num_buffers_per_channel);
 }

@@ -58,6 +58,7 @@ def run_test_linear_impl(
     num_iters=1,
     use_persistent_buffers=True,
     use_non_fused=False,
+    force_transpose=True,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -165,7 +166,7 @@ def run_test_linear_impl(
             topology=topology,
             cluster_axis=cluster_axis,
             barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
-            chunks_per_sync=1,
+            force_transpose=force_transpose,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
         )
@@ -221,6 +222,7 @@ def run_test_linear(
     weight_dtype=None,
     bias_dtype=None,
     use_non_fused=False,
+    force_transpose=True,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -278,13 +280,14 @@ def run_test_linear(
         cluster_axis=1,
         num_workers_per_link=num_workers_per_link,
         use_non_fused=use_non_fused,
+        force_transpose=force_transpose,
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "M, K, N, core_grid_x, core_grid_y, num_workers_per_link, num_links",
-    [(4096, 4096, 4096, 4, 4, 4, 1)],
+    "M, K, N, core_grid_x, core_grid_y, num_workers_per_link, num_links, force_transpose",
+    [(4096, 4096, 4096, 4, 4, 4, 1, True)],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
@@ -322,6 +325,7 @@ def test_linear(
     num_workers_per_link,
     num_links,
     use_non_fused,
+    force_transpose,
 ):
     assert (num_links * num_workers_per_link) == core_grid_y
     check_result = run_test_linear(
@@ -339,6 +343,7 @@ def test_linear(
         num_workers_per_link=num_workers_per_link,
         num_links=num_links,
         use_non_fused=use_non_fused,
+        force_transpose=force_transpose,
     )
     for i in range(mesh_device.get_num_devices()):
         assert check_result[i]["pcc"] > 0.999_500
