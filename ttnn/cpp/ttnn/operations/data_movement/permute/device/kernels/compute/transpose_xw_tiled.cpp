@@ -34,7 +34,7 @@ void kernel_main() {
 
     for (uint32_t block = start_block; block < end_block; block++) {
         // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)
-        compute_kernel_lib::tilize(cb_in, 1, cb_tilize, 1);
+        compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_tilize>>>(1, 1);
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
