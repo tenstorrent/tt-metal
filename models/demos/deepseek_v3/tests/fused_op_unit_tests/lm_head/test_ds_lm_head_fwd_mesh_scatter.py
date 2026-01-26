@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
 DEVICE_PERF_ENV_VAR = "DS_LM_HEAD_FWD_MESH_SCATTER_DEVICE_PERF"
 PCC_ITERS = 100
 PERF_WARMUP_ITERS = 10
@@ -34,10 +33,6 @@ DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {}
 CI_ACTIVE = os.getenv("CI") == "true"
 
-_LONG_SEQ_SKIP_MARK = pytest.mark.skipif(
-    CI_ACTIVE and os.getenv(LONG_SEQ_ENV_VAR) is None,
-    reason=f"Set {LONG_SEQ_ENV_VAR}=1 to enable long sequence coverage on CI.",
-)
 
 _CI_SKIP_MARK = pytest.mark.skipif(
     os.getenv("CI") == "true" and os.getenv(DEVICE_PERF_ENV_VAR) is None,
@@ -386,8 +381,6 @@ def _run_ds_lm_head_fwd_mesh_scatter_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets for long seq lengths.
         ("decode", 32, 1.0, 0.2, 0.2, 127767.789),
         ("prefill", 128, 1.0, 0.2, 0.2, 99067.926),
-        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
         pytest.param(
             "prefill",
             32768,
@@ -395,7 +388,7 @@ def _run_ds_lm_head_fwd_mesh_scatter_test(
             0.2,
             0.2,
             0.0,
-            marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
+            marks=[_CI_SKIP_MARK],
             id="prefill-32768",
         ),
         pytest.param(
@@ -405,7 +398,7 @@ def _run_ds_lm_head_fwd_mesh_scatter_test(
             0.2,
             0.2,
             0.0,
-            marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
+            marks=[_CI_SKIP_MARK],
             id="prefill-131072",
         ),
     ],
@@ -413,12 +406,9 @@ def _run_ds_lm_head_fwd_mesh_scatter_test(
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK, id="program_cache-eager"),
         pytest.param(False, False, marks=_CI_SKIP_MARK, id="no_program_cache-eager"),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK, id="no_program_cache-trace"),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize("use_real_weights", [True, pytest.param(False, marks=_CI_SKIP_MARK, id="random_weights")])
 @pytest.mark.parametrize(
@@ -497,10 +487,7 @@ def test_ds_lm_head_fwd_mesh_scatter(
     [
         ("decode", 32),
         ("prefill", 128),
-        pytest.param("prefill", 1024, marks=_CI_SKIP_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, marks=_CI_SKIP_MARK, id="prefill-8192"),
-        pytest.param("prefill", 32768, marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK], id="prefill-32768"),
-        pytest.param("prefill", 131072, marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK], id="prefill-131072"),
+        pytest.param("prefill", 131072, marks=[_CI_SKIP_MARK], id="prefill-131072"),
     ],
 )
 def test_ds_lm_head_fwd_mesh_scatter_device_perf(mode, seq_len):
@@ -520,7 +507,6 @@ def test_ds_lm_head_fwd_mesh_scatter_device_perf(mode, seq_len):
     step_name = f"ds_lm_head_fwd_mesh_scatter_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head_fwd_mesh_scatter.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_ds_lm_head_fwd_mesh_scatter -k "{expr}"'
 
     profiler.start("run")

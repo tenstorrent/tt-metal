@@ -33,9 +33,6 @@ DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {}
 CI_ACTIVE = os.getenv("CI") == "true"
 
 _TRACE_REQUIRES_CACHE_MARK = pytest.mark.skip(reason="Trace capture requires program cache to be enabled.")
-_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK = pytest.mark.skip(
-    reason="paged_update_cache is only used in decode mode for MLA1D."
-)
 _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
     reason="CI runs only decode/prefill-128 with program_cache+trace+real_weights coverage.",
@@ -261,21 +258,14 @@ def _collect_device_perf(
     [
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.99997, 0.3, 0.3, 510.378),
-        pytest.param("prefill", 128, 0.999, 0.3, 0.3, 0.0, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 1024, 0.999, 0.3, 0.3, 0.0, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 8192, 0.999, 0.3, 0.3, 0.0, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 131072, 0.999, 0.3, 0.3, 0.0, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
     ],
 )
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK),
         pytest.param(False, False, marks=_CI_SKIP_MARK),
         (True, True),
-        pytest.param(False, True, marks=[_CI_SKIP_MARK, _TRACE_REQUIRES_CACHE_MARK]),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -304,10 +294,8 @@ def test_paged_update_cache(
     set_deterministic_env,
     state_dict,
 ):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
@@ -481,17 +469,11 @@ def test_paged_update_cache(
     "mode, seq_len",
     [
         ("decode", 1),
-        pytest.param("prefill", 128, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 1024, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 8192, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
-        pytest.param("prefill", 131072, marks=_PAGED_UPDATE_CACHE_PREFILL_SKIP_MARK),
     ],
 )
 def test_paged_update_cache_device_perf(mode, seq_len):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
@@ -508,7 +490,6 @@ def test_paged_update_cache_device_perf(mode, seq_len):
         trace_filter = "eager"
     else:
         trace_filter = "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_paged_update_cache -k "{expr}"'
 
     profiler.start("run")

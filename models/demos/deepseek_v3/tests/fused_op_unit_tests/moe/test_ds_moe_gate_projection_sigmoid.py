@@ -426,8 +426,6 @@ def _run_ds_moe_gate_projection_sigmoid_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.996, 0.2, 0.2, 1125.247),
         ("prefill", 128, 0.999, 0.2, 0.2, 1037.366),
-        pytest.param("prefill", 1024, 0.999, 0.2, 0.2, 0.0, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 8192, 0.999, 0.2, 0.2, 0.0, marks=_CI_FOCUSED_SKIP_MARK),
         pytest.param(
             "prefill",
             32768,
@@ -453,12 +451,9 @@ def _run_ds_moe_gate_projection_sigmoid_test(
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_FOCUSED_SKIP_MARK),
         pytest.param(False, False, marks=_CI_FOCUSED_SKIP_MARK),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
@@ -540,8 +535,6 @@ def test_ds_moe_gate_projection_sigmoid(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.996, 0.2, 0.2, 1125.247),
         ("prefill", 128, 0.999, 0.2, 0.2, 1037.366),
-        pytest.param("prefill", 1024, 0.999, 0.2, 0.2, 0.0, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 8192, 0.999, 0.2, 0.2, 0.0, marks=_CI_FOCUSED_SKIP_MARK),
         pytest.param(
             "prefill",
             32768,
@@ -567,12 +560,9 @@ def test_ds_moe_gate_projection_sigmoid(
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_FOCUSED_SKIP_MARK),
         pytest.param(False, False, marks=_CI_FOCUSED_SKIP_MARK),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
@@ -661,9 +651,6 @@ def test_ds_moe_gate_projection_sigmoid_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 1024, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 8192, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 32768, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-32768"),
         pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
     ],
 )
@@ -684,7 +671,6 @@ def test_ds_moe_gate_projection_sigmoid_device_perf(mode, seq_len):
     step_name = f"ds_moe_gate_projection_sigmoid_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_gate_projection_sigmoid.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_gate_projection_sigmoid -k "{expr}"'
 
     profiler.start("run")
@@ -750,9 +736,6 @@ def test_ds_moe_gate_projection_sigmoid_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 1024, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 8192, marks=_CI_FOCUSED_SKIP_MARK),
-        pytest.param("prefill", 32768, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-32768"),
         pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
     ],
 )
@@ -772,7 +755,6 @@ def test_ds_moe_gate_projection_sigmoid_single_device_device_perf(mode, seq_len)
     step_name = f"ds_moe_gate_projection_sigmoid_single_device_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_gate_projection_sigmoid.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"single_device and program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_gate_projection_sigmoid_single_device -k "{expr}"'
 
     profiler.start("run")

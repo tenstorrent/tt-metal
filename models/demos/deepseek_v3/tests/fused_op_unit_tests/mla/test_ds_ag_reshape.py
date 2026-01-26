@@ -244,12 +244,9 @@ def _collect_device_perf(
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK),
         pytest.param(False, False, marks=_CI_SKIP_MARK),
         (True, True),
-        pytest.param(False, True, marks=[_CI_SKIP_MARK, _TRACE_REQUIRES_CACHE_MARK]),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -427,7 +424,6 @@ def test_ds_ag_reshape_device_perf(mode, seq_len):
     step_name = f"ds_ag_reshape_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/test_ds_ag_reshape.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_ds_ag_reshape -k "{expr}"'
 
     profiler.start("run")

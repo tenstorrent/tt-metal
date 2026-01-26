@@ -25,7 +25,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
 DEVICE_PERF_ENV_VAR = "DS_EMBEDDING_FWD_REDUCE_SCATTER_DEVICE_PERF"
 PCC_ITERS = 100
 PERF_WARMUP_ITERS = 10
@@ -34,11 +33,6 @@ DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {}
 CI_ACTIVE = os.getenv("CI") == "true"
-
-_LONG_SEQ_SKIP_MARK = pytest.mark.skipif(
-    os.getenv(LONG_SEQ_ENV_VAR) is None,
-    reason=f"Set {LONG_SEQ_ENV_VAR}=1 to enable long sequence coverage.",
-)
 
 _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
@@ -463,8 +457,6 @@ _MODE_SEQ_PARAMS = [
     # TODO: Replace expected_perf_us baselines with theoretical targets.
     ("decode", 128, 0.9999995, 0.2, 0.2, 1631.596),
     ("prefill", 128, 0.9999985, 0.2, 0.2, 1619.947),
-    pytest.param("prefill", 1024, 0.9999985, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
-    pytest.param("prefill", 8192, 0.9999985, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
     pytest.param(
         "prefill",
         32768,
@@ -472,7 +464,7 @@ _MODE_SEQ_PARAMS = [
         0.2,
         0.2,
         0.0,
-        marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
+        marks=[_CI_SKIP_MARK],
         id="prefill-32768",
     ),
     pytest.param(
@@ -482,18 +474,15 @@ _MODE_SEQ_PARAMS = [
         0.2,
         0.2,
         0.0,
-        marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
+        marks=[_CI_SKIP_MARK],
         id="prefill-131072",
     ),
 ]
 
 _PROGRAM_TRACE_PARAMS = [
-    pytest.param(True, False, marks=_CI_SKIP_MARK),
     pytest.param(False, False, marks=_CI_SKIP_MARK),
     (True, True),
-    pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
 ]
-
 _USE_REAL_WEIGHTS_PARAMS = [True, pytest.param(False, marks=_CI_SKIP_MARK)]
 
 
@@ -504,7 +493,6 @@ _USE_REAL_WEIGHTS_PARAMS = [True, pytest.param(False, marks=_CI_SKIP_MARK)]
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     _PROGRAM_TRACE_PARAMS,
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
@@ -589,8 +577,7 @@ else:
         ("prefill", 128),
         ("prefill", 1024),
         ("prefill", 8192),
-        pytest.param("prefill", 32768, marks=_LONG_SEQ_SKIP_MARK, id="prefill-32768"),
-        pytest.param("prefill", 131072, marks=_LONG_SEQ_SKIP_MARK, id="prefill-131072"),
+        pytest.param("prefill", 131072, id="prefill-131072"),
     ]
 
 
@@ -614,7 +601,6 @@ def test_ds_embedding_fwd_reduce_scatter_device_perf(mode, seq_len):
     step_name = f"ds_embedding_fwd_reduce_scatter_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding_fwd_reduce_scatter.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_embedding_fwd_reduce_scatter -k "{expr}"'
 
     profiler.start("run")

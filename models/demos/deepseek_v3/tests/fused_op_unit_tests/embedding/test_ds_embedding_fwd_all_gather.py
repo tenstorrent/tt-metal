@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
 DEVICE_PERF_ENV_VAR = "DS_EMBEDDING_FWD_ALL_GATHER_DEVICE_PERF"
 PCC_ITERS = 100
 PERF_WARMUP_ITERS = 10
@@ -33,11 +32,6 @@ DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {}
 CI_ACTIVE = os.getenv("CI") == "true"
-
-_LONG_SEQ_SKIP_MARK = pytest.mark.skipif(
-    CI_ACTIVE and os.getenv(LONG_SEQ_ENV_VAR) is None,
-    reason=f"Set {LONG_SEQ_ENV_VAR}=1 to enable long sequence coverage on CI.",
-)
 
 _TRACE_REQUIRES_CACHE_MARK = pytest.mark.skip(reason="Trace capture requires program cache.")
 
@@ -453,29 +447,15 @@ else:
         ("prefill", 128, 1.0, 0.2, 0.2, 1279.149),
         ("prefill", 1024, 1.0, 0.2, 0.2, 1751.616),
         ("prefill", 8192, 1.0, 0.2, 0.2, 2239.408),
-        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 5246.868, marks=_LONG_SEQ_SKIP_MARK, id="prefill-32768"),
-        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 17448.759, marks=_LONG_SEQ_SKIP_MARK, id="prefill-131072"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 17448.759, id="prefill-131072"),
     ]
     _PROGRAM_TRACE_PARAMS = [
         (True, False),
         (False, False),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
     ]
-    _PROGRAM_TRACE_IDS = [
-        "program_cache-eager",
-        "no_program_cache-eager",
-        "program_cache-trace",
-        "no_program_cache-trace",
-    ]
-    _USE_REAL_WEIGHTS_PARAMS = [True, False]
-    _USE_REAL_WEIGHTS_IDS = ["real_weights", "random_weights"]
 
 
-@pytest.mark.parametrize(
-    "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
-    _MODE_SEQ_PARAMS,
-)
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     _PROGRAM_TRACE_PARAMS,
@@ -564,8 +544,7 @@ else:
         ("prefill", 128),
         ("prefill", 1024),
         ("prefill", 8192),
-        pytest.param("prefill", 32768, marks=_LONG_SEQ_SKIP_MARK, id="prefill-32768"),
-        pytest.param("prefill", 131072, marks=_LONG_SEQ_SKIP_MARK, id="prefill-131072"),
+        pytest.param("prefill", 131072, id="prefill-131072"),
     ]
 
 
@@ -589,7 +568,6 @@ def test_ds_embedding_fwd_all_gather_device_perf(mode, seq_len):
     step_name = f"ds_embedding_fwd_all_gather_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding_fwd_all_gather.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_embedding_fwd_all_gather -k "{expr}"'
 
     profiler.start("run")

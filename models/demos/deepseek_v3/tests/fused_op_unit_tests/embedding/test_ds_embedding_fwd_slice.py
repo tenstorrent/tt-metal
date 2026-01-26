@@ -25,7 +25,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
 DEVICE_PERF_ENV_VAR = "DS_EMBEDDING_FWD_SLICE_DEVICE_PERF"
 PCC_ITERS = 100
 PERF_WARMUP_ITERS = 10
@@ -37,19 +36,11 @@ DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {
 }
 CI_ACTIVE = os.getenv("CI") == "true"
 
-_LONG_SEQ_SKIP_MARK = pytest.mark.skipif(
-    CI_ACTIVE and os.getenv(LONG_SEQ_ENV_VAR) is None,
-    reason=f"Set {LONG_SEQ_ENV_VAR}=1 to enable long sequence coverage on CI.",
-)
-
 _CI_SKIP_MARK = pytest.mark.skipif(
     os.getenv("CI") == "true",
     reason="CI runs only decode/prefill-128 with program_cache+trace+real_weights coverage.",
 )
 _TRACE_REQUIRES_CACHE_MARK = pytest.mark.skip(reason="Trace capture requires program cache.")
-_PREFILL_NOT_APPLICABLE_MARK = pytest.mark.skip(
-    reason="Slice is only used when seq_len requires padding; prefill seq_len=128 has no padding."
-)
 
 
 def ds_embedding_fwd_slice_reference(embeddings_ag: torch.Tensor, original_seq_len: int) -> torch.Tensor:
@@ -499,40 +490,14 @@ def _run_ds_embedding_fwd_slice_test(
     [
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 1.0, 0.2, 0.2, 423.906),
-        pytest.param("prefill", 128, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-128"),
-        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-8192"),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK, id="program_cache-eager"),
         pytest.param(False, False, marks=_CI_SKIP_MARK, id="no_program_cache-eager"),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
@@ -567,10 +532,8 @@ def test_ds_embedding_fwd_slice(
     set_deterministic_env,
     state_dict,
 ):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
@@ -613,40 +576,14 @@ def test_ds_embedding_fwd_slice(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         ("decode", 1, 1.0, 0.2, 0.2, 423.906),
-        pytest.param("prefill", 128, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-128"),
-        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 0.0, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-8192"),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK, id="program_cache-eager"),
         pytest.param(False, False, marks=_CI_SKIP_MARK, id="no_program_cache-eager"),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
@@ -686,10 +623,8 @@ def test_ds_embedding_fwd_slice_single_device(
     state_dict,
 ):
     _skip_single_device_unstable(mesh_device)
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     if mesh_device.get_num_devices() == 1:
         single_device_mesh = mesh_device
@@ -742,28 +677,11 @@ def test_ds_embedding_fwd_slice_single_device(
     "mode, seq_len",
     [
         ("decode", 1),
-        pytest.param("prefill", 128, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-128"),
-        pytest.param("prefill", 1024, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-8192"),
-        pytest.param(
-            "prefill",
-            32768,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
     ],
 )
 def test_ds_embedding_fwd_slice_device_perf(mode, seq_len):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
@@ -775,7 +693,6 @@ def test_ds_embedding_fwd_slice_device_perf(mode, seq_len):
     step_name = f"ds_embedding_fwd_slice_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding_fwd_slice.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_embedding_fwd_slice -k "{expr}"'
 
     profiler.start("run")
@@ -840,28 +757,11 @@ def test_ds_embedding_fwd_slice_device_perf(mode, seq_len):
     "mode, seq_len",
     [
         ("decode", 1),
-        pytest.param("prefill", 128, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-128"),
-        pytest.param("prefill", 1024, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, marks=_PREFILL_NOT_APPLICABLE_MARK, id="prefill-8192"),
-        pytest.param(
-            "prefill",
-            32768,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            marks=[_PREFILL_NOT_APPLICABLE_MARK, _LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
     ],
 )
 def test_ds_embedding_fwd_slice_single_device_device_perf(mode, seq_len):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
+    assert mode == "decode", "Decode only supports seq_len=1"
+    assert seq_len == 1, "Decode only supports seq_len=1"
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
@@ -875,7 +775,6 @@ def test_ds_embedding_fwd_slice_single_device_device_perf(mode, seq_len):
     step_name = f"ds_embedding_fwd_slice_single_device_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding_fwd_slice.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"single_device and program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_embedding_fwd_slice_single_device -k "{expr}"'
 
     profiler.start("run")

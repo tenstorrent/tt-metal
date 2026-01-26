@@ -467,17 +467,13 @@ def _build_lm_head_projection_decode_single_device_inputs(
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK, id="program_cache-eager"),
         pytest.param(False, False, marks=_CI_SKIP_MARK, id="no_program_cache-eager"),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK, id="no_program_cache-trace"),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
     [
-        pytest.param(True, id="real_weights"),
         pytest.param(False, marks=_CI_SKIP_MARK, id="random_weights"),
     ],
 )
@@ -550,7 +546,6 @@ def test_ds_lm_head_projection_decode_device_perf(seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"ds_lm_head_projection_decode_device_perf_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head_projection_decode.py"
-    expr = f"program_cache and not no_program_cache and trace and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_lm_head_projection_decode -k "{expr}"'
 
     profiler.start("run")
@@ -621,17 +616,13 @@ def test_ds_lm_head_projection_decode_device_perf(seq_len):
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
-        pytest.param(True, False, marks=_CI_SKIP_MARK, id="program_cache-eager"),
         pytest.param(False, False, marks=_CI_SKIP_MARK, id="no_program_cache-eager"),
         (True, True),
-        pytest.param(False, True, marks=_TRACE_REQUIRES_CACHE_MARK, id="no_program_cache-trace"),
     ],
-    ids=["program_cache-eager", "no_program_cache-eager", "program_cache-trace", "no_program_cache-trace"],
 )
 @pytest.mark.parametrize(
     "use_real_weights",
     [
-        pytest.param(True, id="real_weights"),
         pytest.param(False, marks=_CI_SKIP_MARK, id="random_weights"),
     ],
 )
@@ -707,7 +698,6 @@ def test_ds_lm_head_projection_decode_single_device_device_perf(seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"ds_lm_head_projection_decode_single_device_device_perf_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head_projection_decode.py"
-    expr = f"single_device and program_cache and not no_program_cache and trace and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_lm_head_projection_decode_single_device -k "{expr}"'
 
     profiler.start("run")

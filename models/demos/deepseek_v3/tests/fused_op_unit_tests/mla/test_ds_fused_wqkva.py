@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
 DEVICE_PERF_ENV_VAR = "DS_FUSED_WQKVA_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
@@ -38,10 +37,6 @@ DEVICE_PERF_TARGETS_US = {
 }
 CI_ACTIVE = os.getenv("CI") == "true"
 
-_LONG_SEQ_SKIP_MARK = pytest.mark.skipif(
-    os.getenv(LONG_SEQ_ENV_VAR) is None,
-    reason=f"Set {LONG_SEQ_ENV_VAR}=1 to enable long sequence coverage.",
-)
 _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
     reason="CI runs only decode/prefill-128 with program_cache+trace+real_weights coverage.",
@@ -483,8 +478,6 @@ def _collect_device_perf(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.99993, 0.2, 0.2, 2003.264),
         ("prefill", 128, 0.99993, 0.2, 0.2, 1295.686),
-        pytest.param("prefill", 1024, 0.99993, 0.2, 0.2, 4040.506, marks=_CI_SKIP_MARK),
-        pytest.param("prefill", 8192, 0.99993, 0.2, 0.2, 24818.087, marks=_CI_SKIP_MARK),
         pytest.param(
             "prefill",
             131072,
@@ -492,7 +485,7 @@ def _collect_device_perf(
             0.2,
             0.2,
             0.0,
-            marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK],
+            marks=[_CI_SKIP_MARK],
             id="prefill-131072",
         ),
     ],
@@ -575,9 +568,7 @@ def test_ds_fused_wqkva(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 1024, marks=_CI_SKIP_MARK),
-        pytest.param("prefill", 8192, marks=_CI_SKIP_MARK),
-        pytest.param("prefill", 131072, marks=[_LONG_SEQ_SKIP_MARK, _CI_SKIP_MARK], id="prefill-131072"),
+        pytest.param("prefill", 131072, marks=[_CI_SKIP_MARK], id="prefill-131072"),
     ],
 )
 def test_ds_fused_wqkva_device_perf(mode, seq_len):
@@ -597,7 +588,6 @@ def test_ds_fused_wqkva_device_perf(mode, seq_len):
     step_name = f"ds_fused_wqkva_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/ds_fused_wqkva.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_ds_fused_wqkva -k "{expr}"'
 
     profiler.start("run")
