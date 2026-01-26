@@ -147,6 +147,40 @@ Then run:
 
 # Combine options
 ./analyze_nd_failures.sh --file urls.txt --model sonnet-1M --skip-download --no-overwrite
+
+# Create a PR with the suggested fixes after analysis
+./analyze_nd_failures.sh --create-pr <job_url>
+
+# Create PR against a different base branch
+./analyze_nd_failures.sh --create-pr --pr-base develop <job_url>
+```
+
+### Creating PRs from Analysis
+
+The `--create-pr` flag automates the entire fix workflow:
+1. Analyzes the failure (as normal)
+2. Uses Claude to implement the primary recommended fix
+3. Creates a branch, commits changes, and opens a PR
+
+```bash
+# Full workflow: analyze and create PR
+./analyze_nd_failures.sh --create-pr <job_url>
+
+# Use a more capable model for complex fixes
+./analyze_nd_failures.sh --create-pr --model opus <job_url>
+```
+
+You can also create a PR from an existing analysis using the standalone script:
+
+```bash
+# Create PR from existing analysis
+./create_pr_from_analysis.sh path/to/analysis_result.md
+
+# Dry run - make changes but don't push/create PR
+./create_pr_from_analysis.sh --dry-run path/to/analysis_result.md
+
+# Specify base branch and model
+./create_pr_from_analysis.sh --base develop --model opus path/to/analysis_result.md
 ```
 
 #### Preventing Overwrites
