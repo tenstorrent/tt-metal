@@ -388,13 +388,8 @@ jobs:
           echo "Determining retry count by running test until failure"
           echo "════════════════════════════════════════════════════════════════"
 
-          mkdir -p ./build_bisect
-          cp ./tests/scripts/test_single_commit.sh ./build_bisect/
-          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
-          chmod +x ./build_bisect/test_single_commit.sh
-          chmod +x ./build_bisect/download_artifacts.sh
-
           TIMEOUT='${{ inputs.timeout }}'
+          TRACY_ENABLED='${{ inputs.tracy }}'
 
           # Determine start commit
           START_COMMIT='${{ inputs.start-commit }}'
@@ -408,7 +403,7 @@ jobs:
             TARGET_COMMIT=$(git rev-parse HEAD)
           fi
 
-          echo "Testing commit: $TARGET_COMMIT"
+          echo "Target commit: $TARGET_COMMIT"
 
           # Create test script in /tmp/
           TEST_SCRIPT='${{ inputs.test-script }}'
@@ -425,14 +420,58 @@ jobs:
             SCRIPT_PATH="/tmp/bisect_command_script.sh"
           fi
 
-          # Build test arguments (single attempt per run, no ND mode for counting)
-          declare -a test_args
-          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
-            test_args+=(--tracy)
-          fi
-          test_args+=(--artifact-mode)
+          # ══════════════════════════════════════════════════════════════════
+          # STEP 1: Build/download artifacts ONCE for the target commit
+          # ══════════════════════════════════════════════════════════════════
+          echo ""
+          echo "::group::Building/downloading artifacts for $TARGET_COMMIT (one-time)"
 
-          # Run test until failure
+          # Checkout target commit
+          git checkout "$TARGET_COMMIT"
+
+          # Sync submodules
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+
+          # Copy download script
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
+          chmod +x ./build_bisect/download_artifacts.sh
+
+          # Try to download artifacts, fall back to building
+          BUILD_SUCCESS=false
+          if [ "$TRACY_ENABLED" == "true" ]; then
+            TRACY_FLAG="--tracy"
+          else
+            TRACY_FLAG=""
+          fi
+
+          echo "Attempting to download artifacts..."
+          if ./build_bisect/download_artifacts.sh "$TARGET_COMMIT" $TRACY_FLAG; then
+            echo "✓ Artifacts downloaded successfully"
+            BUILD_SUCCESS=true
+          else
+            echo "Artifact download failed, building from source..."
+            build_args="--build-all --enable-ccache"
+            [ "$TRACY_ENABLED" != "true" ] && build_args="$build_args --disable-profiler"
+            if ./build_metal.sh $build_args; then
+              echo "✓ Build completed successfully"
+              BUILD_SUCCESS=true
+            else
+              echo "ERROR: Build failed"
+            fi
+          fi
+
+          echo "::endgroup::"
+
+          if [ "$BUILD_SUCCESS" != "true" ]; then
+            echo "ERROR: Could not build or download artifacts for $TARGET_COMMIT"
+            exit 1
+          fi
+
+          # ══════════════════════════════════════════════════════════════════
+          # STEP 2: Run test repeatedly until failure (no rebuilding)
+          # ══════════════════════════════════════════════════════════════════
           ATTEMPT=1
           MAX_ATTEMPTS=100
           FAILED=false
@@ -443,21 +482,30 @@ jobs:
             echo "Retry determination: Attempt $ATTEMPT"
             echo "════════════════════════════════════════════════════════════════"
 
-            # Run test_single_commit.sh with 1 attempt (no ND mode)
-            if ./build_bisect/test_single_commit.sh "$TARGET_COMMIT" "$SCRIPT_PATH" "$TIMEOUT" "1" "${test_args[@]}" 2>&1; then
+            # Reset devices before each test
+            echo "Resetting devices..."
+            tt-smi -r >/dev/null 2>&1 || true
+
+            # Run the test
+            echo "Running test: $SCRIPT_PATH"
+            TEST_OUTPUT="retry_test_output.log"
+
+            set +e
+            timeout -k 10s "${TIMEOUT}m" bash -l "$SCRIPT_PATH" 2>&1 | tee "$TEST_OUTPUT"
+            TEST_RC=${PIPESTATUS[0]}
+            set -e
+
+            if [ $TEST_RC -eq 0 ]; then
               echo "Attempt $ATTEMPT: PASSED"
               ATTEMPT=$((ATTEMPT + 1))
+            elif [ $TEST_RC -eq 124 ] || [ $TEST_RC -eq 137 ] || [ $TEST_RC -eq 143 ]; then
+              echo "Attempt $ATTEMPT: TIMEOUT (rc=$TEST_RC) - treating as skip"
+              echo "ERROR: Cannot determine retry count - test timed out"
+              exit 1
             else
-              RC=$?
-              if [ $RC -eq 2 ]; then
-                echo "Attempt $ATTEMPT: SKIPPED (build failed or timeout)"
-                echo "ERROR: Cannot determine retry count - test was skipped"
-                exit 1
-              else
-                echo "Attempt $ATTEMPT: FAILED"
-                FAILED=true
-                break
-              fi
+              echo "Attempt $ATTEMPT: FAILED (rc=$TEST_RC)"
+              FAILED=true
+              break
             fi
           done
 
