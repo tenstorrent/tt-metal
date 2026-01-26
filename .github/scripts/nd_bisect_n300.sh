@@ -173,6 +173,9 @@ if [ -z "$RETRIES" ]; then
   # Save current branch/commit
   ORIGINAL_REF=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || git rev-parse HEAD)
 
+  # Set up trap to restore original branch on exit/interrupt
+  trap 'echo ""; echo "Interrupted - restoring original branch..."; git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true' EXIT INT TERM
+
   # Checkout target commit
   if ! git checkout "$TARGET_COMMIT" >/dev/null 2>&1; then
     die "Could not checkout commit: $TARGET_COMMIT"
@@ -215,6 +218,7 @@ if [ -z "$RETRIES" ]; then
 
   if [ "$FAILED" = false ]; then
     git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true
+    trap - EXIT INT TERM
     die "Test did not fail after $MAX_ATTEMPTS attempts"
   fi
 
@@ -224,8 +228,9 @@ if [ -z "$RETRIES" ]; then
   echo "Setting ND bisect retries to: $RETRIES (3x $ATTEMPT)"
   echo ""
 
-  # Return to original branch
+  # Return to original branch and clear trap
   git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true
+  trap - EXIT INT TERM
 else
   echo "Using provided retry count: $RETRIES"
 fi
