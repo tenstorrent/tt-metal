@@ -80,9 +80,14 @@ cxxopts::Options create_validation_options() {
         "Usage:\n"
         "  run_cluster_validation [OPTIONS]                # Run validation (default)\n"
         "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link\n\n"
+        "The cabling-descriptor-path can be a single .textproto file or a directory containing\n"
+        "multiple .textproto files that will be merged together.\n\n"
         "To run on a multi-node cluster, use mpirun with a --hostfile option.");
 
-    options.add_options()("cabling-descriptor-path", "Path to cabling descriptor", cxxopts::value<std::string>())(
+    options.add_options()(
+        "cabling-descriptor-path",
+        "Path to cabling descriptor file or directory containing multiple descriptors",
+        cxxopts::value<std::string>())(
         "deployment-descriptor-path", "Path to deployment descriptor", cxxopts::value<std::string>())(
         "factory-descriptor-path", "Path to factory descriptor", cxxopts::value<std::string>())(
         "global-descriptor-path", "Path to global descriptor", cxxopts::value<std::string>())(

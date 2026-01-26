@@ -4,15 +4,15 @@
 
 #include "ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl::broadcast {
+namespace ttnn::prim {
 
 BroadcastDeviceOperation::program_factory_t BroadcastDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::BroadcastProgramFactory{};
+    return BroadcastProgramFactory{};
 }
 
 void BroadcastDeviceOperation::validate_on_program_cache_hit(
@@ -86,10 +86,7 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::ccl::broadcast
-
-namespace ttnn::prim {
-ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_t broadcast(
+Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
@@ -97,8 +94,6 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType = ttnn::operations::ccl::broadcast::BroadcastDeviceOperation;
-
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -123,8 +118,8 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t(
+    return ttnn::device_operation::launch<BroadcastDeviceOperation>(
+        BroadcastParams(
             sender_coord,
             num_links,
             num_devices,
@@ -132,6 +127,6 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
             ccl_topology,
             cluster_axis,
             sub_device_id),
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        BroadcastInputs{.input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim

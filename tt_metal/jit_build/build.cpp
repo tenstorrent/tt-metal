@@ -303,7 +303,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     env_(env),
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
-    dispatch_message_addr_(build_config.dispatch_message_addr),
+    core_type_(build_config.core_type),
+    processor_class_(build_config.processor_class),
+    processor_id_(build_config.processor_id),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
@@ -312,13 +314,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     default_compile_opt_level_("Os"),
     default_linker_opt_level_("Os") {
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
-    if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
-        build_config.processor_class == HalProcessorClassType::COMPUTE) {
+    if (this->core_type_ == HalProgrammableCoreType::TENSIX &&
+        this->processor_class_ == HalProcessorClassType::COMPUTE) {
         this->default_compile_opt_level_ = "O3";
         this->default_linker_opt_level_ = "O3";
         this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
         this->process_defines_at_compile_ = false;
-    } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
+    } else if (this->core_type_ == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
         // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
         // because its linker script depends on some files in that directory.
         // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
@@ -326,10 +328,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_,
-        build_config.core_type,
-        build_config.processor_class,
-        static_cast<uint32_t>(build_config.processor_id)};
+        this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -346,7 +345,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         for (const auto& define : jit_build_query.defines(params)) {
             fmt::format_to(it, "-D{} ", define);
         }
-        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", this->dispatch_message_addr_);
+        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -359,9 +358,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
     }
+
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
-    this->lflags_ += jit_build_query.linker_flags(params);
-    this->lflags_ += fmt::format("-T{} ", this->linker_script_);
+
     // Source files
     {
         auto srcs = jit_build_query.srcs(params);
@@ -399,11 +398,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
-
-    if (not this->is_fw_) {
-        // Emit relocations, so we can relocate the resulting binary
-        this->lflags_ += "-Wl,--emit-relocs ";
-    }
 }
 
 void JitBuildState::compile_one(
@@ -459,6 +453,10 @@ void JitBuildState::compile_one(
     // Append common args provided by the build state
     cmd += this->cflags_;
     cmd += this->includes_;
+    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
+    if (settings) {
+        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
+    }
     cmd += fmt::format("-c -o {} {} ", obj, src);
     cmd += defines;
 
@@ -509,10 +507,19 @@ bool JitBuildState::need_link(const string& out_dir) const {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
-    // ZoneScoped;
+void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
+    lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
+        {.is_fw = this->is_fw_,
+         .core_type = this->core_type_,
+         .processor_class = this->processor_class_,
+         .processor_id = static_cast<uint32_t>(this->processor_id_)});
+    lflags += fmt::format("-T{} ", this->linker_script_);
+    if (!this->is_fw_) {
+        // Emit relocations, so we can relocate the resulting binary
+        lflags += "-Wl,--emit-relocs ";
+    }
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
@@ -536,7 +543,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 
     // Append common args provided by the build state
     cmd += lflags;
-    cmd += this->link_objs_;
+    cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     cmd += "-o " + elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -555,6 +562,10 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
         // Don't leave incomplete hash file
         std::filesystem::remove(hash_path);
     }
+}
+
+void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
+    link_impl(out_dir, settings, this->link_objs_);
 }
 
 // Given this elf (A) and a later elf (B):
@@ -578,8 +589,16 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 std::string JitBuildState::weakened_firmware_name() const {
+    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+    const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
+        {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
     std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
+    return fmt::format(
+        "{}{}/{}_{}",
+        this->env_.out_firmware_root_,
+        weakened_firmware_target_name,
+        weakened_firmware_target_name,
+        name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
@@ -618,6 +637,40 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     extract_zone_src_locations(out_dir);
 }
 
+void JitBuildState::link_to_processor(
+    const JitBuildState& processor_build_state, const JitBuildSettings* settings) const {
+    TT_ASSERT(!this->is_fw_);
+    TT_ASSERT(!processor_build_state.is_fw_);
+    TT_ASSERT(settings != nullptr);
+
+    TT_ASSERT(this->core_type_ == processor_build_state.core_type_);
+    TT_ASSERT(this->processor_class_ == processor_build_state.processor_class_);
+
+    const string orig_processor_out_dir =
+        processor_build_state.out_path_ + settings->get_full_kernel_name() + processor_build_state.target_name_ + "/";
+    TT_ASSERT(fs::exists(orig_processor_out_dir));
+
+    const string out_dir = this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+
+    fs::create_directories(out_dir);
+
+    string link_objs;
+    for (const string& obj : processor_build_state.objs_) {
+        const string obj_path = orig_processor_out_dir + obj;
+        TT_ASSERT(fs::exists(obj_path));
+        link_objs += obj_path + " ";
+    }
+    for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
+             {.is_fw = processor_build_state.is_fw_,
+              .core_type = processor_build_state.core_type_,
+              .processor_class = processor_build_state.processor_class_,
+              .processor_id = static_cast<uint32_t>(processor_build_state.processor_id_)})) {
+        link_objs += this->env_.root_ + obj + " ";
+    }
+
+    link_impl(out_dir, settings, link_objs);
+}
+
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
@@ -636,6 +689,14 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     for (const auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
+}
+
+void jit_link_additional_processor(
+    const JitBuildState& orig_processor_build_state,
+    const JitBuildState& additional_processor_build_state,
+    const JitBuildSettings* additional_processor_settings) {
+    additional_processor_build_state.link_to_processor(orig_processor_build_state, additional_processor_settings);
+    write_successful_jit_build_marker(additional_processor_build_state, additional_processor_settings);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

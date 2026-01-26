@@ -19,9 +19,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl::slice_reshard_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct SliceReshardAsyncParams {
     std::vector<IDevice*> devices;
     uint32_t dim;
     uint32_t output_dim_offset;
@@ -35,7 +35,7 @@ struct operation_attributes_t {
     uint32_t ring_size;
 
     // Constructor required because GlobalSemaphore is not default constructible
-    operation_attributes_t(
+    SliceReshardAsyncParams(
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t output_dim_offset,
@@ -78,8 +78,4 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
-    Tensor input;
-};
-
-}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
+}  // namespace ttnn::experimental::prim

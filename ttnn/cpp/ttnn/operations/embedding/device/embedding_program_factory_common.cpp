@@ -4,7 +4,7 @@
 
 #include "embedding_program_factory_common.hpp"
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
@@ -51,4 +51,4 @@ CoreSplitResult split_work_to_cores_aligned(
     return CoreSplitResult{
         required_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2};
 }
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

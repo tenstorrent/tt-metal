@@ -29,15 +29,13 @@ namespace ttml::nanobind {
 using namespace ::nanobind;
 
 NB_MODULE(_ttml, m) {
-    // Import ttnn first to ensure all shared types (Layout, DataType, etc.) are registered
-    // before _ttml uses them in function signatures
-    nb::module_::import_("ttnn");
-
     // Bind NamedParameters as a proper map type at the top level
     nb::bind_map<ttml::serialization::NamedParameters>(m, "NamedParameters");
 
-    // Note: Layout enum and MeshDevice are already registered by ttnn
-    // They are imported and re-exported in the Python __init__.py
+    // NOTE: Layout enum is NOT exported here.
+    // ttnn's C++ library (which _ttml links against) already exports Layout.
+    // Python code should use: from ttnn import Layout
+    // See ttml/__init__.py which imports Layout from ttnn.
 
     auto m_autograd = m.def_submodule("autograd", "autograd");
     auto m_models = m.def_submodule("models", "models");
@@ -59,6 +57,8 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::ops::py_module(m_ops);
     ttml::nanobind::core::py_module(m_core);
     ttml::nanobind::optimizers::py_module(m_optimizers);
+
+    // MeshDevice binding is owned by ttnn; avoid re-registering here to prevent duplicate nanobind types.
 }
 
 }  // namespace ttml::nanobind

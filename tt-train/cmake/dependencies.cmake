@@ -168,6 +168,16 @@ CPMAddPackage(
 
 if(flatbuffers_ADDED)
     # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    target_compile_options(flatc PRIVATE -Wno-restrict)
-    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+    target_compile_options(
+        flatc
+        PRIVATE
+            -Wno-restrict
+            -Wno-deprecated-declarations
+    )
+    target_compile_options(
+        flatbuffers
+        PRIVATE
+            -Wno-restrict
+            -Wno-deprecated-declarations
+    )
 endif()

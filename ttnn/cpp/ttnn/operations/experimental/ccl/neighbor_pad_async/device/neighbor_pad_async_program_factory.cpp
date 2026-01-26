@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -27,12 +27,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::neighbor_pad {
+namespace ttnn::experimental::prim {
 
 NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const NeighborPadAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -52,8 +52,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
 
 void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const NeighborPadAsyncParams& operation_attributes,
+    const NeighborPadAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     // Update runtime arguments for each program in the workload
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
@@ -105,9 +105,9 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 }
 
 NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
+    const NeighborPadAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
@@ -457,4 +457,4 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .num_directions = num_directions});
 }
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::experimental::prim

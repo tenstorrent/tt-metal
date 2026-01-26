@@ -20,7 +20,7 @@ struct Core {
     static constexpr bool is_receiver_core = get_named_compile_time_arg_val("is_receiver_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
     using Mcast = deepseek_b1_ops::Mcast;
 
 // ============================================================================
@@ -51,7 +51,8 @@ KERNEL_ENTRY {
 #elif defined(COMPILE_FOR_BRISC)
     using McastCTArgs = Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
-        Core::is_sender_core && Core::is_receiver_core>;  // is_part_of_receiver_grid = sender is also a receiver
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
+        Core::is_sender_core && Core::is_receiver_core>;  // loopback = sender is also a receiver
 
     // Mcast CB index from named compile-time args
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
@@ -96,4 +97,3 @@ KERNEL_ENTRY {
     mcast(mcast_args);
     mcast.teardown();
 }
-KERNEL_END
