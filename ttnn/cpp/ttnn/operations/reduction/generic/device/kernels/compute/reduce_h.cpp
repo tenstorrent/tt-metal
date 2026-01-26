@@ -18,14 +18,11 @@ void kernel_main() {
     // REDUCE_OP/DIM is expected to come from add_define
     // For REDUCE_COL: tiles arrive in N C W_skip H W_chunk order
     // Chunk size auto-detected via DEST_AUTO_LIMIT (matches reader via shared defines)
-    // NONE: First operation after hw_startup, no reconfig needed
+    // ReconfigNonePolicy: First operation after hw_startup, no reconfig needed
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
-        compute_kernel_lib::ReduceInputMode::STREAMING,
-        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-        tt::CBIndex::c_0,  // input CB
-        tt::CBIndex::c_2,  // scaler CB
-        tt::CBIndex::c_3,  // output CB
-        compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
+        compute_kernel_lib::reduce_policies::StreamingPolicy,
+        compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+        tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3, compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
 }

@@ -28,9 +28,9 @@ void calc_numeric_stable(
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputMode::PERSISTENT,
-        compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
-        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::row(Wt));
+        compute_kernel_lib::reduce_policies::PersistentPolicy,
+        compute_kernel_lib::reduce_policies::ReconfigInputPolicy>(
+        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::InputBlockShape::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -264,13 +264,13 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PERSISTENT mode
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::reduce_policies::PersistentPolicy>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::TileShape::row(Wt),
-                {},
-                {},
+                compute_kernel_lib::InputBlockShape::row(Wt),
+                compute_kernel_lib::InputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
                 [](uint32_t) {
                     recip_tile_init();
                     recip_tile(0);

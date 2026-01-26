@@ -83,7 +83,7 @@ void kernel_main() {
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
         compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            cb_stats, cb_reduce, cb_var, compute_kernel_lib::TileShape::row(stats_tiles_cols));
+            cb_stats, cb_reduce, cb_var, compute_kernel_lib::InputBlockShape::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(var + eps)

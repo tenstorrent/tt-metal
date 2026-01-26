@@ -6,7 +6,7 @@ Replace positional `Ht, Wt, num_batches` parameters with a `TileShape` struct us
 
 - Self-documenting call sites
 - Safe defaults for common cases
-- Consistent API style with existing `TileLayout`
+- Consistent API style with existing `InputMemoryLayout`
 
 ---
 
@@ -57,7 +57,7 @@ ALWI void reduce(
     uint32_t icb_scaler,
     uint32_t ocb,
     TileShape shape,                    // <-- NEW: replaces Ht, Wt, num_batches
-    TileLayout layout = {},
+    InputMemoryLayout layout = {},
     PostReduceOp post_reduce_op = {});
 ```
 
@@ -196,7 +196,7 @@ ALWI void reduce(
     uint32_t icb_scaler,
     uint32_t ocb,
     TileShape shape,
-    TileLayout layout = {},
+    InputMemoryLayout layout = {},
     PostReduceOp post_reduce_op = {})
 {
     // Replace internal usage:
@@ -296,4 +296,4 @@ Then re-run the failing test.
 | Full grid | `Ht, Wt, NC` | `TileShape::grid(Ht, Wt, NC)` |
 | Readability | Positional, cryptic | Self-documenting |
 | Default batches | Must specify `1` | Defaults to `1` |
-| API consistency | Different from `TileLayout` | Matches `TileLayout` pattern |
+| API consistency | Different from `InputMemoryLayout` | Matches `InputMemoryLayout` pattern |
