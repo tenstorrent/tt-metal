@@ -12,20 +12,33 @@
 #include <gtest/gtest.h>
 #include "common/command_queue_fixture.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "block_variants/block_variants_test_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/test_utils/stimulus.hpp"
 #include <cstdint>
 #include <vector>
-#include <random>
+#include <chrono>
 
 using namespace tt;
 using namespace tt::tt_metal;
 using std::vector;
 
 namespace {
+
+vector<bfloat16> transpose_tile(const vector<bfloat16>& tile) {
+    constexpr uint32_t tile_dim = 32;
+    vector<bfloat16> transposed(tile.size());
+    for (uint32_t r = 0; r < tile_dim; ++r) {
+        for (uint32_t c = 0; c < tile_dim; ++c) {
+            transposed[c * tile_dim + r] = tile[r * tile_dim + c];
+        }
+    }
+    return transposed;
+}
 
 /**
  * Run transpose block test
@@ -37,7 +50,7 @@ namespace {
  * @param data_format Data format for tiles
  */
 void run_transpose_block_test(
-    Device* device,
+    IDevice* device,
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_blocks = 10,
@@ -73,7 +86,6 @@ void run_transpose_block_test(
 
     // Setup circular buffers for reference program
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = tt::CBIndex::c_2;
 
     CircularBufferConfig cb_src0_config =
@@ -86,6 +98,11 @@ void run_transpose_block_test(
                                              .set_page_size(out_cb_index, single_tile_size);
     auto cb_out_ref = CreateCircularBuffer(program_ref, core, cb_out_config);
     auto cb_out_test = CreateCircularBuffer(program_test, core, cb_out_config);
+
+    (void)cb_src0_ref;
+    (void)cb_src0_test;
+    (void)cb_out_ref;
+    (void)cb_out_test;
 
     // Create reference kernel (tile-by-tile)
     auto reader_kernel_ref = CreateKernel(
@@ -106,6 +123,7 @@ void run_transpose_block_test(
         "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_tiles.cpp",
         core,
         ComputeConfig{.compile_args = compute_args_ref});
+    (void)compute_kernel_ref;
 
     // Create test kernel (block operation)
     auto reader_kernel_test = CreateKernel(
@@ -126,74 +144,37 @@ void run_transpose_block_test(
         "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_block.cpp",
         core,
         ComputeConfig{.compile_args = compute_args_test});
+    (void)compute_kernel_test;
 
     // Generate random input data
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-
-    vector<uint32_t> input_vec;
-    input_vec.reserve(input_buffer_size / sizeof(uint32_t));
-
-    for (uint32_t i = 0; i < input_tiles; i++) {
-        auto tile_data = generate_uniform_random_vector<uint32_t>(-1.0f, 1.0f, single_tile_size / sizeof(uint32_t));
-        input_vec.insert(input_vec.end(), tile_data.begin(), tile_data.end());
-    }
+    uint32_t seed = std::chrono::system_clock::now().time_since_epoch().count();
+    uint32_t num_bfloat16 = input_buffer_size / sizeof(bfloat16);
+    auto input_vec =
+        tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, num_bfloat16, seed);
 
     // Write input data to device
-    WriteBuffer(device->command_queue(), input_dram_buffer, input_vec);
+    detail::WriteToBuffer(input_dram_buffer, input_vec);
 
     // Set runtime args for reference program
-    SetRuntimeArgs(
-        program_ref,
-        reader_kernel_ref,
-        core,
-        {input_dram_buffer->address(),
-         (std::uint32_t)input_dram_buffer->noc_coordinates().x,
-         (std::uint32_t)input_dram_buffer->noc_coordinates().y,
-         input_tiles});
+    SetRuntimeArgs(program_ref, reader_kernel_ref, core, {input_dram_buffer->address(), 0, input_tiles});
 
-    SetRuntimeArgs(
-        program_ref,
-        writer_kernel_ref,
-        core,
-        {output_dram_buffer_ref->address(),
-         (std::uint32_t)output_dram_buffer_ref->noc_coordinates().x,
-         (std::uint32_t)output_dram_buffer_ref->noc_coordinates().y,
-         output_tiles});
+    SetRuntimeArgs(program_ref, writer_kernel_ref, core, {output_dram_buffer_ref->address(), 0, output_tiles});
 
     // Set runtime args for test program
-    SetRuntimeArgs(
-        program_test,
-        reader_kernel_test,
-        core,
-        {input_dram_buffer->address(),
-         (std::uint32_t)input_dram_buffer->noc_coordinates().x,
-         (std::uint32_t)input_dram_buffer->noc_coordinates().y,
-         input_tiles});
+    SetRuntimeArgs(program_test, reader_kernel_test, core, {input_dram_buffer->address(), 0, input_tiles});
 
-    SetRuntimeArgs(
-        program_test,
-        writer_kernel_test,
-        core,
-        {output_dram_buffer_test->address(),
-         (std::uint32_t)output_dram_buffer_test->noc_coordinates().x,
-         (std::uint32_t)output_dram_buffer_test->noc_coordinates().y,
-         output_tiles});
+    SetRuntimeArgs(program_test, writer_kernel_test, core, {output_dram_buffer_test->address(), 0, output_tiles});
 
     // Execute programs
-    EnqueueProgram(device->command_queue(), program_ref, false);
-    Finish(device->command_queue());
-
-    EnqueueProgram(device->command_queue(), program_test, false);
-    Finish(device->command_queue());
+    detail::LaunchProgram(device, program_ref);
+    detail::LaunchProgram(device, program_test);
 
     // Read results
     vector<uint32_t> result_vec_ref;
-    ReadBuffer(device->command_queue(), output_dram_buffer_ref, result_vec_ref);
+    detail::ReadFromBuffer(output_dram_buffer_ref, result_vec_ref);
 
     vector<uint32_t> result_vec_test;
-    ReadBuffer(device->command_queue(), output_dram_buffer_test, result_vec_test);
+    detail::ReadFromBuffer(output_dram_buffer_test, result_vec_test);
 
     // Convert to bfloat16 for comparison
     auto result_bfp16_ref = unpack_uint32_vec_into_bfloat16_vec(result_vec_ref);
@@ -203,7 +184,7 @@ void run_transpose_block_test(
     ASSERT_EQ(result_bfp16_ref.size(), result_bfp16_test.size());
 
     // Calculate PCC
-    float pcc = get_pcc(result_bfp16_ref, result_bfp16_test);
+    float pcc = block_variants::compute_pcc(result_bfp16_ref, result_bfp16_test);
     log_info(LogTest, "PCC: {}", pcc);
 
     EXPECT_GE(pcc, 0.9999f) << "PCC between reference and test results is too low";
@@ -243,7 +224,7 @@ void run_transpose_block_test(
     }
 
     // Compare with golden reference
-    float pcc_golden = get_pcc(result_bfp16_test, golden_result);
+    float pcc_golden = block_variants::compute_pcc(result_bfp16_test, golden_result);
     log_info(LogTest, "PCC vs Golden: {}", pcc_golden);
 
     EXPECT_GE(pcc_golden, 0.9999f) << "PCC between test result and golden reference is too low";
@@ -255,37 +236,97 @@ void run_transpose_block_test(
 // Test Cases
 // =============================================================================
 
-class BlockVariantsFixture : public tt::tt_metal::CommandQueueFixture {};
+class BlockVariantsFixture : public tt::tt_metal::UnitMeshCQFixture {};
 
-TEST_F(BlockVariantsFixture, TransposeBlock_1x1) { run_transpose_block_test(this->device_.get(), 1, 1); }
+TEST_F(BlockVariantsFixture, TransposeBlock_1x1) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 1, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_1x2) { run_transpose_block_test(this->device_.get(), 1, 2); }
+TEST_F(BlockVariantsFixture, TransposeBlock_1x2) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 1, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_1x4) { run_transpose_block_test(this->device_.get(), 1, 4); }
+TEST_F(BlockVariantsFixture, TransposeBlock_1x4) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 1, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_1x8) { run_transpose_block_test(this->device_.get(), 1, 8); }
+TEST_F(BlockVariantsFixture, TransposeBlock_1x8) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 1, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_1x16) { run_transpose_block_test(this->device_.get(), 1, 16); }
+TEST_F(BlockVariantsFixture, TransposeBlock_1x16) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 1, 16);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_2x1) { run_transpose_block_test(this->device_.get(), 2, 1); }
+TEST_F(BlockVariantsFixture, TransposeBlock_2x1) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 2, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_2x2) { run_transpose_block_test(this->device_.get(), 2, 2); }
+TEST_F(BlockVariantsFixture, TransposeBlock_2x2) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 2, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_2x4) { run_transpose_block_test(this->device_.get(), 2, 4); }
+TEST_F(BlockVariantsFixture, TransposeBlock_2x4) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 2, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_2x8) { run_transpose_block_test(this->device_.get(), 2, 8); }
+TEST_F(BlockVariantsFixture, TransposeBlock_2x8) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 2, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_4x1) { run_transpose_block_test(this->device_.get(), 4, 1); }
+TEST_F(BlockVariantsFixture, TransposeBlock_4x1) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 4, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_4x2) { run_transpose_block_test(this->device_.get(), 4, 2); }
+TEST_F(BlockVariantsFixture, TransposeBlock_4x2) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 4, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_4x4) { run_transpose_block_test(this->device_.get(), 4, 4); }
+TEST_F(BlockVariantsFixture, TransposeBlock_4x4) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 4, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_8x1) { run_transpose_block_test(this->device_.get(), 8, 1); }
+TEST_F(BlockVariantsFixture, TransposeBlock_8x1) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 8, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_8x2) { run_transpose_block_test(this->device_.get(), 8, 2); }
+TEST_F(BlockVariantsFixture, TransposeBlock_8x2) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 8, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, TransposeBlock_16x1) { run_transpose_block_test(this->device_.get(), 16, 1); }
+TEST_F(BlockVariantsFixture, TransposeBlock_16x1) {
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 16, 1);
+    }
+}
 
 // =============================================================================
 // Stress Tests
@@ -293,10 +334,14 @@ TEST_F(BlockVariantsFixture, TransposeBlock_16x1) { run_transpose_block_test(thi
 
 TEST_F(BlockVariantsFixture, TransposeBlock_Stress_ManyBlocks) {
     // Process many blocks to test stability
-    run_transpose_block_test(this->device_.get(), 4, 4, 1000);
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 4, 4, 1000);
+    }
 }
 
 TEST_F(BlockVariantsFixture, TransposeBlock_Stress_MaxCapacity) {
     // Use maximum DEST capacity
-    run_transpose_block_test(this->device_.get(), 16, 1, 100);
+    for (const auto& mesh_device : devices_) {
+        run_transpose_block_test(mesh_device->get_devices().at(0), 16, 1, 100);
+    }
 }

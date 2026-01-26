@@ -12,8 +12,9 @@
 #include <gtest/gtest.h>
 #include "common/command_queue_fixture.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "block_variants/block_variants_test_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -39,7 +40,7 @@ namespace {
  * @param data_format Data format for tiles
  */
 void run_reduce_block_test(
-    Device* device,
+    IDevice* device,
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_blocks = 10,
@@ -92,8 +93,13 @@ void run_reduce_block_test(
     auto cb_src_test = CreateCircularBuffer(program_test, core, cb_src_config);
     auto cb_dst_test = CreateCircularBuffer(program_test, core, cb_dst_config);
 
+    (void)cb_src_ref;
+    (void)cb_dst_ref;
+    (void)cb_src_test;
+    (void)cb_dst_test;
+
     // Create reference kernel (tile-by-tile)
-    std::string ref_kernel_file = "tests/tt_metal/tt_metal/kernels/compute_reduce_tiles.cpp";
+    std::string ref_kernel_file = "tests/tt_metal/tt_metal/block_variants/kernels/compute_reduce_tiles.cpp";
     std::vector<uint32_t> compute_args_ref = {Ht, Wt, num_blocks};
     auto compute_kernel_ref = CreateKernel(
         program_ref,
@@ -105,9 +111,10 @@ void run_reduce_block_test(
             .math_approx_mode = false,
             .compile_args = compute_args_ref,
             .defines = {}});
+    (void)compute_kernel_ref;
 
     // Create test kernel (block operation)
-    std::string test_kernel_file = "tests/tt_metal/tt_metal/kernels/compute_reduce_block.cpp";
+    std::string test_kernel_file = "tests/tt_metal/tt_metal/block_variants/kernels/compute_reduce_block.cpp";
     std::vector<uint32_t> compute_args_test = {Ht, Wt, num_blocks};
     auto compute_kernel_test = CreateKernel(
         program_test,
@@ -119,44 +126,33 @@ void run_reduce_block_test(
             .math_approx_mode = false,
             .compile_args = compute_args_test,
             .defines = {}});
+    (void)compute_kernel_test;
 
     // Create data reader kernels
-    std::vector<uint32_t> reader_args = {src_dram_buffer->address(), total_tiles, tiles_per_block};
-
     auto reader_kernel_ref = CreateKernel(
         program_ref,
-        "tests/tt_metal/tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto reader_kernel_test = CreateKernel(
         program_test,
-        "tests/tt_metal/tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     // Create data writer kernels
-    std::vector<uint32_t> writer_args_ref = {dst_dram_buffer_ref->address(), num_blocks};
-
-    std::vector<uint32_t> writer_args_test = {dst_dram_buffer_test->address(), num_blocks};
-
     auto writer_kernel_ref = CreateKernel(
         program_ref,
-        "tests/tt_metal/tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args_ref});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     auto writer_kernel_test = CreateKernel(
         program_test,
-        "tests/tt_metal/tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_args_test});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Generate input data
     std::vector<bfloat16> input_data;
@@ -164,40 +160,46 @@ void run_reduce_block_test(
 
     // Generate random data with some structure to ensure meaningful reduction
     std::srand(0);  // Fixed seed for reproducibility
+    const float rand_max = static_cast<float>(RAND_MAX);
     for (uint32_t i = 0; i < total_tiles * 512; i++) {
-        float val = static_cast<float>(std::rand()) / RAND_MAX * 2.0f - 1.0f;  // Range [-1, 1]
+        float val = static_cast<float>(std::rand()) / rand_max * 2.0f - 1.0f;  // Range [-1, 1]
         input_data.push_back(bfloat16(val));
     }
 
     // Write input data to device
-    EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, input_data, false);
+    detail::WriteToBuffer(src_dram_buffer, input_data);
+
+    // Set runtime args
+    SetRuntimeArgs(program_ref, reader_kernel_ref, core, {src_dram_buffer->address(), 0, total_tiles});
+    SetRuntimeArgs(program_ref, writer_kernel_ref, core, {dst_dram_buffer_ref->address(), 0, num_blocks});
+
+    SetRuntimeArgs(program_test, reader_kernel_test, core, {src_dram_buffer->address(), 0, total_tiles});
+    SetRuntimeArgs(program_test, writer_kernel_test, core, {dst_dram_buffer_test->address(), 0, num_blocks});
 
     // Run reference program
-    EnqueueProgram(device->command_queue(), program_ref, false);
-    Finish(device->command_queue());
+    detail::LaunchProgram(device, program_ref);
 
     // Run test program
-    EnqueueProgram(device->command_queue(), program_test, false);
-    Finish(device->command_queue());
+    detail::LaunchProgram(device, program_test);
 
     // Read results
     std::vector<bfloat16> output_ref(num_blocks * 512);
     std::vector<bfloat16> output_test(num_blocks * 512);
 
-    EnqueueReadBuffer(device->command_queue(), dst_dram_buffer_ref, output_ref, true);
-    EnqueueReadBuffer(device->command_queue(), dst_dram_buffer_test, output_test, true);
+    detail::ReadFromBuffer(dst_dram_buffer_ref, output_ref);
+    detail::ReadFromBuffer(dst_dram_buffer_test, output_test);
 
     // Convert to float for comparison
     std::vector<float> output_ref_float, output_test_float;
     for (const auto& val : output_ref) {
-        output_ref_float.push_back(val.to_float());
+        output_ref_float.push_back(static_cast<float>(val));
     }
     for (const auto& val : output_test) {
-        output_test_float.push_back(val.to_float());
+        output_test_float.push_back(static_cast<float>(val));
     }
 
     // Calculate PCC (Pearson Correlation Coefficient)
-    auto pcc = tt::test_utils::get_pcc(output_ref_float, output_test_float);
+    float pcc = block_variants::compute_pcc(output_ref_float, output_test_float);
 
     log_info(LogTest, "PCC: {}", pcc);
     EXPECT_GE(pcc, 0.9999) << "PCC too low: " << pcc;
@@ -229,37 +231,97 @@ void run_reduce_block_test(
 // Test Cases
 // =============================================================================
 
-class BlockVariantsFixture : public tt::tt_metal::CommandQueueFixture {};
+class BlockVariantsFixture : public tt::tt_metal::UnitMeshCQFixture {};
 
-TEST_F(BlockVariantsFixture, ReduceBlock_1x1) { run_reduce_block_test(this->device_.get(), 1, 1); }
+TEST_F(BlockVariantsFixture, ReduceBlock_1x1) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 1, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_1x2) { run_reduce_block_test(this->device_.get(), 1, 2); }
+TEST_F(BlockVariantsFixture, ReduceBlock_1x2) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 1, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_1x4) { run_reduce_block_test(this->device_.get(), 1, 4); }
+TEST_F(BlockVariantsFixture, ReduceBlock_1x4) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 1, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_1x8) { run_reduce_block_test(this->device_.get(), 1, 8); }
+TEST_F(BlockVariantsFixture, ReduceBlock_1x8) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 1, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_1x16) { run_reduce_block_test(this->device_.get(), 1, 16); }
+TEST_F(BlockVariantsFixture, ReduceBlock_1x16) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 1, 16);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_2x1) { run_reduce_block_test(this->device_.get(), 2, 1); }
+TEST_F(BlockVariantsFixture, ReduceBlock_2x1) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 2, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_2x2) { run_reduce_block_test(this->device_.get(), 2, 2); }
+TEST_F(BlockVariantsFixture, ReduceBlock_2x2) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 2, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_2x4) { run_reduce_block_test(this->device_.get(), 2, 4); }
+TEST_F(BlockVariantsFixture, ReduceBlock_2x4) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 2, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_2x8) { run_reduce_block_test(this->device_.get(), 2, 8); }
+TEST_F(BlockVariantsFixture, ReduceBlock_2x8) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 2, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_4x1) { run_reduce_block_test(this->device_.get(), 4, 1); }
+TEST_F(BlockVariantsFixture, ReduceBlock_4x1) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 4, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_4x2) { run_reduce_block_test(this->device_.get(), 4, 2); }
+TEST_F(BlockVariantsFixture, ReduceBlock_4x2) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 4, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_4x4) { run_reduce_block_test(this->device_.get(), 4, 4); }
+TEST_F(BlockVariantsFixture, ReduceBlock_4x4) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 4, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_8x1) { run_reduce_block_test(this->device_.get(), 8, 1); }
+TEST_F(BlockVariantsFixture, ReduceBlock_8x1) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 8, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_8x2) { run_reduce_block_test(this->device_.get(), 8, 2); }
+TEST_F(BlockVariantsFixture, ReduceBlock_8x2) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 8, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, ReduceBlock_16x1) { run_reduce_block_test(this->device_.get(), 16, 1); }
+TEST_F(BlockVariantsFixture, ReduceBlock_16x1) {
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 16, 1);
+    }
+}
 
 // =============================================================================
 // Stress Tests
@@ -267,10 +329,14 @@ TEST_F(BlockVariantsFixture, ReduceBlock_16x1) { run_reduce_block_test(this->dev
 
 TEST_F(BlockVariantsFixture, ReduceBlock_Stress_ManyBlocks) {
     // Process many blocks to test stability
-    run_reduce_block_test(this->device_.get(), 4, 4, 1000);
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 4, 4, 1000);
+    }
 }
 
 TEST_F(BlockVariantsFixture, ReduceBlock_Stress_MaxCapacity) {
     // Use maximum DEST capacity
-    run_reduce_block_test(this->device_.get(), 16, 1, 100);
+    for (const auto& mesh_device : devices_) {
+        run_reduce_block_test(mesh_device->get_devices().at(0), 16, 1, 100);
+    }
 }

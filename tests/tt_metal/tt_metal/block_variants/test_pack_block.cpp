@@ -12,15 +12,22 @@
 #include <gtest/gtest.h>
 #include "common/command_queue_fixture.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "block_variants/block_variants_test_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <map>
 #include <random>
+#include <string>
+#include <vector>
 
 using namespace tt;
 using namespace tt::tt_metal;
+using std::map;
+using std::string;
+using std::vector;
 
 namespace {
 
@@ -34,7 +41,7 @@ namespace {
  * @param data_format Data format for tiles
  */
 void run_pack_block_test(
-    Device* device,
+    IDevice* device,
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_blocks = 10,
@@ -86,6 +93,13 @@ void run_pack_block_test(
     auto cb_intermed0_test = CreateCircularBuffer(program_test, core, cb_intermed0_config);
     auto cb_output_test = CreateCircularBuffer(program_test, core, cb_output_config);
 
+    (void)cb_src0_ref;
+    (void)cb_intermed0_ref;
+    (void)cb_output_ref;
+    (void)cb_src0_test;
+    (void)cb_intermed0_test;
+    (void)cb_output_test;
+
     // Create reference kernel (tile-by-tile)
     auto reader_kernel_ref = CreateKernel(
         program_ref,
@@ -108,7 +122,7 @@ void run_pack_block_test(
         compute_kernel_ref,
         core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4, .defines = defines_ref, .compile_args = {Ht, Wt, num_blocks}});
+            .math_fidelity = MathFidelity::HiFi4, .compile_args = {Ht, Wt, num_blocks}, .defines = defines_ref});
 
     // Create test kernel (block operation)
     auto reader_kernel_test = CreateKernel(
@@ -132,7 +146,10 @@ void run_pack_block_test(
         compute_kernel_test,
         core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4, .defines = defines_test, .compile_args = {Ht, Wt, num_blocks}});
+            .math_fidelity = MathFidelity::HiFi4, .compile_args = {Ht, Wt, num_blocks}, .defines = defines_test});
+
+    (void)compute_kernel_ref_id;
+    (void)compute_kernel_test_id;
 
     // Generate random input data
     std::vector<uint32_t> src_vec;
@@ -172,39 +189,27 @@ void run_pack_block_test(
         {dst_dram_buffer_test->address(), static_cast<uint32_t>(block_size_tiles * num_blocks), 0});
 
     // Write input data to device
-    WriteBuffer(device->command_queue(), src_dram_buffer, src_vec);
+    detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Execute reference program
-    EnqueueProgram(device->command_queue(), program_ref, false);
-    Finish(device->command_queue());
+    detail::LaunchProgram(device, program_ref);
 
     // Execute test program
-    EnqueueProgram(device->command_queue(), program_test, false);
-    Finish(device->command_queue());
+    detail::LaunchProgram(device, program_test);
 
     // Read results
     std::vector<uint32_t> result_vec_ref;
-    ReadBuffer(device->command_queue(), dst_dram_buffer_ref, result_vec_ref);
+    detail::ReadFromBuffer(dst_dram_buffer_ref, result_vec_ref);
 
     std::vector<uint32_t> result_vec_test;
-    ReadBuffer(device->command_queue(), dst_dram_buffer_test, result_vec_test);
+    detail::ReadFromBuffer(dst_dram_buffer_test, result_vec_test);
 
     // Convert to float for comparison
-    std::vector<float> result_float_ref;
-    std::vector<float> result_float_test;
-
-    for (uint32_t i = 0; i < result_vec_ref.size(); ++i) {
-        auto unpacked_ref = unpack_uint32_into_two_bfloat16(result_vec_ref[i]);
-        auto unpacked_test = unpack_uint32_into_two_bfloat16(result_vec_test[i]);
-
-        result_float_ref.push_back(unpacked_ref.first.to_float());
-        result_float_ref.push_back(unpacked_ref.second.to_float());
-        result_float_test.push_back(unpacked_test.first.to_float());
-        result_float_test.push_back(unpacked_test.second.to_float());
-    }
+    auto result_bfp16_ref = unpack_uint32_vec_into_bfloat16_vec(result_vec_ref);
+    auto result_bfp16_test = unpack_uint32_vec_into_bfloat16_vec(result_vec_test);
 
     // Calculate PCC
-    double pcc = calculate_pcc(result_float_ref, result_float_test);
+    double pcc = block_variants::compute_pcc(result_bfp16_ref, result_bfp16_test);
 
     log_info(LogTest, "PCC between reference and test results: {}", pcc);
 
@@ -224,37 +229,97 @@ void run_pack_block_test(
 // Test Cases
 // =============================================================================
 
-class BlockVariantsFixture : public tt::tt_metal::CommandQueueFixture {};
+class BlockVariantsFixture : public tt::tt_metal::UnitMeshCQFixture {};
 
-TEST_F(BlockVariantsFixture, PackBlock_1x1) { run_pack_block_test(this->device_.get(), 1, 1); }
+TEST_F(BlockVariantsFixture, PackBlock_1x1) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 1, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_1x2) { run_pack_block_test(this->device_.get(), 1, 2); }
+TEST_F(BlockVariantsFixture, PackBlock_1x2) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 1, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_1x4) { run_pack_block_test(this->device_.get(), 1, 4); }
+TEST_F(BlockVariantsFixture, PackBlock_1x4) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 1, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_1x8) { run_pack_block_test(this->device_.get(), 1, 8); }
+TEST_F(BlockVariantsFixture, PackBlock_1x8) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 1, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_1x16) { run_pack_block_test(this->device_.get(), 1, 16); }
+TEST_F(BlockVariantsFixture, PackBlock_1x16) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 1, 16);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_2x1) { run_pack_block_test(this->device_.get(), 2, 1); }
+TEST_F(BlockVariantsFixture, PackBlock_2x1) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 2, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_2x2) { run_pack_block_test(this->device_.get(), 2, 2); }
+TEST_F(BlockVariantsFixture, PackBlock_2x2) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 2, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_2x4) { run_pack_block_test(this->device_.get(), 2, 4); }
+TEST_F(BlockVariantsFixture, PackBlock_2x4) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 2, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_2x8) { run_pack_block_test(this->device_.get(), 2, 8); }
+TEST_F(BlockVariantsFixture, PackBlock_2x8) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 2, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_4x1) { run_pack_block_test(this->device_.get(), 4, 1); }
+TEST_F(BlockVariantsFixture, PackBlock_4x1) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 4, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_4x2) { run_pack_block_test(this->device_.get(), 4, 2); }
+TEST_F(BlockVariantsFixture, PackBlock_4x2) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 4, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_4x4) { run_pack_block_test(this->device_.get(), 4, 4); }
+TEST_F(BlockVariantsFixture, PackBlock_4x4) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 4, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_8x1) { run_pack_block_test(this->device_.get(), 8, 1); }
+TEST_F(BlockVariantsFixture, PackBlock_8x1) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 8, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_8x2) { run_pack_block_test(this->device_.get(), 8, 2); }
+TEST_F(BlockVariantsFixture, PackBlock_8x2) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 8, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, PackBlock_16x1) { run_pack_block_test(this->device_.get(), 16, 1); }
+TEST_F(BlockVariantsFixture, PackBlock_16x1) {
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 16, 1);
+    }
+}
 
 // =============================================================================
 // Stress Tests
@@ -262,10 +327,14 @@ TEST_F(BlockVariantsFixture, PackBlock_16x1) { run_pack_block_test(this->device_
 
 TEST_F(BlockVariantsFixture, PackBlock_Stress_ManyBlocks) {
     // Process many blocks to test stability
-    run_pack_block_test(this->device_.get(), 4, 4, 1000);
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 4, 4, 1000);
+    }
 }
 
 TEST_F(BlockVariantsFixture, PackBlock_Stress_MaxCapacity) {
     // Use maximum DEST capacity
-    run_pack_block_test(this->device_.get(), 16, 1, 100);
+    for (const auto& mesh_device : devices_) {
+        run_pack_block_test(mesh_device->get_devices().at(0), 16, 1, 100);
+    }
 }

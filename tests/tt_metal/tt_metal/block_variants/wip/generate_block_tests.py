@@ -279,8 +279,8 @@ def generate_test_harness(operation: str, config: Dict) -> str:
 #include <gtest/gtest.h>
 #include "common/command_queue_fixture.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

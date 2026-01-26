@@ -12,16 +12,24 @@
 #include <gtest/gtest.h>
 #include "common/command_queue_fixture.hpp"
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "block_variants/block_variants_test_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <chrono>
+#include <cstdint>
+#include <map>
 #include <random>
+#include <string>
+#include <vector>
 
 using namespace tt;
 using namespace tt::tt_metal;
+using std::map;
+using std::string;
+using std::vector;
 
 namespace {
 
@@ -35,7 +43,7 @@ namespace {
  * @param data_format Data format for tiles
  */
 void run_broadcast_block_test(
-    Device* device,
+    IDevice* device,
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_blocks = 10,
@@ -90,6 +98,13 @@ void run_broadcast_block_test(
     auto cb_src0_test = CreateCircularBuffer(program_test, core, cb_src0_config);
     auto cb_src1_test = CreateCircularBuffer(program_test, core, cb_src1_config);
     auto cb_out_test = CreateCircularBuffer(program_test, core, cb_out_config);
+
+    (void)cb_src0_ref;
+    (void)cb_src1_ref;
+    (void)cb_out_ref;
+    (void)cb_src0_test;
+    (void)cb_src1_test;
+    (void)cb_out_test;
 
     // Reader kernels - identical for both programs
     std::map<string, string> reader_defines = {{"DRAM_UNRESERVED_BASE", "0"}};
@@ -159,6 +174,9 @@ void run_broadcast_block_test(
         core,
         ComputeConfig{.compile_args = compute_args_test, .defines = compute_defines_test});
 
+    (void)compute_kernel_ref;
+    (void)compute_kernel_test;
+
     // Generate input data
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -202,15 +220,7 @@ void run_broadcast_block_test(
     detail::ReadFromBuffer(dst_dram_buffer_test, result_test);
 
     // Compute PCC
-    std::vector<float> result_ref_float(result_ref.size());
-    std::vector<float> result_test_float(result_test.size());
-
-    for (size_t i = 0; i < result_ref.size(); i++) {
-        result_ref_float[i] = result_ref[i].to_float();
-        result_test_float[i] = result_test[i].to_float();
-    }
-
-    float pcc = test_utils::get_pcc(result_ref_float, result_test_float);
+    float pcc = block_variants::compute_pcc(result_ref, result_test);
 
     log_info(LogTest, "PCC: {}", pcc);
     EXPECT_GE(pcc, 0.9999f) << "PCC between reference and test results is too low";
@@ -218,12 +228,16 @@ void run_broadcast_block_test(
     // Also validate against golden reference implementation
     std::vector<float> src0_float(src0_data.size());
     std::vector<float> src1_float(src1_data.size());
+    std::vector<float> result_test_float(result_test.size());
 
     for (size_t i = 0; i < src0_data.size(); i++) {
-        src0_float[i] = src0_data[i].to_float();
+        src0_float[i] = static_cast<float>(src0_data[i]);
     }
     for (size_t i = 0; i < src1_data.size(); i++) {
-        src1_float[i] = src1_data[i].to_float();
+        src1_float[i] = static_cast<float>(src1_data[i]);
+    }
+    for (size_t i = 0; i < result_test.size(); i++) {
+        result_test_float[i] = static_cast<float>(result_test[i]);
     }
 
     // Create golden reference by broadcasting scalar across all tiles
@@ -237,7 +251,7 @@ void run_broadcast_block_test(
         }
     }
 
-    float pcc_golden = test_utils::get_pcc(result_test_float, golden_ref);
+    float pcc_golden = block_variants::compute_pcc(result_test_float, golden_ref);
     log_info(LogTest, "PCC vs Golden: {}", pcc_golden);
     EXPECT_GE(pcc_golden, 0.9999f) << "PCC against golden reference is too low";
 }
@@ -248,37 +262,97 @@ void run_broadcast_block_test(
 // Test Cases
 // =============================================================================
 
-class BlockVariantsFixture : public tt::tt_metal::CommandQueueFixture {};
+class BlockVariantsFixture : public tt::tt_metal::UnitMeshCQFixture {};
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_1x1) { run_broadcast_block_test(this->device_.get(), 1, 1); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_1x1) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 1, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_1x2) { run_broadcast_block_test(this->device_.get(), 1, 2); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_1x2) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 1, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_1x4) { run_broadcast_block_test(this->device_.get(), 1, 4); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_1x4) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 1, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_1x8) { run_broadcast_block_test(this->device_.get(), 1, 8); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_1x8) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 1, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_1x16) { run_broadcast_block_test(this->device_.get(), 1, 16); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_1x16) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 1, 16);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_2x1) { run_broadcast_block_test(this->device_.get(), 2, 1); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_2x1) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 2, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_2x2) { run_broadcast_block_test(this->device_.get(), 2, 2); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_2x2) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 2, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_2x4) { run_broadcast_block_test(this->device_.get(), 2, 4); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_2x4) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 2, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_2x8) { run_broadcast_block_test(this->device_.get(), 2, 8); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_2x8) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 2, 8);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_4x1) { run_broadcast_block_test(this->device_.get(), 4, 1); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_4x1) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 4, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_4x2) { run_broadcast_block_test(this->device_.get(), 4, 2); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_4x2) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 4, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_4x4) { run_broadcast_block_test(this->device_.get(), 4, 4); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_4x4) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 4, 4);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_8x1) { run_broadcast_block_test(this->device_.get(), 8, 1); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_8x1) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 8, 1);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_8x2) { run_broadcast_block_test(this->device_.get(), 8, 2); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_8x2) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 8, 2);
+    }
+}
 
-TEST_F(BlockVariantsFixture, BroadcastBlock_16x1) { run_broadcast_block_test(this->device_.get(), 16, 1); }
+TEST_F(BlockVariantsFixture, BroadcastBlock_16x1) {
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 16, 1);
+    }
+}
 
 // =============================================================================
 // Stress Tests
@@ -286,10 +360,14 @@ TEST_F(BlockVariantsFixture, BroadcastBlock_16x1) { run_broadcast_block_test(thi
 
 TEST_F(BlockVariantsFixture, BroadcastBlock_Stress_ManyBlocks) {
     // Process many blocks to test stability
-    run_broadcast_block_test(this->device_.get(), 4, 4, 1000);
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 4, 4, 1000);
+    }
 }
 
 TEST_F(BlockVariantsFixture, BroadcastBlock_Stress_MaxCapacity) {
     // Use maximum DEST capacity
-    run_broadcast_block_test(this->device_.get(), 16, 1, 100);
+    for (const auto& mesh_device : devices_) {
+        run_broadcast_block_test(mesh_device->get_devices().at(0), 16, 1, 100);
+    }
 }
