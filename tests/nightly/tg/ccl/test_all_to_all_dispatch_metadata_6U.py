@@ -136,12 +136,14 @@ def run_all_to_all_dispatch_metadata_test(
     warmup_iters,
     trace_mode,
     num_links=4,
-    scheme="random",
+    scheme="random_sequential_experts",
     dtype=ttnn.bfloat16,
     profiler=BenchmarkProfiler(),
     topology=None,
     cluster_axis=1,
     shard_dim=0,
+    worker_mode=ttnn.WorkerMode.DIRECT,
+    dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
@@ -293,7 +295,8 @@ def run_all_to_all_dispatch_metadata_test(
                 # Use a drain core that's NOT in the sender cores to avoid L1 address overlap
                 # between the metadata tensor and the global semaphore
                 drain_sync_tilizer_core=(0, 0),
-                use_mux=False,
+                worker_mode=worker_mode,
+                dispatch_algorithm=dispatch_algorithm,
             )
 
             if not trace_mode:
@@ -517,7 +520,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [2 * 16])
-@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("select_experts_k", [7])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
@@ -571,10 +574,12 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="worst_congestion",
+        scheme="best_congestion",
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        worker_mode=ttnn.WorkerMode.DIRECT,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
     )
 
     signpost(header="stop")

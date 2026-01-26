@@ -113,7 +113,7 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                 if scheme == "sequential":
                     expert_indices[b, 0, s, k] = current_expert % experts
                     current_expert += 1 + (k % 2)
-                elif scheme == "random":
+                elif scheme == "random" or scheme == "random_sequential_experts":
                     # need to ensure a set of unique indices
                     current_indices = expert_indices[b, 0, s, :].tolist()
                     expert_indices[b, 0, s, k] = random.choice(
@@ -234,6 +234,42 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                             expert_id = device * experts_per_device + local_idx
                             expert_indices[b, 0, s, idx] = expert_id
                     # For k > 0, the values were already set when k == 0
+                elif scheme == "worst_congestion_descending":
+                    # Worst case for sparse multicast: send to furthest device first (antipode),
+                    # then progressively closer devices. This maximizes the hop distance for
+                    # each packet, as opposed to worst_congestion (ascending) which starts
+                    # from the nearest neighbor.
+                    #
+                    # For a 16-device ring from src_device:
+                    # - k=0: hop 8 (antipode, maximum distance)
+                    # - k=1: hop 7
+                    # - k=2: hop 6
+                    # - ...
+                    # - k=7: hop 1 (nearest neighbor)
+                    # - k=8: hop 0 (local, if k > devices/2)
+                    #
+                    # This is the worst case for sparse multicast because:
+                    # 1. Each packet travels maximum distance before hitting any destination
+                    # 2. No benefit from early delivery along the path
+                    # 3. Maximum total hop-distance across all packets
+                    devices = mesh_shape[0] * mesh_shape[1]
+                    experts_per_device = experts // devices
+
+                    # Batch is sharded in chunks across devices
+                    batches_per_device = batch // devices
+                    src_device = b // batches_per_device
+
+                    # Start from antipode (devices // 2 hops away) and decrement
+                    antipode_hop = devices // 2
+                    hop_distance = max(0, antipode_hop - k)  # Clamp to 0 for local when k > antipode
+                    target_device = (src_device + hop_distance) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices

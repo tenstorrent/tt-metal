@@ -545,7 +545,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(dest_chip_id)},
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(dest_mesh_id)},
-        {"DIRECTIONS", ttnn::operations::ccl::common::stringify(directions)}};
+        {"DIRECTIONS", ttnn::operations::ccl::common::stringify(directions)},
+        {"DISPATCH_ALGORITHM", std::to_string(static_cast<uint8_t>(operation_attributes.dispatch_algorithm))}};
 
     if (operation_attributes.axis.has_value()) {
         writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());

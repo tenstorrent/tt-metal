@@ -17,6 +17,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <vector>
+#include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -48,6 +49,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const CoreCoord drain_sync_tilizer_core;  // Core where indices/scores are sharded for selective_tilize
         const bool use_mux;                       // Whether to use fabric mux (allows multiple workers per link)
         const CoreRangeSet mux_core_range_set;    // Cores to run mux kernels on (only used if use_mux is true)
+        const DispatchAlgorithm dispatch_algorithm;  // Algorithm for routing tokens to destination devices
         static constexpr auto attribute_names = std::forward_as_tuple(
             "worker_core_range_set",
             "output_mem_config",
@@ -58,7 +60,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "output_concat_dim",
             "drain_sync_tilizer_core",
             "use_mux",
-            "mux_core_range_set");
+            "mux_core_range_set",
+            "dispatch_algorithm");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 worker_core_range_set,
@@ -70,7 +73,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 output_concat_dim,
                 drain_sync_tilizer_core,
                 use_mux,
-                mux_core_range_set);
+                mux_core_range_set,
+                dispatch_algorithm);
         };
     };
     struct tensor_args_t {
@@ -156,5 +160,6 @@ all_to_all_dispatch_metadata(
     uint32_t output_concat_dim,
     const CoreCoord& drain_sync_tilizer_core,
     bool use_mux,
-    const CoreRangeSet& mux_core_range_set);
+    const CoreRangeSet& mux_core_range_set,
+    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm);
 }  // namespace ttnn::prim

@@ -18,7 +18,32 @@
 
 namespace ttnn::operations::experimental::ccl {
 
+void bind_all_to_all_dispatch_metadata_enums(nb::module_& mod) {
+    nb::enum_<DispatchAlgorithm>(mod, "DispatchAlgorithm")
+        .value("BROADCAST", DispatchAlgorithm::BROADCAST, "Broadcast all tokens to ALL devices")
+        .value("SPARSE_UNICAST", DispatchAlgorithm::SPARSE_UNICAST, "Send to each target device individually")
+        .value("SPARSE_MCAST_LINEAR", DispatchAlgorithm::SPARSE_MCAST_LINEAR, "Sparse multicast in single direction")
+        .value(
+            "SPARSE_MCAST_SHORTEST_PATH",
+            DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH,
+            "Sparse multicast with bidirectional shortest path routing (default)")
+        .value(
+            "SPARSE_MCAST_SPLIT_BW",
+            DispatchAlgorithm::SPARSE_MCAST_SPLIT_BW,
+            "Sparse multicast, split token data 50/50 between directions");
+
+    nb::enum_<WorkerMode>(mod, "WorkerMode")
+        .value("DIRECT", WorkerMode::DIRECT, "Direct EDM, 1 worker per link (default)")
+        .value("MUX_TOKEN_SPLIT", WorkerMode::MUX_TOKEN_SPLIT, "Mux enabled, tokens distributed across workers")
+        .value(
+            "MUX_PAYLOAD_SPLIT",
+            WorkerMode::MUX_PAYLOAD_SPLIT,
+            "Workers on same link split token payload (not yet implemented)");
+}
+
 void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
+    // Bind the enums first
+    bind_all_to_all_dispatch_metadata_enums(mod);
     const auto* doc =
         R"doc(
         All to all dispatch metadata operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis. This operation sends tokens to their selected experts, with empty rows for tokens that did not select any experts on that device.
@@ -46,9 +71,10 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
             drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `(0, 0)`.
-            use_mux (bool, optional): whether to use fabric mux for multi-worker per link support. Defaults to `True`.
-            worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,3) - 4 cores for 4 links.
-            mux_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for mux workers when use_mux is True. Defaults to cores (1,0) to (1,7) - 8 cores (2 per link × 4 links).
+            worker_mode (ttnn.WorkerMode, optional): the worker mode for distributing workers across links. Defaults to `ttnn.WorkerMode.DIRECT`.
+            dispatch_algorithm (ttnn.DispatchAlgorithm, optional): the algorithm for routing tokens to destination devices. Defaults to `ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH`.
+            worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,7) - 8 cores for 4 links.
+            mux_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for mux workers when worker_mode uses mux. Defaults to cores (1,0) to (1,7) - 8 cores (2 per link × 4 links).
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.
@@ -69,7 +95,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             memory_config=memory_config,
                             output_concat_dim=output_concat_dim,
                             drain_sync_tilizer_core=(0, 0),
-                            use_mux=True)
+                            worker_mode=ttnn.WorkerMode.DIRECT,
+                            dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::all_to_all_dispatch_metadata);
@@ -90,7 +117,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
                const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
-               bool use_mux,
+               WorkerMode worker_mode,
+               DispatchAlgorithm dispatch_algorithm,
                const std::optional<CoreRangeSet>& worker_core_range_set,
                const std::optional<CoreRangeSet>& mux_core_range_set) /*-> std::array*/ {
                 std::optional<CoreCoord> drain_core = std::nullopt;
@@ -109,7 +137,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                     memory_config,
                     output_concat_dim,
                     drain_core,
-                    use_mux,
+                    worker_mode,
+                    dispatch_algorithm,
                     worker_core_range_set,
                     mux_core_range_set);
             },
@@ -125,7 +154,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             nb::arg("num_links") = nb::none(),
             nb::arg("topology") = nb::none(),
             nb::arg("drain_sync_tilizer_core") = nb::none(),
-            nb::arg("use_mux") = true,
+            nb::arg("worker_mode") = WorkerMode::DIRECT,
+            nb::arg("dispatch_algorithm") = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH,
             nb::arg("worker_core_range_set") = nb::none(),
             nb::arg("mux_core_range_set") = nb::none()});
 }

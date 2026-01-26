@@ -413,7 +413,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

@@ -239,7 +239,8 @@ all_to_all_dispatch_metadata(
     uint32_t output_concat_dim,
     const CoreCoord& drain_sync_tilizer_core,
     bool use_mux,
-    const CoreRangeSet& mux_core_range_set) {
+    const CoreRangeSet& mux_core_range_set,
+    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm) {
     using OperationType = ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -252,7 +253,8 @@ all_to_all_dispatch_metadata(
             .output_concat_dim = output_concat_dim,
             .drain_sync_tilizer_core = drain_sync_tilizer_core,
             .use_mux = use_mux,
-            .mux_core_range_set = mux_core_range_set},
+            .mux_core_range_set = mux_core_range_set,
+            .dispatch_algorithm = dispatch_algorithm},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

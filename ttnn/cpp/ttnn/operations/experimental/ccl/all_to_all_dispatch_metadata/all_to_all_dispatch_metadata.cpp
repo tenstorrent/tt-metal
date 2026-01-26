@@ -26,7 +26,8 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& output_concat_dim,
     const std::optional<CoreCoord>& drain_sync_tilizer_core,
-    bool use_mux,
+    WorkerMode worker_mode,
+    DispatchAlgorithm dispatch_algorithm,
     const std::optional<CoreRangeSet>& worker_core_range_set,
     const std::optional<CoreRangeSet>& mux_core_range_set) {
     auto* mesh_device = input_tensor.device();
@@ -50,10 +51,16 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     // Default mux cores: (1,0) to (1,7) - 8 cores (2 per link × 4 links)
     CoreRangeSet mux_cores = mux_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(1, 0), CoreCoord(1, 7))));
 
-    if (use_mux) {
-        log_debug(tt::LogOp, "use_mux: true");
-    } else {
-        log_debug(tt::LogOp, "use_mux: false");
+    // Convert WorkerMode to use_mux for now
+    // DIRECT = no mux, MUX_TOKEN_SPLIT = mux enabled, MUX_PAYLOAD_SPLIT = not yet implemented (uses mux)
+    bool use_mux = (worker_mode != WorkerMode::DIRECT);
+
+    log_debug(tt::LogOp, "worker_mode: {}", static_cast<int>(worker_mode));
+    log_debug(tt::LogOp, "dispatch_algorithm: {}", static_cast<int>(dispatch_algorithm));
+    log_debug(tt::LogOp, "use_mux: {}", use_mux);
+
+    if (worker_mode == WorkerMode::MUX_PAYLOAD_SPLIT) {
+        TT_THROW("WorkerMode::MUX_PAYLOAD_SPLIT is not yet implemented");
     }
 
     return ttnn::prim::all_to_all_dispatch_metadata(
@@ -71,7 +78,8 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         output_concat_dim_,
         drain_core,
         use_mux,
-        mux_cores);
+        mux_cores,
+        dispatch_algorithm);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -531,7 +531,6 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             // neg_distance: going WEST/NORTH (descending, with wrap)
             uint32_t pos_distance = (target_device - LinearizedSrcMeshCoord + NumDevices) % NumDevices;
             uint32_t neg_distance = (LinearizedSrcMeshCoord - target_device + NumDevices) % NumDevices;
-
             // Determine shortest path direction
             if (pos_distance < neg_distance) {
                 // Shorter via positive direction (EAST/SOUTH)
@@ -1056,14 +1055,15 @@ void kernel_main() {
     //   expert selection. More selective/sparse, but in ring topology may send same token
     //   over same links multiple times (e.g., device 0 -> device 2 doesn't pass device 1).
     // ============================================================================
-    enum class DispatchAlgorithm {
-        BROADCAST,                   // Broadcast all tokens to ALL devices (bidirectional multicast)
-        SPARSE_UNICAST,              // Send to each target device individually (point-to-point)
-        SPARSE_MCAST_LINEAR,         // Sparse multicast in single direction
-        SPARSE_MCAST_SHORTEST_PATH,  // Sparse multicast with bidirectional shortest path routing
-        SPARSE_MCAST_SPLIT_BW        // Sparse multicast, split token data 50/50 between directions
+    enum class DispatchAlgorithm : uint8_t {
+        BROADCAST = 0,                   // Broadcast all tokens to ALL devices (bidirectional multicast)
+        SPARSE_UNICAST = 1,              // Send to each target device individually (point-to-point)
+        SPARSE_MCAST_LINEAR = 2,         // Sparse multicast in single direction
+        SPARSE_MCAST_SHORTEST_PATH = 3,  // Sparse multicast with bidirectional shortest path routing
+        SPARSE_MCAST_SPLIT_BW = 4        // Sparse multicast, split token data 50/50 between directions
     };
-    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH;
+    // DISPATCH_ALGORITHM is passed as a define from the host
+    constexpr DispatchAlgorithm dispatch_algorithm = static_cast<DispatchAlgorithm>(DISPATCH_ALGORITHM);
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
