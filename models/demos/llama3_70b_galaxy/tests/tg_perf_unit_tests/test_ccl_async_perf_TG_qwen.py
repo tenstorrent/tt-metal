@@ -147,7 +147,7 @@ def test_rms_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse_qwen"
     cols = ["DEVICE KERNEL"]
-    op_name = "RMSAllGather"
+    op_name = "RMSAllGatherDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
