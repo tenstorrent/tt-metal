@@ -132,8 +132,34 @@ if [ $build_rc -ne 0 ]; then
 fi
 
 echo "::group::Import sanity ($commit_sha)"
-if ! verify_import_path 2>&1; then
-  echo "Import path check failed; skipping this commit"
+# Reset devices before import sanity check to avoid hangs from previous tests
+echo "Resetting devices before import sanity check..."
+tt-smi -r >/dev/null 2>&1 || true
+sleep 2
+
+# Run import sanity with timeout to avoid infinite hangs (2 minutes should be plenty)
+echo "Running import sanity check (timeout: 2 minutes)..."
+set +e
+timeout -k 10s 120s python -c "
+import sys
+try:
+    import ttnn
+    if hasattr(ttnn, 'get_arch_name'):
+        ttnn.get_arch_name()
+    print('Import sanity check passed')
+except Exception as e:
+    print(f'ERROR during ttnn import/test: {e}')
+    sys.exit(1)
+" 2>&1
+IMPORT_RC=$?
+set -e
+
+if [ $IMPORT_RC -ne 0 ]; then
+  echo "Import path check failed or timed out (rc=$IMPORT_RC); skipping this commit"
+  # Kill any hung python processes and reset devices
+  pkill -9 -f "python" 2>/dev/null || true
+  sleep 2
+  tt-smi -r >/dev/null 2>&1 || true
   echo "::endgroup::"
   exit 2
 fi
