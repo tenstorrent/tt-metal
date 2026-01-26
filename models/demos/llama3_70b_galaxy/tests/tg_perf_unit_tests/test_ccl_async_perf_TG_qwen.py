@@ -33,7 +33,7 @@ def test_ag_tg_qwen_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
     cols = ["DEVICE KERNEL"]
-    op_name = "AllGatherAsync"
+    op_name = "AllGatherAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
@@ -90,7 +90,7 @@ def test_ar_tg_qwen_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}_qwen"
     cols = ["DEVICE KERNEL"]
-    op_name = "AllReduceAsync"
+    op_name = "AllReduceAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
