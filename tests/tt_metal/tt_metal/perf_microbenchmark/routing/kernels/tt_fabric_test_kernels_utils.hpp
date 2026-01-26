@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include "api/debug/dprint.h"
 #include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -1037,9 +1038,10 @@ struct SenderKernelTrafficConfig {
             }
         }
 
+        DPRINT << "Sending packet to core " << (uint32_t)connection_idx_ << " (wait)\n";
         // STEP 2: Wait for space
         connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
-
+        
         // STEP 3: Send packet
         if constexpr (!BENCHMARK_MODE) {
             if (payload_size_bytes > 0 && payload_buffer_) {
@@ -1072,6 +1074,7 @@ struct SenderKernelTrafficConfig {
         }
 
         num_packets_processed += 1;  // Always increment by 1
+        DPRINT << "\t(send)\n";
 
         return true;  // Packet sent successfully
     }

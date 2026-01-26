@@ -651,18 +651,17 @@ struct OverlayRegStorage {
      * The packed_delta contains the values to add to each channel
      */
     FORCE_INLINE static void atomic_increment(storage_type packed_delta) {
-        increment_local_update_ptr_val(stream_id, static_cast<int32_t>(packed_delta));
+        increment_local_update_ptr_val(stream_id, packed_delta);
     }
 
     /**
      * Decrement by packed value - writes negative delta for atomic decrement
      */
     FORCE_INLINE static void decrement_packed(storage_type packed_value) {
-        int32_t delta = -static_cast<int32_t>(packed_value);
-        DPRINT << "OVERLAY_DECR: stream=" << stream_id
-               << " packed=" << HEX() << packed_value
-               << " delta=" << delta << ENDL();
-        increment_local_update_ptr_val(stream_id, delta);
+        // DPRINT << "OVERLAY_DECR: stream=" << stream_id
+        //        << " packed=" << HEX() << packed_value
+        //        << " delta=" << -packed_value << ENDL();
+        increment_local_update_ptr_val(stream_id, -packed_value);
     }
 };
 
@@ -772,9 +771,9 @@ public:
         constexpr uint32_t reg1_shift = CHANNELS_IN_REG0 * CREDIT_WIDTH;
         uint32_t reg1_part = static_cast<uint32_t>(packed_value >> reg1_shift);
 
-        DPRINT << "MULTI_OVERLAY_DECR: packed=" << HEX() << packed_value
-               << " reg0_part=" << HEX() << reg0_part << " delta=" << -static_cast<int32_t>(reg0_part)
-               << " reg1_part=" << HEX() << reg1_part << " delta=" << -static_cast<int32_t>(reg1_part) << ENDL();
+        // DPRINT << "MULTI_OVERLAY_DECR: packed=" << HEX() << packed_value
+        //        << " reg0_part=" << HEX() << reg0_part << " delta=" << -static_cast<int32_t>(reg0_part)
+        //        << " reg1_part=" << HEX() << reg1_part << " delta=" << -static_cast<int32_t>(reg1_part) << ENDL();
 
         // Write negative deltas to decrement atomically
         write_register<0>(-static_cast<int32_t>(reg0_part));
