@@ -1,5 +1,5 @@
 tt-metal
-Copyright 2025 Tenstorrent AI ULC
+Copyright 2026 Tenstorrent USA, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ================================================================================
-
-This product includes software developed by Tenstorrent AI ULC.
 
 This project includes modified portions of the LLVM Project (https://llvm.org)
 in the following files:
@@ -36,7 +34,7 @@ project and are included in distributed builds (such as Python Wheels).
 Each is subject to its own license terms:
 
 - sfpi-gcc
-  Tenstorrent AI ULC
+  Tenstorrent USA, Inc.
   Licensed under Apache 2.0
   https://github.com/tenstorrent/sfpi-gcc
 
