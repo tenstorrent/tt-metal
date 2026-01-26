@@ -1476,6 +1476,9 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
             "Cannot specify both TT_METAL_{}_CHIPS and TT_METAL_{}_NODES",
             RunTimeDebugFeatureNames[feature],
             RunTimeDebugFeatureNames[feature]);
+    } else if (!nodes_specified && !chips_specified) {
+        // All chips are enabled if neither chips nor nodes are specified
+        feature_targets[feature].all_chips = true;
     }
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
@@ -1587,10 +1590,6 @@ bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    // Default is no chips are specified is all
-    if (chips.empty()) {
-        feature_targets[feature].all_chips = true;
-    }
     feature_targets[feature].chip_ids = chips;
 
     return specified;
@@ -1626,7 +1625,7 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
         env_var_str = strchr(env_var_str, ')');
         if (env_var_str != nullptr) {
             env_var_str++;  // Skip ')'
-            while (*env_var_str == ',' || *env_var_str == ' ' || *env_var_str == '"') {
+            while (*env_var_str == ',') {
                 env_var_str++;
             }
             if (*env_var_str == '\0') {
@@ -1713,12 +1712,19 @@ void RunTimeOptions::set_experimental_device_debug_dump_enabled(bool enabled) {
 void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane) {
     for (auto& target : feature_targets) {
         if (!target.node_ids.empty()) {
-            // Convert each FabricNodeId to a physical chip ID
+            // Clear the chip IDs because the chip ID from fabric node IDs come from the MGD which can change
+            // during runtime
+            // We only allowed specifying chip ID xor node ID so clearing the chip IDs is safe
+            target.chip_ids.clear();
+            std::unordered_set<int> seen_chip_ids;
             for (const auto& node_id : target.node_ids) {
                 ChipId chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
-                target.chip_ids.push_back(static_cast<int>(chip_id));
+                int chip_id_int = static_cast<int>(chip_id);
+                if (seen_chip_ids.insert(chip_id_int).second) {
+                    target.chip_ids.push_back(chip_id_int);
+                    fmt::print("Resolved fabric node ID {} to chip ID {}\n", node_id, chip_id_int);
+                }
             }
-            target.node_ids.clear();
         }
     }
 }

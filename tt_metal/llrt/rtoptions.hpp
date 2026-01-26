@@ -70,7 +70,7 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
-    std::vector<tt_fabric::FabricNodeId> node_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
