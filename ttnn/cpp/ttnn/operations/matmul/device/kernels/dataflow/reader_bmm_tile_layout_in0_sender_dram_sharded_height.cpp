@@ -5,7 +5,9 @@
 // Batch-sharded DRAM matmul - in0 reader kernel
 // For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
 // Each worker handles B/num_workers batches independently
-// Input A is L1 sharded by batch - each core has B/num_cores complete [M, N] matrices
+// Input A is L1 sharded by batch on INPUT STORAGE CORES
+// Workers are on OPTIMAL DRAM READER CORES (different from storage cores)
+// Workers NOC read their in0 shard from their corresponding input storage core
 
 #include <stdint.h>
 
@@ -41,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);            // N / in0_block_w (K blocks in inner loop)
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(3);  // B / num_cores
     constexpr uint32_t in0_tensor_stride_batch_bytes = get_compile_time_arg_val(4);  // bytes per batch in in0
+    constexpr uint32_t in0_shard_size_bytes = get_compile_time_arg_val(5);           // full shard size in bytes
 
     // RUNTIME ARGS
     const uint32_t worker_core_type = get_arg_val<uint32_t>(0);
@@ -48,37 +51,34 @@ void kernel_main() {
         return;  // idle core
     }
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in2 = 2;  // Sharded CB for in0
+    // Get the input storage core coordinates and L1 address (where in0 shard is located)
+    const uint32_t input_storage_noc_x = get_arg_val<uint32_t>(1);
+    const uint32_t input_storage_noc_y = get_arg_val<uint32_t>(2);
+    const uint32_t input_shard_l1_addr = get_arg_val<uint32_t>(3);
 
-    // Read from sharded L1 buffer and push to compute CB
-    uint32_t l1_read_addr = get_read_ptr(cb_id_in2);
+    constexpr uint32_t cb_id_in0 = 0;
+
+    // Build NOC address for the remote input storage core
+    uint64_t remote_shard_base_noc_addr = get_noc_addr(input_storage_noc_x, input_storage_noc_y, input_shard_l1_addr);
 
     // Process each batch
-    DPRINT << "num_batches_per_core: " << num_batches_per_core << ENDL();
+    DPRINT << "in0 reader: NOC reading from storage core (" << input_storage_noc_x << ", " << input_storage_noc_y << ")"
+           << ENDL();
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
-        uint32_t batch_read_addr = l1_read_addr + batch * in0_tensor_stride_batch_bytes;
+        uint32_t batch_offset = batch * in0_tensor_stride_batch_bytes;
 
         // Process K blocks within each batch
-        // DPRINT << "num_blocks: " << num_blocks << ENDL();
-        // DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
-        // DPRINT << "in0_block_size_bytes: " << in0_block_size_bytes << ENDL();
-
         for (uint32_t block = 0; block < num_blocks; ++block) {
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-            // Copy block from sharded buffer to compute CB
-            uint64_t src_noc_addr = get_noc_addr(batch_read_addr);
+            // NOC read block from REMOTE input storage core to local CB
+            uint32_t read_offset = batch_offset + block * in0_block_size_bytes;
+            uint64_t src_noc_addr = remote_shard_base_noc_addr + read_offset;
             noc_async_read(src_noc_addr, l1_write_addr, in0_block_size_bytes);
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
-            // DPRINT << "Reader BMM Tile Layout In0 Sender Dram Sharded Height" << ENDL();
-            // print_full_tile(cb_id_in0, 0);
-            // print_full_tile(cb_id_in0, 1);
-            // This looks normal - identity matrix and then zeros
-            batch_read_addr += in0_block_size_bytes;
         }
     }
 }
