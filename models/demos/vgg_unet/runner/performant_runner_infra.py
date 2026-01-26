@@ -45,6 +45,7 @@ class VGG_UnetTestInfra:
             torch_model.eval()  # Set to evaluation mode
         parameters = create_vgg_unet_model_parameters(torch_model, self.torch_input_per_device, device=device)
         self.torch_output = torch_model(self.torch_input)
+        self.torch_model = torch_model  # Store the PyTorch model for PCC validation
         self.ttnn_vgg_unet_model = Tt_vgg_unet(device, parameters, parameters.conv_args)
 
     def run(self):
