@@ -565,6 +565,118 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 /**
+ * Streaming QK matmul: out_cb = in0_cb @ in1_cb (streaming version)
+ *
+ * For QK = Q @ K^T where:
+ * - Q is [M, K] tiles, fully available in in0_cb
+ * - K^T columns arrive streaming: K tiles per column, N columns total (column-major K^T)
+ * - Output QK is [M, N] tiles, produced one column at a time
+ *
+ * This allows overlapping K data arrival with computation - as each column of K^T
+ * arrives, we can immediately start computing the corresponding output column.
+ *
+ * Memory layout:
+ * - Q: row-major [M, K] - tiles Q[m,k] at position m*K + k
+ * - K^T: column-major [K, N] - column n at positions n*K to (n+1)*K-1 (contiguous per column)
+ * - Output: row-major [M, N] - tiles out[m,n] at position m*N + n
+ *
+ * @param in0_cb Q buffer (fully available)
+ * @param in1_cb K buffer (tiles pushed streaming, K tiles at a time)
+ * @param out_cb Output buffer
+ * @param M Output rows (Sq_chunk_t, typically 1 for decode)
+ * @param N Output columns (Sk_chunk_t_dynamic) - number of streaming iterations
+ * @param K Inner dimension (DHt)
+ * @param transpose Whether to transpose in1 tiles
+ * @param add_mask Whether to add mask during computation
+ * @param mask_cb Mask buffer (if add_mask) - must have M*N tiles available
+ * @param zero_cb Zero buffer (if add_mask)
+ * @param pop_in1_cb Whether to pop K tiles after each column (false to keep for V reuse)
+ */
+ALWI void cb_matmul_blocks_streaming(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,
+    const bool& transpose,
+    const bool& add_mask,
+    const uint32_t& mask_cb,
+    const uint32_t& zero_cb,
+    const bool& pop_in1_cb = true) {
+    // Initialize matmul with proper accumulation mode
+    mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, 1 /*ct_dim*/, 1 /*rt_dim*/, K /*kt_dim*/);
+
+    reconfig_data_format(in1_cb, in0_cb);
+
+    // Reserve all output tiles upfront
+    cb_reserve_back(out_cb, M * N);
+
+    // Wait for mask if we're going to use it
+    if (add_mask) {
+        cb_wait_front(mask_cb, M * N);
+        cb_wait_front(zero_cb, 1);
+    }
+
+    // Track total K tiles for streaming wait
+    uint32_t total_k_tiles_waited = 0;
+
+    // Stream through N columns of K^T
+    for (uint32_t col = 0; col < N; ++col) {
+        // Wait for K tiles (one column of K^T)
+        // With column-major K^T, column n is at positions n*K to (n+1)*K-1
+        total_k_tiles_waited += K;
+        cb_wait_front(in1_cb, total_k_tiles_waited);
+
+        // Compute M output tiles (one column of output)
+        for (uint32_t row = 0; row < M; ++row) {
+            tile_regs_acquire();
+
+            uint32_t dst_index = 0;
+
+            // Accumulate across K dimension
+            // Q[row, k] is at position row*K + k in Q buffer
+            // K^T[k, col] is at position col*K + k in column-major K^T buffer
+            for (uint32_t k = 0; k < K; ++k) {
+                matmul_block(
+                    in0_cb,
+                    in1_cb,
+                    row * K + k,  // in0_index: Q[row, k]
+                    col * K + k,  // in1_index: K^T[k, col] in column-major layout
+                    dst_index,
+                    transpose,
+                    1,  // subblock_w
+                    1,  // subblock_h
+                    K   // in0_block_w (for accumulation)
+                );
+            }
+
+            // Optionally add mask for this output tile
+            if (add_mask) {
+                add_tiles_init(zero_cb, mask_cb, true);
+                add_tiles(zero_cb, mask_cb, 0, row * N + col, dst_index);
+            }
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            // Pack to row-major output position: out[row, col] at position row*N + col
+            pack_tile(dst_index, out_cb, row * N + col);
+
+            tile_regs_release();
+        }
+    }
+
+    cb_push_back(out_cb, M * N);
+
+    // Pop all K tiles at once if requested (default)
+    // If reuse_k is needed, caller sets pop_in1_cb=false and pops later
+    if (pop_in1_cb) {
+        cb_pop_front(in1_cb, N * K);
+    }
+}
+
+/**
  * out_cb = in0_cb @ in1_cb
  */
 ALWI void cb_matmul_blocks(
@@ -583,7 +695,9 @@ ALWI void cb_matmul_blocks(
     const bool& transpose,
     const bool& add_mask,
     const uint32_t& mask_cb,
-    const uint32_t& zero_cb) {
+    const uint32_t& zero_cb,
+    const bool& pop_in1_cb,
+    const uint32_t& pop_in1_cb_num_tiles) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -635,5 +749,8 @@ ALWI void cb_matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-    cb_pop_front(in1_cb, K * N);
+    // cb_pop_front(in1_cb, K * N);
+    if (pop_in1_cb) {
+        cb_pop_front(in1_cb, pop_in1_cb_num_tiles);
+    }
 }

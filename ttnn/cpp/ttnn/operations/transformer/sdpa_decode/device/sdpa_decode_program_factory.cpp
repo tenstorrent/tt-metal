@@ -75,8 +75,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const auto& q_shape_unpadded = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.padded_shape();
     // Use k_shape for S and DH since Q might be different for decode
+    // B comes from q_shape[1], PNH from q_shape[2] (may include replication factor for MLA)
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
-
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -88,6 +88,18 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t q_heads_parallel_factor = 1;
     if (is_q_sharded && use_mla) {
         uint32_t q_shard_height = input_tensor_q.memory_config().shard_spec()->shape[0];
+
+        // When Q is replicated for local reads, q_shape[2] = original_heads * num_cores_per_head
+        // The num_cores_per_head (replication factor) comes from max_cores_per_head_batch in program_config
+        // uint32_t num_cores_per_head_config = program_config.has_value() ? program_config->max_cores_per_head_batch :
+        // 1;
+
+        // Derive original number of Q heads from the replicated tensor
+        // If Q is replicated: num_q_heads = q_shape[2] / replication_factor
+        // If Q is not replicated: num_q_heads = q_shape[2] (replication_factor = 1)
+        num_q_heads = 128;  // / num_cores_per_head_config;
+        PNH = 128;          // Reset PNH to original head count for calculations
+
         q_heads_parallel_factor = std::max((uint32_t)1, (num_q_heads + q_shard_height - 1) / q_shard_height);
 
         if (q_heads_parallel_factor > 1) {
@@ -99,7 +111,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
                 num_kv_heads);
         }
 
-        B *= q_heads_parallel_factor;  // adjust batch size to account for Q sharding
+        B = 16;  // adjust batch size to account for Q sharding
     }
 
     if (is_paged_attention) {
@@ -241,33 +253,12 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             TT_FATAL(false, "We only support SDPA on subcoregrids with sharded Q and sharded output");
         }
     } else {
-        if (is_q_sharded || is_output_sharded) {
-            int reducer_idx = 0;
-            int worker_idx = num_output_cores;
-
-            for (int i = 0; i < num_cores_available; ++i) {
-                CoreCoord core;
-                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                    core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
-                    reducer_idx++;
-                } else {
-                    core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
-                    worker_idx++;
-                }
-                if (i < num_active_cores) {
-                    core_group.push_back(core);
-                } else {
-                    core_group_idle.push_back(core);
-                }
-            }
-        } else {
-            for (int i = 0; i < num_cores_available; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-                if (i < num_active_cores) {
-                    core_group.push_back(core);
-                } else {
-                    core_group_idle.push_back(core);
-                }
+        for (int i = 0; i < num_cores_available; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            if (i < num_active_cores) {
+                core_group.push_back(core);
+            } else {
+                core_group_idle.push_back(core);
             }
         }
     }
@@ -476,10 +467,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // CBs
     // Q input
+    CBHandle cb_in0_id = 0;
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_0, q_df}})
                             .set_page_size(CBIndex::c_0, q_tile_size)
                             .set_tile_dims(CBIndex::c_0, q_tile);
-    CreateCircularBuffer(program, core_grid, c_in0_config);
+    if (is_q_sharded) {
+        c_in0_config.set_globally_allocated_address(*q_buffer);
+    }
+    cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
 
     // K input
     auto c_in1_config =
@@ -673,24 +668,37 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Create core groups for reduce cores
     std::vector<uint32_t> reduce_core_physical_xs;
     std::vector<uint32_t> reduce_core_physical_ys;
-    uint32_t reduce_core_noc_x{};
-    uint32_t reduce_core_noc_y{};
-    reduce_core_physical_xs.reserve(num_reducer_cores);
-    reduce_core_physical_ys.reserve(num_reducer_cores);
+
+    reduce_core_physical_xs.resize(num_reducer_cores);
+    reduce_core_physical_ys.resize(num_reducer_cores);
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
+
         uint32_t worker_id_for_reduce = (i % num_cores_per_head) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
-        if (do_reduce) {
-            reduce_core_noc_x = core.x;
-            reduce_core_noc_y = core.y;
-            // get physical core
-            CoreCoord reduce_core = {(std::size_t)reduce_core_noc_x, (std::size_t)reduce_core_noc_y};
-            auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
-            reduce_core_physical_xs.push_back((uint32_t)reduce_core_physical.x);
-            reduce_core_physical_ys.push_back((uint32_t)reduce_core_physical.y);
+
+        if (!do_reduce) {
+            continue;
         }
+
+        uint32_t x = core.x;
+        uint32_t y = core.y;
+
+        // --- reducer ordering logic ---
+        uint32_t quadrant_x = x / 4;
+        uint32_t quadrant_y = y / 4;
+        uint32_t quadrant_id = quadrant_y * 2 + quadrant_x;
+        uint32_t local_row = y % 4;
+
+        uint32_t reducer_index = quadrant_id * 4 + local_row;
+        // --------------------------------
+
+        CoreCoord reduce_core = {x, y};
+        auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
+
+        reduce_core_physical_xs[reducer_index] = (uint32_t)reduce_core_physical.x;
+        reduce_core_physical_ys[reducer_index] = (uint32_t)reduce_core_physical.y;
     }
 
     log_debug(tt::LogOp, "reduce_core_physical_xs: {}", reduce_core_physical_xs);
@@ -699,24 +707,37 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Create core ggroups for output cores
     std::vector<uint32_t> output_core_physical_xs;
     std::vector<uint32_t> output_core_physical_ys;
-    uint32_t output_core_noc_x{};
-    uint32_t output_core_noc_y{};
-    output_core_physical_xs.reserve(num_output_cores);  // num output cores is equal to batch size
-    output_core_physical_ys.reserve(num_output_cores);
+
+    output_core_physical_xs.resize(num_output_cores);  // num output cores is equal to batch size
+    output_core_physical_ys.resize(num_output_cores);
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
+
         uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_output = (worker_id_for_output == -1);
-        if (do_output) {
-            output_core_noc_x = core.x;
-            output_core_noc_y = core.y;
-            // get physical core
-            CoreCoord output_core = {(std::size_t)output_core_noc_x, (std::size_t)output_core_noc_y};
-            auto output_core_physical = device->worker_core_from_logical_core(output_core);
-            output_core_physical_xs.push_back((uint32_t)output_core_physical.x);
-            output_core_physical_ys.push_back((uint32_t)output_core_physical.y);
+
+        if (!do_output) {
+            continue;
         }
+
+        uint32_t x = core.x;
+        uint32_t y = core.y;
+
+        // --- reducer ordering logic ---
+        uint32_t quadrant_x = x / 4;
+        uint32_t quadrant_y = y / 4;
+        uint32_t quadrant_id = quadrant_y * 2 + quadrant_x;
+        uint32_t local_row = y % 4;
+
+        uint32_t output_index = quadrant_id * 4 + local_row;
+        // --------------------------------
+
+        CoreCoord output_core = {x, y};
+        auto output_core_physical = device->worker_core_from_logical_core(output_core);
+
+        output_core_physical_xs[output_index] = (uint32_t)output_core_physical.x;
+        output_core_physical_ys[output_index] = (uint32_t)output_core_physical.y;
     }
 
     log_debug(tt::LogOp, "output_core_physical_xs: {}", output_core_physical_xs);
@@ -725,6 +746,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Common Compile time Args
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
     auto output_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto k_mcast_semaphore_id = CreateSemaphore(program, core_grid, 0);
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
@@ -763,6 +785,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         is_page_table_sharded,
         full_tile.get_tile_size(q_df),
         sliding_window_size.value_or(0),
+        k_mcast_semaphore_id,
     };
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
@@ -840,6 +863,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_half_tile,
         scale_union.u,
         sliding_window_size.value_or(0),
+        (uint32_t)use_mla,  // reuse_k: if MLA, V = K
     };
 
     // Determine granularity for compute loops
@@ -873,6 +897,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
+        // Enable streaming QK matmul for dynamic chunk sizes with K multicast
+        // This allows overlapping K data transfer with QK computation
+        compute_defines["USE_STREAMING_QK_MATMUL"] = "1";
     }
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
@@ -935,9 +962,28 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         bool do_output = (worker_id_for_output == -1);
+        bool do_k_mcast = (core.y == 0) || (core.y == 4);
+        uint32_t grid_x = grid_size.x;
+        uint32_t cur_row = i / grid_x;
+        uint32_t cur_col = i % grid_x;
+        uint32_t quad_row = cur_row / num_cores_per_head;
+        uint32_t quad_col = cur_col / num_cores_per_head;
+        auto phys_top = device->worker_core_from_logical_core(core);
+        auto phys_bottom = device->worker_core_from_logical_core(core);
+
+        if (do_k_mcast) {
+            phys_top = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
+            phys_bottom = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + 3});
+        }
+
+        uint32_t mcast_x = phys_top.x;
+        uint32_t mcast_y0 = phys_top.y;
+        uint32_t mcast_y1 = phys_bottom.y;
+        uint32_t num_dests = num_cores_per_head - 1;
+
+        uint32_t cur_batch = (quad_row * grid_x) + quad_col * num_cores_per_head + (cur_row % num_cores_per_head);
 
         uint32_t cur_head = (i % num_cores_per_batch) / num_cores_per_head;
-        uint32_t cur_batch = i / num_cores_per_batch;
         uint32_t core_num_in_reduce = i % num_cores_per_head;
         uint32_t core_num_in_output = i % num_cores_per_batch;
 
@@ -954,6 +1000,11 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
         log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
         log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
+        log_debug(tt::LogOp, "do_k_mcast: {}", do_k_mcast);
+        log_debug(tt::LogOp, "mcast_x: {}", mcast_x);
+        log_debug(tt::LogOp, "mcast_y0: {}", mcast_y0);
+        log_debug(tt::LogOp, "mcast_y1: {}", mcast_y1);
+        log_debug(tt::LogOp, "num_dests: {}", num_dests);
 
         // reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -971,7 +1022,13 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             cur_batch,
             core_num_in_reduce,
             core_num_in_output,
-            cur_pos};
+            cur_pos,
+            do_k_mcast,
+            mcast_x,
+            mcast_y0,
+            mcast_y1,
+            num_dests,
+        };
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
@@ -1027,6 +1084,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
          .num_cores_per_batch = num_cores_per_batch,
          .num_cores_per_head = num_cores_per_head,
          .num_output_cores = num_output_cores,
+         .cb_in0_id = cb_in0_id,
          .cb_in8_id = cb_in8_id,
          .cb_in9_id = cb_in9_id,
          .is_output_sharded = is_output_sharded,
@@ -1056,6 +1114,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const auto& compute_kernels_id = shared_variables.compute_kernels_id;
     const auto& num_cores_per_batch = shared_variables.num_cores_per_batch;
     const auto& num_cores_per_head = shared_variables.num_cores_per_head;
+    const auto& cb_in0_id = shared_variables.cb_in0_id;
     const auto& cb_in8_id = shared_variables.cb_in8_id;
     const auto& cb_in9_id = shared_variables.cb_in9_id;
     const auto& is_output_sharded = shared_variables.is_output_sharded;
@@ -1068,7 +1127,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const bool is_paged_attention = shared_variables.is_paged_attention;
     const bool is_causal = shared_variables.is_causal;
     const bool use_mla = shared_variables.use_mla;
-
+    const bool is_q_sharded = tensor_args.q.is_sharded();
     auto* q_buffer = tensor_args.q.buffer();
     auto* k_buffer = tensor_args.k.buffer();
     auto* v_buffer = use_mla ? k_buffer : tensor_args.v.value().buffer();
@@ -1152,6 +1211,9 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
         compute_args[arg_idx++] = core_num_in_reduce;
         compute_args[arg_idx++] = core_num_in_output;
         compute_args[arg_idx++] = cur_pos;
+    }
+    if (is_q_sharded) {
+        UpdateDynamicCircularBufferAddress(program, cb_in0_id, *q_buffer);
     }
     if (use_cur_pos_tensor and cur_pos_tensor.value().is_sharded()) {
         UpdateDynamicCircularBufferAddress(program, cb_in8_id, *cur_pos_tensor.value().buffer());

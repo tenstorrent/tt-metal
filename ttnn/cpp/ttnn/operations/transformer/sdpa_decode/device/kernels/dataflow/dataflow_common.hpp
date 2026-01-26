@@ -413,9 +413,12 @@ void worker_compute(
     uint32_t out_tile_id = 0;
 
     // Wait for compute to deliver output chunk
-    cb_wait_front(cb_out, out_chunk_tiles);
-    cb_wait_front(cb_out_m, PNHt);
-    cb_wait_front(cb_out_l, PNHt);
+    {
+        DeviceZoneScopedN("wait on local cb writeout");
+        cb_wait_front(cb_out, out_chunk_tiles);
+        cb_wait_front(cb_out_m, PNHt);
+        cb_wait_front(cb_out_l, PNHt);
+    }
 
     // Write output chunk to reducer
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
@@ -426,15 +429,20 @@ void worker_compute(
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_write_ptr(cb_intermed_out)) + worker_offset;
 
     // send the max logits first then the logits sum then the partial output to the reducer
-    noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
-    output_write_addr += ml_write_size;
-    noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
-    output_write_addr += ml_write_size;
-    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
-
+    {
+        DeviceZoneScopedN("write output chunk to reducer");
+        noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
+        output_write_addr += ml_write_size;
+        noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
+        output_write_addr += ml_write_size;
+        noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
+    }
     // increment semaphore
-    noc_async_write_barrier();
-    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+    {
+        DeviceZoneScopedN("barrier + incr sem");
+        noc_async_write_barrier();
+        noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+    }
 
     // pop front
     cb_pop_front(cb_out, out_chunk_tiles);
@@ -518,6 +526,25 @@ uint32_t write_partial_tiles_to_memory(
 /******************************************************************************
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
+
+// template <typename ReaderType>
+// void read_k_chunk(uint32_t k_chunk_start, uint32_t k_chunk_end, uint32_t k_start_tile_id, uint32_t Sk_chunk_t,
+// uint32_t k_chunk_tiles, const ReaderType& k_reader) {
+//     uint32_t barrier_count = 0;
+//     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+//         cb_reserve_back(cb_k_in, k_chunk_tiles);
+//         uint32_t k_write_ptr = get_write_ptr(cb_k_in);
+//         uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
+//         barrier_count = 0;
+//         for (uint32_t col = 0; col < DHt; ++col) {
+//             uint32_t k_tile_id = k_start_tile_id + col;
+//             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+//                 noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+//             }
+//         }
+//     }
+
+// }
 
 template <
     uint32_t DHt,

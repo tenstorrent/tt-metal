@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <vector>
+#include "tools/profiler/kernel_profiler.hpp"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -46,8 +47,9 @@ void kernel_main() {
     constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
     constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
+    constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(31);
 
-    constexpr auto k_args = TensorAccessorArgs<31>();
+    constexpr auto k_args = TensorAccessorArgs<32>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -71,7 +73,11 @@ void kernel_main() {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
-
+    const bool do_k_mcast = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_y0 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_y1 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_dests = get_arg_val<uint32_t>(arg_idx++);
     // idle core
     if (q_addr == 0) {
         return;
@@ -80,32 +86,37 @@ void kernel_main() {
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
                                       // case we set cur_pos to the last position
-    if constexpr (is_causal) {
-        // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-        if (cur_pos_arg != UINT32_MAX) {
-            cur_pos = cur_pos_arg;
-        } else {
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            cb_reserve_back(cb_index_id, 1);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
 
-            if constexpr (!is_cur_pos_tensor_sharded) {
-                const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
+    {
+        DeviceZoneScopedN("read cur_pos");
+        if constexpr (is_causal) {
+            // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+            if (cur_pos_arg != UINT32_MAX) {
+                cur_pos = cur_pos_arg;
+            } else {
+                constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+                cb_reserve_back(cb_index_id, 1);
+                uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
 
-                // index_tensor has one page to read
-                uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
-                noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-                noc_async_read_barrier();
+                if constexpr (!is_cur_pos_tensor_sharded) {
+                    const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
+
+                    // index_tensor has one page to read
+                    uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
+                    noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+                    noc_async_read_barrier();
+                }
+
+                cb_push_back(cb_index_id, 1);
+                volatile tt_l1_ptr uint32_t* index_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+                cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
             }
 
-            cb_push_back(cb_index_id, 1);
-            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-            cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
-        }
-
-        if (cur_pos == UINT32_MAX) {
-            // cur_pos of -1 indicates that the user should be skipped
-            return;
+            if (cur_pos == UINT32_MAX) {
+                // cur_pos of -1 indicates that the user should be skipped
+                return;
+            }
         }
     }
 
@@ -125,6 +136,15 @@ void kernel_main() {
         return;  // early exit because no computes needs to be done
     }
 
+    // DPRINT << "PSt: " << PSt << ENDL();
+    // DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
+    // DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
+    // DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
+    // DPRINT << "window_start_unaligned: " << window_start_unaligned << ENDL();
+    // DPRINT << "window_start_chunk: " << window_start_chunk << ENDL();
+    // DPRINT << "Sk_chunk_t_dynamic:" << Sk_chunk_t_dynamic << ENDL();
+    // DPRINT << "tilize_q:" << static_cast<uint32_t>(tilize_q) << ENDL();
+
     tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
@@ -132,7 +152,11 @@ void kernel_main() {
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
 
+    // DPRINT << "output_core_noc_x: " << output_core_noc_x << " output_core_noc_y: " << output_core_noc_y << ENDL();
+
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
+
+    // DPRINT << "q_chunk_tiles: " << q_chunk_tiles << ENDL();
     uint32_t k_chunk_tiles = Sk_chunk_t_dynamic * DHt;
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
     uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t_dynamic;
@@ -154,60 +178,73 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
+    uint32_t k_mcast_sem_addr = get_semaphore(k_mcast_semaphore_id);
+    volatile tt_l1_ptr uint32_t* k_mcast_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(k_mcast_sem_addr);
+
     // First, read Q entirely, it could be interleaved or sharded
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
-    if constexpr (is_q_sharded) {
-        uint64_t q_read_addr;
-        uint32_t q_write_ptr;
-        if (is_output_core) {
-            q_read_addr = get_noc_addr(q_addr);
-        } else {
-            q_read_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, q_addr);
-        }
-        if constexpr (tilize_q) {
-            cb_reserve_back(cb_q_rm, q_chunk_tiles);
-            q_write_ptr = get_write_ptr(cb_q_rm);
-        } else {
+    {
+        DeviceZoneScopedN("read Q");
+        if constexpr (is_q_sharded) {
+            uint64_t q_read_addr;
+            uint32_t q_write_ptr;
+            // if (is_output_core) {
+            // q_read_addr = get_noc_addr(q_addr);
+            // } else {
+            //     q_read_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, q_addr);
+            // }
+            //     if constexpr (tilize_q) {
+            //         cb_reserve_back(cb_q_rm, q_chunk_tiles);
+            //         q_write_ptr = get_write_ptr(cb_q_rm);
+            //     } else {
+            //         cb_reserve_back(cb_q_in, q_chunk_tiles);
+            //         q_write_ptr = get_write_ptr(cb_q_in);
+            //     }
+            // if constexpr (use_half_tile and not tilize_q) {
+            //     // q_addr represents 32x32 tiles; read them as 16x32 tiles
+            //     // TODO: Properly setup q input as tiny tiles and remove special handling for tiny tiles
+            //     for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {
+            //         noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
+            //         q_read_addr += 2 * q_tile_bytes;
+            //         q_write_ptr += q_tile_bytes;
+            //     }
+            // } else {
+            //     // Read all Q tiles at once from local L1
+            //     // noc_async_read(q_read_addr, q_write_ptr, q_chunk_size_bytes);
+            // }
+            // // noc_async_read_barrier();
+            // if constexpr (tilize_q) {
+            //     cb_push_back(cb_q_rm, q_chunk_tiles);
+            // } else {
+            //     cb_push_back(cb_q_in, q_chunk_tiles);
+            // }
+            DPRINT << "reserving cb_q_in: " << q_chunk_tiles << ENDL();
             cb_reserve_back(cb_q_in, q_chunk_tiles);
-            q_write_ptr = get_write_ptr(cb_q_in);
-        }
-        if constexpr (use_half_tile and not tilize_q) {
-            // q_addr represents 32x32 tiles; read them as 16x32 tiles
-            // TODO: Properly setup q input as tiny tiles and remove special handling for tiny tiles
-            for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {
+            DPRINT << "finishing reserving cb_q_in: " << q_chunk_tiles << ENDL();
+            DPRINT << "pushing back cb_q_in: " << q_chunk_tiles << ENDL();
+            cb_push_back(cb_q_in, q_chunk_tiles);
+            DPRINT << "finishing pushing back cb_q_in: " << q_chunk_tiles << ENDL();
+
+        } else {
+            const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
+            uint32_t q_tile_id = q_batch_offset;
+            cb_reserve_back(cb_q_in, q_chunk_tiles);
+            uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+            for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+                uint64_t q_read_addr = q_reader.get_noc_addr(q_tile_id);
                 noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
-                q_read_addr += 2 * q_tile_bytes;
+                q_tile_id += 1;
                 q_write_ptr += q_tile_bytes;
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
             }
-        } else {
-            noc_async_read(q_read_addr, q_write_ptr, q_chunk_size_bytes);
-        }
-        noc_async_read_barrier();
-        if constexpr (tilize_q) {
-            cb_push_back(cb_q_rm, q_chunk_tiles);
-        } else {
+            noc_async_read_barrier();
             cb_push_back(cb_q_in, q_chunk_tiles);
         }
-    } else {
-        const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
-        uint32_t q_tile_id = q_batch_offset;
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        uint32_t q_write_ptr = get_write_ptr(cb_q_in);
-        for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
-            uint64_t q_read_addr = q_reader.get_noc_addr(q_tile_id);
-            noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
-            q_tile_id += 1;
-            q_write_ptr += q_tile_bytes;
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_q_in, q_chunk_tiles);
     }
-
     // Read the rest
     const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
 
@@ -236,28 +273,32 @@ void kernel_main() {
     // Typed pointers for page table entries in L1
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
-    if constexpr (is_paged_attention) {
-        constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
-        uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
-        cb_reserve_back(cb_id_page_table, num_pages_to_read);
 
-        // Read page table from DRAM
-        if constexpr (!is_page_table_sharded) {
-            page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-            const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
-            uint64_t page_table_noc_addr = page_table_gen.get_noc_addr((cur_batch / q_heads_parallel_factor));
-            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
-            noc_async_read_barrier();
-            page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
-            page_table_ptr_u32 = page_table_ptr;
+    {
+        DeviceZoneScopedN("read page table");
+        if constexpr (is_paged_attention) {
+            constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
+            uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
+            cb_reserve_back(cb_id_page_table, num_pages_to_read);
 
-        } else {  // Read page table from dyanmically allocated L1 buffer
-            page_table_cb_wr_ptr =
-                get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
-            page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
+            // Read page table from DRAM
+            if constexpr (!is_page_table_sharded) {
+                page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
+                const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
+                uint64_t page_table_noc_addr = page_table_gen.get_noc_addr((cur_batch / q_heads_parallel_factor));
+                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
+                noc_async_read_barrier();
+                page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+                page_table_ptr_u32 = page_table_ptr;
+
+            } else {  // Read page table from dyanmically allocated L1 buffer
+                page_table_cb_wr_ptr =
+                    get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
+                page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
+            }
+
+            cb_push_back(cb_id_page_table, num_pages_to_read);
         }
-
-        cb_push_back(cb_id_page_table, num_pages_to_read);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
@@ -270,15 +311,25 @@ void kernel_main() {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
-                {
-                    // Read K chunk in row-major order (to simplify page mapping). Write tiles to CB in transposed
-                    // order.
+                // Size of one row of K (one column of K^T) = DHt tiles
+                uint32_t row_tile_bytes = DHt * k_tile_bytes;
+
+                if (do_k_mcast) {
+                    // STREAMING K MULTICAST
+                    // Read K row by row, write contiguously (column-major K^T layout)
+                    // This enables streaming matmul that processes one K^T column at a time
+
                     cb_reserve_back(cb_k_in, k_chunk_tiles);
-                    uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-                    k_base_read_ptr = get_noc_addr(k_write_ptr);
+                    uint32_t k_write_ptr_base = get_write_ptr(cb_k_in);
+                    k_base_read_ptr = get_noc_addr(k_write_ptr_base);
                     barrier_count = 0;
+
+                    DPRINT << "reading k chunk mcaster (streaming)" << ENDL();
+
                     for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
-                        uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
+                        // Write position: contiguous per row (column-major K^T)
+                        // Row n of K -> Column n of K^T -> positions [n*DHt, (n+1)*DHt)
+                        uint32_t row_write_ptr = k_write_ptr_base + row * row_tile_bytes;
                         uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
 
                         uint32_t physical_k_tile_id =
@@ -287,41 +338,99 @@ void kernel_main() {
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
                                 : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+
+                        // Read one row of K, write contiguously (DHt tiles)
                         for (uint32_t col = 0; col < DHt; ++col) {
-                            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                            physical_k_tile_id += 1;                               // Go to next tile in row
-                            k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
+                            noc_async_read_tile(physical_k_tile_id, k_reader, row_write_ptr);
+                            physical_k_tile_id += 1;        // Go to next tile in K row
+                            row_write_ptr += k_tile_bytes;  // Contiguous write (next tile in buffer)
 
                             if (++barrier_count == barrier_threshold) {
                                 noc_async_read_barrier();
                                 barrier_count = 0;
                             }
                         }
+                        noc_async_read_barrier();
+
+                        // Multicast just this row (DHt tiles) to other cores
+                        uint32_t row_start_ptr = k_write_ptr_base + row * row_tile_bytes;
+                        uint64_t dst_mcast_addr = get_noc_multicast_addr(
+                            mcast_x,   // x_start
+                            mcast_y0,  // y_start
+                            mcast_x,   // x_end (same column)
+                            mcast_y1,  // y_end
+                            row_start_ptr);
+
+                        noc_async_write_multicast(
+                            row_start_ptr,
+                            dst_mcast_addr,
+                            row_tile_bytes,  // Only this row (DHt tiles)
+                            num_dests,
+                            /*linked=*/false);
+
+                        // Ensure data multicast is complete
+                        noc_async_write_barrier();
+
+                        // Signal "tiles ready" via semaphore multicast
+                        constexpr uint32_t VALID = 1;
+                        noc_semaphore_set(k_mcast_sem_ptr, VALID);
+
+                        uint64_t sem_mcast_addr =
+                            get_noc_multicast_addr(mcast_x, mcast_y0, mcast_x, mcast_y1, k_mcast_sem_addr);
+
+                        noc_semaphore_set_multicast(k_mcast_sem_addr, sem_mcast_addr, num_dests, false);
+
+                        // Push DHt tiles (one K^T column) - allows compute to start immediately
+                        cb_push_back(cb_k_in, DHt);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_k_in, k_chunk_tiles);
+
+                } else {
+                    // STREAMING K RECEIVER
+                    // Reserve full buffer upfront for V reuse (k_base_read_ptr needs to stay valid)
+                    // Wait for each row of K (column of K^T) and push incrementally
+
+                    DPRINT << "waiting for k mcast semaphore (streaming)" << ENDL();
+
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                    k_base_read_ptr = get_noc_addr(get_write_ptr(cb_k_in));
+
+                    for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+                        noc_semaphore_wait(k_mcast_sem_ptr, 1);
+                        noc_semaphore_set(k_mcast_sem_ptr, 0);
+
+                        // Push DHt tiles (data already written by mcast)
+                        cb_push_back(cb_k_in, DHt);
+                    }
                 }
 
                 if constexpr (use_attention_mask) {
+                    DPRINT << "reading mask chunk (use_attention_mask)" << ENDL();
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                         PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
+                    DPRINT << "finished reading mask chunk (use_attention_mask)" << ENDL();
                 }
 
                 {
+                    DeviceZoneScopedN("read V chunk");
                     if constexpr (reuse_k) {
-                        // Read V chunk (tranpose of K), from K's L1 buffer
+                        // Read V chunk from K's L1 buffer
+                        // K^T is now stored in column-major order: each column of K^T is contiguous
+                        // K^T[k, n] is at position n*DHt + k (column n, row k)
+                        // V needs row-major layout: V[row, col] at position row*vDHt + col
+                        // Since K^T = K, and V = K for MLA, V[row, col] = K^T[col, row]
+                        // K^T[col, row] is at position row*DHt + col in column-major K^T
+
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        uint64_t k_read_ptr = k_base_read_ptr;
+                        uint64_t k_read_ptr_base = k_base_read_ptr;
 
                         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
-                            k_read_ptr = k_base_read_ptr + row * k_tile_bytes;     // Increment across K's Col
-
                             for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
+                                // V[row, col] = K^T[col, row]
+                                // K^T[col, row] is at position row*DHt + col in column-major K^T layout
+                                uint64_t k_read_ptr = k_read_ptr_base + (row * DHt + col) * k_tile_bytes;
                                 noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
-
                                 v_write_ptr += v_tile_bytes;
-                                k_read_ptr += Sk_chunk_t_dynamic * k_tile_bytes;  // Strid across K's width
                             }
                         }
                     } else {
@@ -358,7 +467,6 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_v_in, v_chunk_tiles);
                 }
-
             }
         } else {
             // Offset for current batch

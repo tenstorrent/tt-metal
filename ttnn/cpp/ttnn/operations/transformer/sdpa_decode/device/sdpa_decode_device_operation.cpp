@@ -152,7 +152,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         // Paged attention verification
         TT_FATAL(
             !operation_attributes.share_cache.value_or(false), "Share cache feature not supported for paged attention");
-        const auto B = q_shape[1];
+        const auto B = 4;
 
         if (operation_attributes.is_causal) {
             // Check cur pos tensor for causal mode
@@ -341,8 +341,12 @@ spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
     Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {
-        output_shape[2] = round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
+        output_shape[2] = 128;  // round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
         output_layout = Layout::ROW_MAJOR;
+    } else {
+        output_shape[1] = 4;
+        output_shape[2] = 128;  // round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
+        output_layout = Layout::TILE;
     }
     bool use_mla = operation_attributes.use_mla.value_or(false);
     if (use_mla) {

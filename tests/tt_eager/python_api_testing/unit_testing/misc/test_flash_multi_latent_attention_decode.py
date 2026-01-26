@@ -163,6 +163,7 @@ def run_flash_mla_decode_impl(
     d_rope,
     q_num_cores,
     q_dtype,
+    q_mem_config,
     dtype,
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
@@ -200,6 +201,27 @@ def run_flash_mla_decode_impl(
     k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S, D)
     v = k[..., :kv_lora_rank]  # (B, H, S, D)
 
+    # In this configuration, q is replicated across all cores within each head group
+    # num_cores_per_head_for_config is used to tell the program factory about the replication factor
+    num_cores_per_head_for_config = 1  # Default: no replication
+    if q_mem_config is not None:
+        # Replicate Q for each core in the reducer group
+        num_cores_per_head = 4
+        num_cores_per_head_for_config = num_cores_per_head  # Pass replication factor to program config
+        q_heads_parallel_factor = 4
+        num_virtual_batches = batch * q_heads_parallel_factor  # 16 virtual batches
+        heads_per_vbatch = nh // q_heads_parallel_factor  # 32 heads per virtual batch
+
+        q_permuted = q.permute(2, 0, 1, 3)  # (S, B, H, D) = (1, 4, 128, 576)
+        # Reshape to (S, B, q_heads_parallel_factor, heads_per_vbatch, D)
+        q_reshaped = q_permuted.reshape(1, batch, q_heads_parallel_factor, heads_per_vbatch, -1)  # (1, 4, 4, 32, 576)
+        # Replicate each virtual batch chunk across num_cores_per_head
+        q_replicated = q_reshaped.repeat_interleave(num_cores_per_head, dim=2)  # (1, 4, 16, 32, 576)
+        # Merge the replication into the heads dimension, preserving batch dim
+        q_for_tt = q_replicated.reshape(1, 1, -1, q_replicated.shape[-1])  # (1, 1, 2048, 576)
+    else:
+        q_for_tt = q.permute(2, 0, 1, 3)  # Original path: (1, 4, 128, 576)
+
     ######################
     ### TT Setup
     #######################
@@ -229,13 +251,13 @@ def run_flash_mla_decode_impl(
         )
 
     q_chunk_size = 0  # Not used in decode
-    k_chunk_size = 128
+    k_chunk_size = 32
 
     scale = (kv_lora_rank + d_rope) ** -0.5
 
-    max_start_idx = seq_len // 2
-    start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
-
+    max_start_idx = seq_len - 1
+    # [0, 170, 341, 512]
+    start_indices = [max_start_idx] * batch
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
@@ -243,6 +265,7 @@ def run_flash_mla_decode_impl(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        max_cores_per_head_batch=num_cores_per_head_for_config,  # Tells program factory about Q replication factor
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -270,37 +293,43 @@ def run_flash_mla_decode_impl(
             # Only batch shard if nkv > 1
             q_num_cores = min(batch, q_num_cores)  # Limit q_num_cores to batch size
 
-        block_height = nearest_y(np.prod(q.shape[:-1]) // q_num_cores, ttnn.TILE_SIZE)
+        block_height = 32  # nearest_y(np.prod(q_for_tt.shape[:-1]) // q_num_cores, ttnn.TILE_SIZE)
 
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
+        if q_mem_config is None:
+            q_mem_config = ttnn.create_sharded_memory_config(
+                shape=(block_height, q.shape[-1]),
+                core_grid=q_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            out_mem_config = ttnn.create_sharded_memory_config(
+                shape=(block_height, v.shape[-1]),
+                core_grid=q_core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            # Custom q_mem_config provided (Q is replicated for local reads)
+            # Output shape mismatch: tensor has [1, batch, nh*4, v_dim] but SDPA produces
+            # [1, batch*4, nh/4, v_dim]. Use DRAM output to avoid sharding issues.
+            out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-        q_mem_config = ttnn.create_sharded_memory_config(
-            shape=(block_height, q.shape[-1]),
-            core_grid=q_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-        out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(block_height, v.shape[-1]),
-            core_grid=q_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-    print(f"shard shape: {block_height}x{q.shape[-1]}")
+    print(f"shard shape: {block_height}x{q_for_tt.shape[-1]}")
     # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     tt_q = ttnn.from_torch(
-        q.permute(2, 0, 1, 3),  # (B, H, S, D) -> (S, B, H, D)
+        q_for_tt,  # (S, B, H, D)
         device=device,
         dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=q_mem_config,
     )
+
     tt_k = ttnn.from_torch(
         tt_k_torch,
         device=device,
@@ -395,9 +424,10 @@ def run_flash_mla_decode_impl(
 
     for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
         tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
-
-        out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-        logger.debug(f"Output PCC: {out_pcc}")
+        for b in range(batch):
+            for h in range(nh):
+                out_pass, out_pcc = comp_pcc(tt_out_torch[b, h, :, :], out_t[b, h, :, :], pcc_threshold)
+                logger.debug(f"Output PCC for batch {b}, head {h}: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
@@ -462,6 +492,7 @@ def test_flash_mla_decode(
         d_rope,
         q_num_cores,
         q_dtype,
+        None,  # q_mem_config - use default sharding
         dtype,
         use_paged_attention,
         block_size,

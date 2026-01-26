@@ -20,6 +20,7 @@ struct SdpaDecodeProgramFactory {
         uint32_t num_cores_per_batch = 0;
         uint32_t num_cores_per_head = 0;
         uint32_t num_output_cores = 0;
+        tt::tt_metal::CBHandle cb_in0_id{};
         tt::tt_metal::CBHandle cb_in8_id{};
         tt::tt_metal::CBHandle cb_in9_id{};
         bool is_output_sharded = false;
