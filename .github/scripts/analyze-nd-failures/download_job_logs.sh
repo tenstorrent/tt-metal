@@ -10,8 +10,10 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${SCRIPT_DIR}/build_downloaded_logs"
 REPO="tenstorrent/tt-metal"
+
+# Default output directory (can be overridden with --output-dir)
+OUTPUT_DIR=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -206,6 +208,11 @@ main() {
     if [[ ${#urls[@]} -eq 0 ]]; then
         log_error "No URLs provided. Use --help for usage information."
         exit 1
+    fi
+
+    # Set default output directory if not provided
+    if [[ -z "$OUTPUT_DIR" ]]; then
+        OUTPUT_DIR="${SCRIPT_DIR}/build_downloaded_logs"
     fi
 
     # Check if gh CLI is available
