@@ -148,6 +148,7 @@ jobs:
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
+            {
               "name": "GPT-OSS op perf unit tests",
               "model-type": "GPT-OSS",
               "model-name": "gpt-oss",
