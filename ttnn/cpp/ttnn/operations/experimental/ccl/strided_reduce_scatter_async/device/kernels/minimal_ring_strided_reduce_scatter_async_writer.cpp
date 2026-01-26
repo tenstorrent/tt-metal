@@ -83,6 +83,8 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
@@ -219,7 +221,7 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t chunk_width = 2;
-        const uint32_t mm_block_ht = 1;
+        const uint32_t mm_block_ht = 2;
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -243,6 +245,8 @@ void kernel_main() {
         DPRINT << "chunk_width: " << chunk_width << ENDL();
         DPRINT << "direction: " << (uint32_t)direction << ENDL();
         DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
+        DPRINT << "worker_id: " << worker_id << ENDL();
+        DPRINT << "num_workers: " << num_workers << ENDL();
 
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "batch element: " << b << " " << ENDL();

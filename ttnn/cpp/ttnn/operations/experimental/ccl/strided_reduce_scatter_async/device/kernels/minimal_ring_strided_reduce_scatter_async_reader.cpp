@@ -51,6 +51,8 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 16;
 
@@ -110,7 +112,7 @@ void kernel_main() {
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const uint32_t chunk_width = 2;
-    const uint32_t mm_block_ht = 1;
+    const uint32_t mm_block_ht = 2;
 
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
@@ -128,6 +130,8 @@ void kernel_main() {
     DPRINT << " start_pages_read_in_row: " << start_pages_read_in_row << ENDL();
     DPRINT << " start_row_offset: " << start_row_offset << ENDL();
     DPRINT << " out_ready_sem: " << out_ready_sem << ENDL();
+    DPRINT << " worker_id: " << worker_id << ENDL();
+    DPRINT << " num_workers: " << num_workers << ENDL();
 
     uint32_t sem_target = 0;
 
@@ -142,8 +146,6 @@ void kernel_main() {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                 for (uint32_t i = 0; i < ring_size; i++) {
                     DPRINT << "Next ring element: " << i << " " << ENDL();
-                    // DPRINT << "direction: " << (uint32_t)direction << ENDL();
-                    // DPRINT << "slice_idx: " << slice_idx << ENDL();
                     const bool do_reduce = i != 0;
                     uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
@@ -168,7 +170,6 @@ void kernel_main() {
                             sem_target++;
                             DPRINT << "SEMAPHORE WAIT COMPLETE: " << sem_target << ENDL();
                         }
-                        // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                         // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();

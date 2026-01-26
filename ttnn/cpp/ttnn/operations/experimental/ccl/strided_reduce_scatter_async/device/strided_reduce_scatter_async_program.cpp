@@ -1164,6 +1164,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     start_tiles_to_read,                      // start_tiles_to_read
                     start_pages_read_in_row,                  // start_pages_read_in_row
                     start_row_offset,                         // start_row_offset (unused by dim0 kernel)
+                    worker_id,                                // worker_id
+                    num_workers,                              // num_workers
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1198,7 +1200,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     start_row_offset,         // start_row_offset (unused by dim0 kernel)
                     start_tiles_read,         // start_tiles_read
                     start_tiles_to_read,      // tiles_to_read
-
+                    worker_id,                // worker_id
+                    num_workers,              // num_workers
                 };
                 append_fabric_mux_connection_rt_args(
                     mux_connection_valid(dir),

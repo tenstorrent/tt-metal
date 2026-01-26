@@ -78,6 +78,8 @@ void kernel_main() {
     arg_idx++;  // start_row_offset unused by dim 0 kernel
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);

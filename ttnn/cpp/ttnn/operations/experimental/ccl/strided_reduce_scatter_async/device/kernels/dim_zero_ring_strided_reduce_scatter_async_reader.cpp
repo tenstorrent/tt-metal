@@ -42,6 +42,10 @@ void kernel_main() {
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx++;  // start_pages_read_in_row unused by dim0 kernel
+    arg_idx++;  // start_row_offset unused by dim0 kernel
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 10;
 
