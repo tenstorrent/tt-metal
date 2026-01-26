@@ -6,7 +6,7 @@ on:
       device:
         description: 'Select devices to test on'
         required: true
-        default: ['all']
+        default: 'all'
         type: choice
         multiple: true
         options:
@@ -26,8 +26,6 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "0 18 * * 0" # every Sunday at 6pm UTC
   workflow_call:
     inputs:
       device:
