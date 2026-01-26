@@ -106,6 +106,8 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
 
 inline NcoresWHsb compute_ncores_wh_sb(
     size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    // check single_block_size_limit is valid
+    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
     // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
     // Calculate ncores using single_block_size_limit.
@@ -125,7 +127,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
     }
     // single_block_size = n * single_sblock_size
     // Conditions: (1) single_sblock_size < single_block_size_limit
-    //             (2) Maximize total_blocks_sb (computed as with single_block_size)
+    //             (2) Maximize total_blocks_sb (computed by single_block_size)
     //             (3) Minimize n (prefer smaller n for tie-breaker)
     //             (4) blocks_row_cliff < single_sblock_size_limit
     uint32_t single_block_size = 0;
