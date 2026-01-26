@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <numeric>
 
 #include <tt-metalium/buffer_types.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
@@ -557,6 +558,67 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     // Compare with a std::vector copy to avoid allocator type mismatch in EXPECT_EQ
     std::vector<uint32_t> aligned_copy(aligned_buf->begin(), aligned_buf->end());
     EXPECT_EQ(src, aligned_copy);
+}
+
+/*
+Setup Quasar emulator by following these steps:
+https://yyz-gitlab.local.tenstorrent.com/tensix/tt-umd-simulators/-/tree/main/emu?ref_type=heads
+
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter=*QuasarAlignmentTest
+*/
+TEST_F(MeshDeviceFixture, QuasarAlignmentTest) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "This test is only supported on Quasar";
+    }
+
+    auto mesh_device = devices_.at(0);
+    auto* device = mesh_device->get_devices()[0];
+
+    uint32_t size_bytes = 1024;
+    uint32_t base_l1_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    ASSERT_EQ(base_l1_addr % MetalContext::instance().hal().get_alignment(HalMemType::L1), 0);
+
+    std::vector<uint32_t> arrange_data(size_bytes / sizeof(uint32_t));
+    std::iota(arrange_data.begin(), arrange_data.end(), 1);
+
+    CoreCoord logical_core(0, 0);
+    tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_addr, arrange_data, CoreType::WORKER);
+
+    uint32_t offset_addr = base_l1_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t offset_data_size_bytes = 200;
+
+    std::vector<uint32_t> offset_data(offset_data_size_bytes / sizeof(uint32_t), 0xDEADBEEF);
+    tt_metal::detail::WriteToDeviceL1(device, logical_core, offset_addr, offset_data, CoreType::WORKER);
+
+    std::vector<uint32_t> read_data(size_bytes / sizeof(uint32_t));
+    tt_metal::detail::ReadFromDeviceL1(device, logical_core, base_l1_addr, size_bytes, read_data, CoreType::WORKER);
+
+    // Memory layout after both writes:
+    // Bytes 0-15 (4 uint32_t): arrange_data[0-3] = 1, 2, 3, 4
+    // Bytes 16-215 (50 uint32_t): 0xDEADBEEF (overwrites arrange_data[4-53])
+    // Bytes 216-1023: arrange_data[54-255] = 55, 56, ..., 256
+
+    uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t offset_start_idx = alignment / sizeof(uint32_t);               // 16 / 4 = 4
+    uint32_t offset_num_words = offset_data_size_bytes / sizeof(uint32_t);  // 200 / 4 = 50
+    uint32_t offset_end_idx = offset_start_idx + offset_num_words;          // 4 + 50 = 54
+
+    // Validate first 16 bytes (4 uint32_t) are from arrange_data
+    for (uint32_t i = 0; i < offset_start_idx; i++) {
+        EXPECT_EQ(read_data[i], arrange_data[i]) << "Mismatch at index " << i;
+    }
+
+    // Validate next 200 bytes (50 uint32_t) are 0xDEADBEEF
+    for (uint32_t i = offset_start_idx; i < offset_end_idx; i++) {
+        EXPECT_EQ(read_data[i], 0xDEADBEEF)
+            << "Expected 0xDEADBEEF at index " << i << " but got 0x" << std::hex << read_data[i];
+    }
+
+    // Validate remaining bytes are from arrange_data (offset by the overwritten region)
+    for (uint32_t i = offset_end_idx; i < read_data.size(); i++) {
+        EXPECT_EQ(read_data[i], arrange_data[i]) << "Mismatch at index " << i;
+    }
 }
 
 }  // namespace tt::tt_metal
