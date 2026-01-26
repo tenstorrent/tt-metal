@@ -148,13 +148,13 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        card: [N150, N300]
+        card: [N150]  # Single chip only for U22/U24 upgrade testing
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_matrix) }}
     name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
     defaults:
       run:
         shell: bash
-    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
+    runs-on: ["tt-metal-dev-iwang", "${{ matrix.card }}"]  # Target specific test machine
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -229,12 +229,12 @@ jobs:
       fail-fast: false
       matrix:
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.unstable_matrix) }}
-        card: [N150, N300]
+        card: [N150]  # Single chip only for U22/U24 upgrade testing
     name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
     defaults:
       run:
         shell: bash
-    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
+    runs-on: ["tt-metal-dev-iwang", "${{ matrix.card }}"]  # Target specific test machine
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -281,10 +281,10 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        card: [N150, N300]
+        card: [N150]  # Single chip only for U22/U24 upgrade testing
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
+    runs-on: tt-metal-dev-iwang  # Target specific test machine
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
