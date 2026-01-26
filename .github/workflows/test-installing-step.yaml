@@ -1,4 +1,4 @@
-name: "Custom test dispatch"
+name: Test INSTALLING.md install.sh step
 
 on:
   workflow_dispatch:
@@ -17,30 +17,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare system
-        run: |
-          # The runners come with docker preinstalled but we want to
-          # simulate a completely blank system for our Podman install
-          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
-
       - name: Install TT dependencies via TT-Installer
         shell: bash
         run: |
           set -euo pipefail
+          export PATH=/home/ubuntu/.local/bin:$PATH
           curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
           chmod +x install.sh
-
-          timeout 1800 sudo bash ./install.sh \
+          ./install.sh \
             --smi-version=v3.0.38 \
-            --update-firmware=off \
+            --fw-version=19.2.0 \
             --kmd-version=2.5.0 \
-            --install-metalium-models-container \
-            --verbose \
-            --reboot-option=never \
-            --mode-non-interactive
+            --install-container-runtime=no \
+            --metalium-container=models
 
       - name: Run MNIST MLP via tt-metalium-models
         shell: bash
         run: |
           set -euo pipefail
-          sudo /root/.local/bin/tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
+          export PATH=/home/ubuntu/.local/bin:$PATH
+          tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
