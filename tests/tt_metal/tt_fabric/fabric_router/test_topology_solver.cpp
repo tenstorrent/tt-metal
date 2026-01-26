@@ -2519,4 +2519,158 @@ TEST_F(TopologySolverTest, MappingConstraintsOneToManyIntersection) {
     constraints3.add_required_constraint(1, global_nodes3);
     EXPECT_EQ(constraints3.get_valid_mappings(1).size(), 1u);  // Intersection: {10}
 }
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenBasic) {
+    // Test basic forbidden constraint after required constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+
+    // Forbid one mapping
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);  // Forbidden
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+
+    // Forbid another mapping
+    constraints.add_forbidden_constraint(1, 12);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 0u);
+
+    // Verify is_valid_mapping works correctly
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 10));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 11));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 12));
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenOneToMany) {
+    // Test forbidden constraint with multiple global nodes
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12, 13};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 4u);
+
+    // Forbid multiple mappings at once
+    std::set<TestGlobalNode> forbidden_nodes = {11, 13};
+    constraints.add_forbidden_constraint(1, forbidden_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);  // Forbidden
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(13), 0u);  // Forbidden
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenManyToOne) {
+    // Test forbidden constraint with multiple target nodes
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes1 = {10, 11, 12};
+    std::set<TestGlobalNode> global_nodes2 = {10, 11, 13};
+    constraints.add_required_constraint(1, global_nodes1);
+    constraints.add_required_constraint(2, global_nodes2);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+
+    // Forbid one global node for multiple targets
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    constraints.add_forbidden_constraint(target_nodes, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // {10, 12}
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 2u);  // {10, 13}
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 0u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
+    // Test that forbidden constraint cannot contradict required constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+
+    // Try to forbid the required mapping - should throw
+    EXPECT_THROW(constraints.add_forbidden_constraint(1, 10), std::runtime_error);
+
+    // Verify the constraint is still valid after the failed attempt
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenAfterTrait) {
+    // Test forbidden constraint after trait constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host0"}};
+    std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);  // {10, 11}
+
+    // Forbid one of the valid mappings
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 0u);
+
+    // Target 2 should still have both mappings
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 2u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenEmptyValidMappings) {
+    // Test that forbidding all valid mappings causes validation error
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_required_constraint(1, global_nodes);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+
+    // Forbid one mapping - should be fine
+    constraints.add_forbidden_constraint(1, 11);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+
+    // Forbid the remaining mapping - should throw (empty valid mappings)
+    EXPECT_THROW(constraints.add_forbidden_constraint(1, 10), std::runtime_error);
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_WithForbiddenConstraints) {
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add required constraint: target node 1 must map to global node 10
+    // Add forbidden constraint: target node 2 cannot map to global node 12
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // First, add a required constraint for target 2 to restrict its valid mappings
+    std::set<TestGlobalNode> valid_for_2 = {11, 12, 13};
+    constraints.add_required_constraint(2, valid_for_2);
+
+    // Then forbid one of them
+    constraints.add_forbidden_constraint(2, 12);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with forbidden constraint should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify forbidden constraint is satisfied (target 2 should not map to 12)
+    EXPECT_NE(result.target_to_global.at(2), 12) << "Forbidden constraint should be satisfied";
+}
 }  // namespace tt::tt_fabric

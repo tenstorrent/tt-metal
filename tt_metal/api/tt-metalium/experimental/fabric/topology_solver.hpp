@@ -213,6 +213,45 @@ public:
     void add_preferred_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
+     * @brief Add explicit forbidden constraint (one-to-one)
+     *
+     * Forbids a specific target node from mapping to a specific global node.
+     * Removes the mapping from valid mappings. Throws TT_THROW if constraint contradicts
+     * a required constraint or causes empty valid mappings.
+     *
+     * @param target_node The target node to constrain
+     * @param global_node The global node it cannot map to
+     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     */
+    void add_forbidden_constraint(TargetNode target_node, GlobalNode global_node);
+
+    /**
+     * @brief Add explicit forbidden constraint (one-to-many for target node)
+     *
+     * Forbids a specific target node from mapping to any of the provided global nodes.
+     * Removes the mappings from valid mappings. Throws TT_THROW if constraint contradicts
+     * a required constraint or causes empty valid mappings.
+     *
+     * @param target_node The target node to constrain
+     * @param global_nodes The set of global nodes it cannot map to
+     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     */
+    void add_forbidden_constraint(TargetNode target_node, const std::set<GlobalNode>& global_nodes);
+
+    /**
+     * @brief Add explicit forbidden constraint (one-to-many for global node)
+     *
+     * Forbids multiple target nodes from mapping to a specific global node.
+     * Removes the mappings from valid mappings. Throws TT_THROW if constraint contradicts
+     * a required constraint or causes empty valid mappings.
+     *
+     * @param target_nodes The set of target nodes to constrain
+     * @param global_node The global node they cannot map to
+     * @throws std::runtime_error If constraint contradicts required constraint or causes empty valid mappings
+     */
+    void add_forbidden_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
+
+    /**
      * @brief Get valid mappings for a specific target node
      *
      * @param target The target node
@@ -260,7 +299,8 @@ private:
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
 
     // Internal validation - throws if invalid
-    void validate_and_throw() const;
+    // If saved_state is provided and validation fails, restores the saved state before throwing
+    void validate_and_throw(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
 };
 
 /**

@@ -252,7 +252,8 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw() const {
+void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw(
+    const std::map<TargetNode, std::set<GlobalNode>>* saved_state) {
     // Check if any target node has an empty valid_mappings_ set
     std::vector<TargetNode> conflicted_targets;
     for (const auto& [target, valid_set] : valid_mappings_) {
@@ -262,6 +263,14 @@ void MappingConstraints<TargetNode, GlobalNode>::validate_and_throw() const {
     }
 
     if (!conflicted_targets.empty()) {
+        // Restore saved state if provided
+        if (saved_state != nullptr) {
+            // Restore only the affected nodes from saved_state
+            for (const auto& [target, saved_valid_set] : *saved_state) {
+                valid_mappings_[target] = saved_valid_set;
+            }
+        }
+
         std::ostringstream oss;
         oss << "Constraint validation failed: " << conflicted_targets.size()
             << " target node(s) have no valid mappings (overconstrained).\n";
@@ -322,6 +331,51 @@ template <typename TargetNode, typename GlobalNode>
 const std::map<TargetNode, std::set<GlobalNode>>& MappingConstraints<TargetNode, GlobalNode>::get_preferred_mappings()
     const {
     return preferred_mappings_;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+    TargetNode target_node, GlobalNode global_node) {
+    auto it = valid_mappings_.find(target_node);
+    if (it == valid_mappings_.end()) {
+        return;  // No constraints exist for this target
+    }
+
+    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    it->second.erase(global_node);
+    validate_and_throw(&saved_state);
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+    TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
+    auto it = valid_mappings_.find(target_node);
+    if (it == valid_mappings_.end()) {
+        return;  // No constraints exist for this target
+    }
+
+    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    for (const auto& global_node : global_nodes) {
+        it->second.erase(global_node);
+    }
+    validate_and_throw(&saved_state);
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
+    const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    for (const auto& target_node : target_nodes) {
+        auto it = valid_mappings_.find(target_node);
+        if (it != valid_mappings_.end()) {
+            saved_state[target_node] = it->second;
+            it->second.erase(global_node);
+        }
+    }
+
+    if (!saved_state.empty()) {
+        validate_and_throw(&saved_state);
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
