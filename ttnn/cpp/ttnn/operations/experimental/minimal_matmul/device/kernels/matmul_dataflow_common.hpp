@@ -197,6 +197,45 @@ void read_ternary_block_sync(
     noc_async_read_barrier();
 }
 
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_ternary_blocks_sync(
+    const TensorAccessorType& ternary_a_accessor,
+    const TensorAccessorType& ternary_b_accessor,
+    const TensorShape2D& shape,
+    uint32_t ternary_a_write_ptr,
+    uint32_t ternary_b_write_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            if (j >= shape.logical_d1) {
+                ternary_a_write_ptr += tile_size_bytes;
+                ternary_b_write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+                noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            } else {
+                fill_zeros_async(ternary_a_write_ptr, tile_size_bytes);
+                fill_zeros_async(ternary_b_write_ptr, tile_size_bytes);
+            }
+            ternary_a_write_ptr += tile_size_bytes;
+            ternary_b_write_ptr += tile_size_bytes;
+        }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
+        ternary_a_write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+        ternary_b_write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    noc_async_read_barrier();
+}
+
 /**
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N

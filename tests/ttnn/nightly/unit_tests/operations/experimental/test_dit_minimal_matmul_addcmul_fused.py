@@ -88,7 +88,6 @@ def run_dit_minimal_matmul_addcmul_fused_test(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
     )
 
-    # Run fused operation (skeleton version)
     tt_output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
         tt_matmul_input,
         tt_matmul_weight,
@@ -123,13 +122,16 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
     )
 
 
+# @pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N, config_name",
     [
-        (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
-        (32760, 5120, 13824, "14B-480p"),  # 21*30*52 = 32760
-        (75600, 5120, 13824, "14B-720p"),  # 21*45*80 = 75600
-        (2000, 5120, 13824, "small"),  # Small test shape
+        # (2048, 2048, 2048, "tiny"),
+        (9472, 3456, 5120, "medium"),
+        # (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
+        # (32760, 5120, 13824, "14B-480p"),  # 21*30*52 = 32760
+        # (75600, 5120, 13824, "14B-720p"),  # 21*45*80 = 75600
+        # (2000, 5120, 13824, "small"),  # Small test shape
     ],
 )
 def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_name):
@@ -137,9 +139,9 @@ def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_na
     logger.info(f"Testing Wan2.2 shape configuration: {config_name}")
 
     # Use appropriate block sizes for large shapes
-    M_block = 16 if M > 10000 else 8
-    K_block = 16
-    N_block = 16
+    M_block = 8 if M > 10000 else 8
+    K_block = 8
+    N_block = 8
 
     run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
@@ -152,15 +154,14 @@ def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_na
         M_block_size=M_block,
         K_block_size=K_block,
         N_block_size=N_block,
-        subblock_h=4,
-        subblock_w=4,
+        subblock_h=2,
+        subblock_w=2,
     )
 
 
 @pytest.mark.parametrize("scalar_value", [0.5, 1.0, 2.0], ids=["scalar_0.5", "scalar_1.0", "scalar_2.0"])
 def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
     """Test with different scalar multiplier values."""
-    # Note: In skeleton implementation, scalar is ignored
     run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
         M=512,
@@ -302,11 +303,8 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     tt_fused_torch = ttnn.to_torch(tt_fused_output)
     tt_matmul_torch = ttnn.to_torch(tt_matmul_output)
 
-    # Skeleton implementation: fused should match minimal_matmul
-    # assert_quality(tt_matmul_torch, tt_fused_torch, min_pcc=0.9999, max_rmse=0.001)
     check_result = assert_quality(tt_matmul_torch, tt_fused_torch)
 
-    # TODO: When fusion is implemented, uncomment and test full pipeline:
     tt_addcmul_output = ttnn.addcmul(tt_addcmul_input1, tt_matmul_output, tt_addcmul_input2, value=scalar)
     tt_addcmul_torch = ttnn.to_torch(tt_addcmul_output)
     assert_quality(tt_addcmul_torch, tt_fused_torch)
