@@ -125,6 +125,7 @@ color of the square corresponds to the core that is responsible for producing th
 
 .. figure:: images/work_distribution_11_cores.png
    :alt: Output Tile Distribution on Multiple Cores (Each color represents a different core)
+   :width: 700
    :align: center
 
    Figure 2: Output Tile Distribution on Multiple Cores
@@ -360,6 +361,7 @@ This is shown in Figure 3.
 
 .. figure:: images/work_distribution_9_cores.png
    :alt: Output Tile Distribution on Multiple Cores Using Blocking (Each color represents a different core)
+   :width: 700
    :align: center
 
    Figure 3: Output Tile Distribution on Multiple Cores Using Blocking
@@ -424,18 +426,21 @@ We can split the sum over ``k`` into consecutive chunks corresponding to K-block
 
 .. figure:: images/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
+   :width: 250
    :align: center
 
 Define the partial result from block b as:
 
-.. figure:: images/sum_blok_b.png
+.. figure:: images/sum_block_b.png
    :alt: ``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``
+   :width: 200
    :align: center
 
 Then:
 
 .. figure:: images/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
+   :width: 200
    :align: center
 
 The overall approach can be summarized by the following pseudo-code:
