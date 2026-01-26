@@ -275,35 +275,13 @@ class MasterConfigLoader:
     def _build_db_query(self) -> Tuple[str, list]:
         """Build the SQL query for loading configurations from database.
 
+        Uses a CTE to first aggregate all mesh configs within each configuration
+        into a single tensor_placements array, then aggregates configurations per operation.
+        This ensures each configuration appears once with all its mesh placements.
+
         Returns:
             Tuple of (query_string, params_list)
         """
-        # Base query that reconstructs JSON format from normalized tables
-        query = """
-        SELECT
-            o.operation_name,
-            jsonb_agg(
-                jsonb_set(
-                    c.full_config_json,
-                    '{machine_info,0,tensor_placements}',
-                    jsonb_build_array(
-                        jsonb_build_object(
-                            'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
-                            'placement', CASE WHEN mc.placement_type = 'shard'
-                                THEN '[PlacementShard(' || COALESCE(mc.shard_dim::text, '0') || ')]'
-                                ELSE '[PlacementReplicate]' END,
-                            'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
-                        )
-                    )
-                )
-                ORDER BY c.ttnn_configuration_id, mc.device_count
-            ) as configs
-        FROM ttnn_ops.ttnn_operation o
-        JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
-        JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
-        JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
-        """
-
         params = []
         where_clauses = []
 
@@ -312,23 +290,64 @@ class MasterConfigLoader:
             where_clauses.append("mc.mesh_shape = %s")
             params.append(list(MasterConfigLoader._mesh_filter))
 
-        # Add lead model filter if enabled
-        if MasterConfigLoader._lead_models_only:
-            # Join with configuration_model and model tables to filter by lead models
-            query = query.replace(
-                "FROM ttnn_ops.ttnn_operation o",
-                """FROM ttnn_ops.ttnn_operation o
-        JOIN ttnn_ops.ttnn_configuration_model cm_model ON cm_model.configuration_id = c.ttnn_configuration_id
-        JOIN ttnn_ops.ttnn_model m ON m.ttnn_model_id = cm_model.model_id""",
-            )
-            where_clauses.append("m.is_lead_model = true")
-
+        # Build the CTE WHERE clause
+        cte_where = ""
         if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
+            cte_where = " WHERE " + " AND ".join(where_clauses)
 
-        query += " GROUP BY o.operation_name"
+        # Base CTE query that aggregates mesh configs within each configuration
+        cte_query = f"""
+        WITH config_with_placements AS (
+            SELECT
+                c.operation_id,
+                c.ttnn_configuration_id,
+                jsonb_set(
+                    c.full_config_json,
+                    '{{machine_info,0,tensor_placements}}',
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
+                            'placement', CASE WHEN mc.placement_type = 'shard'
+                                THEN '[PlacementShard(' || COALESCE(mc.shard_dim::text, '0') || ')]'
+                                ELSE '[PlacementReplicate]' END,
+                            'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
+                        )
+                        ORDER BY mc.device_count
+                    )
+                ) as config_json
+            FROM ttnn_ops.ttnn_configuration c
+            JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+            {cte_where}
+            GROUP BY c.operation_id, c.ttnn_configuration_id, c.full_config_json
+        )
+        """
 
-        return query, params
+        # Main query that aggregates configurations per operation
+        main_query = """
+        SELECT
+            o.operation_name,
+            jsonb_agg(cwp.config_json ORDER BY cwp.ttnn_configuration_id) as configs
+        FROM ttnn_ops.ttnn_operation o
+        JOIN config_with_placements cwp ON cwp.operation_id = o.ttnn_operation_id
+        """
+
+        # Add lead model filter if enabled (joins to main query, not CTE)
+        if MasterConfigLoader._lead_models_only:
+            main_query = """
+        SELECT
+            o.operation_name,
+            jsonb_agg(cwp.config_json ORDER BY cwp.ttnn_configuration_id) as configs
+        FROM ttnn_ops.ttnn_operation o
+        JOIN config_with_placements cwp ON cwp.operation_id = o.ttnn_operation_id
+        JOIN ttnn_ops.ttnn_configuration_model cm_model ON cm_model.configuration_id = cwp.ttnn_configuration_id
+        JOIN ttnn_ops.ttnn_model m ON m.ttnn_model_id = cm_model.model_id
+        WHERE m.is_lead_model = true
+        """
+
+        main_query += " GROUP BY o.operation_name"
+
+        return cte_query + main_query, params
 
     def get_operation_configs_from_db(self, operation_name: str) -> List:
         """Query configurations for a single operation from database.
@@ -347,14 +366,24 @@ class MasterConfigLoader:
         if not is_ttnn_ops_db_available():
             return []
 
-        # Build query for single operation
-        query = """
-        SELECT
-            jsonb_agg(
+        # Build query for single operation using CTE to aggregate mesh configs per configuration
+        params = [operation_name, operation_name]
+
+        # Build mesh filter clause
+        mesh_filter_clause = ""
+        if MasterConfigLoader._mesh_filter:
+            mesh_filter_clause = " AND mc.mesh_shape = %s"
+            params.append(list(MasterConfigLoader._mesh_filter))
+
+        query = f"""
+        WITH config_with_placements AS (
+            SELECT
+                c.operation_id,
+                c.ttnn_configuration_id,
                 jsonb_set(
                     c.full_config_json,
-                    '{machine_info,0,tensor_placements}',
-                    jsonb_build_array(
+                    '{{machine_info,0,tensor_placements}}',
+                    jsonb_agg(
                         jsonb_build_object(
                             'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
                             'placement', CASE WHEN mc.placement_type = 'shard'
@@ -362,25 +391,21 @@ class MasterConfigLoader:
                                 ELSE '[PlacementReplicate]' END,
                             'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
                         )
+                        ORDER BY mc.device_count
                     )
-                )
-                ORDER BY c.ttnn_configuration_id, mc.device_count
-            ) as configs
-        FROM ttnn_ops.ttnn_operation o
-        JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
-        JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
-        JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
-        WHERE (o.operation_name = %s OR o.base_operation_name = %s)
+                ) as config_json
+            FROM ttnn_ops.ttnn_configuration c
+            JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+            WHERE c.operation_id IN (
+                SELECT o.ttnn_operation_id FROM ttnn_ops.ttnn_operation o
+                WHERE o.operation_name = %s OR o.base_operation_name = %s
+            ){mesh_filter_clause}
+            GROUP BY c.operation_id, c.ttnn_configuration_id, c.full_config_json
+        )
+        SELECT jsonb_agg(config_json ORDER BY ttnn_configuration_id) as configs
+        FROM config_with_placements
         """
-
-        params = [operation_name, operation_name]
-
-        # Add mesh filter if specified
-        if MasterConfigLoader._mesh_filter:
-            query += " AND mc.mesh_shape = %s"
-            params.append(list(MasterConfigLoader._mesh_filter))
-
-        query += " GROUP BY o.operation_name"
 
         try:
             with ttnn_ops_connection() as (conn, cursor):

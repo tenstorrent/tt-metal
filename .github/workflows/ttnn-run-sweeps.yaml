@@ -716,19 +716,27 @@ jobs:
           )
 
           # Build query to reconstruct the JSON structure with tensor_placements injected
-          # This matches the format produced by MasterConfigLoader._build_db_query()
+          # Uses a CTE to first aggregate mesh configs within each configuration,
+          # then aggregates configurations per operation
           mesh_filter = os.environ.get('MESH_FILTER', '')
 
-          # Build the query with jsonb_set to inject tensor_placements into each config
-          # This ensures input_hash matches between database and JSON approaches
-          query = """
-          SELECT
-              o.operation_name,
-              jsonb_agg(
+          # Build WHERE clause for mesh filter
+          mesh_where = ""
+          if mesh_filter:
+              rows, cols = mesh_filter.split('x')
+              mesh_where = f"WHERE mc.mesh_shape[1] = {rows} AND mc.mesh_shape[2] = {cols}"
+
+          # CTE aggregates all mesh configs for each configuration into tensor_placements array
+          # Then outer query aggregates all configurations per operation
+          query = f"""
+          WITH config_with_placements AS (
+              SELECT
+                  c.operation_id,
+                  c.ttnn_configuration_id,
                   jsonb_set(
                       c.full_config_json,
-                      '{machine_info,0,tensor_placements}',
-                      jsonb_build_array(
+                      '{{machine_info,0,tensor_placements}}',
+                      jsonb_agg(
                           jsonb_build_object(
                               'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
                               'placement', CASE WHEN mc.placement_type = 'shard'
@@ -736,22 +744,20 @@ jobs:
                                   ELSE '[PlacementReplicate]' END,
                               'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
                           )
+                          ORDER BY mc.device_count
                       )
-                  )
-                  ORDER BY c.ttnn_configuration_id, mc.device_count
-              ) as configs
+                  ) as config_json
+              FROM ttnn_ops.ttnn_configuration c
+              JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+              JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+              {mesh_where}
+              GROUP BY c.operation_id, c.ttnn_configuration_id, c.full_config_json
+          )
+          SELECT
+              o.operation_name,
+              jsonb_agg(cwp.config_json ORDER BY cwp.ttnn_configuration_id) as configs
           FROM ttnn_ops.ttnn_operation o
-          JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
-          JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
-          JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
-          """
-
-          # Add mesh filter if specified
-          if mesh_filter:
-              rows, cols = mesh_filter.split('x')
-              query += f" WHERE mc.mesh_shape[1] = {rows} AND mc.mesh_shape[2] = {cols}"
-
-          query += """
+          JOIN config_with_placements cwp ON cwp.operation_id = o.ttnn_operation_id
           GROUP BY o.operation_name
           ORDER BY o.operation_name;
           """
