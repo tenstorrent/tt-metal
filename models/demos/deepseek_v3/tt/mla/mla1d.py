@@ -798,14 +798,27 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        return ttnn.as_tensor(
-            torch.concatenate(caches),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
+        cache_tensor = torch.concatenate(caches)
+        if torch.all(cache_tensor == 0):
+            cache_shape = list(cache_tensor.shape)
+            # ttnn.zeros doesn't accept a mesh_mapper, so we need to pass correct shape per device
+            cache_shape[0] = cache_shape[0] // (mesh_device.shape[1] * mesh_device.shape[0])
+            return ttnn.zeros(
+                shape=cache_shape,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            return ttnn.as_tensor(
+                cache_tensor,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+            )
 
     @classmethod
     def forward_decode(
