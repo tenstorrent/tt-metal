@@ -38,9 +38,8 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     presence_term = ttnn.multiply(
         ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
     )
-    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
-    presence_term_bf16.deallocate()
+    logits = ttnn.subtract(logits, presence_term, output_tensor=logits, **op_kwargs)
+    presence_term.deallocate()
 
     # frequency
     output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
@@ -254,6 +253,8 @@ class TTPenalties(LightweightModule):
                 counts_sliced=self.output_counts,
                 mask=self.output_mask,
             )
+            tokens_tt.deallocate()
+            src_tt.deallocate()
 
     def update_output_tokens(self, new_tokens):
         # reshape decode token

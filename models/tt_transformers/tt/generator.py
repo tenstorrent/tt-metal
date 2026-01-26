@@ -342,8 +342,8 @@ class Generator:
 
         all_users = [0] if use_batched_prefill else empty_slots
 
-        # Padded batch size for batched prefill (following Galaxy 70B)
-        padded_batch = 32
+        # Padded batch size for batched prefill - use model's max_batch_size (following Galaxy 70B approach)
+        padded_batch = self.model_args[0].max_batch_size
 
         out_list = []
         for idx, user_id in enumerate(all_users):
@@ -1940,11 +1940,9 @@ class Generator:
     ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
-        num_blocks = 0
-        if trace_enabled:
-            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-        else:
-            num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        # Use prefill_seq_len when available (handles batched prefill where prefill_len may be a list)
+        seq_len_for_blocks = prefill_seq_len if prefill_seq_len is not None else prefill_len
+        num_blocks = num_blocks_in_seq(seq_len_for_blocks, block_size)
         page_table = page_table[:, :num_blocks]
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
