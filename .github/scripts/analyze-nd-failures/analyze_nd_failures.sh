@@ -16,6 +16,9 @@ DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download_job_logs.sh"
 REPO_ROOT="${SCRIPT_DIR}/../../.."
 BASE_OUTPUT_DIR="${REPO_ROOT}/build_ND_analysis"
 
+# Non-root user for running Claude CLI (required because --dangerously-skip-permissions doesn't work as root)
+CLAUDE_USER="claude-runner"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +40,72 @@ log_error() {
 
 log_debug() {
     echo -e "${BLUE}[DEBUG]${NC} $1" >&2
+}
+
+# Function to ensure non-root user exists for Claude CLI
+# Claude CLI's --dangerously-skip-permissions doesn't work as root for security reasons
+ensure_claude_user() {
+    # Skip if not running as root
+    if [[ $(id -u) -ne 0 ]]; then
+        CLAUDE_USER=$(whoami)
+        log_debug "Not running as root, using current user: $CLAUDE_USER"
+        return 0
+    fi
+
+    # Check if user already exists
+    if id "$CLAUDE_USER" &>/dev/null; then
+        log_debug "User $CLAUDE_USER already exists"
+    else
+        log_info "Creating non-root user '$CLAUDE_USER' for Claude CLI..."
+        useradd -m -s /bin/bash "$CLAUDE_USER" 2>/dev/null || {
+            log_error "Failed to create user $CLAUDE_USER"
+            exit 1
+        }
+        log_info "User '$CLAUDE_USER' created successfully"
+    fi
+
+    # Get the claude user's home directory
+    local claude_home
+    claude_home=$(eval echo "~$CLAUDE_USER")
+
+    # Copy Claude credentials to the non-root user if they exist in root's home
+    if [[ -f /root/.claude.json ]]; then
+        cp /root/.claude.json "$claude_home/.claude.json" 2>/dev/null || true
+        chown "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude.json" 2>/dev/null || true
+        chmod 600 "$claude_home/.claude.json" 2>/dev/null || true
+        log_debug "Copied Claude credentials to $CLAUDE_USER"
+    fi
+
+    # Copy Claude config directory if it exists
+    if [[ -d /root/.claude ]]; then
+        cp -r /root/.claude "$claude_home/.claude" 2>/dev/null || true
+        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude" 2>/dev/null || true
+        log_debug "Copied Claude config directory to $CLAUDE_USER"
+    fi
+
+    # Ensure the user has read access to the repository
+    if [[ -d "$REPO_ROOT" ]]; then
+        # Make repo readable by claude user (preserve existing permissions)
+        chmod -R a+rX "$REPO_ROOT" 2>/dev/null || true
+    fi
+}
+
+# Function to run command as claude user (handles both root and non-root cases)
+run_as_claude_user() {
+    local cmd=$1
+
+    if [[ $(id -u) -ne 0 ]]; then
+        # Not root, run directly
+        eval "$cmd"
+    else
+        # Running as root, switch to claude user
+        # Use runuser if available, otherwise su
+        if command -v runuser &>/dev/null; then
+            runuser -u "$CLAUDE_USER" -- bash -c "$cmd"
+        else
+            su - "$CLAUDE_USER" -c "$cmd"
+        fi
+    fi
 }
 
 # Function to check prerequisites
@@ -85,6 +154,9 @@ check_prerequisites() {
         log_error "Download script not found: $DOWNLOAD_SCRIPT"
         exit 1
     fi
+
+    # Ensure non-root user exists for Claude CLI
+    ensure_claude_user
 
     log_info "All prerequisites met"
 }
@@ -363,42 +435,50 @@ run_claude_analysis() {
 
     log_info "Note: This may take several minutes. Large prompts can take time to process..."
 
-    # Claude CLI reads from stdin and uses --model flag
+    # Ensure output directory is writable by claude user
+    local output_dir
+    output_dir=$(dirname "$output_file")
+    if [[ $(id -u) -eq 0 ]]; then
+        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$output_dir" 2>/dev/null || true
+        chmod -R u+rwX "$output_dir" 2>/dev/null || true
+    fi
+
+    # Build the Claude command
     # Use -p flag for non-interactive/pipe mode (print and exit)
-    # Use stdbuf to disable buffering and ensure all output is captured
-    # Use tee to show output in real-time while also saving to file
+    # Use --dangerously-skip-permissions to allow Claude to read source files
+    local claude_cmd="cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions"
+
     local exit_code=0
+    local temp_output
+    temp_output=$(mktemp)
+
+    log_info "Running Claude as user: $CLAUDE_USER"
 
     if command -v timeout &> /dev/null; then
         log_info "Using timeout (10 minute limit)"
-        if command -v stdbuf &> /dev/null; then
-            # Use stdbuf to unbuffer output for better capture
-            # Use --dangerously-skip-permissions to allow Claude to read source files
-            if ! stdbuf -oL -eL timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
-                exit_code=$?
-            fi
-        else
-            # Fallback without stdbuf
-            if ! timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | tee "$output_file"; then
-                exit_code=$?
-            fi
+        if ! timeout 600 bash -c "$(declare -f run_as_claude_user); CLAUDE_USER='$CLAUDE_USER'; run_as_claude_user \"$claude_cmd\"" 2>&1 | tee "$temp_output"; then
+            exit_code=$?
         fi
 
         if [[ $exit_code -eq 124 ]]; then
             log_error "Claude analysis timed out after 10 minutes"
+            cp "$temp_output" "$output_file" 2>/dev/null || true
+            rm -f "$temp_output"
             return 1
         fi
     else
         # No timeout - run directly
-        if command -v stdbuf &> /dev/null; then
-            if ! stdbuf -oL -eL sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
-                exit_code=$?
-            fi
-        else
-            if ! sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p --dangerously-skip-permissions" 2>&1 | tee "$output_file"; then
-                exit_code=$?
-            fi
+        if ! run_as_claude_user "$claude_cmd" 2>&1 | tee "$temp_output"; then
+            exit_code=$?
         fi
+    fi
+
+    # Copy output to final location and fix permissions
+    cp "$temp_output" "$output_file" 2>/dev/null || true
+    rm -f "$temp_output"
+
+    if [[ $(id -u) -eq 0 ]]; then
+        chown root:root "$output_file" 2>/dev/null || true
     fi
 
     # Ensure output is flushed to disk
@@ -417,6 +497,9 @@ run_claude_analysis() {
 
 # Main function
 main() {
+    # Record start time for total duration calculation
+    local start_time=$(date +%s)
+
     local urls=()
     local urls_file=""
     local skip_download=false
@@ -607,9 +690,16 @@ main() {
         log_info "Combined analysis saved to: $combined_output"
     fi
 
+    # Calculate and display total duration
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
+
     # Summary
     echo ""
     log_info "=== Analysis Complete ==="
+    log_info "Total time: ${minutes}m ${seconds}s"
     log_info "Results saved to: $BASE_OUTPUT_DIR"
     for result_file in "${analysis_results[@]}"; do
         echo "  - $result_file"
