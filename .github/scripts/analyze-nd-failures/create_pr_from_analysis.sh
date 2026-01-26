@@ -11,7 +11,8 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${SCRIPT_DIR}/../../.."
+# Resolve to absolute path
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Non-root user for running Claude CLI
 CLAUDE_USER="claude-runner"
@@ -471,12 +472,22 @@ main() {
         stashed=true
     fi
 
+    # Track if we created a branch (for cleanup)
+    local branch_created=false
+
     # Function to restore original state on failure
     cleanup_on_failure() {
         log_warn "Cleaning up after failure..."
-        if [[ -n "$original_branch" ]] && [[ "$original_branch" != "HEAD" ]]; then
+
+        # Delete the branch we created if it exists
+        if [[ "$branch_created" == "true" ]] && [[ -n "$branch_name" ]]; then
+            log_info "Deleting branch '$branch_name'..."
+            git checkout "$original_branch" 2>/dev/null || git checkout "$base_branch" 2>/dev/null || true
+            git branch -D "$branch_name" 2>/dev/null || true
+        elif [[ -n "$original_branch" ]] && [[ "$original_branch" != "HEAD" ]]; then
             git checkout "$original_branch" 2>/dev/null || true
         fi
+
         if [[ "$stashed" == "true" ]]; then
             log_info "Restoring stashed changes..."
             git stash pop 2>/dev/null || true
@@ -519,6 +530,7 @@ main() {
         cleanup_on_failure
         exit 1
     fi
+    branch_created=true
     log_info "Now on branch: $branch_name (based on latest origin/$base_branch)"
 
     # Create implementation prompt
@@ -573,13 +585,8 @@ main() {
         fi
     else
         log_error "Failed to create PR"
-        log_info "Changes are still on branch: $branch_name"
-        if [[ "$stashed" == "true" ]]; then
-            log_info ""
-            log_info "Note: Your original changes are stashed. To restore:"
-            log_info "  git checkout $original_branch && git stash pop"
-        fi
         rm -f "$impl_log"
+        cleanup_on_failure
         exit 1
     fi
 
