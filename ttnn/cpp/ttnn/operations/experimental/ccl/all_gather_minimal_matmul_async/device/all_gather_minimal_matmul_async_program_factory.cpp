@@ -224,7 +224,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
-    const uint32_t chunks_per_sync,
+    const bool force_transpose,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -251,7 +251,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
                 semaphore,
                 barrier_semaphore,
                 using_persistent_buffers,
-                chunks_per_sync,
+                force_transpose,
                 num_workers_per_link,
                 num_buffers_per_channel);
 
@@ -289,7 +289,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
-    const uint32_t chunks_per_sync,
+    const bool force_transpose,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
     auto* device = input_tensor.device();
@@ -388,7 +388,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = M > N;
+    bool transpose_core_grid = force_transpose ? true : (M > N);
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
