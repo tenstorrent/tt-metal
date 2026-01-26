@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mesh Graph Descriptor for 2-Galaxy 1x8 Configuration
+#
+# Topology: Two Galaxy units using 1x8 subset (8 devices each) connected via Ethernet
+# Use case: Disaggregated prefill/decode, KV cache transfer benchmarking
+#
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "Galaxy_1x8"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 8 ] }  # 1 row × 8 cols = 8 devices
+  host_topology   { dims: [ 1, 1 ] }  # Single host per Galaxy
+  channels {
+    count: 4
+    policy: STRICT
+  }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+
+  # Two Galaxy instances: mesh_id=0 (sender), mesh_id=1 (receiver)
+  instances { mesh { mesh_descriptor: "Galaxy_1x8" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "Galaxy_1x8" mesh_id: 1 } }
+
+  # Connection between the two Galaxies (4 ethernet channels)
+  connections {
+    nodes { mesh { mesh_descriptor: "Galaxy_1x8" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Galaxy_1x8" mesh_id: 1 } }
+    channels { count: 4 }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
