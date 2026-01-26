@@ -872,9 +872,7 @@ protected:
 class PrefetcherLinearPackedReadTestFixture : virtual public BasePrefetcherTestFixture {
 protected:
     std::vector<CQPrefetchRelayLinearPackedSubCmd> build_sub_cmds(
-        const std::vector<uint64_t>& lengths,
-        const std::vector<uint64_t>& addresses,
-        uint32_t n_sub_cmds) {
+        const std::vector<uint64_t>& lengths, const std::vector<uint64_t>& addresses, uint32_t n_sub_cmds) {
         std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds;
         sub_cmds.reserve(n_sub_cmds);
         for (uint32_t i = 0; i < n_sub_cmds; i++) {
@@ -899,7 +897,8 @@ protected:
         uint32_t cumulative_l1_offset = 0;  // Track offset across all commands
 
         while (remaining_bytes > 0) {
-            uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
+            uint32_t n_sub_cmds =
+                payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
             uint32_t max_read_size = std::min(DEFAULT_SCRATCH_DB_SIZE / 2, remaining_bytes);
 
             std::vector<uint64_t> lengths;
@@ -932,8 +931,9 @@ protected:
             // Create n_sub_cmds
             std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses, n_sub_cmds);
 
-            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
-                sub_cmds, noc_xy, l1_addr, total_length);
+            HostMemDeviceCommand cmd =
+                CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
+                    sub_cmds, noc_xy, l1_addr, total_length);
 
             commands_per_iteration.push_back(std::move(cmd));
 

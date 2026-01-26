@@ -1570,7 +1570,8 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint64_t total_l
             uint64_t length = sub_cmd->length;
             sub_cmd++;
 
-            uint64_t amt_to_read2 = (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
+            uint64_t amt_to_read2 =
+                (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
             noc_read_64bit_any_len<false>(noc_xy_addr, addr, scratch_read_addr, amt_to_read2);
             scratch_read_addr += amt_to_read2;
             amt_read += amt_to_read2;
@@ -1652,7 +1653,8 @@ static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
 
-    void* end = copy_into_l1_cache<sizeof(CQPrefetchCmdLarge)>(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
+    void* end =
+        copy_into_l1_cache<sizeof(CQPrefetchCmdLarge)>(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
     // Store a sentinal non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayLinearPackedSubCmd*)end)->length = 1;
@@ -1791,7 +1793,8 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
             // DPRINT << "relay linear packed" << ENDL();
             if (exec_buf) {
-                stride = process_exec_buf_relay_linear_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
+                stride =
+                    process_exec_buf_relay_linear_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
                 stride = process_relay_linear_packed_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr, l1_cache);
             }
