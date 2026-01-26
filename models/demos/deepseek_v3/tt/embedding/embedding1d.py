@@ -174,6 +174,29 @@ class Embedding1D(AbstractModule):
     def _forward(cls, x, cfg):
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
 
+        ### Embedding
+        embeddings, original_seq_len = cls._fwd_embedding(x, cfg)
+
+        ### Typecast
+        embeddings_tc = cls._fwd_typecast(embeddings, cfg)
+
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        ### All Gather
+        embeddings_ag = cls._fwd_all_gather(embeddings_tc, cfg, ccl)
+
+        assert len(embeddings_ag.shape) == 4
+        if embeddings_ag.shape[-2] == original_seq_len:
+            return embeddings_ag
+
+        assert embeddings_ag.shape[-2] > original_seq_len
+
+        ### Slice
+        return cls._fwd_slice(embeddings_ag, original_seq_len)
+
+    @classmethod
+    def _fwd_embedding(cls, x, cfg) -> tuple[ttnn.Tensor, int]:
         # TODO: remove this padding once all gather async supports subtile gathering
         # Add padding so that the batch dimension is divisible by TILE_SIZE
         _, _, original_seq_len = x.shape
@@ -185,25 +208,24 @@ class Embedding1D(AbstractModule):
             ttnn.deallocate(x_padded)
 
         embeddings = ttnn.unsqueeze(embeddings, 0)
+        return embeddings, original_seq_len
 
+    @classmethod
+    def _fwd_typecast(cls, embeddings: ttnn.Tensor, cfg) -> ttnn.Tensor:
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)
+        return embeddings_tc
 
-        # CCL runtime initialization in execution order
-        ccl = cfg["ccl"]
-
+    @classmethod
+    def _fwd_all_gather(cls, embeddings_tc: ttnn.Tensor, cfg, ccl: CCL) -> ttnn.Tensor:
         embeddings_ag = ttnn.experimental.all_gather_async(
             embeddings_tc, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
         )
         ttnn.deallocate(embeddings_tc)
+        return embeddings_ag
 
-        assert len(embeddings_ag.shape) == 4
-        if embeddings_ag.shape[-2] == original_seq_len:
-            return embeddings_ag
-
-        assert embeddings_ag.shape[-2] > original_seq_len
-
+    @classmethod
+    def _fwd_slice(cls, embeddings_ag: ttnn.Tensor, original_seq_len: int) -> ttnn.Tensor:
         embeddings_ag_slice = embeddings_ag[:, :, :original_seq_len, :]
         ttnn.deallocate(embeddings_ag)
-
         return embeddings_ag_slice

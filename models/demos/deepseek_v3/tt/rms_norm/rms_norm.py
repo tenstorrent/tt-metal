@@ -67,13 +67,9 @@ class RMSNorm(RMSNormBase):
 
     @classmethod
     def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
-        """Forward pass of the embedding.
+        ### RMSNorm
+        return cls._fwd_rmsnorm(x, cfg)
 
-        Args:
-            x: Input tensor (token indices)
-            cfg: RunConfig containing weights and op configurations
-
-        Returns:
-            Output tensor after embedding lookup
-        """
+    @classmethod
+    def _fwd_rmsnorm(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
         return ttnn.rms_norm(x, program_config=cls._get_pc(x.memory_config()), **cfg)

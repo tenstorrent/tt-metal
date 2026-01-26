@@ -135,6 +135,7 @@ class LMHead1D(AbstractModule):
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
+        ### Lm head projection
         output = ttnn.linear(x, **cfg["linear"])
 
         ttnn.deallocate(x)

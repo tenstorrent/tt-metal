@@ -140,7 +140,7 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 32),
+        ("decode", 32),  # Represents batch for decode mode
     ]
     + [
         ("prefill", seq_len)

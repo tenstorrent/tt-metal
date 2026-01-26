@@ -1,0 +1,9 @@
+prompt: |
+  Debug and fix the unit test {{item}}. First run the unit test and log the output to a log file; verify it's failing. If it's passing, udpate the README.md with the updated info. If it's failing, continue with the debug process. Read the output log carefully and identify the root cause or next steps for debugging. Iterate until the unit test passes. Do not change the reference code, consider this the ground truth. Update the README.md with the updated info.
+check: |
+  Verify that the unit tests with the signature {{item}} passes now by running all unit tests. If any other test is failing now that is marked as passing in the README.md, the check fails. If the test itself is still failing, the check fails. If the test passes, check that the README.md is updated with the updated info.
+  Return an empty string if OK, otherwise explain what is missing.
+on_success: "Acknowledge completion for {{item}} and update the README.md with the updated info."
+on_failure: |
+  Explain why the check failed for {{item}}.
+tear_down: "No cleanup needed."

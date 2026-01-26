@@ -429,55 +429,120 @@ class MLP(AbstractModule):
         return x6
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        num_layers, _, seq_len, _ = x.shape
+    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: dict, ccl: CCL) -> ttnn.Tensor:
+        return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
-        # CCL runtime initialization in execution order
-        ccl = cfg["ccl"]
-
-        # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
-
-        # Chunk the input if needed
-        if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
-            x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
-            seq_len = cfg["max_rows"]
-
-        # Gate and up projections with dynamic program configs
+    @classmethod
+    def _fwd_ff1_prefill(
+        cls, x: ttnn.Tensor, seq_len: int, cfg: RunPrefillConfig
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, int]:
         w1_out = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w1"]
         )
+        return w1_out, seq_len
+
+    @classmethod
+    def _fwd_ff3_prefill(cls, x: ttnn.Tensor, seq_len: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         w3_out = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w3"]
         )
         ttnn.deallocate(x)
+        return w3_out
 
-        # Apply silu
-        # w1_out_activated = cls._silu_workaround(w1_out)
-        # ttnn.deallocate(w1_out)
+    @classmethod
+    def _fwd_ff1_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return ttnn.linear(x, **cfg["w1"])
 
-        # Apply activation and multiply
+    @classmethod
+    def _fwd_ff3_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return ttnn.linear(x, **cfg["w3"])
+
+    @classmethod
+    def _fwd_mul_silu_prefill(cls, w1_out: ttnn.Tensor, w3_out: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
+        return activated
 
-        # Down projection with dynamic program configs, no need to reshard as we are using dram activations
+    @classmethod
+    def _fwd_mul_silu_decode(cls, w1_out: ttnn.Tensor, w3_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        w1_out_activated = cls._silu_workaround(w1_out)
+        ttnn.deallocate(w1_out)
+
+        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out_activated)
+        ttnn.deallocate(w3_out)
+        return activated
+
+    @classmethod
+    def _fwd_ff2_prefill(cls, activated: ttnn.Tensor, seq_len: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         output = ttnn.linear(
             activated,
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
             **cfg["w2"],
         )
         ttnn.deallocate(activated)
+        return output
 
-        # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+    @classmethod
+    def _cond_reshape_before_ff1_prefill(
+        cls, x: ttnn.Tensor, seq_len: int, cfg: RunPrefillConfig
+    ) -> tuple[ttnn.Tensor, int]:
+        if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            x = ttnn.reshape(x, [x.shape[0], even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
+            seq_len = cfg["max_rows"]
+        return x, seq_len
 
+    @classmethod
+    def _cond_reshape_after_ff2_prefill(cls, output: ttnn.Tensor, num_layers: int) -> ttnn.Tensor:
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+        return output
+
+    @classmethod
+    def _fwd_ff2_decode(cls, activated: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        output = ttnn.linear(activated, **cfg["w2"])
+        ttnn.deallocate(activated)
+        return output
+
+    @classmethod
+    def _fwd_reduce_scatter(cls, reduce_scatter_input: ttnn.Tensor, cfg: dict, ccl: CCL) -> ttnn.Tensor:
+        reduce_scatter_output = ttnn.experimental.reduce_scatter_minimal_async(
+            reduce_scatter_input, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
+        ttnn.deallocate(reduce_scatter_input)
+        return reduce_scatter_output
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        num_layers, _, seq_len, _ = x.shape
+
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        ### All Gather
+        x = cls._fwd_all_gather(x, cfg, ccl)
+
+        x, seq_len = cls._cond_reshape_before_ff1_prefill(x, seq_len, cfg)
+
+        ### FF1
+        w1_out, seq_len = cls._fwd_ff1_prefill(x, seq_len, cfg)
+
+        ### FF3
+        w3_out = cls._fwd_ff3_prefill(x, seq_len, cfg)
+
+        ### Multiply + SiLU
+        activated = cls._fwd_mul_silu_prefill(w1_out, w3_out, cfg)
+
+        ### FF2
+        w2_out = cls._fwd_ff2_prefill(activated, seq_len, cfg)
+
+        ### Reduce Scatter
+        w2_out = cls._fwd_reduce_scatter(w2_out, cfg, ccl)
+
+        output = cls._cond_reshape_after_ff2_prefill(w2_out, num_layers)
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output
@@ -488,30 +553,20 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = cls._fwd_all_gather(x, cfg, ccl)
 
         # Gate and up projections
-        w1_out = ttnn.linear(x, **cfg["w1"])
-        w3_out = ttnn.linear(x, **cfg["w3"])
-
-        # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
-        ttnn.deallocate(w1_out)
+        w1_out = cls._fwd_ff1_decode(x, cfg)
+        w3_out = cls._fwd_ff3_decode(x, cfg)
 
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
-        ttnn.deallocate(w3_out)
+        activated = cls._fwd_mul_silu_decode(w1_out, w3_out, cfg)
 
         # Down projection
-        w2_out = ttnn.linear(activated, **cfg["w2"])
-        ttnn.deallocate(activated)
+        w2_out = cls._fwd_ff2_decode(activated, cfg)
 
         # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
-        ttnn.deallocate(w2_out)
+        output = cls._fwd_reduce_scatter(w2_out, cfg, ccl)
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output

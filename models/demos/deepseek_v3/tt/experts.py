@@ -216,15 +216,18 @@ class Experts(AbstractModule):
         num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
         x = ttnn.reshape(x, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size))
 
-        # Gate and up projections
+        ### FF1
         w1_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w1_experts"])
+
+        ### FF3
         w3_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w3_experts"])
 
-        # Apply activation and multiply
+        # Multiply + SiLU
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
+        ### FF2
         # Reshape for down projection
         # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
         activated = ttnn.squeeze(activated, 0)

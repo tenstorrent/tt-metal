@@ -263,8 +263,11 @@ class LMHead(AbstractModule):
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        mesh_scatter(x, **cfg["mesh_scatter"])
-        output = ttnn.linear(x, **cfg["linear"])
+        ### Mesh scatter
+        cls._fwd_mesh_scatter(x, cfg)
+
+        ### Lm head projection
+        output = cls._fwd_lm_head_projection_decode(x, cfg)
 
         assert output.memory_config() == cfg["output_memory_config"]
 
@@ -302,8 +305,25 @@ class LMHead(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
+        ### Mesh scatter
+        cls._fwd_mesh_scatter(x, cfg)
+
+        ### Lm head projection
+        output = cls._fwd_lm_head_projection_prefill(x, cfg)
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
+
+    @classmethod
+    def _fwd_mesh_scatter(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> None:
         mesh_scatter(x, **cfg["mesh_scatter"])
 
+    @classmethod
+    def _fwd_lm_head_projection_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return ttnn.linear(x, **cfg["linear"])
+
+    @classmethod
+    def _fwd_lm_head_projection_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         _, _, seq_len, _ = x.shape
 
         # Use effective sequence length (chunk size) for program config to avoid L1 overflow
@@ -322,5 +342,4 @@ class LMHead(AbstractModule):
         if num_chunks > 1:
             output = ttnn.reshape(output, [1, 1, -1, output_dim])
 
-        assert output.memory_config() == cfg["output_memory_config"]
         return output

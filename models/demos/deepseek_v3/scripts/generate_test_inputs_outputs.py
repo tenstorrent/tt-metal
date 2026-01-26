@@ -231,10 +231,19 @@ def main():
     # Capture prefill
     with torch.no_grad():
         print("Running the prefill phase")
+        prefill_input_ids = model_inputs.input_ids[:, : -args.num_decode_tokens]
+        prefill_len = prefill_input_ids.shape[1]
+        causal_mask = torch.full(
+            (prefill_len, prefill_len),
+            float("-inf"),
+            device=prefill_input_ids.device,
+        )
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+        prefill_attention_mask = causal_mask.unsqueeze(0).unsqueeze(0)
         try:
             model(
-                input_ids=model_inputs.input_ids[:, : -args.num_decode_tokens],
-                attention_mask=model_inputs.attention_mask[:, : -args.num_decode_tokens],
+                input_ids=prefill_input_ids,
+                attention_mask=prefill_attention_mask,
                 past_key_values=kv_cache,
                 use_cache=False,
                 output_attentions=False,
@@ -253,8 +262,10 @@ def main():
     for tok_idx in range(args.num_decode_tokens):
         print(f"Running the decode phase {tok_idx + 1}/{args.num_decode_tokens}")
         input_ids = model_inputs.input_ids[:, -args.num_decode_tokens + tok_idx - 1 : -args.num_decode_tokens + tok_idx]
-        attention_mask = torch.full(
-            (input_ids.shape[0], model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1), float("-inf")
+        kv_len = model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1
+        attention_mask = torch.zeros(
+            (input_ids.shape[0], 1, input_ids.shape[1], kv_len),
+            device=input_ids.device,
         )
         log_dict.update({layer_group: [] for layer_group in log_dict})
         with torch.no_grad():

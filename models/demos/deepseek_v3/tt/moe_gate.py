@@ -292,15 +292,41 @@ class MoEGate(AbstractModule):
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert x.memory_config() == cfg["input_memory_config"]
 
-        # Gate projections
+        ### Gate projection + sigmoid
+        scores = cls._fwd_gate_projection_and_sigmoid(x, cfg)
+
+        ### Add score correction bias
+        scores_with_bias = cls._fwd_add_score_correction_bias(scores, cfg)
+
+        ### Expert selection
+        topk_experts_scores_normalized, topk_experts_indices = cls._fwd_expert_selection(
+            scores,
+            scores_with_bias,
+            cfg,
+        )
+
+        return topk_experts_scores_normalized, topk_experts_indices
+
+    @classmethod
+    def _fwd_gate_projection_and_sigmoid(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+    ) -> ttnn.Tensor:
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
-        # Sigmoid activation
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
-        # Add score correction bias
+        return scores
+
+    @classmethod
+    def _fwd_add_score_correction_bias(
+        cls,
+        scores: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+    ) -> ttnn.Tensor:
         # Expand bias to match scores shape(dynamic shape)
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
         scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
@@ -311,6 +337,15 @@ class MoEGate(AbstractModule):
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
+        return scores_with_bias
+
+    @classmethod
+    def _fwd_expert_selection(
+        cls,
+        scores: ttnn.Tensor,
+        scores_with_bias: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         # Reshape scores to expert groups
         expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
         num_experts_per_group = expert_scores_grouped.shape[3]

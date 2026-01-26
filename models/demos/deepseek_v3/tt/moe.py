@@ -248,19 +248,19 @@ class MoE(SharedStateAddOn, AbstractModule):
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
-        # All Gather
+        ### All Gather
 
         x = cls._fwd_all_gather(x, cfg)
 
-        # MoE Gate
+        ### MoE Gate
 
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
-        # Repeat + Permute Expert weights
+        ### Repeat + Permute Expert weights
 
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
-        # MOE
+        ### MOE
 
         post_combine_output_tensor = cls._fwd_moe(
             x,
@@ -272,7 +272,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Reduce Scatter
+        ### Reduce Scatter
 
         post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
 
