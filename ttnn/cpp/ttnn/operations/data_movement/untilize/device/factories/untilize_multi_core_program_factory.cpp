@@ -52,7 +52,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
-    bool input_is_nd_sharded = a.nd_shard_spec().has_value();
+    bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
 
     // For ND sharded input, compute distribution_spec once and reuse it
     std::optional<BufferDistributionSpec> distribution_spec_opt;
@@ -99,6 +99,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             num_input_blocks_per_full_core =
                 num_blocks_per_shard;  // in legacy 2D sharding, there is only one shard per core.
             num_input_blocks_per_cliff_core = 0;
+
+            uint32_t num_shards_height = tt::div_up(tensor_height, input_shard_height);
+            num_shards = num_shards_height * num_input_blocks_across_width;
         } else {
             const auto& nd_shard_spec = a.nd_shard_spec().value();
             input_shard_height = nd_shard_spec.shard_shape[-2];
@@ -368,7 +371,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         }
 
     } else {
-        for (uint32_t i = 0; i < full_cores.size(); ++i) {
+        uint32_t num_full_cores =
+            input_is_sharded ? std::min(static_cast<uint32_t>(full_cores.size()), num_shards) : full_cores.size();
+        for (uint32_t i = 0; i < num_full_cores; ++i) {
             CoreCoord core = full_cores[i];
             uint32_t height_wise_input_block_start_index =
                 (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
