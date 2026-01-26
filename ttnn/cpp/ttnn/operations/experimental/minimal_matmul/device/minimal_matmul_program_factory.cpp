@@ -160,19 +160,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         use_bias ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor.value().dtype()) : in1_data_format;
     auto in2_tile_size = tt::tile_size(in2_data_format);
 
-    // bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_c.has_value();
-    // TOOD: Add fused ternary op support in kernel
-    // auto in4_data_format = use_fused_ternary
-    //                            ?
-    //                            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype())
-    //                            : output_data_format;  // doesn't matter if not used
-    // auto in5_data_format = use_fused_ternary
-    //                            ?
-    //                            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_c.value().dtype())
-    //                            : output_data_format;  // doesn't matter if not used
-    // auto in4_tile_size = tt::tile_size(in4_data_format);
-    // auto in5_tile_size = tt::tile_size(in5_data_format);
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -417,8 +404,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             : in1_data_format;
 
     // Get fused ternary tensor addresses
-    // uint32_t fused_ternary_a_addr = use_fused_ternary ? fused_ternary_input_a.value().buffer()->address() : 0;
-    // uint32_t fused_ternary_b_addr = use_fused_ternary ? fused_ternary_input_c.value().buffer()->address() : 0;
     auto in3_tile_size = tt::tile_size(in3_data_format);
 
     /**
@@ -493,10 +478,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
-        // in4_tile_size,
-        // in5_tile_size,
     };
-    // append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
     append_accessors(
         in0_receiver_compile_time_args,
         input_tensor,
@@ -535,9 +517,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         true,               // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
-        // TOOD: Add fused ternary op support in kernel
-        // in4_tile_size,
-        // in5_tile_size,
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -577,10 +556,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         false,              // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
-        false,              // is_injector_core
-        // TOOD: Add fused ternary op support in kernel
-        // in4_tile_size,
-        // in5_tile_size,
     };
     append_accessors(
         in1_receiver_compile_time_args,
@@ -692,9 +667,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
-
-        // log_info(tt::LogOp, "core_id: {}, M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
-        // core_id, M_start_tile, M_end_tile, N_start_tile, N_end_tile);
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
@@ -830,19 +802,6 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& override_variables = cached_program.shared_variables;
-
-    // Get fused ternary addresses
-    // TOOD: Add fused ternary op support in kernel
-    // bool has_fused_ternary =
-    //     tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_c.has_value();
-    // auto in4_addr = has_fused_ternary ? tensor_args.fused_ternary_input_a.value().buffer()->address() : 0;
-    // auto in5_addr = has_fused_ternary ? tensor_args.fused_ternary_input_c.value().buffer()->address() : 0;
-
-    // uint32_t scalar_as_uint = 0;
-    // if (has_fused_ternary && operation_attributes.fused_ternary_scalar.has_value()) {
-    //     float scalar = operation_attributes.fused_ternary_scalar.value();
-    //     scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
-    // }
 
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);

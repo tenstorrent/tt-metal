@@ -33,28 +33,28 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
-void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb, bias_cb);
-    reconfig_data_format(in_cb, bias_cb);
-    pack_reconfig_data_format(out_cb);
-    uint32_t fused_act_dst_id = 0;
-
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
-            SFPU_OP_FUNC_ACTIVATION
-#endif
-            pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
-            tile_id++;
-        }
-        cb_push_back(out_cb, N_block_tiles);
-    }
-}
-
+/*
+ * Fused bias and addcmul block
+ *
+ * This functions computes the following operation:
+ * If FUSE_BIAS and FUSE_TERNARY are enabled then:
+ *   output = ternary_a + scalar * (matmul_result + bias) * ternary_b
+ * If FUSE_BIAS is enabled and FUSE_TERNARY is disabled then:
+ *   output = matmul_result + bias
+ * If FUSE_BIAS is disabled and FUSE_TERNARY is enabled then:
+ *    output = ternary_a + scalar * matmul_result * ternary_b
+ *
+ * Note: One of FUSE_BIAS or FUSE_TERNARY must be enabled.
+ *
+ * in_cb: input buffer (matmul result)
+ * bias_cb: bias buffer
+ * ternary_a_cb: ternary a buffer
+ * ternary_b_cb: ternary b buffer
+ * scalar_value: scalar multiplier
+ * out_cb: output buffer
+ * M_block_tiles: number of M block tiles
+ * N_block_tiles: number of N block tiles
+ */
 void add_bias_and_addcmul_block(
     uint32_t in_cb,
     uint32_t bias_cb,
@@ -84,8 +84,11 @@ void add_bias_and_addcmul_block(
             acquire_dst();
 
 #ifdef FUSE_BIAS
+#ifdef FUSE_TERNARY
+            // If fused ternary is enabled then we have to reconfigure unpacker every iteration
             add_bcast_rows_init_short(in_cb, bias_cb);
             reconfig_data_format(in_cb, bias_cb);
+#endif  // FUSE_TERNARY
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #else
             reconfig_data_format_srca(in_cb);
@@ -109,13 +112,6 @@ void add_bias_and_addcmul_block(
 #endif
 
 #ifdef FUSE_TERNARY
-            // Reconfigure data format for reading ternary tensors
-            // reconfig_data_format(ternary_a_cb, ternary_b_cb);
-
-            // fill_tile_init();
-            // fill_tile(ternary_b_dst_id, 5.f);
-            // fill_tile(ternary_a_dst_id, 4.f);
-
             // Perform addcmul: output = ternary_a + (scalar * matmul_result * ternary_b)
             addcmul_tile_init();
             addcmul_tile<DataFormat::Float16_b>(
@@ -208,15 +204,10 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
 
-    // const uint32_t num_tiles = (M_end_tile - M_start_tile) * (N_end_tile - N_start_tile);
-    // DPRINT_MATH(
-    //     DPRINT << "num_tiles = " << num_tiles << ENDL();
-    // );
-
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
 #else
-    // Set default value to maintain compatiblity with add_bias_and_addcmul_block
+    // Set default value to maintain compatibility with add_bias_and_addcmul_block
     // But in this case, this value is not used (set as constexpr to help compiler optimize out)
     constexpr uint32_t fused_ternary_scalar_uint = 0;
 #endif
@@ -340,7 +331,6 @@ void kernel_main() {
                 out_cb,
                 M_block_tiles,
                 N_block_tiles);
-            // add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
 
 #ifdef FUSE_BIAS
             cb_pop_front(in2_cb, N_block_tiles);
