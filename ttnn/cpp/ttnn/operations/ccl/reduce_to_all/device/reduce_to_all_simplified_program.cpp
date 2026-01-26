@@ -429,11 +429,67 @@ reduce_to_all_simplified_program_factory(
     CreateCircularBuffer(program, shard_grid, cb_sync_config);
 
     // =========================================================================
+    // Setup relay masters and relay buffers
+    // =========================================================================
+    // Relay optimization: Only 1 worker per link sends to mux (relay master).
+    // Other 3 workers (relay workers) send their packets to the relay master via NOC.
+    // Relay master: first core per link
+    // Relay workers: remaining 3 cores per link
+    constexpr auto num_links = 2;
+    const uint32_t cores_per_link = num_shard_cores / num_links;
+    constexpr uint32_t num_relay_workers = 3;  // Workers 1, 2, 3 relay through worker 0
+
+    // Identify relay master cores (first core of each link)
+    std::vector<CoreCoord> relay_master_cores = {shard_cores[0], shard_cores[cores_per_link]};
+
+    // Relay buffer size: header + payload (L + S + M aligned)
+    // Note: packet_header_size_bytes is already defined above for CB creation
+    const uint32_t relay_buffer_size = tt::round_up(packet_header_size_bytes + total_packet_size, l1_alignment);
+
+    // Create relay semaphores on relay master cores (one per relay worker)
+    // These semaphores signal when a relay worker has written its packet to the relay buffer
+    // Reused for both R1 and R2 phases
+    std::vector<std::vector<uint32_t>> relay_sems_per_link(num_links);
+    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+        CoreCoord relay_master = relay_master_cores[link_idx];
+        for (uint32_t i = 0; i < num_relay_workers; i++) {
+            relay_sems_per_link[link_idx].push_back(CreateSemaphore(program, {relay_master}, 0));
+        }
+    }
+
+    // Allocate relay buffers on relay master cores using L1 space
+    // We use a fixed offset from the base L1 address to avoid CB allocation complexity
+    // The relay buffers are placed after the CB space
+    const uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    // Estimate CB space usage (conservative upper bound)
+    // This ensures relay buffers don't overlap with CB allocations
+    const uint32_t estimated_cb_space =
+        (out_tiles * aligned_page_size) * 6 +  // L tensors: local, r1_neighbor, r1_result, r2_neighbor, l_out, l2_temp
+        (Sq_chunk_t * aligned_page_size) * 12 +  // S/M tensors and temps
+        (4 * packet_header_size_bytes) +         // packet_header CB
+        (2 * total_packet_size) +                // packet CB
+        aligned_page_size +                      // sync CB
+        4096;                                    // Safety margin
+
+    // Relay buffer base address (after CB space)
+    const uint32_t relay_buffer_base = l1_unreserved_base + estimated_cb_space;
+
+    // Calculate relay buffer addresses for each link
+    // Each relay master has 3 relay buffers (one per relay worker)
+    std::vector<std::vector<uint32_t>> relay_buffer_addrs_per_link(num_links);
+    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+        for (uint32_t i = 0; i < num_relay_workers; i++) {
+            relay_buffer_addrs_per_link[link_idx].push_back(relay_buffer_base + i * relay_buffer_size);
+        }
+    }
+
+    // =========================================================================
     // Setup mux cores and config
     // =========================================================================
-    constexpr auto num_links = 2;
-    // Each link has its own mux and termination master, so workers per mux = cores_per_link
-    const uint32_t num_workers_per_direction = num_shard_cores / num_links;
+    // With relay optimization: only 1 client per mux (the relay master)
+    // Previously: num_workers_per_direction = num_shard_cores / num_links = 4
+    constexpr uint32_t num_mux_clients_per_direction = 1;  // Only relay master connects to mux
 
     std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
     if (operation_attributes.input_mux_cores.has_value()) {
@@ -447,7 +503,7 @@ reduce_to_all_simplified_program_factory(
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
+        num_mux_clients_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -490,30 +546,33 @@ reduce_to_all_simplified_program_factory(
     // Writer compile-time args
     // Build base args first, then calculate mux indices based on size
     std::vector<uint32_t> writer_ct_args = {
-        Sq_chunk_t,             // 0
-        vDHt,                   // 1
-        cb_local_l,             // 2
-        cb_local_s,             // 3
-        cb_local_m,             // 4
-        cb_r1_result_l,         // 5
-        cb_r1_result_s,         // 6
-        cb_r1_result_m,         // 7
-        cb_packet_header,       // 8
-        cb_packet,              // 9
-        l1_alignment,           // 10
-        input_page_size_bytes,  // 11
-        cb_sync,                // 12
+        Sq_chunk_t,                          // 0
+        vDHt,                                // 1
+        cb_local_l,                          // 2
+        cb_local_s,                          // 3
+        cb_local_m,                          // 4
+        cb_r1_result_l,                      // 5
+        cb_r1_result_s,                      // 6
+        cb_r1_result_m,                      // 7
+        cb_packet_header,                    // 8
+        cb_packet,                           // 9
+        l1_alignment,                        // 10
+        input_page_size_bytes,               // 11
+        cb_sync,                             // 12
+        num_relay_workers,                   // 13 - number of relay workers (3)
+        relay_buffer_size,                   // 14 - size of each relay buffer
+        (uint32_t)packet_header_size_bytes,  // 15 - packet header size
     };
 
     // Calculate mux indices based on current size.
-    // The indices will be at positions 13 and 14, followed by the mux args.
+    // The indices will be at positions 16 and 17, followed by the mux args.
     // r1_mux_ct_idx points to where R1 mux args start (after base args + 2 indices)
     // r2_mux_ct_idx points to where R2 mux args start (after R1 mux args)
     constexpr uint32_t num_mux_args_per_direction = 5;
     uint32_t r1_mux_ct_idx = writer_ct_args.size() + 2;  // +2 for the two index args we're about to add
     uint32_t r2_mux_ct_idx = r1_mux_ct_idx + num_mux_args_per_direction;
 
-    // Push the calculated indices (positions 13 and 14)
+    // Push the calculated indices (positions 16 and 17)
     writer_ct_args.push_back(r1_mux_ct_idx);
     writer_ct_args.push_back(r2_mux_ct_idx);
 
@@ -522,13 +581,14 @@ reduce_to_all_simplified_program_factory(
     // the same mux_kernel_config. The FWD vs BWD direction only affects RUNTIME args
     // (mux core coordinates, semaphores). The memory layout, buffer sizes, status
     // addresses, etc. are the same for all muxes sharing a config.
+    // With relay optimization, only 1 client (relay master) connects to each mux.
     simplified_fabric_mux_ct_args(
-        num_workers_per_direction,
+        num_mux_clients_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         writer_ct_args);  // R1 mux config
     simplified_fabric_mux_ct_args(
-        num_workers_per_direction,
+        num_mux_clients_per_direction,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         writer_ct_args);  // R2 mux config (identical values, different runtime mapping)
@@ -611,8 +671,7 @@ reduce_to_all_simplified_program_factory(
     auto r1_recv_sem = semaphores[0];
     auto r2_recv_sem = semaphores[1];
 
-    // Split shard cores per link
-    const uint32_t cores_per_link = num_shard_cores / num_links;
+    // Split shard cores per link (cores_per_link already defined in relay setup)
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
@@ -662,8 +721,17 @@ reduce_to_all_simplified_program_factory(
         const auto& cores_for_link = (link_idx == 0) ? cores_link_1 : cores_link_2;
         uint32_t worker_id = 0;
 
+        // Get relay master info for this link
+        CoreCoord relay_master_logical = relay_master_cores[link_idx];
+        CoreCoord relay_master_noc = mesh_device->worker_core_from_logical_core(relay_master_logical);
+
+        // Get relay buffer addresses for this link
+        const auto& relay_buffer_addrs = relay_buffer_addrs_per_link[link_idx];
+
         for (auto& core : cores_for_link) {
             auto core_noc = mesh_device->worker_core_from_logical_core(core);
+            bool is_relay_master = (core == relay_master_logical);
+            uint32_t worker_idx_in_link = worker_id;  // 0 = relay master, 1-3 = relay workers
 
             // Reader runtime args
             // Include buffer addresses so reader can memcpy S and M from packet buffer
@@ -688,7 +756,33 @@ reduce_to_all_simplified_program_factory(
                 r2_recv_sem.address(),               // 6: R2 neighbor semaphore
                 core_noc.x,                          // 7: current_core_x
                 core_noc.y,                          // 8: current_core_y
+                is_relay_master ? 1u : 0u,           // 9: is_relay_master flag
             };
+
+            if (is_relay_master) {
+                // Relay master runtime args:
+                // - Relay buffer addresses (3 buffers for 3 relay workers)
+                // - Relay semaphore addresses (3 semaphores, reused for R1 and R2)
+                writer_rt_args.push_back(relay_buffer_addrs[0]);             // 10: relay_buffer_0_addr
+                writer_rt_args.push_back(relay_buffer_addrs[1]);             // 11: relay_buffer_1_addr
+                writer_rt_args.push_back(relay_buffer_addrs[2]);             // 12: relay_buffer_2_addr
+                writer_rt_args.push_back(relay_sems_per_link[link_idx][0]);  // 13: relay_sem_0
+                writer_rt_args.push_back(relay_sems_per_link[link_idx][1]);  // 14: relay_sem_1
+                writer_rt_args.push_back(relay_sems_per_link[link_idx][2]);  // 15: relay_sem_2
+            } else {
+                // Relay worker runtime args:
+                // - Relay master NOC coordinates
+                // - This worker's assigned relay buffer address on master
+                // - This worker's assigned relay semaphore address on master
+                uint32_t relay_worker_idx = worker_idx_in_link - 1;  // 0, 1, or 2
+                uint32_t my_relay_buffer_addr = relay_buffer_addrs[relay_worker_idx];
+                uint32_t my_relay_sem_addr = relay_sems_per_link[link_idx][relay_worker_idx];
+
+                writer_rt_args.push_back(relay_master_noc.x);    // 10: relay_master_noc_x
+                writer_rt_args.push_back(relay_master_noc.y);    // 11: relay_master_noc_y
+                writer_rt_args.push_back(my_relay_buffer_addr);  // 12: my_relay_buffer_addr
+                writer_rt_args.push_back(my_relay_sem_addr);     // 13: my_relay_sem_addr
+            }
 
             // Determine which physical mux (FWD or BWD) is used for R1 and R2
             // mux_cores layout: [link0_bwd, link0_fwd, link1_bwd, link1_fwd]
@@ -707,12 +801,16 @@ reduce_to_all_simplified_program_factory(
             CoreCoord r1_term_master_virtual = mesh_device->worker_core_from_logical_core(r1_term_master);
             CoreCoord r2_term_master_virtual = mesh_device->worker_core_from_logical_core(r2_term_master);
 
-            // Add R1 mux runtime args (must match order of compile-time args!)
+            // Add R1 mux runtime args
+            // With relay optimization, only relay master uses the mux (channel 0)
+            // All cores get mux args but only relay master uses them
+            // Always use worker_id 0 since mux is configured for 1 client only
+            constexpr uint32_t mux_worker_id = 0;
             simplified_fabric_mux_rt_args(
-                core == r1_term_master,
+                is_relay_master,  // Only relay master is termination master
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 r1_mux_virtual,
-                worker_id,
+                mux_worker_id,
                 core,
                 mux_kernel_config,
                 program,
@@ -722,10 +820,10 @@ reduce_to_all_simplified_program_factory(
 
             // Add R2 mux runtime args
             simplified_fabric_mux_rt_args(
-                core == r2_term_master,
+                is_relay_master,  // Only relay master is termination master
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 r2_mux_virtual,
-                worker_id,
+                mux_worker_id,
                 core,
                 mux_kernel_config,
                 program,
