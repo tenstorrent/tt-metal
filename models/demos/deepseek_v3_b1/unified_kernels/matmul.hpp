@@ -106,20 +106,22 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w == 1) {
+            if constexpr (out_w <= 8) {
                 // Use optimized custom_mm API for single output tile with K-dimension reduction
                 custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
 
                 tile_regs_acquire();
 
-                // Single call handles all K tiles internally via MOP replay
-                custom_mm_block(args.in0, args.in1, 0, 0, 0, transpose, args.k_num_tiles);
+                for (uint32_t w = 0; w < out_w; w++) {
+                    custom_mm_block(args.in0, args.in1, 0, w, w, transpose, args.k_num_tiles, out_w);
+                }
 
                 tile_regs_commit();
 
-                // Pack output tile
                 tile_regs_wait();
-                pack_tile(0, args.out, 0);
+                for (uint32_t w = 0; w < out_w; w++) {
+                    pack_tile(w, args.out, w);
+                }
                 tile_regs_release();
             } else {
                 // Use standard matmul API for multiple output tiles
