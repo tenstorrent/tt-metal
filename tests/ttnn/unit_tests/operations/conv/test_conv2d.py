@@ -68,7 +68,6 @@ def test_conv_features(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if (
         is_watcher_enabled()
-        and output_layout == ttnn.TILE_LAYOUT
         and output_channels == 353
         and input_channels == 384
         and shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
