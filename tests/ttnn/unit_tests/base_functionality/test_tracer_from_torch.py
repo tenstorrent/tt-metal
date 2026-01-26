@@ -9,6 +9,7 @@ import transformers
 import ttnn
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize(
     "shape",
     [(1, 1, 5632, 64)],
