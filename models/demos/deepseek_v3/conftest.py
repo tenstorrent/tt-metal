@@ -168,8 +168,21 @@ def hf_config(model_path):
 
 
 @pytest.fixture(scope="session")
-def state_dict(model_path):
-    yield load_state_dict(model_path, "")
+def state_dict(model_path, request):
+    # Check if we're using synthetic weights - if so, return empty dict
+    # This avoids needing real model files for synthetic weight tests
+    if hasattr(request, "param") and request.param and request.param.get("use_synthetic_weights"):
+        yield {}
+    else:
+        # For real weights, check if model files exist
+        import pathlib
+
+        index_path = pathlib.Path(model_path) / "model.safetensors.index.json"
+        if not index_path.exists():
+            # Return empty dict if no model files (likely using synthetic weights)
+            yield {}
+        else:
+            yield load_state_dict(model_path, "")
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -185,7 +198,9 @@ def clear_state_dict_cache(request):
 
     state_dict = request.getfixturevalue("state_dict")
     yield
-    state_dict.clear_cache()
+    # Only clear cache if it's a LazyStateDict, not a regular dict
+    if hasattr(state_dict, "clear_cache"):
+        state_dict.clear_cache()
 
 
 @pytest.fixture(scope="session")
@@ -252,11 +267,17 @@ def force_recalculate_weight_config(request):
 
 @pytest.fixture(scope="session")
 def cache_path():
-    try:
-        default_cache = f"/localdev/{os.getlogin()}/deepseek-v3-cache"
-    except OSError:
-        default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
-    return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
+    # If DEEPSEEK_V3_CACHE is explicitly set, use it
+    cache_env = os.getenv("DEEPSEEK_V3_CACHE")
+    if cache_env:
+        return Path(cache_env)
+
+    # When DEEPSEEK_V3_CACHE is not set (e.g., for synthetic weights),
+    # use a temporary directory that doesn't require special permissions
+    import tempfile
+
+    temp_dir = tempfile.mkdtemp(prefix="deepseek_v3_cache_")
+    return Path(temp_dir)
 
 
 def get_current_device_type() -> str:

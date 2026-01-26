@@ -16,15 +16,114 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import dequantize, even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     dequantize_state_dict,
     get_model_config,
     get_test_weight_config,
     run_module_forward,
 )
+
+
+def generate_synthetic_moe_expert_weights(
+    hf_config,
+    seed: int = 42,
+) -> Dict[str, torch.Tensor]:
+    """Generate synthetic weights for MoE experts that resemble real trained weights.
+
+    This function generates weights with distributions similar to real DeepSeek V3 MoE expert weights
+    based on empirical analysis of the actual model weights from HuggingFace.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dictionary containing weight tensors for all MoE expert components
+    """
+    torch.manual_seed(seed)
+
+    # Extract dimensions
+    hidden_size = hf_config.hidden_size
+    moe_intermediate_size = hf_config.moe_intermediate_size
+    n_routed_experts = hf_config.n_routed_experts
+
+    # Block size for quantization
+    block_size = 128
+
+    def create_quantized_weight(shape, target_std_after_dequant):
+        """Create FP8 weight and scale that produces target std after dequantization."""
+        # Create weights in FP8 range with reasonable distribution
+        fp8_std = 30.0  # Use a good portion of FP8 range
+        weight_fp8 = (torch.randn(shape) * fp8_std).to(torch.float8_e4m3fn)
+
+        # Calculate inv_scale to achieve target std after dequantization
+        # After dequant: weight_float = weight_fp8 * inv_scale
+        # We want: std(weight_float) = target_std_after_dequant
+        # So: inv_scale ≈ target_std_after_dequant / fp8_std
+        inv_scale = target_std_after_dequant / fp8_std
+        return weight_fp8, inv_scale
+
+    def create_scale_tensor_from_base(weight_shape, base_inv_scale):
+        """Create scale tensor matching the blocked dimensions of the weight."""
+        # Calculate number of blocks in each dimension
+        num_blocks_0 = (weight_shape[0] + block_size - 1) // block_size
+        num_blocks_1 = (weight_shape[1] + block_size - 1) // block_size
+        # Create scale tensor with small variation around the base value
+        scale = torch.ones(num_blocks_0, num_blocks_1) * base_inv_scale
+        # Add small variation (±10%) to simulate block-wise quantization
+        scale = scale * (1.0 + torch.randn(num_blocks_0, num_blocks_1) * 0.1)
+        # Ensure positive values
+        scale = torch.clamp(scale, min=1e-6)
+        return scale
+
+    # Generate weights for all experts
+    weights = {}
+
+    # Based on real DeepSeek V3 weight analysis:
+    # Expert weights have varying std, but typical ranges are:
+    # gate_proj: std ≈ 0.0024-0.0049
+    # up_proj: std ≈ 0.0023-0.0048
+    # down_proj: std ≈ 0.0038-0.0074
+
+    for expert_idx in range(n_routed_experts):
+        prefix = f"experts.{expert_idx}."
+
+        # Add some variation between experts (±30% around mean)
+        variation = 1.0 + (torch.randn(1).item() * 0.3)
+
+        # Target standard deviations based on real weight analysis
+        gate_std = 0.0035 * variation  # Average of observed range
+        up_std = 0.0035 * variation
+        down_std = 0.0055 * variation  # Down projections tend to have larger std
+
+        # Create quantized weights with appropriate scales
+        gate_weight, gate_scale_base = create_quantized_weight((moe_intermediate_size, hidden_size), gate_std)
+        up_weight, up_scale_base = create_quantized_weight((moe_intermediate_size, hidden_size), up_std)
+        down_weight, down_scale_base = create_quantized_weight((hidden_size, moe_intermediate_size), down_std)
+
+        weights[f"{prefix}gate_proj.weight"] = gate_weight
+        weights[f"{prefix}up_proj.weight"] = up_weight
+        weights[f"{prefix}down_proj.weight"] = down_weight
+
+        # Generate scale tensors with proper blocked dimensions
+        weights[f"{prefix}gate_proj.weight_scale_inv"] = create_scale_tensor_from_base(
+            (moe_intermediate_size, hidden_size), gate_scale_base
+        )
+        weights[f"{prefix}up_proj.weight_scale_inv"] = create_scale_tensor_from_base(
+            (moe_intermediate_size, hidden_size), up_scale_base
+        )
+        weights[f"{prefix}down_proj.weight_scale_inv"] = create_scale_tensor_from_base(
+            (hidden_size, moe_intermediate_size), down_scale_base
+        )
+
+    # Ensure proper dtypes for scale tensors
+    for key in weights:
+        if "scale_inv" in key:
+            weights[key] = weights[key].to(torch.float32)
+
+    return weights
 
 
 class DeepseekV3MoEExperts(nn.Module):
@@ -106,19 +205,54 @@ def test_forward_pass(
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
+
+    # Use deterministic input for reproducibility, especially important for synthetic weights
+    torch.manual_seed(42)  # Fixed seed for input generation
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
-    if weight_type == "random":
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
-        )
+    if use_synthetic_weights:
+        # Generate synthetic weights
+        synthetic_weights = generate_synthetic_moe_expert_weights(hf_config)
+
+        # Dequantize synthetic weights for the reference model
+        dequantized_weights = {}
+        block_shape = hf_config.quantization_config["weight_block_size"]
+
+        for name, tensor in synthetic_weights.items():
+            if name.endswith("_scale_inv"):
+                continue  # Skip scale tensors
+            elif tensor.dtype == torch.float8_e4m3fn:
+                # Dequantize FP8 weights using their scale tensors
+                scale_name = name + "_scale_inv"
+                if scale_name in synthetic_weights:
+                    scale_tensor = synthetic_weights[scale_name]
+                    # Dequantize using the scale
+                    dequantized_tensor = dequantize(tensor, scale_tensor, block_shape)
+                    dequantized_weights[name] = dequantized_tensor.to(torch.bfloat16)
+                else:
+                    dequantized_weights[name] = tensor.to(torch.bfloat16)
+            else:
+                # Keep non-quantized weights as-is
+                dequantized_weights[name] = tensor
+
+        # Load dequantized weights into reference model
+        reference_model.load_state_dict(dequantized_weights)
+
+        # Use synthetic weights (with quantization) for TTNN weight conversion
+        state_dict = synthetic_weights
     else:
         assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
 
+    # Force recalculation when using synthetic weights to avoid cache issues
     weight_config = get_test_weight_config(
-        TTExperts, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        TTExperts,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        use_synthetic_weights or force_recalculate_weight_config,
     )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
@@ -179,6 +313,7 @@ def test_forward_pass(
 
         chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=0.98)
 
+        print(f"Chunk {chunk_idx} PCC: {chunk_pcc:.6f}")
         min_pcc = min(min_pcc, chunk_pcc)
         if not chunk_passed:
             passed = False
