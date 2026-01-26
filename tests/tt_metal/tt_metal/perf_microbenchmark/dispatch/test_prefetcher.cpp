@@ -896,6 +896,7 @@ protected:
 
         uint32_t remaining_bytes = DEVICE_DATA_SIZE;
         uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cumulative_l1_offset = 0;  // Track offset across all commands
 
         while (remaining_bytes > 0) {
             uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
@@ -906,7 +907,6 @@ protected:
             lengths.reserve(n_sub_cmds);
             addresses.reserve(n_sub_cmds);
             uint64_t total_length = 0;
-            uint32_t current_l1_offset = 0;
 
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
                 // limit the length to min and max read size
@@ -917,9 +917,9 @@ protected:
                 lengths.push_back(length);
 
                 // Linear address in L1 - read from already written data
-                uint64_t addr = l1_base + current_l1_offset;
+                uint64_t addr = l1_base + cumulative_l1_offset;
                 addresses.push_back(addr);
-                current_l1_offset += length;
+                cumulative_l1_offset += length;
             }
 
             // If we're about to exceed DEVICE_DATA_SIZE, then exit
@@ -937,14 +937,15 @@ protected:
 
             commands_per_iteration.push_back(std::move(cmd));
 
-            // Update device_data with expected data - we're reading from pre-populated L1
-            // The data was written as sequential values (0, 1, 2, 3, ...) starting at addresses[0]
-            // We need to push the actual values that will be read
+            // Update device_data with expected data
+            // We pre-populated L1 with sequential values [0, 1, 2, 3, ...]
+            // Reading from addresses[i] will get the values starting at that offset
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
-                uint32_t offset_start = (addresses[i] - l1_base) / sizeof(uint32_t);
+                uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 uint32_t length_words = lengths[i] / sizeof(uint32_t);
+                // The prefetcher reads these values and dispatcher writes them sequentially to destination
                 for (uint32_t j = 0; j < length_words; j++) {
-                    device_data.push_one(first_worker, offset_start + j);
+                    device_data.push_one(first_worker, offset_words + j);
                 }
             }
 
