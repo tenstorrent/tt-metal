@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -34,7 +35,7 @@ struct OnePacketConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePacketConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -183,7 +184,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 /* ========== Test case for reading varying number of packets and packet sizes; Test id = 80 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -219,7 +220,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
 /* ========== Test case for writing varying number of packets and packet sizes; Test id = 81 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
@@ -343,6 +344,42 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
                 .num_packets = num_packets,
                 .packet_size_bytes = packet_size_bytes,
                 .read = true,
+                .use_2_0 = true,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 257;
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 85,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = false,
                 .use_2_0 = true,
             };
 
