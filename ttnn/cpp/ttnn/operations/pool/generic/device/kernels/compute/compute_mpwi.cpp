@@ -14,7 +14,7 @@
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/copy_dest_values.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
