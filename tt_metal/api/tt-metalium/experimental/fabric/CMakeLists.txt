@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Experimental Fabric API Headers
-set(TT_METAL_EXPERIMENTAL_FABRIC_API
-    api/tt-metalium/experimental/fabric/control_plane.hpp
-    api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
-    api/tt-metalium/experimental/fabric/fabric.hpp
-    api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
-    api/tt-metalium/experimental/fabric/fabric_types.hpp
-    api/tt-metalium/experimental/fabric/mesh_graph.hpp
-    api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
-    api/tt-metalium/experimental/fabric/routing_table_generator.hpp
-    api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
-    api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
-    api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
-    PARENT_SCOPE
+target_sources(
+    tt_metal
+    PUBLIC
+        FILE_SET api
+        FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/control_plane.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/edm_fabric_counters.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fabric.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fabric_edm_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fabric_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph_descriptor.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/routing_table_generator.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/topology_mapper_utils.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fabric_telemetry.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fabric_telemetry_reader.hpp
 )

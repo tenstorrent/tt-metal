@@ -27,14 +27,17 @@ add_custom_target(
 )
 
 # Load public API headers from subdirectory
-add_subdirectory(api/tt-metalium)
+# Create the FILE_SET with TYPE and BASE_DIRS first
 target_sources(
     tt_metal
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
-        FILES ${TT_METAL_PUBLIC_API}
+)
+add_subdirectory(api/tt-metalium)
+target_sources(
+    tt_metal
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
