@@ -10,6 +10,9 @@ from typing import Any, overload
 
 from loguru import logger
 
+import concurrent.futures
+from tqdm import tqdm
+
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
@@ -123,6 +126,80 @@ def create_run_config(model_config, weight_config, *model_states, cached_ttnn_we
     )
 
     return run_config
+
+
+def preload_weights_parallel(
+    model_config: ModelPrefillConfig | ModelDecodeConfig,
+    weight_config: WeightConfig,
+    *model_states: ModelState,
+    cached_ttnn_weights: dict[str, ttnn.Tensor],
+    max_workers: int = 32,
+):
+    """
+    Preload weights in parallel into the cache.
+    This function identifies all unique (SavedWeight, Device) pairs from the config
+    and loads them using a thread pool.
+    """
+    # The states are merged to create a single unified model state.
+    unified_model_state = functools.reduce(
+        lambda cfg1, cfg2: _merge_config_containers(
+            cfg1,
+            cfg2,
+            merge_config_specific_items=_merge_model_states,
+            search_for_mesh_device=False,
+            mb_mesh_device=None,
+        ),
+        model_states,
+    )
+
+    # The model config and state config are merged first to determine the mesh devices to load the configs on.
+    model_state_config = _merge_config_containers(
+        model_config,
+        unified_model_state,
+        merge_config_specific_items=_merge_model_config_state_items,
+        search_for_mesh_device=True,
+        mb_mesh_device=None,
+    )
+
+    weights_to_load = []
+
+    def _collect_for_preload(model_state_config_item: Any, weight_config_item: Any, _: Any = None) -> Any:
+        if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, SavedWeight):
+            if weight_config_item.path not in cached_ttnn_weights:
+                weights_to_load.append((weight_config_item, model_state_config_item.mesh_device))
+        return None
+
+    # Traverse configs to collect load tasks
+    _merge_config_containers(
+        model_state_config,
+        weight_config,
+        merge_config_specific_items=_collect_for_preload,
+        search_for_mesh_device=False,
+        mb_mesh_device=None,
+    )
+
+    if not weights_to_load:
+        return
+
+    logger.info(f"Parallelly preloading {len(weights_to_load)} weights using {max_workers} workers...")
+
+    # Load in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {
+            executor.submit(load_weight, sw, dev): sw.path for sw, dev in weights_to_load
+        }
+        for future in tqdm(
+            concurrent.futures.as_completed(future_to_path),
+            total=len(future_to_path),
+            desc="Preloading weights",
+            unit="tensor",
+        ):
+            path = future_to_path[future]
+            try:
+                cached_ttnn_weights[path] = future.result()
+            except Exception as e:
+                logger.error(f"Failed to preload weight {path}: {e}")
+                raise
 
 
 def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_mesh_device: ttnn.Device | None) -> Any:

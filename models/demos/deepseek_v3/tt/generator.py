@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
-from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.run_config import create_run_config, preload_weights_parallel
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -204,6 +204,14 @@ class DeepseekGenerator:
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self._prepare_model_states(kv_cache_override=kv_cache_override)
+            logger.info("Preloading weights parallelly (prefill)...")
+            preload_weights_parallel(
+                self.model_prefill_cfg,
+                self.model_weight_config,
+                self.model_state,
+                self.model_shared_state,
+                cached_ttnn_weights=self._weight_ttnn_cache,
+            )
             self.model_run_config_prefill = create_run_config(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -221,6 +229,14 @@ class DeepseekGenerator:
             ), "Model shared state must be prepared before creating decode run config. Run _prepare_run_configs('prefill') first."
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
+            )
+            logger.info("Preloading weights parallelly (decode)...")
+            preload_weights_parallel(
+                self.model_decode_cfg,
+                self.model_weight_config,
+                self.model_state,
+                self.model_shared_state,
+                cached_ttnn_weights=self._weight_ttnn_cache,
             )
             self.model_run_config_decode = create_run_config(
                 self.model_decode_cfg,
