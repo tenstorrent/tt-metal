@@ -259,14 +259,10 @@ void serialize_asic_to_fabric_node_mapping_to_file(
 
         // Emit each mesh within this hostname
         for (const auto& [mesh_id, chip_mappings] : mesh_mappings) {
-            // First emit mesh entry
+            // Emit mesh and chips in a single map entry
             emitter << YAML::BeginMap;
             emitter << YAML::Key << "mesh";
             emitter << YAML::Value << *mesh_id;
-            emitter << YAML::EndMap;
-
-            // Then emit chips entry
-            emitter << YAML::BeginMap;
             emitter << YAML::Key << "chips";
             emitter << YAML::Value << YAML::BeginSeq;
 
@@ -306,7 +302,7 @@ void serialize_asic_to_fabric_node_mapping_to_file(
             }
 
             emitter << YAML::EndSeq;
-            emitter << YAML::EndMap;
+            emitter << YAML::EndMap;  // End the map containing both mesh and chips
         }
 
         emitter << YAML::EndSeq;
