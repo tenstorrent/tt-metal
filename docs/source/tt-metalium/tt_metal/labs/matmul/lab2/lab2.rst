@@ -294,7 +294,7 @@ Creating a kernel on a core without setting runtime arguments can lead to undefi
 Exercise 1: Multi Core Matrix Multiplication
 ============================================
 
-Perform the following steps::
+Perform the following steps:
 
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
 #. Verify correctness by comparing the results against the reference matrix multiplication
@@ -309,6 +309,10 @@ Perform the following steps::
    Ensure that you build with Release option and that DPRINTs are disabled.
 #. Create a plot showing relationship between speedup and number of cores used.
    The speedup should be expressed relative to performance of single core implementation from Lab 1.
+
+**Important Note**
+
+If you are working on a device with fewer than 100 Tensix cores, adjust the core grid sizes accordingly.
 
 
 Background: Data Reuse in Multi Core Matrix Multiplication
@@ -384,54 +388,116 @@ If the program is compute-bound, we may choose to:
 * Add more cores across one or both dimensions of the core grid, if higher number of cores
   is available and will divide the number of tiles evenly.
 
-Assigning rectangular blocks to output tiles doesn't address the problem that bringing e.g.
+
+Limiting On-Chip Memory Usage
+=============================
+
+Assigning rectangular blocks to output tiles doesn't address the problem that bringing, for example,
 entire row of ``A`` into on-chip SRAM may not be possible due to limited on-chip memory.
 In fact, for data reuse to be fully effective with blocking, we need multiple rows of input tiles
 in on-chip memory at the same time. The solution is to break down the ``K`` dimension into smaller chunks
-of tiles and compute partial results for each chunk, which require only a subset of the input
+of tiles and compute **partial results** for each chunk, which require only a subset of the input
 tiles that is small enough to fit into on-chip SRAM.
 Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
-avoid performance degradation due to repeated writes and reads to off-chip DRAM.
+avoid performance degradation due to repeated accesses to off-chip DRAM.
 
 We will again assume multiplication of two matrices ``A`` of shape ``MxK`` and ``B`` of shape ``KxN``,
 with the resulting matrix ``C`` having shape ``MxN``.
-We will assume that all the matrix dimensions are divisible by the tile size, and use the notation
-``Mt = M / TILE_HEIGHT`` and ``Nt = N / TILE_WIDTH`` to denote the number of tiles in the
-``M`` and ``N`` dimensions, respectively.
+We will assume that all the matrix dimensions are divisible by the tile size, and use the notation:
+
+* ``Mt = M / TILE_HEIGHT``
+* ``Nt = N / TILE_WIDTH``
+
+to denote the number of tiles in the ``M`` and ``N`` dimensions, respectively.
+Similarly, let
+
+* ``Kt = K / TILE_WIDTH``
+
+be the number of tiles in the ``K`` dimension.
 
 In blocked matrix multiplication, each core is responsible for computing a rectangular block of
-output tiles ``C_block`` consisting of ``M_block_tiles`` rows of tiles and ``N_block_tiles`` columns of tiles.
+output tiles ``C_block`` consisting of
+
+* ``M_block_tiles`` rows of tiles, and
+* ``N_block_tiles`` columns of tiles.
+
 The division of the ``Mt`` and ``Nt`` dimensions into blocks is done simply by dividing
 the number of tiles in each dimension by the number of cores in that dimension of the core grid.
 
-To compute all tiles in a block, the core needs the matching ``M_block_tiles x Kt`` tile rows of ``A``
-(we will call this ``A_block``) and the matching ``Kt x N_block_tiles`` tile columns of ``B``
-(we will call this ``B_block``).
-Since this is too large to fit into on-chip SRAM, we split the ``Kt`` dimension into K-blocks of size ``K_block_tiles``,
-such that ``Kt = num_k_blocks * K_block_tiles``.
-For each K-block index ``b`` in range ``(0, 1, ..., num_k_blocks-1)`` we define:
+To compute all tiles in ``C_block``, the core needs the matching tiles from ``A`` and ``B``:
+
+* The tiles of ``A`` covering all rows of this block and the full K range:
+
+  - ``M_block_tiles x Kt`` block of tiles (call this ``A_block``)
+
+* The tiles of ``B`` covering the full K range and all columns of this block:
+
+  - ``Kt x N_block_tiles`` block of tiles (call this ``B_block``).
+
+Taken together, ``A_block`` and ``B_block`` are typically too large to fit into on‑chip SRAM.
+To fix this, we split the ``Kt`` dimension into smaller K-blocks of size ``K_block_tiles``,
+such that ``num_k_blocks = Kt / K_block_tiles``.
+For each K-block index ``b`` in range ``0 .. num_k_blocks`` we define:
 
 * ``A_slab(b)``: tiles of ``A``, not consisting of full rows, but rather of only appropriate ``K_block_tiles`` tiles
   in the row (size: ``M_block_tiles * K_block_tiles``).
 * ``B_slab(b)``: tiles of ``B``, not consisting of full columns, but rather of only appropriate ``K_block_tiles`` tiles
   in the column (size: ``K_block_tiles * N_block_tiles``).
 
-If we choose ``K_block_tiles`` judiciously, then both ``A_slab(b)`` and ``B_slab(b)``, and
-the partial results can all fit into the on-chip SRAM.
+If we choose ``K_block_tiles`` carefully, then both ``A_slab(b)`` and ``B_slab(b)``, and
+the partial results for ``C_block`` can all fit into the on-chip SRAM at the same time.
 
-To figure out the exact computation that needs to be performed, consider the computation
-of a single output element: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``.
-We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks:
+.. figure:: images/split_k_dimension.png
+   :alt: Splitting the Kt dimension into K-blocks
+   :width: 250
+   :align: center
 
-* Each K-block ``b`` spans some range of ``k`` values: ``b * K_block_tiles .. (b + 1) * K_block_tiles``.
-  Then:
+   Figure 4: Splitting the Kt dimension into K-blocks
+
+An example is shown in Figure 4, where each rectangle represents a tile.
+In this example, ``Mt`` = 9, ``Nt`` = 9, ``Kt`` = 6, with the core grid size being ``3x3``.
+As a result, ``M_block_tiles`` = 3 and ``N_block_tiles`` = 3, whcih means ``C_block`` has shape ``3x3``.
+One of the ``C_block`` tiles is highlighted in purple in the output matrix ``C``.
+The corresponding ``A_block`` and ``B_block`` tiles are highlighted in shades of purple in the
+input matrices ``A`` and ``B``. If we assume that ``A_block`` and ``B_block`` are too large
+to fit into on-chip SRAM, we split the ``Kt`` dimension into ``K_block_tiles`` = ``2``, which means
+there are ``num_k_blocks`` = ``3`` K-blocks. Therefore:
+
+* ``A_slab(b)`` has shape ``3x2`` tiles, and
+* ``B_slab(b)`` has shape ``2x3`` tiles.
+
+Each "slab" is indicated by a different shade of purple in Figure 4.
+
+To figure out the exact computation that needs to be performed, such that each slab needs to be read
+only once, we need to consider the computation of a single output tile ``C[i][j]``:
+
+.. figure:: images/sum_standard.png
+   :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
+   :width: 200
+   :align: center
+
+This requires traversing every tile in row ``i`` of ``A_block`` and every tile in column ``j``
+of ``B_block``. However, we know that we don't have the entire row of ``A`` and column of ``B``
+in on-chip SRAM at the same time. Therefore, we need to split the computation such that all
+computation involving a single slab is performed in a single pass.
+We can do this by observing that, for a given K-block ``b``, the computation requires only slabs
+from the ``A_block`` and ``B_block`` that are at matching block indices ``b`` (i.e. the ones with
+the same shade of purple in Figure 4).
+Therefore, we can decompose the computation of ``C[i][j]`` so that for every ``b`` in range
+``(0, 1, ..., num_k_blocks-1)`` we bring into on-chip SRAM slabs ``A_slab(b)`` and ``B_slab(b)``
+and calculate contributions from ``A_slab(b)`` and ``B_slab(b)`` to all output tiles that are part
+of ``C_block`` before proceeding to the next pair of slabs.
+
+We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
+Each K-block ``b`` spans some range of ``k`` values: ``b * K_block_tiles .. (b + 1) * K_block_tiles``.
+Given this, we can decompose the computation of ``C[i][j]`` as follows:
 
 .. figure:: images/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
    :width: 250
    :align: center
 
-Define the partial result from block b as:
+Define the partial result for block ``b`` as:
 
 .. figure:: images/sum_block_b.png
    :alt: ``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``
@@ -445,7 +511,11 @@ Then:
    :width: 200
    :align: center
 
-The overall approach can be summarized by the following pseudo-code:
+Note that if understanding above equations with respect to tiles is confusing,
+try thinking of them as individual elements rather than tiles.
+The underlying math is the same, but it becomes easier to verify your understanding.
+
+The overall approach can be summarized by the following pseudo-code for a compute core:
 
 .. code-block:: cpp
 
@@ -454,16 +524,17 @@ The overall approach can be summarized by the following pseudo-code:
        Ensure that A_slab(b) is in CB0 // Size: M_block_tiles * K_block_tiles.
        Ensure that B_slab(b) is in CB1 // Size: K_block_tiles * N_block_tiles.
        // For every output tile (i,j) in this C_block:
-       for (i in 0 .. M_block_tiles) {
-           for (j in 0 .. N_block_tiles) {
+       for (i in 0 .. M_block_tiles) { // For every row in the A_slab(b)
+           for (j in 0 .. N_block_tiles) { // For every column in the B_slab(b)
                // Get the current accumulator tile for C(i,j)
                acc_tile = zero_tile()
                if (b != 0)
-                  // Middle or last K-block: reload partial result built so far
-                  acc_tile = load_partial_C_tile(i, j)
+                  // Middle or last K-block: partial result for C(i, j) already exists.
+                  // Load the partial result built so far
+                  acc_tile = partial_C_tile(i, j)
 
                // Add this K-block's contribution to acc_tile
-               for (k_local in 0 .. K_block_tiles) {
+               for (k_local in 0 .. K_block_tiles) { // Iterate over K dimension of the K-block
                    // Indices into the current A and B slabs
                    a_tile = A_slab_tile(i, k_local)
                    b_tile = B_slab_tile(k_local, j)
@@ -471,13 +542,15 @@ The overall approach can be summarized by the following pseudo-code:
                    // Multiply and accumulate into the accumulator tile
                    acc_tile += matmul(a_tile, b_tile)
                }
+
                // Store updated result for C(i,j)
                if (b == num_blocks - 1)
                   // Last K-block: acc_tile has the final result for C(i,j)
-                  store_final_C_tile(i, j, acc_tile)
+                  // Store it to the final destination.
+                  final_C_tile(i, j) = acc_tile
                else
                   // Not last K-block: acc_tile is a partial result to be reused later
-                  store_partial_C_tile(i, j, acc_tile)
+                  partial_C_tile(i, j) = acc_tile
            }
        }
    }
