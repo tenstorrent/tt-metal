@@ -21,39 +21,6 @@ def assert_quality(torch_output, tt_output):
     }
 
 
-# def assert_quality(torch_output, tt_output, min_pcc=0.999, max_rmse=0.05):
-#     """Assert PCC and RMSE quality metrics for test outputs."""
-#     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
-
-
-#     # if pcc_passed:
-#     #     return
-
-#     import pandas as pd
-#     import torch
-
-#     # Save tensors to file for debugging/alignment verification
-#     # torch.save({'torch_output': torch_output, 'tt_output': tt_output}, 'debug_outputs.pt')
-
-#     def print_with_indices(tensor, name):
-#         arr = tensor.to(torch.float32).detach().cpu().numpy()
-#         df = pd.DataFrame(arr)
-#         # print(f"{name} (rows: 0-{df.shape[0]-1}, cols: 0-{df.shape[1]-1}):")
-#         # print(df.to_string(index=True, header=True))
-#         df.to_csv(f"debug_outputs_{name.lower().replace(' ', '_').replace('/', '_')}.csv")
-
-#     # print_with_indices(torch_output, "TORCH OUTPUT")
-#     print_with_indices(tt_output, "TT OUTPUT")
-
-#     assert pcc_val >= min_pcc, f"PCC {pcc_val:.7f} is below minimum {min_pcc}"
-
-#     assert_allclose(torch_output, tt_output, atol=1e-2, rtol=0.05), "Outputs are not close"
-
-#     return {
-#         "pcc": pcc_val,
-#     }
-
-
 def run_dit_minimal_matmul_addcmul_fused_test(
     device,
     M,
@@ -84,16 +51,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # residual
     torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate
 
-    # torch_matmul_input = torch.full_like(torch_matmul_input, fill_value=1.0)
-    # torch_matmul_weight = torch.full_like(torch_matmul_weight, fill_value=1.0)
-    # torch_matmul_weight = torch.eye(K, N, dtype=torch.bfloat16)
-
-    # Debug: Test with constant values first
-    # torch_addcmul_a = torch.full_like(torch_addcmul_a, fill_value=4.0)  # expected output will be == 1
-    # torch_addcmul_b = torch.full_like(torch_addcmul_b, fill_value=5.0)  # expected output will be == 1
-
     torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
-    # torch_bias = torch.full((1, N), fill_value=1.0, dtype=torch.bfloat16)
 
     # Compute expected torch output (full fused operation)
     with torch.no_grad():
@@ -102,8 +60,6 @@ def run_dit_minimal_matmul_addcmul_fused_test(
             torch_matmul_output = torch_matmul_output + torch_bias
         # Full fused result (what we want in the future)
         torch_expected_fused = torch.addcmul(torch_addcmul_a, torch_matmul_output, torch_addcmul_b, value=scalar)
-        # Skeleton result (what we get now - just matmul)
-        torch_expected_skeleton = torch_matmul_output
 
     # Convert to ttnn tensors
     tt_matmul_input = ttnn.from_torch(torch_matmul_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -146,9 +102,6 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    # For skeleton implementation, compare against matmul output only
-    # TODO: When fusion is implemented, compare against torch_expected_fused
-    # check_result = assert_quality(torch_expected_fused, tt_output_torch, min_pcc=0.999, max_rmse=0.05)
     check_result = assert_quality(torch_expected_fused, tt_output_torch)
 
     logger.info(f"Test passed for M={M}, K={K}, N={N}")
@@ -161,16 +114,15 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
     """Basic functionality test with small shapes."""
     run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
-        M=256,  # 256,
-        K=512,  # 512,
-        N=1024,  # 1024,
+        M=256,
+        K=512,
+        N=1024,
         scalar=1.0,
         dtype=dtype,
         use_bias=use_bias,
     )
 
 
-@pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N, config_name",
     [
@@ -288,7 +240,6 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     Compare fused operation with separate minimal_matmul and addcmul calls.
 
     Note: In skeleton implementation, we only compare with minimal_matmul.
-    TODO: Add addcmul comparison when fusion is implemented.
     """
     torch.manual_seed(0)
 
@@ -356,8 +307,8 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     check_result = assert_quality(tt_matmul_torch, tt_fused_torch)
 
     # TODO: When fusion is implemented, uncomment and test full pipeline:
-    # tt_addcmul_output = ttnn.addcmul(tt_addcmul_input1, tt_matmul_output, tt_addcmul_input2, value=scalar)
-    # tt_addcmul_torch = ttnn.to_torch(tt_addcmul_output)
-    # assert_quality(tt_addcmul_torch, tt_fused_torch, min_pcc=0.999, max_rmse=0.05)
+    tt_addcmul_output = ttnn.addcmul(tt_addcmul_input1, tt_matmul_output, tt_addcmul_input2, value=scalar)
+    tt_addcmul_torch = ttnn.to_torch(tt_addcmul_output)
+    assert_quality(tt_addcmul_torch, tt_fused_torch)
 
     logger.info("Comparison test passed: fused operation matches separate minimal_matmul")
