@@ -333,7 +333,7 @@ def _get_tt_sharded_dense_input(
 
     shape0 = dense_contribs_tensor.shape
 
-    local_experts = shape0[0] // ttnn.get_num_devices()
+    local_experts = shape0[0] // math.prod(tuple(device.shape))
     num_tokens = shape0[1]
     hidden = shape0[2]
 
@@ -434,7 +434,8 @@ def _run_op_with_trace(num_iters, op_func, mesh_device, profiler):
     time_taken = profiler.get_duration("selective-reduce-combine-trace") - profiler.get_duration(
         "selective-reduce-combine-trace-warmup"
     )
-    logger.info(f"Time taken e2e: {time_taken} s")
+    time_taken = time_taken / num_iters * 1000000
+    logger.info(f"Time taken e2e: {time_taken} us")
 
     return tt_out
 
@@ -473,7 +474,7 @@ def _run_test(
     )
 
     # print(f"{dense_metadata_tensor=}")
-    #     print(f"{dense_token_counts_tensor=}")
+    print(f"{dense_token_counts_tensor=}")
 
     tt_dense_contribs = _get_tt_sharded_dense_input(
         dense_contribs_tensor,
@@ -639,5 +640,77 @@ def test_decode_trace(
             num_test_iters,
             trace_mode=True,
             profiler=profiler,
+        )
+        logger.info(f"Decode iter: {i} success")
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
+@pytest.mark.parametrize("batch", [128])
+@pytest.mark.parametrize("experts", [32])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [4])
+@pytest.mark.parametrize("num_data_parallel_cores", [4])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
+@pytest.mark.parametrize("num_outer_test_iters", [1])
+@pytest.mark.parametrize("num_test_iters", [40])
+def test_deepseek_perf(
+    mesh_device,
+    batch,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq,
+    cluster_axis,
+    worker_core_range,
+    num_token_parallel_cores,
+    num_data_parallel_cores,
+    num_links,
+    mux_core_range,
+    num_outer_test_iters,
+    num_test_iters,
+):
+    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+
+    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
+    assert mux_cores.num_cores() >= num_links * 2
+
+    profiler = BenchmarkProfiler()
+
+    for i in range(num_outer_test_iters):
+        _run_test(
+            batch,
+            experts,
+            select_experts_k,
+            hidden_size,
+            seq,
+            cluster_axis,
+            worker_cores,
+            num_data_parallel_cores,
+            num_token_parallel_cores,
+            num_links,
+            mux_cores,
+            mesh_device,
+            num_test_iters,
+            trace_mode=True,
+            profiler=profiler,
+            scheme="sequential",
         )
         logger.info(f"Decode iter: {i} success")

@@ -408,7 +408,8 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true, SenderType>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<false, false, SenderType>(
+            fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
