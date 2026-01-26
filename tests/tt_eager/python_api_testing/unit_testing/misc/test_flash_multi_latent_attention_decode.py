@@ -166,6 +166,7 @@ def run_flash_mla_decode_impl(
     dtype,
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
+    reuse_k=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -320,12 +321,16 @@ def run_flash_mla_decode_impl(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_v = ttnn.from_torch(
-        tt_v_torch,
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    tt_v = (
+        ttnn.from_torch(
+            tt_v_torch,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if not reuse_k
+        else None
     )
 
     tt_start_indices = ttnn.from_torch(
@@ -359,6 +364,7 @@ def run_flash_mla_decode_impl(
             tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
                 tt_q,
                 tt_k,
+                tt_v,
                 head_dim_v=kv_lora_rank,
                 cur_pos_tensor=tt_start_indices,
                 scale=scale,
@@ -453,6 +459,13 @@ def run_flash_mla_decode_impl(
         128,
     ],
 )
+@pytest.mark.parametrize(
+    "reuse_k",
+    [
+        # False,
+        True,
+    ],
+)
 def test_flash_mla_decode(
     device,
     batch,
@@ -466,6 +479,7 @@ def test_flash_mla_decode(
     dtype,
     use_paged_attention,
     block_size,
+    reuse_k,
     function_level_defaults,
     reset_seeds,
 ):
@@ -482,4 +496,5 @@ def test_flash_mla_decode(
         dtype,
         use_paged_attention,
         block_size,
+        reuse_k,
     )

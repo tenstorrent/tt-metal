@@ -67,11 +67,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     if (use_mla) {
         // Head dim v validation
-        TT_FATAL(
-            v_shape[3] == operation_attributes.head_dim_v.value(),
-            "Head dimension of V tensor must be equal to head_dim_v, got {} and {}",
-            v_shape[3],
-            operation_attributes.head_dim_v.value());
+        if (tensor_args.v.has_value()) {
+            TT_FATAL(
+                v_shape[3] == operation_attributes.head_dim_v.value(),
+                "Head dimension of V must be equal to head_dim_v, got {} and {}",
+                v_shape[3],
+                operation_attributes.head_dim_v.value());
+        }
         TT_FATAL(
             q_shape[3] == k_shape[3],
             "Head dimension of Q must be equal to head dim of K, got {} and {}",
@@ -221,11 +223,13 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         if (use_mla) {
             TT_FATAL(
                 k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
-            TT_FATAL(
-                v_shape[3] == operation_attributes.head_dim_v.value(),
-                "V must have hidden size equal to head_dim_v, got {} and {}",
-                v_shape[3],
-                operation_attributes.head_dim_v.value());
+            if (tensor_args.v.has_value()) {
+                TT_FATAL(
+                    v_shape[3] == operation_attributes.head_dim_v.value(),
+                    "V must have hidden size equal to head_dim_v, got {} and {}",
+                    v_shape[3],
+                    operation_attributes.head_dim_v.value());
+            }
         } else {
             TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
         }
@@ -292,12 +296,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "K tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
             k_shape[-1],
             D);
-        TT_FATAL(
-            v_shape[-1] == D,
-            "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
-            v_shape[-1],
-            D);
 
+        if (!use_mla) {
+            TT_FATAL(
+                v_shape[-1] == D,
+                "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+                v_shape[-1],
+                D);
+        }
         // Check valid seqlen
         for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
             TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
