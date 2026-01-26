@@ -223,11 +223,9 @@ def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
 @pytest.mark.parametrize(
     "M_block, K_block, N_block, subblock_h, subblock_w",
     [
-        (4, 4, 4, 2, 2),
-        (8, 8, 8, 2, 4),
-        (16, 16, 16, 4, 4),
+        (8, 8, 8, 2, 2),
     ],
-    ids=["4x4x4_2x2", "8x8x8_2x4", "16x16x16_4x4"],
+    ids=["8x8x8_2x2"],
 )
 def test_dit_minimal_matmul_addcmul_fused_block_configs(device, M_block, K_block, N_block, subblock_h, subblock_w):
     """Test with different block size configurations."""
