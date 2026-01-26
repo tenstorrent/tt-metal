@@ -536,9 +536,14 @@ def test_avg_pool2d_compute_kernel_config(
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
+        # Manual num_slices tests
         ([2, 32, 1024, 1024], 8),
         ([1, 320, 384, 384], 6),
         ([1, 256, 81, 81], 2),
+        # Automatic num_slices tests (num_slices=0 means framework determines num_slices)
+        ([2, 32, 1024, 1024], 0),
+        ([1, 320, 384, 384], 0),
+        ([1, 256, 81, 81], 0),
     ),
 )
 @pytest.mark.parametrize(
@@ -586,7 +591,7 @@ def test_avg_pool2d_compute_kernel_config(
 )
 @pytest.mark.parametrize(
     "slice_type",
-    [SliceWidth, SliceHeight],
+    [SliceWidth, SliceHeight, None],
 )
 def test_avg_pool2d_dram(
     device,
@@ -605,7 +610,15 @@ def test_avg_pool2d_dram(
 ):
     if slice_type == SliceHeight and input_shape[3] >= 256:
         pytest.skip("Skip height slice for inputs with large width")
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+
+    # Handle three cases:
+    # 1. slice_type=None -> fully automatic (dram_slice_config=None, framework chooses direction AND num_slices)
+    # 2. num_slices=0 -> semi-automatic (framework determines num_slices only)
+    # 3. num_slices>0 -> manual (explicit num_slices and slice_type)
+    if slice_type is None:
+        dram_slice_config = None  # Fully automatic
+    else:
+        dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
 
     run_avg_pool2d(
         device=device,

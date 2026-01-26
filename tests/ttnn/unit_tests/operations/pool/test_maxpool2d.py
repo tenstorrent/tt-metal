@@ -28,6 +28,7 @@ parameters = {
         "input_specs": [
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type]
+            # Manual num_slices tests
             [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth],
             [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth],
             [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight],
@@ -38,6 +39,17 @@ parameters = {
             [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
             [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
             [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
+            # Automatic num_slices tests (num_slices=0 means framework determines num_slices)
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, BS, SliceWidth],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 0, WS, SliceHeight],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, SliceWidth],
+            [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, SliceHeight],
+            # Fully automatic tests (slice_type=None means framework chooses direction AND num_slices)
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, None],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, BS, None],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, None],
+            [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 0, BS, None],
         ],
     },
     "height_shard_tests": {
@@ -132,7 +144,14 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         slice_type,
     ) = input_spec
     [in_dtype, output_layout] = in_specs
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+    # Handle three cases:
+    # 1. slice_type=None -> fully automatic (dram_slice_config=None)
+    # 2. num_slices=0 -> semi-automatic (framework determines num_slices)
+    # 3. num_slices>0 -> manual (explicit num_slices and slice_type)
+    if slice_type is None:
+        dram_slice_config = None  # Fully automatic
+    else:
+        dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
     torch_tensor_map = {}
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],
