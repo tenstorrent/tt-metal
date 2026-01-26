@@ -7,6 +7,7 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
+#include "api/debug/assert.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -409,9 +410,13 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         }
         cb_pop_front(in1_cb, rows);
     } else {
-        constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-        constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
-
+#ifdef DHT_GRANULARITY
+        constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+#else
+        constexpr uint32_t dst_tiles = 1;
+        constexpr uint32_t granularity = cols;
+#endif
         PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
         if (!pack_accumulate) {
             cb_reserve_back(out_cb, num_tiles);
@@ -456,8 +461,15 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Postcondition: in1_cb has rows consumed
 
     constexpr uint32_t num_tiles = rows * cols;
+
+#ifdef DHT_GRANULARITY
     constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
     constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+#else
+    constexpr uint32_t dst_tiles = 1;
+    constexpr uint32_t granularity = cols;
+#endif
+
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
