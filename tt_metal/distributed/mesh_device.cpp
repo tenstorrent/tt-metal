@@ -375,6 +375,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    TT_FATAL(
+        !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
     const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
