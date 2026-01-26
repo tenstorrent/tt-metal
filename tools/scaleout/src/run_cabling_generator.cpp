@@ -18,23 +18,32 @@
 using namespace tt::scaleout_tools;
 
 struct InputConfig {
-    std::string cabling_descriptor_path;
+    std::string cabling_descriptor_path;  // Can be file or directory
     std::string deployment_descriptor_path;
     std::string output_name;
     bool loc_info = true;  // Default to detailed location info
+    bool is_cabling_directory = false;
 };
 
 bool file_exists(const std::string& path) {
     return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
 }
 
+bool directory_exists(const std::string& path) {
+    return std::filesystem::exists(path) && std::filesystem::is_directory(path);
+}
+
 InputConfig parse_arguments(int argc, char** argv) {
     cxxopts::Options options(
         "run_cabling_generator",
-        "Generate factory system descriptor and cabling guide from cabling and deployment descriptors");
+        "Generate factory system descriptor and cabling guide from cabling and deployment descriptors.\n"
+        "The cabling descriptor can be a single .textproto file or a directory containing multiple\n"
+        ".textproto files that will be merged together.");
 
     options.add_options()(
-        "c,cabling", "Path to the cabling descriptor file (.textproto)", cxxopts::value<std::string>())(
+        "c,cabling",
+        "Path to cabling descriptor file (.textproto) or directory containing multiple descriptors",
+        cxxopts::value<std::string>())(
         "d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())(
         "o,output",
         "Name suffix for output files (without extensions) - optional, defaults to empty",
@@ -55,9 +64,12 @@ InputConfig parse_arguments(int argc, char** argv) {
             std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto"
                       << std::endl;
             std::cout << "  # Generates files with default names (no suffix)" << std::endl;
+            std::cout << std::endl;
             std::cout << "  " << argv[0]
-                      << " --cabling cabling.textproto --deployment deployment.textproto --output test" << std::endl;
-            std::cout << "  # Generates detailed CSV with rack/shelf information" << std::endl;
+                      << " --cabling ./cabling_descriptors/ --deployment deployment.textproto --output merged"
+                      << std::endl;
+            std::cout << "  # Merges all .textproto files in directory and generates merged output" << std::endl;
+            std::cout << std::endl;
             std::cout << "  " << argv[0]
                       << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple"
                       << std::endl;
@@ -79,24 +91,33 @@ InputConfig parse_arguments(int argc, char** argv) {
         config.output_name = result["output"].as<std::string>();
         config.loc_info = !result["simple"].as<bool>();
 
-        // Validate cabling descriptor file
-        if (!file_exists(config.cabling_descriptor_path)) {
-            throw std::invalid_argument("Cabling descriptor file not found: '" + config.cabling_descriptor_path + "'");
+        // Check if cabling descriptor is a directory or file
+        if (directory_exists(config.cabling_descriptor_path)) {
+            config.is_cabling_directory = true;
+        } else if (file_exists(config.cabling_descriptor_path)) {
+            config.is_cabling_directory = false;
+            // Validate file extension for single file
+            if (!config.cabling_descriptor_path.ends_with(".textproto")) {
+                throw std::invalid_argument(
+                    "Cabling descriptor file should have .textproto extension: '" + config.cabling_descriptor_path +
+                    "'");
+            }
+        } else {
+            throw std::invalid_argument(
+                "Cabling descriptor path not found (expected file or directory): '" + config.cabling_descriptor_path +
+                "'");
         }
 
         // Validate deployment descriptor file
         if (!file_exists(config.deployment_descriptor_path)) {
-            throw std::invalid_argument("Deployment descriptor file not found: '" + config.deployment_descriptor_path + "'");
-        }
-
-        // Validate file extensions
-        if (!config.cabling_descriptor_path.ends_with(".textproto")) {
             throw std::invalid_argument(
-                "Cabling descriptor file should have .textproto extension: '" + config.cabling_descriptor_path + "'");
+                "Deployment descriptor file not found: '" + config.deployment_descriptor_path + "'");
         }
 
         if (!config.deployment_descriptor_path.ends_with(".textproto")) {
-            throw std::invalid_argument("Deployment descriptor file should have .textproto extension: '" + config.deployment_descriptor_path + "'");
+            throw std::invalid_argument(
+                "Deployment descriptor file should have .textproto extension: '" + config.deployment_descriptor_path +
+                "'");
         }
 
         // Check for invalid filename characters (only if output name is not empty)
@@ -104,7 +125,8 @@ InputConfig parse_arguments(int argc, char** argv) {
             const std::string invalid_chars = "<>:\"/|?*";
             for (char c : config.output_name) {
                 if (invalid_chars.find(c) != std::string::npos) {
-                    throw std::invalid_argument("Output name contains invalid character '" + std::string(1, c) + "'. Avoid: " + invalid_chars);
+                    throw std::invalid_argument(
+                        "Output name contains invalid character '" + std::string(1, c) + "'. Avoid: " + invalid_chars);
                 }
             }
             config.output_name = "_" + config.output_name;
@@ -124,7 +146,12 @@ int main(int argc, char** argv) {
         InputConfig config = parse_arguments(argc, argv);
 
         std::cout << "Generating cabling configuration..." << std::endl;
-        std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << std::endl;
+        if (config.is_cabling_directory) {
+            std::cout << "  Cabling descriptor directory: " << config.cabling_descriptor_path << std::endl;
+            std::cout << "  (Will merge all .textproto files in directory)" << std::endl;
+        } else {
+            std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << std::endl;
+        }
         std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << std::endl;
         std::cout << "  Output name suffix: " << config.output_name << std::endl;
 

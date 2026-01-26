@@ -267,6 +267,10 @@ public:
     // implementation of build, to avoid breaking users / tools.
     // We can migrate build to use arch-independent target names, and then this can be removed.
     virtual std::string target_name(const Params& params) const = 0;
+    // Returns the target name for the weakened firmware.
+    // This is usually the same as the target name, but in some cases, the target name for
+    // the weakened firmware may be different.
+    virtual std::string weakened_firmware_target_name(const Params& params) const = 0;
 };
 
 class Hal {
@@ -309,6 +313,8 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t operand_start_stream_{};
+    bool has_stream_registers_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
@@ -377,6 +383,8 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    bool has_stream_registers() const { return has_stream_registers_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

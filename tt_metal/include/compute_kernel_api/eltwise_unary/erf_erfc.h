@@ -37,7 +37,7 @@ ALWI void erf_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_erf_erfc, erf, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erf, RC, fast_and_approx, idst));
 }
 
 /************** ERFC *****************/
@@ -66,7 +66,7 @@ ALWI void erfc_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_erf_erfc, erfc, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfc, RC, fast_and_approx, idst));
 }
 
 }  // namespace ckernel
