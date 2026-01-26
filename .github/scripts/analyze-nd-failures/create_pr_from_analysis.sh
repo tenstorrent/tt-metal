@@ -457,32 +457,69 @@ main() {
     # Change to repo root
     cd "$REPO_ROOT"
 
-    # Ensure we're on a clean state
+    # Save current branch to return to later (on failure)
+    local original_branch
+    original_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    log_debug "Original branch: $original_branch"
+
+    # Check for uncommitted changes and stash them
+    local stashed=false
     if ! git diff --quiet || ! git diff --cached --quiet; then
         log_warn "Working directory has uncommitted changes."
-        log_warn "These will be included in the PR if you continue."
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Aborted."
-            exit 0
-        fi
+        log_info "Stashing changes before proceeding..."
+        git stash push -m "Auto-stash before ND failure PR creation $(date +%Y%m%d-%H%M%S)"
+        stashed=true
     fi
 
-    # Fetch latest and create branch
-    log_info "Fetching latest from origin..."
-    git fetch origin "$base_branch" 2>/dev/null || git fetch origin
+    # Function to restore original state on failure
+    cleanup_on_failure() {
+        log_warn "Cleaning up after failure..."
+        if [[ -n "$original_branch" ]] && [[ "$original_branch" != "HEAD" ]]; then
+            git checkout "$original_branch" 2>/dev/null || true
+        fi
+        if [[ "$stashed" == "true" ]]; then
+            log_info "Restoring stashed changes..."
+            git stash pop 2>/dev/null || true
+        fi
+    }
 
-    # Check if branch already exists
-    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
-        log_error "Branch '$branch_name' already exists locally."
-        log_error "Please delete it first: git branch -D $branch_name"
+    # Fetch latest from origin to ensure we have up-to-date refs
+    log_info "Fetching latest from origin..."
+    git fetch origin --prune
+
+    # Verify base branch exists on remote
+    if ! git show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
+        log_error "Base branch 'origin/$base_branch' not found."
+        log_error "Available remote branches:"
+        git branch -r | head -10
+        cleanup_on_failure
         exit 1
     fi
 
-    # Create and checkout new branch
-    log_info "Creating branch: $branch_name"
-    git checkout -b "$branch_name" "origin/$base_branch"
+    # Check if branch already exists locally
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        log_error "Branch '$branch_name' already exists locally."
+        log_error "Please delete it first: git branch -D $branch_name"
+        cleanup_on_failure
+        exit 1
+    fi
+
+    # Check if branch already exists on remote
+    if git show-ref --verify --quiet "refs/remotes/origin/$branch_name"; then
+        log_warn "Branch '$branch_name' already exists on remote."
+        log_warn "Will create a unique local branch name."
+        branch_name="${branch_name}-$(date +%H%M%S)"
+        log_info "Using branch name: $branch_name"
+    fi
+
+    # Create and checkout new branch from latest origin/base_branch
+    log_info "Creating branch '$branch_name' from 'origin/$base_branch'..."
+    if ! git checkout -b "$branch_name" "origin/$base_branch"; then
+        log_error "Failed to create branch from origin/$base_branch"
+        cleanup_on_failure
+        exit 1
+    fi
+    log_info "Now on branch: $branch_name (based on latest origin/$base_branch)"
 
     # Create implementation prompt
     local impl_prompt
@@ -497,7 +534,7 @@ main() {
     if ! run_claude_implementation "$impl_prompt" "$impl_log" "$claude_model"; then
         log_error "Claude implementation failed"
         rm -f "$impl_prompt" "$impl_log"
-        git checkout - 2>/dev/null || true
+        cleanup_on_failure
         exit 1
     fi
 
@@ -516,6 +553,11 @@ main() {
         log_info "  git add -A && git commit -m 'Fix ND failure'"
         log_info "  git push -u origin $branch_name"
         log_info "  gh pr create --base $base_branch"
+        if [[ "$stashed" == "true" ]]; then
+            log_info ""
+            log_info "Note: Your original changes are stashed. To restore:"
+            log_info "  git checkout $original_branch && git stash pop"
+        fi
         rm -f "$impl_log"
         exit 0
     fi
@@ -524,9 +566,19 @@ main() {
     local pr_url
     if pr_url=$(create_pull_request "$analysis_file" "$branch_name" "$base_branch" "$impl_log"); then
         log_info "Success! PR URL: $pr_url"
+        if [[ "$stashed" == "true" ]]; then
+            log_info ""
+            log_info "Note: Your original changes are stashed. To restore:"
+            log_info "  git checkout $original_branch && git stash pop"
+        fi
     else
         log_error "Failed to create PR"
         log_info "Changes are still on branch: $branch_name"
+        if [[ "$stashed" == "true" ]]; then
+            log_info ""
+            log_info "Note: Your original changes are stashed. To restore:"
+            log_info "  git checkout $original_branch && git stash pop"
+        fi
         rm -f "$impl_log"
         exit 1
     fi
