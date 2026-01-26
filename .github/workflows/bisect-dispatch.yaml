@@ -476,6 +476,20 @@ jobs:
           MAX_ATTEMPTS=100
           FAILED=false
 
+          # Helper to clean up any hung processes after a test
+          cleanup_after_test() {
+            echo "Cleaning up any remaining processes..."
+            # Kill any remaining python/pytest processes from the test
+            pkill -9 -f "pytest" 2>/dev/null || true
+            pkill -9 -f "python.*test" 2>/dev/null || true
+            # Give processes time to die
+            sleep 2
+            # Reset devices
+            echo "Resetting devices..."
+            tt-smi -r 2>&1 || true
+            sleep 2
+          }
+
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo ""
             echo "════════════════════════════════════════════════════════════════"
@@ -486,14 +500,33 @@ jobs:
             echo "Resetting devices..."
             tt-smi -r >/dev/null 2>&1 || true
 
-            # Run the test
+            # Run the test with timeout - write to file to avoid pipe blocking
             echo "Running test: $SCRIPT_PATH"
-            TEST_OUTPUT="retry_test_output.log"
+            TEST_OUTPUT="retry_test_output_${ATTEMPT}.log"
 
             set +e
-            timeout -k 10s "${TIMEOUT}m" bash -l "$SCRIPT_PATH" 2>&1 | tee "$TEST_OUTPUT"
-            TEST_RC=${PIPESTATUS[0]}
+            # Run test with aggressive kill timeout (30s after SIGTERM)
+            timeout -k 30s "${TIMEOUT}m" bash -l "$SCRIPT_PATH" >"$TEST_OUTPUT" 2>&1 &
+            TEST_PID=$!
+
+            # Wait for test to complete, showing progress
+            while kill -0 $TEST_PID 2>/dev/null; do
+              # Show recent output every 10 seconds
+              sleep 10
+              echo "... test still running ($(wc -l < "$TEST_OUTPUT" 2>/dev/null || echo 0) lines of output) ..."
+            done
+
+            wait $TEST_PID
+            TEST_RC=$?
             set -e
+
+            # Show test output
+            echo "--- Test output ---"
+            cat "$TEST_OUTPUT" 2>/dev/null || true
+            echo "--- End of output (rc=$TEST_RC) ---"
+
+            # Always cleanup after test (kill any hung processes)
+            cleanup_after_test
 
             if [ $TEST_RC -eq 0 ]; then
               echo "Attempt $ATTEMPT: PASSED"
