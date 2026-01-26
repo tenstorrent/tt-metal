@@ -170,7 +170,8 @@ extern "C" uint32_t _start1() {
         uint32_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        asm("FENCE.i");
+        // TODO: TRISCs need cache invalidation through register
+        // asm("FENCE.i");
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
