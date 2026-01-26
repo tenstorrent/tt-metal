@@ -114,6 +114,10 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     const auto [cb_srcC_index, cb_srcC] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
 
+    // Zero tile CB
+    const auto [cb_zero_index, cb_zero] =
+        tt::tt_metal::create_cb(next_cb_index++, program, all_cores, aligned_input_unit_size, 1, input_cb_data_format);
+
     // Separate output CB for tiled
     const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;  // double buffered if needed
     const auto [cb_output_index, cb_output] =
@@ -127,6 +131,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         (std::uint32_t)cb_srcA_index,
         (std::uint32_t)cb_srcB_index,
         (std::uint32_t)cb_srcC_index,
+        (std::uint32_t)cb_zero_index,
         (std::uint32_t)aligned_input_unit_size,
     };
 
@@ -167,6 +172,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
                 (uint32_t)cb_srcA_index,
                 (uint32_t)cb_srcB_index,
                 (uint32_t)cb_srcC_index,
+                (uint32_t)cb_zero_index,
                 (uint32_t)cb_output_index};
 
             tt::tt_metal::CreateKernel(
@@ -185,6 +191,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
                 (uint32_t)cb_srcA_index,
                 (uint32_t)cb_srcB_index,
                 (uint32_t)cb_srcC_index,
+                (uint32_t)cb_zero_index,
                 (uint32_t)cb_output_index};
 
             tt::tt_metal::CreateKernel(

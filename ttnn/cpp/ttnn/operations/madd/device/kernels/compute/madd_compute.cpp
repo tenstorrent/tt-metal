@@ -17,12 +17,16 @@ void MAIN {
     constexpr uint32_t cb_srcA_index = get_compile_time_arg_val(1);
     constexpr uint32_t cb_srcB_index = get_compile_time_arg_val(2);
     constexpr uint32_t cb_srcC_index = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_out_index = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_zero_index = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_out_index = get_compile_time_arg_val(5);
 
     constexpr uint32_t dst0 = 0;
+    constexpr bool acc_to_dest = true;
 
     binary_op_init_common(cb_srcA_index, cb_srcB_index, cb_out_index);
-    mul_tiles_init(cb_srcA_index, cb_srcB_index);
+
+    // Wait for zero tile to be available (reader should generate it once)
+    cb_wait_front(cb_zero_index, 1);
 
     for (uint32_t i = 0; i < num_pages; ++i) {
         DPRINT << "Processing page " << i << " / " << num_pages << ENDL();
@@ -39,8 +43,8 @@ void MAIN {
         tt::compute::common::print_full_tile(cb_srcB_index, 0, false);
 #endif
         tile_regs_acquire();  // math core acquires dst, init dsts to zero
+        mul_tiles_init(cb_srcA_index, cb_srcB_index);
         mul_tiles(cb_srcA_index, cb_srcB_index, 0, 0, dst0);
-        tile_regs_commit();
 
         cb_pop_front(cb_srcA_index, 1);
         cb_pop_front(cb_srcB_index, 1);
@@ -50,11 +54,16 @@ void MAIN {
 #ifdef DEBUG_PRINT_ENABLED
         tt::compute::common::print_full_tile(cb_srcC_index, 0, false);
 #endif
-        // tile_regs_acquire();
-        // // d0 = d0 + c
-        // add_tiles_init_with_dt(dst0, cb_srcC_index);
-        // add_tiles(cb_srcC_index, dst0, 0, 0, dst0);
-        // tile_regs_commit();
+
+        DPRINT << "Reading tile zero from CB " << cb_zero_index << ENDL();
+#ifdef DEBUG_PRINT_ENABLED
+        tt::compute::common::print_full_tile(cb_zero_index, 0, false);
+#endif
+
+        add_tiles_init(cb_srcC_index, cb_zero_index, acc_to_dest);
+        add_tiles(cb_srcC_index, cb_zero_index, 0, 0, dst0);
+
+        tile_regs_commit();
         cb_pop_front(cb_srcC_index, 1);
 
         DPRINT << "Writing output tile to CB " << cb_out_index << ENDL();
@@ -69,5 +78,7 @@ void MAIN {
 #endif
         cb_push_back(cb_out_index, 1);  // Pack
     }
+
+    cb_pop_front(cb_zero_index, 1);
 }  // MAIN
 }  // namespace NAMESPACE

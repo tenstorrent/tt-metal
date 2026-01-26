@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
     uint32_t srcA_addr = get_arg_val<uint32_t>(0);
@@ -15,14 +16,18 @@ void kernel_main() {
     constexpr uint32_t cb_srcA_index = get_compile_time_arg_val(0);
     constexpr uint32_t cb_srcB_index = get_compile_time_arg_val(1);
     constexpr uint32_t cb_srcC_index = get_compile_time_arg_val(2);
-    constexpr uint32_t aligned_input_unit_size = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_zero_index = get_compile_time_arg_val(3);
+    constexpr uint32_t aligned_input_unit_size = get_compile_time_arg_val(4);
 
-    constexpr auto srcA_args = TensorAccessorArgs<4>();
-    constexpr auto srcB_args = TensorAccessorArgs<5>();
-    constexpr auto srcC_args = TensorAccessorArgs<6>();
+    constexpr auto srcA_args = TensorAccessorArgs<5>();
+    constexpr auto srcB_args = TensorAccessorArgs<6>();
+    constexpr auto srcC_args = TensorAccessorArgs<7>();
     const auto srcA_accessor = TensorAccessor(srcA_args, srcA_addr, aligned_input_unit_size);
     const auto srcB_accessor = TensorAccessor(srcB_args, srcB_addr, aligned_input_unit_size);
     const auto srcC_accessor = TensorAccessor(srcC_args, srcC_addr, aligned_input_unit_size);
+
+    constexpr uint32_t zero = 0;
+    generate_reduce_scaler(cb_zero_index, zero);  // pre-generate zero tile
 
     const uint32_t end_id = start_page_id + num_pages;
 
