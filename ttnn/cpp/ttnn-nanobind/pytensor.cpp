@@ -221,7 +221,13 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
-    config.dtype = get_dtype_from_ttnn_datatype(data_type);
+    bool input_is_bfloat16 =
+        py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat) && py_tensor_dtype.bits == 16;
+    if (data_type == DataType::BFLOAT16 && !input_is_bfloat16) {
+        config.dtype = get_dtype_from_ttnn_datatype(DataType::FLOAT32);
+    } else {
+        config.dtype = get_dtype_from_ttnn_datatype(data_type);
+    }
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
 

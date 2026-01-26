@@ -58,8 +58,8 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("input_a_is_sharded", [False])
-@pytest.mark.parametrize("output_is_sharded", [False])
+@pytest.mark.parametrize("input_a_is_sharded", [True, False])
+@pytest.mark.parametrize("output_is_sharded", [True, False])
 @pytest.mark.parametrize("m_size, num_cores", [[5632, 22]])
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
