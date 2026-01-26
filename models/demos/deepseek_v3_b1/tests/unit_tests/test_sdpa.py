@@ -16,18 +16,13 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
-# @pytest.mark.parametrize("use_python_op", [True, False], ids=["python", "cpp"])
-# @pytest.mark.parametrize("batch_size", [1])
-# @pytest.mark.parametrize(
-#     "decode_position", [2 * 1024 - 1, 4 * 1024 - 1, 8 * 1024 - 1, 32 * 1024 - 1]
-# )  # 2k, 4k, 8k, 32k
-@pytest.mark.parametrize("use_python_op", [True], ids=["python"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("decode_position", [128 - 1, 2 * 1024 - 1, 4 * 1024 - 1, 8 * 1024 - 1, 32 * 1024 - 1])
+# @pytest.mark.parametrize("decode_position", [128 - 1, 1024 - 1])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
 @pytest.mark.parametrize("kv_sharded", [False, True], ids=["interleaved", "sharded"])
-def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, use_python_op, kv_sharded):
-    """Test FlashMLADecode op with both Python and C++ implementations."""
+def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_sharded):
+    """Test FlashMLADecode op."""
     torch.manual_seed(0)
 
     # Use 128 heads and 16 heads per core to test 8 groups of heads
@@ -166,32 +161,18 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, use_
         packer_l1_acc=False,
     )
 
-    if use_python_op:
-        # Run the Python op
-        logger.info("Running FlashMLADecode.op (Python)...")
-        attn_out = FlashMLADecode.op(
-            q_tensor=tt_q,
-            kv_cache_tensor=tt_cache,
-            head_dim_v=kv_lora_rank,
-            cur_pos_tensor=tt_position_ids,
-            output_tensor=tt_out,
-            scale=scale,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        # Run the C++ op
-        logger.info("Running ttnn.transformer.flash_multi_latent_attention_decode (C++)...")
-        attn_out = ttnn.transformer.flash_multi_latent_attention_decode(
-            tt_q,
-            tt_cache,
-            kv_lora_rank,
-            cur_pos_tensor=tt_position_ids,
-            scale=scale,
-            memory_config=out_mem_config,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
+    # Run the op
+    logger.info("Running FlashMLADecode.op...")
+    attn_out = FlashMLADecode.op(
+        q_tensor=tt_q,
+        kv_cache_tensor=tt_cache,
+        head_dim_v=kv_lora_rank,
+        cur_pos_tensor=tt_position_ids,
+        output_tensor=tt_out,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     # Convert output to torch
     output_torch = ttnn.to_torch(attn_out)

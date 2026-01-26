@@ -207,6 +207,7 @@ void kernel_main() {
                         const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
                         noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_bytes);
+                        noc_async_read_barrier();
                     } else {
                         DeviceZoneScopedN("mcast-sender-interleaved-read");
                         const uint32_t k_batch_offset = kv_batch * num_kv_heads * St * DHt;
@@ -219,8 +220,8 @@ void kernel_main() {
                             k_tile_id++;
                             write_ptr += k_tile_bytes;
                         }
+                        noc_async_read_barrier();
                     }
-                    noc_async_read_barrier();
 
                     // Multicast K data to other cores in the S block
                     {

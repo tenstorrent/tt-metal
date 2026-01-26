@@ -12,6 +12,7 @@ This Python implementation matches the C++ sdpa_decode_program_factory.cpp exact
 """
 
 import math
+from dataclasses import dataclass
 
 import torch
 
@@ -39,150 +40,70 @@ def float_to_uint32(val: float) -> int:
 
 # =============================================================================
 # Hard-coded S block definitions for SDPA compute grid
-# Each S block has up to 8 cores for sequence length parallelism
-# Q heads are sharded across the first core of each batch (output core)
+# NOTE: These layouts are optimal ONLY for NOC0. NOC1 has different optimal
+# coordinates due to the mirrored coordinate system.
 # =============================================================================
-# S blocks layout (from diagram):
-# - S1, S2, S3, S4: Left side (Knope/RMS region)
-# - S5, S6, S7, S8: Right side (Kpe/Rope region)
-# Each S block: 8 cores arranged for seq len parallelism per Q head group
-
-# S1 block: columns 0-3, rows 1-2 (upper left region, 0-indexed)
-S1_CORES = [
-    (0, 1),
-    (1, 1),
-    (2, 1),
-    (3, 1),  # Row 1: first 4 cores (Q1, Q2 output cores here)
-    (0, 2),
-    (1, 2),
-    (2, 2),
-    (3, 2),  # Row 2: next 4 cores
-]
-
-# S2 block: columns 0-3, rows 3-4 (0-indexed)
-S2_CORES = [
-    (0, 3),
-    (1, 3),
-    (2, 3),
-    (3, 3),  # Row 3
-    (0, 4),
-    (1, 4),
-    (2, 4),
-    (3, 4),  # Row 4
-]
-
-# S3 block: columns 0-3, rows 7-8 (0-indexed)
-S3_CORES = [
-    (0, 7),
-    (1, 7),
-    (2, 7),
-    (3, 7),  # Row 7
-    (0, 8),
-    (1, 8),
-    (2, 8),
-    (3, 8),  # Row 8
-]
-
-# S4 block: split top/bottom (wraps around, 0-indexed)
-S4_CORES = [
-    (0, 9),
-    (1, 9),
-    (2, 9),
-    (3, 9),  # Row 9
-    (0, 0),
-    (1, 0),
-    (2, 0),
-    (3, 0),  # Row 0 (wraps to top, "S4 bot" in diagram)
-]
-
-# S5 block: columns 7-10, rows 1-2 (right side, 0-indexed)
-S5_CORES = [
-    (7, 1),
-    (8, 1),
-    (9, 1),
-    (10, 1),  # Row 1
-    (7, 2),
-    (8, 2),
-    (9, 2),
-    (10, 2),  # Row 2
-]
-
-# S6 block: columns 7-10, rows 4-5 (0-indexed)
-S6_CORES = [
-    (7, 4),
-    (8, 4),
-    (9, 4),
-    (10, 4),  # Row 4
-    (7, 5),
-    (8, 5),
-    (9, 5),
-    (10, 5),  # Row 5
-]
-
-# S7 block: columns 7-10, rows 6-7 (0-indexed)
-S7_CORES = [
-    (7, 6),
-    (8, 6),
-    (9, 6),
-    (10, 6),  # Row 6
-    (7, 7),
-    (8, 7),
-    (9, 7),
-    (10, 7),  # Row 7
-]
-
-# S8 block: columns 7-10, split top/bottom (wraps around, 0-indexed)
-S8_CORES = [
-    (7, 9),
-    (8, 9),
-    (9, 9),
-    (10, 9),  # Row 9
-    (7, 0),
-    (8, 0),
-    (9, 0),
-    (10, 0),  # Row 0 (wraps to top, "S8 bot" in diagram)
-]
-
-# All S blocks for iteration
-S_BLOCKS = [S1_CORES, S2_CORES, S3_CORES, S4_CORES, S5_CORES, S6_CORES, S7_CORES, S8_CORES]
 
 
-def get_s_block_physical_multicast_coords(device, s_block_idx: int) -> tuple:
+class FlashMLAOptimalGridNOC0:
     """
-    Get multicast NOC coordinates for an S block in PHYSICAL coordinates.
-    Returns (start_x, start_y, end_x, end_y, num_mcast_dests).
+    S block grid layout for SDPA compute.
+    IMPORTANT: These layouts are optimized for NOC0 only.
 
-    Uses first core as start and last core as end. NOC is a torus architecture
-    so wraparound multicast (e.g., S4, S8) works correctly.
+    S blocks layout:
+    - S1, S2, S3, S4: Left side (columns 0-3)
+    - S5, S6, S7, S8: Right side (columns 7-10)
+    Each S block: 8 cores for seq len parallelism per Q head group
+
+    DRAM bank mapping based on proximity:
+    S1→1, S2→3, S3→2, S4→0, S5→5, S6→7, S7→6, S8→4
     """
-    s_block_cores = S_BLOCKS[s_block_idx]
 
-    # First core = start coord (q1), last core = end coord (q8)
-    first_x, first_y = s_block_cores[0]
-    last_x, last_y = s_block_cores[-1]
+    # S block definitions: (name, cores, dram_bank)
+    BLOCKS = (
+        ("S1", ((0, 1), (1, 1), (2, 1), (3, 1), (0, 2), (1, 2), (2, 2), (3, 2)), 1),
+        ("S2", ((0, 3), (1, 3), (2, 3), (3, 3), (0, 4), (1, 4), (2, 4), (3, 4)), 3),
+        ("S3", ((0, 7), (1, 7), (2, 7), (3, 7), (0, 8), (1, 8), (2, 8), (3, 8)), 2),
+        ("S4", ((0, 9), (1, 9), (2, 9), (3, 9), (0, 0), (1, 0), (2, 0), (3, 0)), 0),
+        ("S5", ((7, 1), (8, 1), (9, 1), (10, 1), (7, 2), (8, 2), (9, 2), (10, 2)), 5),
+        ("S6", ((7, 4), (8, 4), (9, 4), (10, 4), (7, 5), (8, 5), (9, 5), (10, 5)), 7),
+        ("S7", ((7, 6), (8, 6), (9, 6), (10, 6), (7, 7), (8, 7), (9, 7), (10, 7)), 6),
+        ("S8", ((7, 9), (8, 9), (9, 9), (10, 9), (7, 0), (8, 0), (9, 0), (10, 0)), 4),
+    )
 
-    # Convert to physical NOC coordinates
-    first_logical = ttnn.CoreCoord(first_x, first_y)
-    last_logical = ttnn.CoreCoord(last_x, last_y)
-    first_physical = device.worker_core_from_logical_core(first_logical)
-    last_physical = device.worker_core_from_logical_core(last_logical)
+    NUM_BLOCKS = len(BLOCKS)
+    CORES_PER_BLOCK = len(BLOCKS[0][1])
 
-    # Number of destinations for multicast (excluding sender)
-    num_mcast_dests = len(s_block_cores) - 1
+    @classmethod
+    def get_cores(cls, s_block_idx: int) -> tuple:
+        """Get cores for S block at index."""
+        return cls.BLOCKS[s_block_idx][1]
 
-    return (first_physical.x, first_physical.y, last_physical.x, last_physical.y, num_mcast_dests)
+    @classmethod
+    def output_cores(cls, s_block_idx: int, num_cores: int) -> tuple:
+        """Get the first N cores from an S block (output/Q shard cores)."""
+        return cls.BLOCKS[s_block_idx][1][:num_cores]
 
+    @classmethod
+    def physical_multicast_coords(cls, device, s_block_idx: int) -> tuple:
+        """
+        Get multicast NOC coordinates for an S block in PHYSICAL coordinates.
+        Returns (start_x, start_y, end_x, end_y, num_mcast_dests).
 
-def get_s_block_core_range_set(s_block_idx: int) -> "ttnn.CoreRangeSet":
-    """Get CoreRangeSet for a specific S block (0-indexed)."""
-    cores = S_BLOCKS[s_block_idx]
-    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
+        Uses first core as start and last core as end. NOC is a torus architecture
+        so wraparound multicast (e.g., S4, S8) works correctly.
+        """
+        cores = cls.BLOCKS[s_block_idx][1]
+        first_x, first_y = cores[0]
+        last_x, last_y = cores[-1]
 
+        first_logical = ttnn.CoreCoord(first_x, first_y)
+        last_logical = ttnn.CoreCoord(last_x, last_y)
+        first_physical = device.worker_core_from_logical_core(first_logical)
+        last_physical = device.worker_core_from_logical_core(last_logical)
 
-def get_s_block_output_cores(s_block_idx: int, num_output_cores: int) -> list:
-    """Get the first N cores from an S block (these are the output/Q shard cores)."""
-    cores = S_BLOCKS[s_block_idx]
-    return cores[:num_output_cores]
+        num_mcast_dests = len(cores) - 1
+        return (first_physical.x, first_physical.y, last_physical.x, last_physical.y, num_mcast_dests)
 
 
 def get_interleaved_tensor_accessor_args(tensor):
@@ -206,15 +127,13 @@ def get_tensor_accessor_args(tensor):
     return accessor_args.get_compile_time_args()
 
 
-from dataclasses import dataclass
-
-
 @dataclass
 class FlashMLAProgramConfig:
     """Program config for FlashMLADecode operation."""
 
     k_chunk_size: int = 128
     exp_approx_mode: bool = True
+    grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
 
 
 class FlashMLADecode:
@@ -338,6 +257,7 @@ class FlashMLADecode:
         # Program config parameters
         k_chunk_size = program_config.k_chunk_size
         exp_approx_mode = program_config.exp_approx_mode
+        grid = program_config.grid
 
         # Validate device has sufficient grid size for hard-coded S block layout
         # S blocks use columns 0-3 and 7-10 (11 cols), rows 0-9 (10 rows)
@@ -399,15 +319,15 @@ class FlashMLADecode:
         # Each Q shard (batch) gets: 1 output core from S1 + 7 worker cores from S2-S8
         # Layout: Q1 uses S1[0], S2[0], S3[0], ..., S8[0]
         #         Q2 uses S1[1], S2[1], S3[1], ..., S8[1], etc.
-        num_s_blocks = len(S_BLOCKS)  # 8 S blocks
-        cores_per_s_block = len(S1_CORES)  # 8 cores per S block
+        num_s_blocks = grid.NUM_BLOCKS  # 8 S blocks
+        cores_per_s_block = grid.CORES_PER_BLOCK  # 8 cores per S block
 
         # Validate Q shards fit in one S block (max 8 Q shards)
         assert B <= cores_per_s_block, f"Too many Q shards ({B}), max is {cores_per_s_block}"
 
         # Validate Q tensor is sharded on S1 output cores
         q_shard_grid = input_tensor_q.memory_config().shard_spec.grid
-        expected_q_cores = get_s_block_output_cores(0, B)  # S1 is index 0
+        expected_q_cores = grid.output_cores(0, B)  # S1 is index 0
         for i, (expected_x, expected_y) in enumerate(expected_q_cores):
             found = False
             for core_range in q_shard_grid.ranges():
@@ -435,7 +355,7 @@ class FlashMLADecode:
         all_cores = []
         for batch_idx in range(B):
             for s_block_idx in range(num_s_blocks):
-                x, y = S_BLOCKS[s_block_idx][batch_idx]
+                x, y = grid.get_cores(s_block_idx)[batch_idx]
                 all_cores.append((x, y))
 
         # Build core grid from all active cores
@@ -454,7 +374,7 @@ class FlashMLADecode:
         # Pre-compute physical multicast coordinates for each S block (used in runtime args)
         s_block_mcast_coords = []
         for s_idx in range(num_s_blocks):
-            coords = get_s_block_physical_multicast_coords(device, s_idx)
+            coords = grid.physical_multicast_coords(device, s_idx)
             s_block_mcast_coords.append(coords)
 
         # =========================================================================
