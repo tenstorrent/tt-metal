@@ -62,11 +62,9 @@ Test cases / features:
 - Program_cache on/off: option available
 - Tracing on/off: option available
 - 100 iterations: does the test run 100 iterations when checking PCC/ATOL
-- Added to CI: whether it's added to any CI pipeline
+- Added to CI: whether it's added to any CI pipeline; reflects special fused op unit pipeline in `.github/workflows/galaxy-deepseek-tests-impl.yaml`
 - Perf shown in superset: whether any superset dashboard cisualizes the data
 - Path to test file: path to the test file
-
-"Added to CI" reflects `pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit` in `.github/workflows/galaxy-deepseek-tests-impl.yaml`.
 
 Superset dashboard: https://superset.tenstorrent.com/superset/dashboard/4fa0fef8-cced-4a8e-8819-48aeed75dcee/?permalink_key=6JbY9pNEQaZ
 
