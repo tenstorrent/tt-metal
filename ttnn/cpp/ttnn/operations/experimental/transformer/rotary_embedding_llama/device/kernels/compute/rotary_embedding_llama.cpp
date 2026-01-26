@@ -102,11 +102,14 @@ void kernel_main() {
                 cb_pop_front(cos_cb, Wt);
 #endif
 
-                // out = cos_interim + sin_interim using helper with PERSISTENT mode
+                // out = cos_interim + sin_interim using helper with Preloaded policy
                 // (tiles already produced by previous operations, output already reserved)
-                compute_kernel_lib::
-                    add<compute_kernel_lib::BroadcastDim::NONE, compute_kernel_lib::BinaryInputMode::PERSISTENT>(
-                        cos_interm_cb, sin_interm_cb, out_cb, compute_kernel_lib::BinaryTileShape::row(Wt));
+                compute_kernel_lib::add<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    cb_policies::Preloaded,
+                    cb_policies::Preloaded,
+                    cb_policies::OutputBulk>(
+                    cos_interm_cb, sin_interm_cb, out_cb, compute_kernel_lib::BinaryTileShape::row(Wt));
                 cb_pop_front(sin_interm_cb, Wt);
                 cb_pop_front(cos_interm_cb, Wt);
 
