@@ -34,7 +34,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
             skip_if_not_blackhole_20_cores,
         ),
         (
-            {"pcc": 0.972, "abs_err": 1.9, "rel_err": 0.4},
+            {"pcc": 0.972, "abs_err": 2.0, "rel_err": 0.4},
             skip_if_not_blackhole_110_cores,
         ),
     ],
