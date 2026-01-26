@@ -8,7 +8,6 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_allclose
 
 
 def assert_quality(torch_output, tt_output):
@@ -127,8 +126,8 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
     "M, K, N, config_name",
     [
         # (2048, 2048, 2048, "tiny"),
-        (9472, 3456, 5120, "medium"),
-        # (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
+        # (9472, 3456, 5120, "medium"),
+        (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
         # (32760, 5120, 13824, "14B-480p"),  # 21*30*52 = 32760
         # (75600, 5120, 13824, "14B-720p"),  # 21*45*80 = 75600
         # (2000, 5120, 13824, "small"),  # Small test shape
@@ -303,7 +302,7 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     tt_fused_torch = ttnn.to_torch(tt_fused_output)
     tt_matmul_torch = ttnn.to_torch(tt_matmul_output)
 
-    check_result = assert_quality(tt_matmul_torch, tt_fused_torch)
+    assert_quality(tt_matmul_torch, tt_fused_torch)
 
     tt_addcmul_output = ttnn.addcmul(tt_addcmul_input1, tt_matmul_output, tt_addcmul_input2, value=scalar)
     tt_addcmul_torch = ttnn.to_torch(tt_addcmul_output)
