@@ -8,7 +8,7 @@ The system consists of:
 
 1. **Analysis Prompt** (`analysis_prompt.md`) - Detailed instructions for the AI analysis
 2. **Download Script** (`download_job_logs.sh`) - Downloads logs and artifacts from GitHub Actions jobs
-3. **Analysis Script** (`analyze_nd_failures.sh`) - Orchestrates the entire analysis process using GitHub Copilot CLI
+3. **Analysis Script** (`analyze_nd_failures.sh`) - Orchestrates the entire analysis process using Claude CLI
 
 ## Prerequisites
 
@@ -27,13 +27,71 @@ The system consists of:
    brew install jq
    ```
 
-3. **GitHub Copilot CLI** - For AI-powered analysis
+3. **Claude CLI** - For AI-powered analysis
    ```bash
-   npm install -g @githubnext/github-copilot-cli
-   github-copilot-cli auth
+   # Install: https://code.claude.com/
+   # Ensure Claude CLI is set up and authenticated on your machine
    ```
 
 4. **GitHub Authentication** - Ensure you have access to the `tenstorrent/tt-metal` repository
+
+## Quick Start
+
+### Setup (One-Time)
+
+1. Install GitHub CLI and authenticate:
+   ```bash
+   # macOS
+   brew install gh
+
+   # Ubuntu/Debian
+   sudo apt-get install gh
+
+   gh auth login
+   ```
+
+2. Install jq:
+   ```bash
+   # macOS
+   brew install jq
+
+   # Ubuntu/Debian
+   sudo apt-get install jq
+   ```
+
+3. Ensure Claude CLI is installed and configured (see prerequisites above)
+
+### Basic Usage
+
+Analyze a single failed job:
+
+```bash
+cd /tt-metal/.github/scripts/analyze-nd-failures
+./analyze_nd_failures.sh https://github.com/tenstorrent/tt-metal/actions/runs/1234567890/job/9876543210
+```
+
+### Using Different Claude Models
+
+The script supports multiple Claude models. Choose based on your needs:
+
+- **sonnet** (default) - Best balance of quality and speed for most tasks
+- **haiku** - Fastest and most cost-effective for simple analyses
+- **sonnet-1M** - Sonnet with 1M token context window for very long prompts
+- **opus** - Most intelligent model for complex reasoning (requires Pro+)
+
+```bash
+# Use default (sonnet)
+./analyze_nd_failures.sh <job_url>
+
+# Use Opus for complex analysis
+./analyze_nd_failures.sh --model opus <job_url>
+
+# Use Haiku for quick analysis
+./analyze_nd_failures.sh --model haiku <job_url>
+
+# Use Sonnet with extended context
+./analyze_nd_failures.sh --model sonnet-1M <job_url>
+```
 
 ## Usage
 
@@ -80,6 +138,12 @@ Then run:
 
 # Skip downloading (use existing downloaded logs)
 ./analyze_nd_failures.sh --skip-download
+
+# Use specific Claude model
+./analyze_nd_failures.sh --model opus <job_urls>
+
+# Combine options
+./analyze_nd_failures.sh --file urls.txt --model sonnet-1M --skip-download
 ```
 
 ## URL Formats
@@ -106,36 +170,41 @@ The script accepts GitHub Actions URLs in these formats:
 1. **Download Phase**:
    - Extracts run_id and job_id from URLs
    - Downloads job logs, annotations, and artifacts using GitHub CLI
-   - Organizes downloads in `downloaded_logs/` directory
+   - Organizes downloads in run-specific directories
 
 2. **Context Preparation**:
-   - Analyzes logs to identify relevant test files
-   - Extracts source files mentioned in error messages
-   - Creates a structured context directory with all relevant files
+   - Extracts job name and error type from logs
+   - Creates a unique directory name: `<job_name>_<error_abbrev>`
+   - Organizes logs and prepares analysis context
 
 3. **Analysis Phase**:
    - Combines the analysis prompt with log excerpts and error messages
-   - Includes relevant test and source files in the context
-   - Sends everything to GitHub Copilot CLI for analysis
+   - Sends everything to Claude CLI for analysis using the selected model
 
 4. **Output**:
-   - Individual analysis results for each job in `analysis_output/`
+   - Individual analysis results for each job
    - Combined analysis if multiple jobs were analyzed
    - Detailed recommendations with code change suggestions
 
 ## Output Structure
 
+Results are organized in `build_ND_analysis/` at the repository root:
+
 ```
-analysis_output/
-├── context_run_1234567890_attempt_1/
-│   ├── logs/                    # Job logs
-│   ├── test_files/              # Relevant test files
-│   ├── source_files/            # Relevant source files
-│   ├── summary.txt              # Context summary
-│   ├── full_prompt.md           # Complete prompt sent to Copilot
-│   └── analysis_result.md       # AI analysis results
-└── combined_analysis.md         # Combined results (if multiple jobs)
+build_ND_analysis/
+├── <job_name>_<error_abbrev>/
+│   ├── downloaded_logs/
+│   │   ├── logs/                    # Job logs
+│   │   └── artifacts/               # Job artifacts
+│   └── analysis_output/
+│       ├── context/
+│       │   └── logs/                # Logs copied for analysis
+│       ├── full_prompt.md           # Complete prompt sent to Claude
+│       └── analysis_result.md       # AI analysis results
+└── combined_analysis.md              # Combined results (if multiple jobs)
 ```
+
+Each run creates a separate folder, so you can analyze multiple failures without overwriting previous results.
 
 ## Understanding the Analysis Results
 
@@ -179,19 +248,16 @@ The system is designed to analyze failures like:
 
 ## Troubleshooting
 
-### Copilot CLI Not Found
+### Claude CLI Not Found
 
-If you get an error about Copilot CLI:
+If you get an error about Claude CLI:
 
 ```bash
-# Install globally
-npm install -g @githubnext/github-copilot-cli
+# Verify Claude CLI is installed
+which claude
 
-# Authenticate
-github-copilot-cli auth
-
-# Verify installation
-github-copilot-cli --version
+# Check Claude CLI documentation for installation:
+# https://code.claude.com/
 ```
 
 ### GitHub Authentication Issues
@@ -218,38 +284,29 @@ If downloads fail:
 
 ### Analysis Failures
 
-If Copilot analysis fails:
+If Claude analysis fails:
 
-1. Verify Copilot CLI is installed and authenticated
+1. Verify Claude CLI is installed and configured
 2. Check that the prompt file exists: `analysis_prompt.md`
 3. Ensure logs were downloaded successfully
 4. Try running with `--skip-download` if logs already exist
+5. Try a different model (e.g., `--model haiku` for faster processing)
+
+### Invalid Model Error
+
+If you see an invalid model error:
+
+```bash
+# Valid models are: haiku, sonnet, sonnet-1M, opus
+./analyze_nd_failures.sh --model sonnet <job_url>
+```
 
 ## Limitations
 
 1. **Hardware Issues**: Some failures require firmware or hardware driver changes that are outside tt-metal's scope
 2. **External Dependencies**: Failures due to GitHub Actions infrastructure or external services cannot be fixed in code
 3. **Rare Failures**: Very rare failures may not have enough data for meaningful analysis
-4. **Copilot Dependency**: Requires GitHub Copilot CLI to be installed and configured
-
-## Future Enhancements
-
-Potential improvements:
-
-- Support for analyzing failures from multiple repositories
-- Integration with GitHub Actions workflows
-- Automatic retry suggestions based on analysis
-- Historical trend analysis
-- Integration with issue tracking systems
-
-## Contributing
-
-When improving this system:
-
-1. Update `analysis_prompt.md` if the analysis requirements change
-2. Test with real failure cases
-3. Document any new features in this README
-4. Ensure scripts handle edge cases gracefully
+4. **Claude Dependency**: Requires Claude CLI to be installed and configured
 
 ## Examples
 
@@ -260,7 +317,7 @@ When improving this system:
   https://github.com/tenstorrent/tt-metal/actions/runs/1234567890/job/9876543210
 ```
 
-### Example 2: Batch Analysis
+### Example 2: Batch Analysis with Opus Model
 
 Create `device_timeout_failures.txt`:
 
@@ -274,7 +331,7 @@ https://github.com/tenstorrent/tt-metal/actions/runs/1234567892/job/9876543212
 Run:
 
 ```bash
-./analyze_nd_failures.sh --file device_timeout_failures.txt
+./analyze_nd_failures.sh --file device_timeout_failures.txt --model opus
 ```
 
 ### Example 3: Re-analyze Existing Logs
@@ -282,8 +339,25 @@ Run:
 If you've already downloaded logs:
 
 ```bash
-./analyze_nd_failures.sh --skip-download
+./analyze_nd_failures.sh --skip-download --model sonnet-1M
 ```
+
+### Example 4: Quick Analysis with Haiku
+
+For a quick analysis of a simple failure:
+
+```bash
+./analyze_nd_failures.sh --model haiku <job_url>
+```
+
+## Model Selection Guide
+
+Choose the right Claude model for your analysis:
+
+- **haiku**: Use for quick, simple analyses. Fastest and most cost-effective.
+- **sonnet** (default): Best for most use cases. Good balance of quality, speed, and cost.
+- **sonnet-1M**: Use when you have very long prompts or need extended context. Same quality as sonnet but with 1M token window.
+- **opus**: Use for complex, nuanced failures that require deep reasoning. Most capable but slower and more expensive.
 
 ## Support
 
@@ -293,6 +367,16 @@ For issues or questions:
 2. Review the script output for error messages
 3. Verify all prerequisites are installed
 4. Check GitHub Actions job URLs are accessible
+5. Review the script help: `./analyze_nd_failures.sh --help`
+
+## Contributing
+
+When improving this system:
+
+1. Update `analysis_prompt.md` if the analysis requirements change
+2. Test with real failure cases
+3. Document any new features in this README
+4. Ensure scripts handle edge cases gracefully
 
 ## License
 
