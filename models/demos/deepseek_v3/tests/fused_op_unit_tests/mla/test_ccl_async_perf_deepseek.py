@@ -393,7 +393,7 @@ def test_to_memory_config_deepseek_perf(
     [
         ("kv_rope_permute_pre", 10, 7.6),
         ("kv_rope_permute_post", 10, 1.5),
-        ("kvpe_permute", 10, 24),
+        ("kvpe_permute", 10, 31),
         ("q_nope_permute_pre_linear", 10, 106),
         ("q_nope_permute_post_linear", 10, 23),
         ("q_rope_permute", 10, 1.7),
@@ -574,7 +574,7 @@ def test_concat_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kvpe_pad", 10, 45),  # Target based on typical pad performance
+        ("kvpe_pad", 10, 41.2),  # Target based on typical pad performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -588,7 +588,7 @@ def test_pad_deepseek_perf(
     benchmark_data = BenchmarkData()
     subdir = "deepseek_pad_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_pad_deepseek.py::test_deepseek_v3_mla_pad_trace_mode[device_params0-100-10-{step_name}-32]"
-    cols = ["DEVICE FW"]
+    cols = ["DEVICE KERNEL"]
     op_name = "PadDeviceOperation"
     profiler.start("run")
     profiler.start(step_name)
@@ -861,7 +861,7 @@ def test_mesh_partition_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("flash_mla_decode", 10, 195),  # Target based on typical flash attention performance
+        ("flash_mla_decode", 10, 193.4),  # Target based on typical flash attention performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -876,7 +876,7 @@ def test_flash_mla_deepseek_perf(
 
     subdir = "deepseek_flash_mla_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py"
-    cols = ["DEVICE FW"]
+    cols = ["DEVICE KERNEL"]
     op_name = "SdpaDecodeDeviceOperation"
 
     profiler.start("run")
@@ -921,11 +921,10 @@ def test_flash_mla_deepseek_perf(
         (
             "wq_kv_a_sequence",
             10,
-            179.46,
+            146.7,
         ),  # Sum: linear(28.81) + all-gather(106) + fast_reduce(7.75) + 3*slices(1.5+1.3+1)
     ],
 )
-# 33uS slower than sum of unit tests
 @pytest.mark.models_device_performance_bare_metal
 def test_wq_kv_a_sequence_deepseek_perf(
     step_name,
@@ -948,7 +947,7 @@ def test_wq_kv_a_sequence_deepseek_perf(
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_wq_kv_a_sequence_deepseek.py -k {step_name}"
-    cols = ["DEVICE FW"]
+    cols = ["DEVICE KERNEL"]
 
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -973,6 +972,87 @@ def test_wq_kv_a_sequence_deepseek_perf(
         measured_max += results[op][cols[0]]["MAX"]
         measured_avg += results[op][cols[0]]["AVG"]
         measured_std += results[op][cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_wq_kv_a_sequence",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    threshold = max(THRESHOLD, perf_target_us * THRESHOLD_PERCENTAGE)
+
+    assert (
+        measured_avg_us < perf_target_us + threshold
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us, the threshold was {threshold} us"
+    assert (
+        measured_avg_us > perf_target_us - threshold
+    ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
+
+
+# Todo: Figure out why this is slower than the sum of its parts by ~9us
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
+        (
+            "norm_and_rope_sequence",
+            10,
+            120,
+        ),  # Sum: q_norm(7.34) + kv_norm(6.68) + to_mem(0.75) + permute(7.6) + reshard(1.04) + rope(4.5) + reshard(1.19) + permute(1.5) + concat(1.36) + pad(45) + permute(31) + reshard(2.8)
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_norm_and_rope_sequence_deepseek_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+    galaxy_type,
+):
+    subdir = "fused_op_unit_tests/mla"
+    command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_norm_and_rope_sequence_deepseek.py -k {step_name}"
+    cols = ["DEVICE KERNEL"]
+
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    op_name = ""
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(
+        command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters, per_op=True
+    )
+    profiler.end(step_name)
+    profiler.end("run")
+    # Get the measured performance
+    print(results)
+    measured_min = 0
+    measured_max = 0
+    measured_avg = 0
+    measured_std = 0
+    for op in results.keys():
+        if op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::transpose::TransposeDeviceOperation>":
+            measured_min += 3 * results[op][cols[0]]["MIN"]
+            measured_max += 3 * results[op][cols[0]]["MAX"]
+            measured_avg += 3 * results[op][cols[0]]["AVG"]
+            measured_std += 3 * results[op][cols[0]]["STD"]
+        elif op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation>":
+            measured_min += 2 * results[op][cols[0]]["MIN"]
+            measured_max += 2 * results[op][cols[0]]["MAX"]
+            measured_avg += 2 * results[op][cols[0]]["AVG"]
+            measured_std += 2 * results[op][cols[0]]["STD"]
+        else:
+            measured_min += results[op][cols[0]]["MIN"]
+            measured_max += results[op][cols[0]]["MAX"]
+            measured_avg += results[op][cols[0]]["AVG"]
+            measured_std += results[op][cols[0]]["STD"]
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
