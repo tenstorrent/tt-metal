@@ -48,7 +48,7 @@ void kernel_main() {
         acquire_dst();
         reduce_block_max_row_init<cols>();
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
-        reduce_block_max_row_uninit();
+        reduce_block_max_row_uninit(qk_im_cb);
 
         if (do_eltwise) {
             copy_tile_to_dst_init_short(prev_max_cb);
