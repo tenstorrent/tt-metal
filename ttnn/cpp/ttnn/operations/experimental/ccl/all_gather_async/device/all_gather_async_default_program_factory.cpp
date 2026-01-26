@@ -355,8 +355,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         sender_device_coord,
         forward_coord,
         backward_coord,
-        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        num_targets_forward,
+        num_targets_backward,
         mesh_device);
 
     TT_FATAL(
