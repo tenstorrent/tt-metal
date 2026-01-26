@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
 
     constexpr auto dst_args = TensorAccessorArgs<13>();
-    const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto accessor_dst = TensorAccessor(dst_args, dst_addr, output_stick_size);
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
 
@@ -84,7 +84,7 @@ void kernel_main() {
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
                 // Perform the write
-                uint64_t dst_noc_addr = s.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
+                uint64_t dst_noc_addr = accessor_dst.get_noc_addr(output_page_id, output_offset_within_page_in_bytes);
                 noc_async_write(current_l1_read_addr, dst_noc_addr, num_bytes_to_write);
 
                 // Increment the number of cols we've processed in the input block
