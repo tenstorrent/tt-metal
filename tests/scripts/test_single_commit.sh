@@ -111,10 +111,12 @@ echo "::group::Building $commit_sha"
 fresh_clean
 
 build_rc=0
-if [ "$artifact_mode" = true ] && try_download_artifacts "$commit_sha"; then
+# Always try to download artifacts first (unless explicitly disabled)
+# This avoids rebuilding metal each time if artifacts are available
+if try_download_artifacts "$commit_sha"; then
   echo "Using downloaded artifacts for $commit_sha"
 else
-  [ "$artifact_mode" = true ] && echo "WARNING: Artifact download failed, falling back to local build"
+  echo "Artifact download failed or not available, falling back to local build"
   build_args="--build-all --enable-ccache"
   [ "$tracy_enabled" -eq 0 ] && build_args="$build_args --disable-profiler"
   ./build_metal.sh $build_args || build_rc=$?

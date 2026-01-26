@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678). Required if search-mode is false."
+      start-commit:
+        required: false
+        type: string
+        default: ""
+        description: "Starting commit for search mode (default: HEAD). This is the known-bad commit to search backward from."
       test-script:
         required: true
         type: string
@@ -388,19 +393,23 @@ jobs:
           ATTEMPTS='${{ inputs.attempts }}'
 
           # Determine which script to run based on test-script input
+          # IMPORTANT: Store test scripts in /tmp/ to ensure they don't change during git checkouts
+          # The bisect process checks out different commits, which would change files in /work/
+          # Using /tmp/ ensures the test script remains stable throughout the bisect
           SCRIPT_PATH=""
           TEST_SCRIPT='${{ inputs.test-script }}'
 
           if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
-            SCRIPT_PATH="/work/bisect_gist_script.sh"
+            SCRIPT_PATH="/tmp/bisect_gist_script.sh"
+            cp /work/bisect_gist_script.sh /tmp/bisect_gist_script.sh
           else
-            cat > /work/bisect_command_script.sh << 'EOF'
+            cat > /tmp/bisect_command_script.sh << 'EOF'
           #!/bin/bash
           set -eo pipefail
           ${{ inputs.test-script }}
           EOF
-            chmod +x /work/bisect_command_script.sh
-            SCRIPT_PATH="/work/bisect_command_script.sh"
+            chmod +x /tmp/bisect_command_script.sh
+            SCRIPT_PATH="/tmp/bisect_command_script.sh"
           fi
 
           # Build test arguments
@@ -411,13 +420,26 @@ jobs:
           if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
             test_args+=(--nd-mode)
           fi
-          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
-            test_args+=(--artifact-mode)
-          fi
+          # Always enable artifact mode - test_single_commit.sh will try to download
+          # and fall back to building if download fails
+          test_args+=(--artifact-mode)
 
-          # Start from HEAD (current commit)
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          echo "Starting search from current commit: $CURRENT_COMMIT"
+          # Start from specified commit or HEAD
+          START_COMMIT='${{ inputs.start-commit }}'
+          if [ -n "$START_COMMIT" ]; then
+            # Validate and resolve the start commit
+            if ! git cat-file -e "$START_COMMIT^{commit}" 2>/dev/null; then
+              echo "ERROR: Start commit does not exist: $START_COMMIT"
+              exit 1
+            fi
+            CURRENT_COMMIT=$(git rev-parse "$START_COMMIT")
+            echo "Starting search from specified commit: $CURRENT_COMMIT"
+            # Checkout the start commit so our search begins there
+            git checkout "$CURRENT_COMMIT" >/dev/null 2>&1
+          else
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            echo "Starting search from HEAD: $CURRENT_COMMIT"
+          fi
 
           # Test current commit first
           echo "::group::Testing current commit $CURRENT_COMMIT"
@@ -571,23 +593,26 @@ jobs:
           TIMEOUT='${{ inputs.timeout }}'
           ATTEMPTS='${{ inputs.attempts }}'
 
-          # Determine which script to run based on test-script input
+          # IMPORTANT: Store test scripts in /tmp/ to ensure they don't change during git checkouts
+          # The bisect process checks out different commits, which would change files in /work/
+          # Using /tmp/ ensures the test script remains stable throughout the bisect
           SCRIPT_PATH=""
           TEST_SCRIPT='${{ inputs.test-script }}'
 
           if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
-            # It's a gist URL, use the downloaded gist script
-            SCRIPT_PATH="/work/bisect_gist_script.sh"
+            # It's a gist URL, copy the downloaded gist script to /tmp/
+            SCRIPT_PATH="/tmp/bisect_gist_script.sh"
+            cp /work/bisect_gist_script.sh /tmp/bisect_gist_script.sh
           else
-            # It's an inline command, write it to a temporary script to avoid quoting issues
+            # It's an inline command, write it to /tmp/ to avoid being affected by git checkouts
             # Note: using heredoc with 'EOF' prevents variable expansion
-            cat > /work/bisect_command_script.sh << 'EOF'
+            cat > /tmp/bisect_command_script.sh << 'EOF'
           #!/bin/bash
           set -eo pipefail
           ${{ inputs.test-script }}
           EOF
-            chmod +x /work/bisect_command_script.sh
-            SCRIPT_PATH="/work/bisect_command_script.sh"
+            chmod +x /tmp/bisect_command_script.sh
+            SCRIPT_PATH="/tmp/bisect_command_script.sh"
           fi
 
           # Build arguments in an array to avoid empty string issues
