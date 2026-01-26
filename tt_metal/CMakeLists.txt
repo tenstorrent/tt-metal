@@ -26,11 +26,6 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
-# TODO(River):
-# This adds tensor headers into tt_metal target without enumerating all of them.
-# This will be added for the API directory itself and other experimental folders in #36380
-add_subdirectory(api/tt-metalium/experimental/tensor)
-
 set(TT_METAL_PUBLIC_API
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
@@ -116,6 +111,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/tensor/host_tensor.hpp
+    api/tt-metalium/experimental/tensor/device_tensor.hpp
 )
 target_sources(
     tt_metal
