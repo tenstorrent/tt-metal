@@ -56,9 +56,6 @@ void MAIN {
 
     cb_wait_front(cb_eps, 1);  // broadcast epsilon is ready
 
-    // Track current batch for batched gamma/beta
-    uint32_t current_batch = tile_row_start / Ht;
-
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
         // Calculate global tile row and batch index
         uint32_t global_tile_row = tile_row_start + tile_row;
@@ -140,12 +137,8 @@ void MAIN {
                 reconfig_data_format(norm_target_cb, cb_gamma);
                 pack_reconfig_data_format(gamma_out_cb);
                 mul_bcast_rows_init_short(norm_target_cb, cb_gamma);
-                // Wait on cb_gamma - cumulative for non-batched, per-batch for batched
-                if constexpr (gamma_is_batched) {
-                    cb_wait_front(cb_gamma, col_tile + block_size);
-                } else {
-                    cb_wait_front(cb_gamma, col_tile + block_size);
-                }
+
+                cb_wait_front(cb_gamma, col_tile + block_size);
                 cb_wait_front(norm_target_cb, block_size);
 
                 tile_regs_acquire();
@@ -172,12 +165,8 @@ void MAIN {
                 reconfig_data_format(cb_intermediate, cb_beta);
                 pack_reconfig_data_format(cb_out);
                 add_bcast_rows_init_short(cb_intermediate, cb_beta);
-                // Wait on cb_beta - cumulative for non-batched, per-batch for batched
-                if constexpr (beta_is_batched) {
-                    cb_wait_front(cb_beta, col_tile + block_size);
-                } else {
-                    cb_wait_front(cb_beta, col_tile + block_size);
-                }
+
+                cb_wait_front(cb_beta, col_tile + block_size);
                 cb_wait_front(cb_intermediate, block_size);
                 cb_reserve_back(cb_out, block_size);
                 tile_regs_acquire();
@@ -209,7 +198,6 @@ void MAIN {
                 if constexpr (do_beta && beta_is_batched) {
                     cb_pop_front(cb_beta, Wt_round_up_block_sizes);
                 }
-                current_batch = next_batch_idx;
             }
         }
     }
