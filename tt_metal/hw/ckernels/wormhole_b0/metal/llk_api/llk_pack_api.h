@@ -388,12 +388,15 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) { _llk_pa
 
 inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable) { _llk_pack_reconfig_l1_acc_(enable); }
 
-template <bool untilize = false, ReduceDim dim>
+template <bool untilize = false, ReduceDim dim, bool enforce_fp32_accumulation = false>
 inline void llk_pack_reduce_mask_config() {
-    _llk_pack_reduce_mask_config_<untilize, dim>();
+    _llk_pack_reduce_mask_config_<untilize, dim, enforce_fp32_accumulation>();
 }
 
-inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
+template <bool enforce_fp32_accumulation = false>
+inline void llk_pack_reduce_mask_clear() {
+    _llk_pack_reduce_mask_clear_<enforce_fp32_accumulation>();
+}
 
 // FIXME-WH-UPLIFT
 template <ReduceDim dim, bool is_fp32_dest_acc_en, bool at_kernel_start = false, bool revert = false>

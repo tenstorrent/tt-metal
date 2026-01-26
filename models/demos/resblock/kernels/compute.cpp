@@ -26,7 +26,8 @@ FORCE_INLINE void init_copy_tile_after_matmul() {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
     // Switch math from matmul mode to datacopy mode
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE, false, false, UnpackToDestEn>(
+        icb)));
     // Reconfigure math HW for unary operation (same CB for both srcA and srcB)
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 }

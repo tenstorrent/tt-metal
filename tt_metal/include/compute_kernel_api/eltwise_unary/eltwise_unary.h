@@ -26,7 +26,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE, false, false, UnpackToDestEn>(
+        icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 }

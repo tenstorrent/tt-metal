@@ -39,7 +39,8 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(icb)));
+          true /*tilize en*/,
+          UnpackToDestEn>(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
 #endif

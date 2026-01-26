@@ -41,16 +41,34 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    bool tilize = false>
+    bool tilize = false,
+    bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-        num_faces, dst_format);
+
+    const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
+    const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
+
+    const bool is_32bit_input_flag = is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format);
+    _llk_math_eltwise_unary_datacopy_init_<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        tilize,
+        is_int_fpu_en,
+        unpack_to_dest>(num_faces, dst_format, is_32bit_input_flag);
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
-inline void llk_math_eltwise_unary_datacopy_uninit() {
-    _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
+inline void llk_math_eltwise_unary_datacopy_uninit(const std::uint32_t operand = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+
+    const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
+    const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
+
+    const bool is_32bit_input_flag = is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format);
+
+    _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>(is_32bit_input_flag);
 }
