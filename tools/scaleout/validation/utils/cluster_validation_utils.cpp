@@ -97,6 +97,62 @@ std::vector<TrafficConfig> generate_sweep_traffic_configs() {
     return configs;
 }
 
+// Helper function to execute tasks in parallel batches with exception handling
+template <typename Task, typename Result = void>
+void execute_parallel_batches(
+    const std::vector<Task>& tasks, size_t batch_size, auto&& task_executor, std::vector<Result>* results = nullptr) {
+    if (tasks.empty()) {
+        return;
+    }
+
+    if constexpr (!std::is_same_v<Result, void>) {
+        if (results) {
+            results->resize(tasks.size());
+        }
+    }
+
+    auto process_future = [&](std::future<Result>& future, size_t index) {
+        if constexpr (std::is_same_v<Result, void>) {
+            future.get();
+        } else if (results) {
+            (*results)[index] = future.get();
+        } else {
+            future.get();
+        }
+    };
+
+    for (size_t batch_start = 0; batch_start < tasks.size(); batch_start += batch_size) {
+        const size_t batch_end = std::min(batch_start + batch_size, tasks.size());
+        std::vector<std::future<Result>> futures;
+        futures.reserve(batch_end - batch_start);
+        std::transform(
+            tasks.begin() + batch_start, tasks.begin() + batch_end, std::back_inserter(futures), [&](const Task& task) {
+                return std::async(std::launch::async, task_executor, task);
+            });
+
+        std::exception_ptr first_exception;
+        for (size_t i = 0; i < futures.size(); ++i) {
+            try {
+                process_future(futures[i], batch_start + i);
+            } catch (...) {
+                if (!first_exception) {
+                    first_exception = std::current_exception();
+                }
+            }
+        }
+        if (first_exception) {
+            std::rethrow_exception(first_exception);
+        }
+    }
+}
+
+// Convenience overload for value-returning tasks with results vector
+template <typename Task, typename Result>
+void execute_parallel_batches(
+    const std::vector<Task>& tasks, std::vector<Result>& results, size_t batch_size, auto&& task_executor) {
+    execute_parallel_batches<Task, Result>(tasks, batch_size, task_executor, &results);
+}
+
 // ============================================================================
 // Traffic Configuration Functions
 // ============================================================================
@@ -201,50 +257,22 @@ void configure_local_kernels(
 
     // Parallelize write_core calls
     constexpr size_t MAX_CONCURRENT_WRITES = 32;
-    if (!write_tasks.empty()) {
-        for (size_t i = 0; i < write_tasks.size(); i += MAX_CONCURRENT_WRITES) {
-            std::vector<std::future<void>> futures;
-            for (size_t j = i; j < std::min(i + MAX_CONCURRENT_WRITES, write_tasks.size()); ++j) {
-                auto chip_id = write_tasks[j].chip_id;
-                auto ethernet_core = write_tasks[j].ethernet_core;
-                const auto* data = write_tasks[j].data;
-                auto address = write_tasks[j].address;
-                futures.push_back(std::async(std::launch::async, [&cluster, chip_id, ethernet_core, data, address]() {
-                    cluster.write_core(chip_id, ethernet_core, *data, address);
-                }));
-            }
-            std::exception_ptr first_exception;
-            for (size_t j = 0; j < futures.size(); ++j) {
-                try {
-                    futures[j].get();
-                } catch (...) {
-                    if (!first_exception) {
-                        first_exception = std::current_exception();
-                    }
-                }
-            }
-            if (first_exception) {
-                std::rethrow_exception(first_exception);
-            }
-        }
-    }
+    execute_parallel_batches(write_tasks, MAX_CONCURRENT_WRITES, [&cluster](const WriteTask& task) {
+        cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
+    });
 
     // Execute barriers per chip (wait for all writes to chip, then barrier)
-    for (ChipId chip_id : chips_with_writes) {
+    std::for_each(chips_with_writes.begin(), chips_with_writes.end(), [&cluster](ChipId chip_id) {
         cluster.l1_barrier(chip_id);
-    }
+    });
 
     // Create kernels and set runtime args
-    const auto* sender_kernel_path =
+    constexpr const char* sender_kernel_path =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
-    const auto* receiver_kernel_path =
+    constexpr const char* receiver_kernel_path =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
 
-    for (const auto& kernel_info : kernel_infos) {
-        auto curr_chip_id = kernel_info.chip_id;
-        auto curr_coord = kernel_info.coord;
-        auto neighbor_chip_id = kernel_info.neighbor_chip_id;
-        auto neighbor_coord = kernel_info.neighbor_coord;
+    for (const auto& [curr_chip_id, curr_coord, neighbor_chip_id, neighbor_coord] : kernel_infos) {
         auto& curr_program = programs[curr_chip_id];
         auto& neighbor_program = programs[neighbor_chip_id];
 
@@ -351,50 +379,28 @@ void configure_cross_host_kernels(
 
     // Parallelize write_core calls
     constexpr size_t MAX_CONCURRENT_WRITES = 32;
-    if (!write_tasks.empty()) {
-        for (size_t i = 0; i < write_tasks.size(); i += MAX_CONCURRENT_WRITES) {
-            std::vector<std::future<void>> futures;
-            for (size_t j = i; j < std::min(i + MAX_CONCURRENT_WRITES, write_tasks.size()); ++j) {
-                auto chip_id = write_tasks[j].chip_id;
-                auto ethernet_core = write_tasks[j].ethernet_core;
-                const auto* data = write_tasks[j].data;
-                auto address = write_tasks[j].address;
-                futures.push_back(std::async(std::launch::async, [&cluster, chip_id, ethernet_core, data, address]() {
-                    cluster.write_core(chip_id, ethernet_core, *data, address);
-                }));
-            }
-            std::exception_ptr first_exception;
-            for (size_t j = 0; j < futures.size(); ++j) {
-                try {
-                    futures[j].get();
-                } catch (...) {
-                    if (!first_exception) {
-                        first_exception = std::current_exception();
-                    }
-                }
-            }
-            if (first_exception) {
-                std::rethrow_exception(first_exception);
-            }
-        }
-    }
+    execute_parallel_batches(write_tasks, MAX_CONCURRENT_WRITES, [&cluster](const WriteTask& task) {
+        cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
+    });
 
     // Execute barriers per chip (wait for all writes to chip, then barrier)
-    for (ChipId chip_id : chips_with_writes) {
+    std::for_each(chips_with_writes.begin(), chips_with_writes.end(), [&cluster](ChipId chip_id) {
         cluster.l1_barrier(chip_id);
-    }
+    });
 
     // Create kernels and set runtime args
-    for (const auto& kernel_info : kernel_infos) {
-        auto my_chip = kernel_info.chip_id;
-        auto my_coord = kernel_info.coord;
-        bool sender = kernel_info.is_sender;
+    constexpr const char* sender_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
+    constexpr const char* receiver_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
+
+    for (const auto& [my_chip, my_coord, sender] : kernel_infos) {
         auto& my_program = programs[my_chip];
 
         if (sender) {
             auto sender_kernel = tt::tt_metal::CreateKernel(
                 my_program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                sender_kernel_path,
                 my_coord,
                 tt::tt_metal::EthernetConfig{
                     .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
@@ -403,7 +409,7 @@ void configure_cross_host_kernels(
         } else {
             auto receiver_kernel = tt::tt_metal::CreateKernel(
                 my_program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                receiver_kernel_path,
                 my_coord,
                 tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
             tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
@@ -730,38 +736,21 @@ void dump_link_stats(
     constexpr size_t MAX_CONCURRENT_READS = 32;
     std::vector<uint32_t> num_mismatched_words(links.size(), 0);
     if (data_size > 0) {
-        for (size_t i = 0; i < links.size(); i += MAX_CONCURRENT_READS) {
-            std::vector<std::future<uint32_t>> futures;
-            for (size_t j = i; j < std::min(i + MAX_CONCURRENT_READS, links.size()); ++j) {
-                auto chip_id = links[j].chip_id;
-                auto ethernet_core = links[j].ethernet_core;
-                futures.push_back(std::async(
-                    std::launch::async,
-                    [&cluster, chip_id, ethernet_core, src_eth_l1_byte_address, data_size, &inputs]() {
-                        auto result_vec = cluster.read_core(chip_id, ethernet_core, src_eth_l1_byte_address, data_size);
-                        uint32_t num_mismatched = 0;
-                        for (size_t k = 0; k < result_vec.size(); ++k) {
-                            if (result_vec[k] != inputs[k]) {
-                                num_mismatched++;
-                            }
-                        }
-                        return num_mismatched;
-                    }));
-            }
-            std::exception_ptr first_exception;
-            for (size_t j = 0; j < futures.size(); ++j) {
-                try {
-                    num_mismatched_words[i + j] = futures[j].get();
-                } catch (...) {
-                    if (!first_exception) {
-                        first_exception = std::current_exception();
+        execute_parallel_batches(
+            links,
+            num_mismatched_words,
+            MAX_CONCURRENT_READS,
+            [&cluster, src_eth_l1_byte_address, data_size, &inputs](const LinkInfo& link) {
+                const auto result_vec =
+                    cluster.read_core(link.chip_id, link.ethernet_core, src_eth_l1_byte_address, data_size);
+                uint32_t mismatches = 0;
+                for (size_t i = 0; i < result_vec.size(); ++i) {
+                    if (result_vec[i] != inputs[i]) {
+                        ++mismatches;
                     }
                 }
-            }
-            if (first_exception) {
-                std::rethrow_exception(first_exception);
-            }
-        }
+                return mismatches;
+            });
     }
 
     // Process results and build LinkStatus entries
