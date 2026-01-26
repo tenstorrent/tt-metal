@@ -44,14 +44,15 @@ public:
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }
     }
-    static void SetUp() {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
-    }
     static void TearDownTestSuite() {
         if (check_32_chips()) {
             ttml::autograd::ctx().close_device();
+        }
+    }
+
+    void SetUp() override {
+        if (!check_32_chips()) {
+            GTEST_SKIP() << "Skipping Galaxy specific tests";
         }
     }
 };
