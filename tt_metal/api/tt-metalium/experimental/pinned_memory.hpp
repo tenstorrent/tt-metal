@@ -134,6 +134,12 @@ public:
     void add_barrier_event(const distributed::MeshEvent& event);
 
     /**
+     * @brief Check if locking the pinned memory may block
+     * @return True if the lock may block, false otherwise
+     */
+    bool lock_may_block() const;
+
+    /**
      * @brief Lock the pinned memory for host access
      * @return Pointer to the host memory that can be safely accessed
      *
