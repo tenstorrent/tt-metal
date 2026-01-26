@@ -468,7 +468,7 @@ def test_ag_matmul_tg_llama_perf(
     subdir = "llama_ccl_perf"
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_llama_all_gather_matmul -k ff2_llama"
     cols = ["DEVICE KERNEL"]
-    op_name = "LlamaAllGatherMatmulAsync"
+    op_name = "LlamaAllGatherMatmulAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
