@@ -13,5 +13,6 @@ void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(2);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(3);
     compute_kernel_hw_startup(cb_id_in0, cb_id_out0);
-    compute_kernel_lib::tilize(cb_id_in0, per_core_block_tile_cnt, cb_id_out0, per_core_block_cnt);
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_id_in0>, OutputCB<cb_id_out0>>>(
+        per_core_block_tile_cnt, per_core_block_cnt);
 }
