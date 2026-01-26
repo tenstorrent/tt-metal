@@ -34,7 +34,7 @@
 
 **Key Features:**
 - **TileShape struct**: `TileShape::grid(Ht, Wt, NC)`, `TileShape::row(Wt)`, `TileShape::single()`
-- **TileLayout struct**: `TileLayout::contiguous()`, `TileLayout::with_row_stride(stride)`
+- **InputMemoryLayout struct**: `InputMemoryLayout::contiguous()`, `InputMemoryLayout::with_row_stride(stride)`
 - **ReduceDataFormatReconfig**: `NONE`, `INPUT`, `OUTPUT`, `BOTH` (default)
 - **Explicit template params**: `reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>()` (no macros)
 - **PostReduceOp lambda**: Custom post-reduce ops (e.g., `recip_tile` for softmax)
@@ -73,7 +73,7 @@
 - **P6-P8:** STREAMING_BATCHED mode - bulk wait/pop, same efficiency as PRELOADED
 - **P10:** PostReduceOp with `dst_idx` param enables REDUCE_COL post-ops (recip_tile, log_tile)
 - **P11:** Single-tile reduces using `TileShape::single()` for pre-accumulated tiles (no accumulator reload)
-- **Library API:** TileShape, TileLayout, ReduceDataFormatReconfig, explicit template params (no macros)
+- **Library API:** TileShape, InputMemoryLayout, ReduceDataFormatReconfig, explicit template params (no macros)
 
 ### 🔶 Partially Migrated (7 files)
 
@@ -214,14 +214,14 @@ ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/numeric.h
 **Achieved:**
 - **28 files fully migrated** - use only `compute_kernel_lib::reduce`
 - **7 files partially migrated** - use both library AND raw `reduce_tile<`
-- **Library API finalized:** TileShape, TileLayout, ReduceDataFormatReconfig, explicit template params
+- **Library API finalized:** TileShape, InputMemoryLayout, ReduceDataFormatReconfig, explicit template params
 - Complex multi-pass reductions working (softmax, layernorm, groupnorm, distributed norms)
 - **moreh_softmax_backward (4 files)** fully migrated using `reduce_tile_to_cb` pattern
 - **P11: Moreh single-tile reduces (3 files)** migrated using `TileShape::single()` for pre-accumulated tiles
 
 **Library Features:**
 - `TileShape::grid(Ht, Wt, NC)` - self-documenting grid dimensions
-- `TileLayout::with_row_stride(stride)` - non-contiguous layout support
+- `InputMemoryLayout::with_row_stride(stride)` - non-contiguous layout support
 - `ReduceDataFormatReconfig::{NONE,INPUT,OUTPUT,BOTH}` - fine-grained reconfig control
 - PERSISTENT mode for multi-pass operations (softmax MAX+SUM pattern)
 - PostReduceOp lambda with `dst_idx` param for REDUCE_COL post-ops (recip_tile, log_tile)
