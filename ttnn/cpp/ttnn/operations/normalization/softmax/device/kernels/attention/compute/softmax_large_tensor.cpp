@@ -250,8 +250,12 @@ void reduce_cb(
     uint32_t cb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
     compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
-        cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t), {},
-        {},  // accum parameter (use default NoAccumulation)
+        cb_in,
+        cb_scaler,
+        cb_out,
+        compute_kernel_lib::InputBlockShape::row(cb_length_t),
+        compute_kernel_lib::InputMemoryLayout::contiguous(),
+        compute_kernel_lib::NoAccumulation{},
         // PostReduceOp: conditionally accumulate with previous result
         [cb_prev_out, use_prev_reduce](uint32_t) {
             if (use_prev_reduce) {
