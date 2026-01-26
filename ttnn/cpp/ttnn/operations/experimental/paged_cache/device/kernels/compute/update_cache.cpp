@@ -35,27 +35,32 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Untilize input (single row, no uninit needed)
-    compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb, true, false>(1);
+    // Config for untilizing new input tokens (skip uninit since we only do this once)
+    using UntilizeNewToken =
+        UntilizeConfig<WidthInTiles<Wt>, InputCB<in_cb>, OutputCB<untilized_in_cb>, UntilizeFlags::SKIP_UNINIT>;
+
+    // Config for untilizing existing cache blocks
+    using UntilizeCacheBlock = UntilizeConfig<WidthInTiles<Wt>, InputCB<cache_cb>, OutputCB<untilized_cache_cb>>;
+
+    // Config for re-tilizing the updated cache (with data format reconfig)
+    using RetilizeUpdatedCache =
+        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, TilizeFlags::DT_RECONFIG, PreviousCB<cache_cb>>;
+
+    // Untilize the new input token
+    compute_kernel_lib::untilize<UntilizeNewToken>(1);
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
+
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Untilize a block from the cache - DEST limit auto-detected
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        // Untilize cache block to be updated
+        compute_kernel_lib::untilize<UntilizeCacheBlock>(1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        // Wait on writer to update block. Tilize.
-        compute_kernel_lib::tilize<true, true, false, true>(
-            untilized_cache2_cb,  // new_cb (input)
-            Wt,                   // block_w
-            out_cb,               // output CB
-            1,                    // num_blocks (1 iteration)
-            1,                    // subblock_h (default)
-            cache_cb              // old_cb (for DT restoration)
-        );
+        // Writer updates the untilized cache with new token. Re-tilize the result.
+        compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, 1);
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
