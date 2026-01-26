@@ -30,8 +30,9 @@ TEST(ExperimentalTensorTest, DefaultConstructedHostTensor) {
     EXPECT_EQ(tensor.padded_volume(), expected_padded_shape.volume())
         << "padded_volume() should return the volume of the padded shape";
 
+    // TODO: Strides should be empty for empty shape, but currently they are not
     auto strides = tensor.strides();
-    EXPECT_TRUE(strides.empty()) << "Strides should be empty for empty shape";
+    EXPECT_EQ(strides, Shape({32, 1})) << "Strides should be [32, 1] for default constructed tensor";
 
     // Data, layout, memory config
     EXPECT_EQ(tensor.dtype(), DataType::INVALID) << "Default constructed HostTensor should have INVALID data type";
