@@ -1607,7 +1607,7 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
             break;
         }
         // Can also have "all"
-        if (strncmp(env_var_str, "all", 3) == 0) {
+        if (strcmp(env_var_str, "all") == 0) {
             feature_targets[feature].all_chips = true;
             break;
         }
@@ -1616,7 +1616,10 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
         if (sscanf(env_var_str, "(M%u , D%u)", &mesh_id, &chip_id) != 2 &&
             sscanf(env_var_str, "(M%u, D%u)", &mesh_id, &chip_id) != 2 &&
             sscanf(env_var_str, "(M%u,D%u)", &mesh_id, &chip_id) != 2) {
-            TT_THROW("Invalid {}", env_var_str);
+            TT_THROW(
+                "Invalid format for {}: '{}'. Expected format: (Mn,Dn) or 'all'. Example: (M0,D0),(M0,D1)",
+                env_var,
+                env_var_str);
         }
 
         feature_targets[feature].node_ids.push_back(tt_fabric::FabricNodeId(tt_fabric::MeshId{mesh_id}, chip_id));
@@ -1625,6 +1628,9 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
             env_var_str++;  // Skip ')'
             while (*env_var_str == ',' || *env_var_str == ' ' || *env_var_str == '"') {
                 env_var_str++;
+            }
+            if (*env_var_str == '\0') {
+                break;
             }
         }
     }
