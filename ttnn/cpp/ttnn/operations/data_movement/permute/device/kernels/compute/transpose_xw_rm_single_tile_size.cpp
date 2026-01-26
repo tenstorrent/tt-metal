@@ -28,15 +28,7 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
-        compute_kernel_lib::tilize(
-            cb_in,        // Input CB (row-major)
-            1,            // block_w (1 tile output)
-            cb_tilize,    // Output CB (tiled)
-            1,            // num_blocks (1 iteration per outer loop)
-            1,            // subblock_h (default)
-            0,            // old_icb (not used)
-            x_block_size  // input_count (asymmetric: rows != tiles)
-        );
+        compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_tilize>>>(1, 1, 1, x_block_size);
 
         // transpose input
         cb_wait_front(cb_tilize, 1);

@@ -25,36 +25,45 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Initialize once before the loop
-    compute_kernel_lib::untilize_init<Wt, in_cb, untilized_in_cb>();
+    // Config for untilizing new input tokens - used for init/reinit between heads
+    using UntilizeNewTokenSetup = UntilizeConfig<WidthInTiles<Wt>, InputCB<in_cb>, OutputCB<untilized_in_cb>>;
+
+    // Config for untilizing new input tokens in the loop (init/uninit handled outside)
+    using UntilizeNewTokenInLoop = UntilizeConfig<
+        WidthInTiles<Wt>,
+        InputCB<in_cb>,
+        OutputCB<untilized_in_cb>,
+        UntilizeFlags::SKIP_INIT | UntilizeFlags::SKIP_UNINIT>;
+
+    // Config for untilizing existing cache blocks
+    using UntilizeCacheBlock = UntilizeConfig<WidthInTiles<Wt>, InputCB<cache_cb>, OutputCB<untilized_cache_cb>>;
+
+    // Config for re-tilizing the updated cache (with data format reconfig from previous cache read)
+    using RetilizeUpdatedCache =
+        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, TilizeFlags::DT_RECONFIG, PreviousCB<cache_cb>>;
+
+    compute_kernel_lib::untilize_init<UntilizeNewTokenSetup>();
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
-        // Untilize input (init done before loop, no uninit needed)
-        compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb, false, false>(1);
+        // Untilize new input token for this head
+        compute_kernel_lib::untilize<UntilizeNewTokenInLoop>(1);
 
         reconfig_data_format_srca(in_cb, cache_cb);
         for (uint32_t u = 0; u < u_count; ++u) {
-            // Untilize cache blocks
-            compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
+            // Untilize cache block to be updated
+            compute_kernel_lib::untilize<UntilizeCacheBlock>(granularity);
 
             reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-            // Wait on writer to update block. Tilize.
-            compute_kernel_lib::tilize<true, true, false, true>(
-                untilized_cache2_cb,  // new_cb (input)
-                Wt,                   // block_w
-                out_cb,               // output CB
-                granularity,          // num_blocks
-                1,                    // subblock_h (default)
-                cache_cb              // old_cb (for DT restoration)
-            );
+            // Writer updates the untilized cache with new token. Re-tilize the result.
+            compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, granularity);
 
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         reconfig_data_format_srca(cache_cb, in_cb);
 
-        // Re-initialize for next iteration
-        compute_kernel_lib::untilize_init<Wt, in_cb, untilized_in_cb>();
+        // Re-initialize for next head
+        compute_kernel_lib::untilize_init<UntilizeNewTokenSetup>();
     }
 }
