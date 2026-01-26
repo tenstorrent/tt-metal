@@ -4,6 +4,7 @@
 
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
+#include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
@@ -28,9 +29,22 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    Tensor prepared_weight_tensor = weight_tensor;
+    switch (prepared_weight_tensor.logical_shape().rank()) {
+        case 5:
+            prepared_weight_tensor = ttnn::operations::experimental::conv3d::prepare_weights(
+                prepared_weight_tensor, groups_, config.C_in_block);
+            break;
+        case 2: break;
+        default: TT_THROW("Unsupported weight tensor rank: {}", prepared_weight_tensor.logical_shape().rank());
+    }
+
+    if (prepared_weight_tensor.layout() != Layout::TILE) {
+        prepared_weight_tensor = prepared_weight_tensor.to_layout(Layout::TILE);
+    }
     return ttnn::prim::conv3d(
         input_tensor,
-        weight_tensor,
+        prepared_weight_tensor,
         bias_tensor,
         config,
         dtype_,
