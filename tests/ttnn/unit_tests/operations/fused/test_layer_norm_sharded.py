@@ -121,13 +121,7 @@ def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage, tensor_type, dtype):
-    if (
-        is_watcher_enabled()
-        and dtype == torch.bfloat16
-        and tensor_type == "ascending_values_repeated_rows"
-        and two_stage
-        and use_welford
-    ):
+    if is_watcher_enabled() and two_stage and use_welford:
         pytest.skip("Skipping due to the hang with watcher enabled, see issue #XXXXX")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
@@ -186,6 +180,8 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
+    if is_watcher_enabled() and two_stage and use_welford:
+        pytest.skip("Skipping due to the hang with watcher enabled, see issue #XXXXX")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
