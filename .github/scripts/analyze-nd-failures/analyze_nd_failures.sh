@@ -365,26 +365,43 @@ run_claude_analysis() {
 
     # Claude CLI reads from stdin and uses --model flag
     # Use -p flag for non-interactive/pipe mode (print and exit)
+    # Use stdbuf to disable buffering and ensure all output is captured
     # Use tee to show output in real-time while also saving to file
+    local exit_code=0
+
     if command -v timeout &> /dev/null; then
         log_info "Using timeout (10 minute limit)"
-        if timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
-            local exit_code=0
-        else
-            local exit_code=$?
-            if [[ $exit_code -eq 124 ]]; then
-                log_error "Claude analysis timed out after 10 minutes"
-                return 1
+        if command -v stdbuf &> /dev/null; then
+            # Use stdbuf to unbuffer output for better capture
+            if ! stdbuf -oL -eL timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
+                exit_code=$?
             fi
+        else
+            # Fallback without stdbuf
+            if ! timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
+                exit_code=$?
+            fi
+        fi
+
+        if [[ $exit_code -eq 124 ]]; then
+            log_error "Claude analysis timed out after 10 minutes"
+            return 1
         fi
     else
         # No timeout - run directly
-        if cat "$prompt_file" | claude --model "$model_flag" -p 2>&1 | tee "$output_file"; then
-            local exit_code=0
+        if command -v stdbuf &> /dev/null; then
+            if ! stdbuf -oL -eL sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | stdbuf -oL -eL tee "$output_file"; then
+                exit_code=$?
+            fi
         else
-            local exit_code=$?
+            if ! sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
+                exit_code=$?
+            fi
         fi
     fi
+
+    # Ensure output is flushed to disk
+    sync "$output_file" 2>/dev/null || true
 
     # Check if we got valid output
     if [[ $exit_code -eq 0 ]] && [[ -s "$output_file" ]]; then
