@@ -239,18 +239,18 @@ void kernel_main() {
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
+
         cb_reserve_back(cb_id_page_table, num_pages_to_read);
 
         // Read page table from DRAM
         if constexpr (!is_page_table_sharded) {
-            page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-            const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
-            uint64_t page_table_noc_addr = page_table_gen.get_noc_addr((cur_batch / q_heads_parallel_factor));
-            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
-            noc_async_read_barrier();
-            page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+            page_table_ptr = read_page_table_for_batch(
+                cb_id_page_table,
+                cur_batch / q_heads_parallel_factor,
+                page_table_args,
+                page_table_addr,
+                page_table_page_size);
             page_table_ptr_u32 = page_table_ptr;
-
         } else {  // Read page table from dyanmically allocated L1 buffer
             page_table_cb_wr_ptr =
                 get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
@@ -285,7 +285,7 @@ void kernel_main() {
                             (is_page_table_sharded)
                                 ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                                : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
+                                : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
                                       virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                         for (uint32_t col = 0; col < DHt; ++col) {
                             noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
@@ -339,8 +339,11 @@ void kernel_main() {
                                           num_kv_heads,
                                           block_size_t,
                                           DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                                    : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
-                                          virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
+                                    : virtual_seq_tile_id_to_physical_tile_id<
+                                          uint32_t,
+                                          num_kv_heads,
+                                          block_size_t,
+                                          DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
                             for (uint32_t col = 0; col < vDHt; ++col) {
                                 noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
                                 physical_v_tile_id += 1;

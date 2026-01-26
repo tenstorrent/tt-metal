@@ -139,19 +139,6 @@ def load_throughput_expert_weights(
         1, num_experts, 1, hidden_size
     )
 
-    # Transpose for matmul: [1, num_experts, out_features, in_features] -> [1, num_experts, in_features, out_features]
-    # w1 = w1.transpose(-1, -2)
-    # w2 = w2.transpose(-1, -2)
-    # w3 = w3.transpose(-1, -2)
-
-    # Reshape bias for proper broadcasting with sparse_matmul output
-    # sparse_matmul output shape: [1, num_sparse_blocks, 1, num_local_experts, local_batch, dim]
-    # We need bias shape: [1, 1, 1, num_local_experts, 1, dim] after sharding
-    # So before sharding: [1, 1, 1, num_experts, 1, dim]
-    w1_bias = w1_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
-    w3_bias = w3_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
-    w2_bias = w2_bias.reshape(1, 1, 1, num_experts, 1, hidden_size)
-
     # Load and shard weights
     w1_tt = _shard_experts_by_device(
         w1,
