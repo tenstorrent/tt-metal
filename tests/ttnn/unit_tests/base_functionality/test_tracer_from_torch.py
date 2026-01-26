@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import transformers
 
 import ttnn
 
@@ -21,12 +20,12 @@ import ttnn
         ttnn.bfloat8_b,
     ],
 )
-def test_to_with_different_dtypes_and_trace(device, shape, input_dtype):
+def test_from_torch_with_different_dtypes_and_trace(device, shape, input_dtype):
     torch.random.manual_seed(1234)
     torch_input_tensor = torch.randn(shape).bfloat16().float()
     interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
     with ttnn.tracer.trace():
-        tensor = ttnn.from_torch(
+        _ = ttnn.from_torch(
             torch_input_tensor,
             device=device,
             layout=ttnn.TILE_LAYOUT,
