@@ -88,7 +88,9 @@ source python_env/bin/activate
 
 ## Step 2: Install tt-train
 
-Once tt-metal is installed and your virtual environment is activated, install tt-train:
+Once tt-metal is installed and your virtual environment is activated, choose one of the following installation methods:
+
+### Method A: pip install (standalone build)
 
 **Regular installation:**
 
@@ -99,10 +101,33 @@ pip install /path/to/tt-train/
 **Editable installation (for development):**
 
 ```bash
-pip install -e /path/to/tt-train/
+pip install --no-build-isolation -e /path/to/tt-train/
 ```
 
 Use the editable installation (`-e`) if you plan to modify the tt-train source code and want changes to be reflected immediately without reinstalling.
+
+> **Note:** This method runs its own CMake build. If you've already built tt-train via `build_metal.sh --build-tt-train`, use Method B instead to avoid rebuilding.
+
+---
+
+### Method B: Using pre-built ttml (recommended for development)
+
+If you built tt-metal with tt-train support using `build_metal.sh --build-tt-train` or `--build-all`, ttml is already compiled. You can make Python find it by creating two `.pth` files:
+
+```bash
+# One-time setup - adds paths to your virtualenv's Python path
+
+# 1. Add ttml Python source code
+echo "/path/to/tt-metal/tt-train/sources/ttml" > python_env/lib/python3.10/site-packages/ttml.pth
+
+# 2. Add the built _ttml C++ extension (.so file)
+echo "/path/to/tt-metal/build/tt-train/sources/ttml" > python_env/lib/python3.10/site-packages/_ttml.pth
+```
+
+This approach:
+- Avoids rebuilding when ttml is already built
+- Reflects Python source changes immediately
+- Works alongside the existing tt-metal editable install
 
 ---
 

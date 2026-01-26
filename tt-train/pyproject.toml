@@ -9,19 +9,12 @@ build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
 minimum-version = "0.8.0"
-#build-dir = "build/{wheel_tag}"
 wheel.packages = ["sources/ttml/ttml"]
-build-dir = "../build"
+build-dir = "build"
 cmake.build-type = "Release"
-cmake.source-dir = ".."
-cmake.define.CMAKE_TOOLCHAIN_FILE = {env="CMAKE_TOOLCHAIN_FILE", default="cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"}
-cmake.define.CMAKE_C_COMPILER = {env="CMAKE_C_COMPILER", default="clang-20"}
-cmake.define.CMAKE_CXX_COMPILER = {env="CMAKE_CXX_COMPILER", default="clang++-20"}
-cmake.define.CMAKE_CXX_COMPILER_LAUNCHER = {env="CMAKE_CXX_COMPILER_LAUNCHER", default="ccache"}
 cmake.targets = ["_ttml"]
 
 [tool.scikit-build.install]
-# Use CMake install components for packaging
 components = ["ttml"]
 
 [project]
