@@ -244,6 +244,13 @@ class TtASPP(LightweightModule):
 
         logger.debug(f"TtASPP forward pass - input shape: {input_shape}, pool_kernel_size: {self.pool_kernel_size}")
 
+        # We can't shard input unfortunately, it OOMs
+        # Input is 2048x2048 = 64x64 tiles = 4096 tiles
+        # Interleaved: 4096 tiles / 110 cores = 38 tiles per core
+        # Allocator does: 38 tiles * 110 cores * 1088 bytes in tile = 4547840 B
+        # Sharded: 4096 tiles / (8 x 8 core grid) = 64 tiles per core
+        # Allocator does: 64 tiles * 110 cores * 1088 bytes in tile = 7659520 B
+        # So sharded uses more L1 and causes OOM
         x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
         if H % self.pool_kernel_size[0] or W % self.pool_kernel_size[1]:
