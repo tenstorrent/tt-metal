@@ -14,30 +14,6 @@ name: "[testing] Ops Sanity pipeline"
 
 on:
   workflow_dispatch:
-    inputs:
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        default: Release
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-      enable-lto:
-        required: false
-        default: false
-        type: boolean
-        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       build-artifact-name:
@@ -49,39 +25,8 @@ on:
       docker-image:
         required: true
         type: string
-      platform:
-        required: false
-        type: string
-        default: "Ubuntu 22.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
-  # Parse platform dropdown to extract enable-lto
-  parse-platform:
-    runs-on: ubuntu-latest
-    outputs:
-      enable-lto: ${{ steps.parse.outputs.enable-lto }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
-
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -92,7 +37,7 @@ jobs:
         with:
           submodules: recursive
       - name: Install dependencies
-        run: pip install PyYAML
+        run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
           set -e
@@ -112,39 +57,33 @@ jobs:
           set -e
           # Install yq
           YQ_VERSION="v4.44.1"
-          wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
           chmod +x /usr/local/bin/yq
           # Check if the file exists
           if [ ! -f "$TESTS_YAML_PATH" ]; then
             echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
             exit 1
           fi
-          # Convert to compact JSON (single line, no indentation)
-          json_output=$(yq -o=json -I=0 '.' "$TESTS_YAML_PATH")
-          # Print the JSON output for debugging
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Print the JSON output
           echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
           echo "${json_output}"
-          # Output using heredoc delimiter approach (required for multi-line or complex values)
-          {
-            echo 'matrix<<EOF'
-            echo "${json_output}"
-            echo 'EOF'
-          } >> $GITHUB_OUTPUT
+          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
 
   build-artifact:
     # This job will ONLY run if the build-artifact-name input is NOT provided.
     if: ${{ inputs.build-artifact-name == '' }}
-    needs: [load-test-matrix, parse-platform]
+    needs: load-test-matrix
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type || 'Release' }}
+      version: 22.04
       build-wheel: true
-      platform: ${{ inputs.platform }}
-      # Enable LTO based on platform setting (user can override via checkbox)
-      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
 
   tests:
     # If the build-artifact-name input is NOT provided, we need to run the build-artifact job first.
