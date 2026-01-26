@@ -201,3 +201,216 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
+
+  # Generate Model Status Chart
+  generate-status-chart:
+    if: always()
+    needs: [n150-tests, n300-tests, p100-tests, p150-tests, p300-tests, wh-loudbox-tests, bh-qb2-tests, bh-loudbox-tests, wh-galaxy-tests, bh-galaxy-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Download all test result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: test-artifacts/
+          pattern: test-results-*
+          merge-multiple: true
+
+      - name: Generate Model Status Chart
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          import glob
+          import xml.etree.ElementTree as ET
+          from collections import defaultdict
+
+          # Define device configurations
+          devices = ['n150', 'n300', 'p100', 'p150', 'p300', 'WH-LOUDBOX', 'BH-QB2', 'BH-LOUDBOX', 'WH-6U', 'BH-6U']
+
+          # Define model configurations per device
+          tt_transformers_models = {
+              'n150': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'mistral-7b', 'phi-3-mini-128k'],
+              'n300': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'phi-3-mini-128k'],
+              'p100': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
+              'p150': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
+              'p300': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'WH-LOUDBOX': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'BH-QB2': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'BH-LOUDBOX': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'WH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'BH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k']
+          }
+
+          standalone_models = {
+              'n150': ['falcon-7b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'n300': ['falcon-7b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'p100': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'p150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'p300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'WH-LOUDBOX': ['falcon-7b', 'falcon-40b', 'resnet-50', 'vit', 'llama3.3-70b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'BH-QB2': ['llama3.3-70b', 'flux.1-dev', 'wan2.2-t2v-a14b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'BH-LOUDBOX': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'WH-6U': ['falcon-7b', 'falcon-40b', 'resnet-50', 'vit', 'llama3.3-70b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'BH-6U': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert']
+          }
+
+          # Get all unique models
+          all_tt_models = set()
+          all_standalone_models = set()
+          for device_models in tt_transformers_models.values():
+              all_tt_models.update(device_models)
+          for device_models in standalone_models.values():
+              all_standalone_models.update(device_models)
+
+          # Parse test results
+          test_results = defaultdict(lambda: defaultdict(list))  # test_results[device][model] = [test_results]
+
+          # Find and parse XML files
+          for xml_file in glob.glob('test-artifacts/**/*.xml', recursive=True):
+              try:
+                  tree = ET.parse(xml_file)
+                  root = tree.getroot()
+
+                  # Extract device and model from filename
+                  filename = os.path.basename(xml_file)
+                  if filename.startswith('results-'):
+                      parts = filename[8:].replace('.xml', '').split('-')
+                      if len(parts) >= 2:
+                          device = parts[0]
+                          model = parts[1]
+
+                          # Get test result
+                          failures = int(root.get('failures', '0'))
+                          errors = int(root.get('errors', '0'))
+                          tests = int(root.get('tests', '0'))
+
+                          passed = tests > 0 and failures == 0 and errors == 0
+                          test_results[device][model].append(passed)
+              except Exception as e:
+                  print(f"Error parsing {xml_file}: {e}")
+
+          # Generate status for TT-Transformers models
+          tt_status = {}
+          for model in sorted(all_tt_models):
+              tt_status[model] = {}
+              for device in devices:
+                  if model in tt_transformers_models.get(device, []):
+                      results = test_results[device].get(model, [])
+                      if len(results) == 0:
+                          status = "Failed"  # No results means failed
+                      elif len(results) < 3:
+                          status = "Partial"  # Missing some tests
+                      else:
+                          passed_count = sum(results)
+                          if passed_count == 3:
+                              status = "Passed"
+                          elif passed_count >= 1:
+                              status = "Partial"
+                          else:
+                              status = "Failed"
+                  else:
+                      status = "NC"  # Not Compatible
+                  tt_status[model][device] = status
+
+          # Generate status for Standalone models
+          standalone_status = {}
+          for model in sorted(all_standalone_models):
+              standalone_status[model] = {}
+              for device in devices:
+                  if model in standalone_models.get(device, []):
+                      results = test_results[device].get(model, [])
+                      if len(results) > 0 and results[0]:
+                          status = "Passed"
+                      elif len(results) > 0:
+                          status = "Failed"
+                      else:
+                          status = "Failed"  # No results means failed
+                  else:
+                      status = "NC"  # Not Compatible
+                  standalone_status[model][device] = status
+
+          # Generate JSON output
+          output_data = {
+              "tt_transformers": tt_status,
+              "standalone": standalone_status,
+              "devices": devices
+          }
+
+          with open('model-status.json', 'w') as f:
+              json.dump(output_data, f, indent=2)
+
+          # Generate Markdown report
+          def generate_markdown_table(title, status_data):
+              md = f"## {title}\n\n"
+
+              # Header
+              md += "| Model |"
+              for device in devices:
+                  md += f" {device} |"
+              md += "\n"
+
+              # Separator
+              md += "|-------|"
+              for _ in devices:
+                  md += "-------|"
+              md += "\n"
+
+              # Data rows
+              for model in sorted(status_data.keys()):
+                  md += f"| {model} |"
+                  for device in devices:
+                      status = status_data[model][device]
+                      # Add emoji for better visualization
+                      if status == "Passed":
+                          emoji = "✅"
+                      elif status == "Partial":
+                          emoji = "⚠️"
+                      elif status == "Failed":
+                          emoji = "❌"
+                      else:  # NC
+                          emoji = "✖️"
+                      md += f" {emoji} {status} |"
+                  md += "\n"
+
+              return md + "\n"
+
+          # Generate full markdown report
+          markdown_content = f"""# Model Test Status Report
+
+          Generated on: {os.environ.get('GITHUB_RUN_ID', 'Unknown')}
+
+          **Legend:**
+          - ✅ **Passed**: All tests passed
+          - ⚠️ **Partial**: Some tests passed (TT-Transformers only)
+          - ❌ **Failed**: All tests failed
+          - ✖️ **NC**: Not Compatible (model not tested on this device)
+
+          """
+
+          markdown_content += generate_markdown_table("TT-Transformers Models", tt_status)
+          markdown_content += generate_markdown_table("Standalone Models", standalone_status)
+
+          with open('model-status-report.md', 'w') as f:
+              f.write(markdown_content)
+
+          print("Generated model status files:")
+          print("- model-status.json")
+          print("- model-status-report.md")
+          EOF
+
+      - name: Upload Model Status Chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-status-chart
+          path: |
+            model-status.json
+            model-status-report.md
+          retention-days: 30
