@@ -42,6 +42,14 @@ The operation returns both:
 
 Before and after the core TopK operation, the input tensor undergoes several transformations to ensure compatibility with the underlying sorting implementation and hardware requirements. These transformations are transparent to the user and are automatically reversed after processing.
 
+### Implementation Functions
+
+The transformation process is implemented through two main functions in the current codebase:
+
+- **`pre_topk_transform_tensor()`**: Prepares tensor for TopK device operation
+- **`post_topk_transform_tensor()`**: Restores tensor to expected output format
+- **`get_nearest_supported_k_value()`**: Rounds K to tile-aligned boundaries (multiples of 32)
+
 ### Pre-TopK Transformations
 
 The input tensor preparation involves the following steps:
@@ -120,23 +128,37 @@ The TTNN TopK operation provides two execution strategies, each optimized for di
 
 ## Strategy Selection Logic
 
-The TopK device operation automatically selects the appropriate strategy based on:
+The TopK device operation automatically selects the appropriate strategy through a hierarchical decision process implemented in `select_program_factory()`. The selection prioritizes multi-core execution when beneficial and feasible:
 
-1. **Width Check**: Input width must be ≥ 8192
-2. **K Constraint**: K must be ≤ 64
-3. **Index Type**: Input dimension must be < 65536 (to use uint16 indices)
-4. **Memory Verification**: L1 memory must be sufficient for:
-   - Local TopK processing on each core
-   - Gather phase with data from all participating cores
-5. **Core Configuration**: A valid core split configuration must exist
+### Multi-Core Prerequisites
 
-If all conditions are met, **Multi Core** is selected. Otherwise, the operation falls back to **Single Core**.
+All of the following conditions must be satisfied for multi-core execution:
+
+1. **Width Check**: Input dimension ≥ 8192 (`multi_core_min_width`)
+   - Ensures sufficient work to justify parallel execution overhead
+
+2. **K Constraint**: K ≤ 64
+   - Multi-core algorithm has optimized paths for small K values
+   - Larger K values may not benefit from parallel execution
+
+3. **Index Type**: Input dimension < 65536
+   - Multi-core implementation currently only supports UInt16 indices
+   - Dimensions ≥ 65536 force single-core execution with UInt32 indices
+
+4. **Memory and Core Feasibility**: Pass `verify_multi_core_cost()` checks
+   - Work must be divisible across available cores without remainder
+   - Memory costs (gather + local per core) must fit within L1 cache limits
+   - Contiguous rectangular core arrangement must be possible
+   - Split size must meet `min_dim_per_core` requirements (≥ 64)
+   - Must require genuinely multiple cores (> 1 core beneficial)
+
+If any condition fails, the operation falls back to **Single Core** strategy.
 
 ## Strategies Description
 
 ### Single Core Strategy
 
-The Single Core strategy processes each row of the input tensor independently on a dedicated core, using a full Bitonic Sort implementation to find the top K elements.
+The Single Core strategy processes each row of the input tensor independently on a dedicated core, using an **insertion sort with double buffering** algorithm to find the top K elements.
 
 #### Overview:
 
@@ -148,33 +170,35 @@ The Single Core strategy processes each row of the input tensor independently on
    - The reader kernel loads the entire row of tiles from DRAM into circular buffers.
    - Index tiles are generated in the reader kernel to track original positions.
 
-3. **Bitonic Sort Execution**:
-   - The compute kernel performs a full Bitonic Sort on the row:
-     - Tiles are transposed (since Bitonic Sort operates on columns).
-     - `topk_local_sort` is used to sort pairs of tiles in-place.
-     - The sort alternates between ascending and descending to build a bitonic sequence.
-     - Multiple merge stages refine the ordering until the entire row is sorted.
-   - The sorting respects the `largest` parameter to determine sort order.
+3. **Insertion Sort with Sliding Window**:
+   - The compute kernel implements an insertion sort algorithm that maintains a sliding window of the K best elements
+   - **Initialization**: Process first two input tiles (64 elements) using `topk_local_sort`
+   - **Incremental Processing**: Process remaining tiles one at a time, inserting them into the maintained sorted buffer
+   - **Double Buffering**: Uses result preparation buffers of size 2×K tiles for efficient insertion operations
+   - **Three Processing Phases**:
+     - **First Sort**: Initial processing of two tiles to establish sorted baseline
+     - **Growing Phase**: Building up the sorted buffer until K elements are reached
+     - **Steady State**: Buffer is full; new tiles compete with existing worst elements
 
-4. **Result Extraction**:
-   - After sorting, the first K elements (top K) are extracted.
-   - These K elements are prepared in intermediate circular buffers.
-   - Results are transposed back to the correct orientation.
+4. **Buffer Management**:
+   - Maintains `ktiles_saved` counter tracking valid sorted data
+   - Uses adaptive buffer positioning with variable increment values
+   - Alternates between buffer halves to prevent data corruption during merges
 
-5. **Output Writing**:
-   - The writer kernel writes the top K values and their corresponding indices to DRAM.
-   - Output consists of K tiles (rounded up from the original K request).
+5. **Output Generation**:
+   - After processing all input tiles, transpose results back from HW to WH format
+   - Pack final top K values and corresponding indices to output buffers
 
-#### Circular Buffers:
+#### Circular Buffers (Single Core):
 
-- **c_0**: Input values (double-buffered, 4 tiles)
-- **c_1**: Input indices (double-buffered, 4 tiles)
-- **c_2**: Transposed values (4 tiles)
-- **c_3**: Transposed indices (4 tiles)
-- **c_4**: Result preparation values (2×K tiles)
-- **c_5**: Result preparation indices (2×K tiles)
-- **c_6**: Output values (K tiles)
-- **c_7**: Output indices (K tiles)
+- **input_val_cb_index**: Input values (double-buffered)
+- **input_ind_cb_index**: Input indices (double-buffered)
+- **transposed_val_cb_index**: Transposed values staging buffer
+- **transposed_ind_cb_index**: Transposed indices staging buffer
+- **result_prep_val_cb_index**: Result preparation values buffer (2×output_tiles size for double buffering)
+- **result_prep_ind_cb_index**: Result preparation indices buffer (2×output_tiles size for double buffering)
+- **output_val_cb_index**: Final output values (output_tiles size)
+- **output_ind_cb_index**: Final output indices (output_tiles size)
 
 #### Memory Considerations:
 
@@ -201,73 +225,71 @@ For a tensor of shape `[32, 8192]` (1 × 256 tiles), k=32, single core processes
 
 ### Multi Core Strategy
 
-The Multi Core strategy exploits parallelism by splitting the width dimension across multiple cores, each computing local top K, then gathering and computing the final top K on a dedicated core.
+The Multi Core strategy exploits parallelism by splitting the width dimension across multiple cores using a **divide-and-conquer approach with Bitonic Sort**. Each core processes its local chunk independently, then a final core performs global aggregation.
 
 #### Overview:
 
 The strategy consists of two phases:
-1. **Local TopK Phase**: Each core processes a subset of the width independently.
-2. **Gather and Final TopK Phase**: A final core gathers all local results and computes the global top K.
+1. **Local Processing Phase**: Each core processes its width chunk using bitonic sort algorithms.
+2. **Global Aggregation Phase**: A final core performs bitonic merge on all local results to compute the global top K.
 
-#### Phase 1: Local TopK (Split Cores)
+#### Phase 1: Local Processing (Split Cores) - `topk_local.cpp`
 
 1. **Width Splitting**:
    - The input width is divided among multiple cores.
-   - Each core receives `split_size` elements (always a power of two for efficient Bitonic Sort).
+   - Each core receives `Wt_local` width tiles (always configured for optimal bitonic sort performance).
    - The split is chosen such that:
      - `split_size ≥ 64` (minimum 2 tiles per core)
      - `split_size ≤ width / 2`
      - Total cores used = `width / split_size`
      - Width must divide evenly by `split_size` (no remainder)
 
-2. **Core Configuration**:
-   - Cores are arranged in a contiguous grid (e.g., x × y cores).
-   - The configuration is calculated to maximize parallelism while fitting in L1 memory.
+2. **Local Bitonic Sort Processing**:
+   - **Initial Sort**: Process input tiles in pairs using `topk_local_sort` to create locally sorted sequences
+   - **Iterative Merging**: Perform `log(Wt_local)` iterations of divide-and-conquer bitonic merging:
+     - Iteration 0: Compare pairs (0,1), (2,3), (4,5) → groups of 64 elements
+     - Iteration 1: Compare (0,2), (4,6), (8,10) → groups of 128 elements
+     - Iteration n: Compare with distance 2^n → groups of 64*(2^(n+1)) elements
+   - **Result Extraction**: Extract top Kt tiles (ceil(K/32)) containing locally optimal TopK elements
 
-3. **Local Processing**:
-   - Each core:
-     - **Reads** its assigned portion of the input row (split_size elements) from DRAM.
-     - **Generates or reads** corresponding indices.
-     - **Executes Bitonic Sort** on its local data.
-     - **Extracts local top K** elements.
-     - **Sends** its local top K values and indices to the final core via NoC (L1-to-L1 communication).
+3. **Communication**:
+   - Each local core sends its Kt tiles of locally optimal results to the final core
+   - Uses semaphore-synchronized NoC transfers for efficient L1-to-L1 communication
+   - Writer kernel manages data transmission to prevent buffer overflow
 
-4. **Communication**:
-   - Each local core uses its writer kernel to send K tiles to the final core.
-   - Semaphores coordinate the data transfer to ensure synchronization.
+#### Phase 2: Global Aggregation (Final Core) - `topk_final.cpp`
 
-#### Phase 2: Gather and Final TopK (Final Core)
+1. **Data Gathering**:
+   - Final core receives Kt tiles from each of the local cores
+   - Total aggregated data: `Wt_final = num_local_cores × Kt` tiles
+   - Data represents candidate TopK elements from all width chunks
 
-1. **Gathering**:
-   - The final core receives local top K results from all split cores.
-   - Data arrives via NoC directly into the final core's L1 memory.
-   - Total gathered data size = `num_cores × K` elements.
+2. **Global Bitonic Merge**:
+   - Apply the same bitonic merge algorithm as local cores but on aggregated data
+   - Perform `log(Wt_final)` iterations of bitonic merging across core boundaries
+   - Produces the globally optimal TopK from all local TopK candidates
 
-2. **Final TopK Computation**:
-   - The final core performs Bitonic Sort on the gathered data.
-   - This produces the global top K from among all local top K results.
-
-3. **Output Writing**:
-   - The final core writes the global top K values and indices to DRAM.
+3. **Output Generation**:
+   - Extract final Kt tiles containing the globally optimal TopK results
+   - Transpose back to WH format and write to output DRAM buffers
 
 #### Circular Buffers (Local Cores):
 
-- **c_0**: Input values (double-buffered)
-- **c_1**: Input indices (double-buffered)
-- **c_24**: Input transposed values (Wt_local tiles)
-- **c_25**: Input transposed indices (Wt_local tiles)
-- **c_26**: Gathered values (Wt_final tiles, for sending)
-- **c_27**: Gathered indices (Wt_final tiles, for sending)
-- **c_28**: Final values (Wt_final tiles)
-- **c_29**: Final indices (Wt_final tiles)
-- **c_16**: Output values (double-buffered)
-- **c_17**: Output indices (double-buffered)
+- **input_cb_index**: Input values (double-buffered)
+- **index_cb_index**: Input indices (double-buffered)
+- **input_transposed_cb_index**: Transposed values staging buffer (Wt_local tiles)
+- **index_transposed_cb_index**: Transposed indices staging buffer (Wt_local tiles)
+- **values_cb_index**: Local TopK values output (Kt tiles for transmission to final core)
+- **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to final core)
 
 #### Circular Buffers (Final Core):
 
-- Same set of circular buffers
-- **c_26** and **c_27** are used to receive data from local cores
-- **c_28** and **c_29** are used for final Bitonic Sort and output preparation
+- **input_cb_index**: Received values from all local cores (Wt_final = num_cores × Kt tiles)
+- **index_cb_index**: Received indices from all local cores (Wt_final = num_cores × Kt tiles)
+- **input_transposed_cb_index**: Staging buffer for global bitonic merge operations (values)
+- **index_transposed_cb_index**: Staging buffer for global bitonic merge operations (indices)
+- **values_cb_index**: Final globally optimal TopK values output (Kt tiles)
+- **output_ind_cb_index**: Final globally optimal TopK indices output (Kt tiles)
 
 #### Synchronization:
 
@@ -318,21 +340,46 @@ For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, multi-core with 8 co
 
 ## Algorithm Details
 
-### Bitonic Sort in TopK
+### Core Sorting Algorithms
 
-Both strategies rely on **Bitonic Sort** as the core sorting mechanism:
+The TopK operation uses different sorting algorithms depending on the selected strategy:
+
+#### Single Core: Insertion Sort with Sliding Window
+
+1. **Sliding Window Approach**:
+   - Maintains a buffer of the current top K elements across all processed input
+   - Processes input tiles incrementally, inserting new elements into the sorted buffer
+   - Uses `topk_local_sort` for merging 64-element chunks (32 existing + 32 new)
+
+2. **Three Processing Phases**:
+   - **First Sort**: Process initial two tiles to establish baseline
+   - **Growing Phase**: Expand sorted buffer until K elements are maintained
+   - **Steady State**: New elements compete with existing worst elements
+
+3. **Efficiency Characteristics**:
+   - Time Complexity: O(Width × K) for insertion operations
+   - Space Complexity: O(K) for maintained sorted buffer
+   - Memory efficient due to streaming approach
+
+#### Multi-Core: Divide-and-Conquer Bitonic Sort
 
 1. **Bitonic Sequence Construction**:
-   - Pairs of tiles are sorted alternately in ascending and descending order.
-   - This creates a bitonic sequence where the first half increases then decreases (or vice versa).
+   - Pairs of tiles are sorted alternately in ascending and descending order
+   - Creates a bitonic sequence where sections increase then decrease (or vice versa)
 
-2. **Bitonic Merge**:
-   - Multiple stages compare and swap elements at increasing distances.
-   - Each stage halves the problem size until the entire sequence is sorted.
+2. **Bitonic Merge Iterations**:
+   - Multiple stages compare and swap elements at exponentially increasing distances
+   - Each iteration doubles the sequence length being compared: 64→128→256→...
+   - log(Width) iterations until entire local chunk is processed
 
-3. **Top K Extraction**:
-   - After sorting, the top K elements are the first K (if largest=True) or last K (if largest=False).
-   - No additional filtering is needed; the sort naturally positions the top K at the beginning or end.
+3. **Global Aggregation**:
+   - Final core receives locally optimal TopK results from all local cores
+   - Applies the same bitonic merge algorithm on aggregated data
+   - Produces globally optimal TopK across all cores' contributions
+
+4. **Top K Extraction**:
+   - After bitonic sorting, the top K elements naturally appear in the first K positions (if largest=True) or last K (if largest=False)
+   - No additional filtering needed; sort positioning handles selection
 
 ### Index Tracking
 
@@ -341,13 +388,17 @@ Throughout the sorting process, indices are maintained in parallel:
 - Every swap operation on values is mirrored on indices.
 - This ensures the final indices correctly point to the original positions of the top K elements.
 
-### Tile-Level Operations
+### Shared Implementation Components
 
-All operations are tile-oriented:
-- `topk_local_sort`: Sorts two tiles together, updating both values and indices.
-- Tiles are transposed before and after sorting since Bitonic Sort operates on columns within tiles.
-- Tile boundaries are respected to maintain hardware efficiency.
+#### Tile-Level Operations
+
+Both strategies share common tile-oriented operations:
+- **`topk_local_sort`**: Core sorting primitive that processes two tiles (64 elements), updating both values and indices
+  - **Single Core Usage**: Used for merging new input with existing sorted elements during insertion
+  - **Multi-Core Usage**: Used for bitonic merge operations between tile pairs
+- **Transpose Operations**: Tiles are transposed between WH and HW formats to match optimal processing layouts
+- **Tile Boundaries**: All operations respect 32-element tile boundaries for hardware efficiency
 
 ---
 
-© Tenstorrent AI ULC 2025
+© Tenstorrent AI ULC 2026

@@ -1,19 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/decorators.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <tuple>
 #include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
-
 namespace ttnn::operations::reduction::topk {
-
 struct ExecuteTopK {
     static std::vector<Tensor> invoke(
         const Tensor& input_tensor,
@@ -26,7 +25,6 @@ struct ExecuteTopK {
         const std::optional<Tensor>& indices_tensor = std::nullopt,
         const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors = std::nullopt);
 };
-
 }  // namespace ttnn::operations::reduction::topk
 
 namespace ttnn {
