@@ -62,6 +62,10 @@ CREATE INDEX ttnn_mesh_config_shape_idx ON ttnn_ops.ttnn_mesh_config(mesh_shape)
 CREATE INDEX ttnn_mesh_config_device_count_idx ON ttnn_ops.ttnn_mesh_config(device_count);
 CREATE INDEX ttnn_mesh_config_placement_idx ON ttnn_ops.ttnn_mesh_config(placement_type);
 
+-- Insert default 1x1 replicate mesh
+INSERT INTO ttnn_ops.ttnn_mesh_config (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
+VALUES ('{1,1}', 1, 'replicate', NULL, NULL);
+
 -- 5. ttnn_configuration (NO mesh_config_id - linked via junction table)
 CREATE TABLE ttnn_ops.ttnn_configuration (
     ttnn_configuration_id SERIAL PRIMARY KEY,
