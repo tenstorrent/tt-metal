@@ -185,3 +185,24 @@ def test_sdxl_matmul(
     if not perf_test_mode:
         output_tensor = ttnn.to_torch(output_tensor)
         assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize("mkn", [(128, 512, 768), (128, 1024, 768), (128, 2048, 768)])
+def test_matmul_needs_higher_default_accuarcy_for_high_pcc(device, mkn):
+    torch.manual_seed(0)
+
+    m, k, n = mkn
+
+    # Create input tensors
+    torch_input_tensor_a = torch.rand((m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((k, n), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.998)
