@@ -46,7 +46,6 @@ void MAIN {
     const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
     const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
 
-    const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
@@ -56,10 +55,12 @@ void MAIN {
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
-    constexpr uint32_t w0_w1_blocks_per_elt_tile =
-        2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 16
-    const uint32_t w0_w1_blocks_per_expert = moe_ring::W0_W1_BLOCKS_PER_EXPERT_A[ring_core_id];
-    // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
+        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+    constexpr uint32_t w0_w1_blocks_per_expert =
+        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_A /
+        2;  // 32 * 3 = 96
+            // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
@@ -95,7 +96,7 @@ void MAIN {
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
     // Initialize matmul for W0
-    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
+    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -106,14 +107,14 @@ void MAIN {
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
         //---------------------------------------------------------------------
-        for (uint32_t tile_id = 0; tile_id < num_elt_tiles; ++tile_id) {
+        for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
             uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
 
             tile_regs_acquire();
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_elt_tile; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 2) {
+                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
                     matmul_block(
                         cb_s2c_in,
                         cb_r2c_w0_w1,
@@ -121,7 +122,7 @@ void MAIN {
                         /*in1_index=*/k,
                         /*idst=*/0,
                         /*transpose=*/false,
-                        /*ct_dim=*/2,
+                        /*ct_dim=*/4,
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
@@ -133,9 +134,11 @@ void MAIN {
             //---------------------------------------------------------------------
             silu_tile_init();
             silu_tile(0);
+            silu_tile(2);
 
             mul_binary_tile_init();
             mul_binary_tile(0, 1, 0);
+            mul_binary_tile(2, 3, 2);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -148,6 +151,7 @@ void MAIN {
             // PACK(mul_binary_tile(0, 1, 0));
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+            pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
             tile_regs_release();
         }
 
