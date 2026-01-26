@@ -14,7 +14,7 @@
 #include <string>
 #include <system_error>
 
-#include <tt-logger/tt_logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::jit_build::utils {
