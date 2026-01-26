@@ -65,7 +65,7 @@ pinnings {
     chip_id: 0
   }
   physical_asic_position {
-    tray_id: 2
+    tray_id: 3
     asic_location: 1
   }
 }
@@ -75,37 +75,37 @@ pinnings {
     chip_id: 7
   }
   physical_asic_position {
+    tray_id: 3
+    asic_location: 8
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 2
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 4
+    asic_location: 1
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 2
+    chip_id: 7
+  }
+  physical_asic_position {
+    tray_id: 4
+    asic_location: 8
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 3
+    chip_id: 0
+  }
+  physical_asic_position {
     tray_id: 2
-    asic_location: 8
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 2
-    chip_id: 0
-  }
-  physical_asic_position {
-    tray_id: 3
-    asic_location: 1
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 2
-    chip_id: 7
-  }
-  physical_asic_position {
-    tray_id: 3
-    asic_location: 8
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 3
-    chip_id: 0
-  }
-  physical_asic_position {
-    tray_id: 4
     asic_location: 1
   }
 }
@@ -115,7 +115,7 @@ pinnings {
     chip_id: 7
   }
   physical_asic_position {
-    tray_id: 4
+    tray_id: 2
     asic_location: 8
   }
 }
