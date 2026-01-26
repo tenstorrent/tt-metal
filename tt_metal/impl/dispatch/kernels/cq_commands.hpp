@@ -32,6 +32,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 12,    // Copy paged data to the ringbuffer
     CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 13,  // Set an offset in the ringbuffer for later reads.
     CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 14,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED = 15,    // relay linear data from multiple srcs to dispatcher
     CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
@@ -181,6 +182,23 @@ struct CQPrefetchRelayRingbufferSubCmd {
     uint32_t length;
 } __attribute__((packed));
 
+struct CQPrefetchRelayLinearPackedCmd {
+    uint16_t count;
+    uint16_t pad;
+    uint32_t noc_xy_addr;
+    uint64_t total_length;  // aggregate length of all sub-read-cmds
+    uint32_t stride;        // stride to start of next cmd
+} __attribute__((packed));
+
+struct CQPrefetchRelayLinearPackedSubCmd {
+    uint64_t addr;    // linear address
+    uint64_t length;  // read length
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+// 16 bytes per sub_cmd vs 12 bytes for paged_packed, so we can fit fewer
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS = 26;
+
 // 16 byte commands.
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
@@ -202,6 +220,7 @@ struct CQPrefetchCmdLarge {
     union {
         CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayLinearCmd relay_linear;
+        CQPrefetchRelayLinearPackedCmd relay_linear_packed;
         uint8_t padding[32 - sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };

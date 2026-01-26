@@ -74,6 +74,13 @@ public:
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
+    void add_prefetch_relay_linear_packed(
+        uint32_t noc_xy_addr,
+        uint64_t total_length,
+        const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+        uint16_t num_sub_cmds,
+        uint32_t offset_idx = 0);
+
     void add_prefetch_paged_to_ringbuffer(const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info);
 
     void add_prefetch_set_ringbuffer_offset(uint32_t offset, bool update_wp = false);
