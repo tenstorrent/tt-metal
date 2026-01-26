@@ -102,6 +102,7 @@ SFPU_UNARY_OPERATION_MAP: Dict[str, MathOperation] = {
     "Gelu": MathOperation.Gelu,
     "Hardsigmoid": MathOperation.Hardsigmoid,
     "Log": MathOperation.Log,
+    "Log1p": MathOperation.Log1p,
     "Neg": MathOperation.Neg,
     "Reciprocal": MathOperation.Reciprocal,
     "ReluMax": MathOperation.ReluMax,

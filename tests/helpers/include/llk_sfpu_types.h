@@ -22,6 +22,7 @@ enum class SfpuType
     tanh_derivative,
     log,
     log_with_base,
+    log1p,
     equal_zero,
     not_equal_zero,
     less_than_zero,

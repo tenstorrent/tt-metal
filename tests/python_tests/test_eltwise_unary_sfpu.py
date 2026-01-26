@@ -43,11 +43,13 @@ from helpers.utils import passed_test
         MathOperation.Acosh,
         MathOperation.Cos,
         MathOperation.Log,
+        MathOperation.Log1p,
         MathOperation.Reciprocal,
         MathOperation.Sin,
         MathOperation.Sqrt,
         MathOperation.Rsqrt,
         MathOperation.Square,
+        MathOperation.Tanh,
         MathOperation.Celu,
         MathOperation.Silu,
         MathOperation.Gelu,
@@ -94,6 +96,9 @@ def test_eltwise_unary_sfpu_float(
 
     if mathop == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
+
+    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
+        pytest.skip(reason="Metal tanh does not support approximation mode")
 
     if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
         # Issue link: https://github.com/tenstorrent/tt-llk/issues/883

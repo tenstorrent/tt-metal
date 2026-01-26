@@ -102,6 +102,45 @@ download_headers() {
     echo "Headers for ${chip_arch} downloaded successfully."
 }
 
+# Function to download SFPU files from tt-metal
+download_sfpu_files() {
+    local chip_arch=$1
+    local sfpu_dir="${SCRIPT_DIR}/hw_specific/${chip_arch}/metal_sfpu"
+    local stamp_file="${sfpu_dir}/.sfpu_downloaded"
+
+    # Map architecture to tt-metal path
+    local ckernels_path=""
+    case "$chip_arch" in
+        wormhole) ckernels_path="wormhole_b0" ;;
+        blackhole) ckernels_path="blackhole" ;;
+        quasar) touch "$stamp_file"; return ;;
+        *) echo "WARNING: Unknown architecture ${chip_arch}, skipping..."; touch "$stamp_file"; return ;;
+    esac
+
+    mkdir -p "$sfpu_dir"
+
+    if [[ -f "$stamp_file" ]]; then
+        echo "SFPU files for ${chip_arch} already downloaded."
+        return
+    fi
+
+    echo "Downloading SFPU files for ${chip_arch}..."
+
+	if git clone --depth 1 --filter=blob:none --sparse https://github.com/tenstorrent/tt-metal.git tt-metal-temp 2>/dev/null; then
+		if git -C tt-metal-temp sparse-checkout set tt_metal/hw/ckernels/${ckernels_path}/metal/llk_api/llk_sfpu 2>/dev/null; then
+			cp tt-metal-temp/tt_metal/hw/ckernels/${ckernels_path}/metal/llk_api/llk_sfpu/*.h "${sfpu_dir}/" || \
+				echo "ERROR: Failed to copy SFPU headers" >&2
+		else
+			echo "ERROR: Failed to sparse-checkout SFPU headers" >&2
+		fi
+		rm -rf tt-metal-temp
+	else
+		echo "ERROR: Failed to clone tt-metal repository" >&2
+	fi
+
+    touch "$stamp_file"
+}
+
 # Function to setup pre-commit hooks
 setup_precommit() {
     echo "Setting up pre-commit hooks..."
@@ -156,6 +195,9 @@ main() {
 
     # Download headers
     download_headers "$chip_arch"
+
+    # Download SFPU files
+    download_sfpu_files "$chip_arch"
 
     # Setup pre-commit hooks
     setup_precommit
