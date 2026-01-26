@@ -486,6 +486,14 @@ def _run_test(
     )
     tt_dense_metadata = _get_tt_dense_metadata(dense_metadata_tensor, mesh_device)
 
+    tt_token_counts = ttnn.from_torch(
+        dense_token_counts_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
     # TODO figure out how to set different semaphore values for different devices
     max_active_token_count = max(dense_token_counts_tensor.tolist())
     active_token_semaphores = [
@@ -498,6 +506,7 @@ def _run_test(
             tt_out = ttnn.selective_reduce_combine(
                 tt_dense_contribs,
                 tt_dense_metadata,
+                tt_token_counts,
                 hidden_size,
                 batch,
                 seq,
@@ -510,7 +519,6 @@ def _run_test(
                 num_data_parallel_cores=num_data_parallel_cores,
                 worker_core_range_set=worker_cores,
                 mux_core_range_set=mux_cores,
-                active_token_count_semaphores=active_token_semaphores,
             )
         return tt_out
 
@@ -525,15 +533,15 @@ def _run_test(
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("batch", [16])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("batch", [64])
 @pytest.mark.parametrize("experts", [16])
-@pytest.mark.parametrize("select_experts_k", [4])
+@pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [4])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
+@pytest.mark.parametrize("num_token_parallel_cores", [1])
 @pytest.mark.parametrize("num_data_parallel_cores", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (4, 3))])
