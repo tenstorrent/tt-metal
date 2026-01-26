@@ -380,15 +380,17 @@ Co-authored-by: Claude <claude@anthropic.com>"
         return 1
     fi
 
-    # Create PR
-    log_info "Creating PR..."
+    # Create PR as draft and assign to current user
+    log_info "Creating draft PR..."
     local pr_url
     local pr_exit_code
     pr_url=$(gh pr create \
         --title "$pr_title" \
         --body "$pr_body" \
         --base "$base_branch" \
-        --head "$branch_name" 2>&1) || pr_exit_code=$?
+        --head "$branch_name" \
+        --draft \
+        --assignee "@me" 2>&1) || pr_exit_code=$?
 
     # Check if PR creation succeeded
     if [[ -n "$pr_exit_code" ]] || [[ -z "$pr_url" ]] || [[ "$pr_url" == *"failed"* ]] || [[ "$pr_url" != "https://"* ]]; then
@@ -400,7 +402,7 @@ Co-authored-by: Claude <claude@anthropic.com>"
 
     echo ""
     log_info "========================================="
-    log_info "PR created successfully!"
+    log_info "Draft PR created successfully!"
     log_info "URL: $pr_url"
     log_info "========================================="
 
