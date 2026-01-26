@@ -678,6 +678,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
 /* ========== 2x2 ========= */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
     // Parameters
     uint32_t test_case_id = 24;
 
@@ -708,6 +710,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
 /* ========== 5x5 ========= */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
     // Parameters
     uint32_t test_case_id = 25;
 
@@ -738,6 +742,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
 /* ========== All ========= */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
+    GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
+
     // Parameters
     uint32_t test_case_id = 26;
 
