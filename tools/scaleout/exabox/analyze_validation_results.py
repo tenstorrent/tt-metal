@@ -60,25 +60,13 @@ def clean_line(line: str) -> str:
 
 
 # Category definitions with display info: (pattern, color, label)
+# Only report specific failure modes; everything else is inconclusive
 CATEGORIES = {
     # Success
     "healthy": (r"All Detected Links are healthy", Colors.GREEN, "Healthy links"),
-    # Critical failures
+    # Link health (traffic/data tests)
     "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", Colors.RED, "Unhealthy links"),
-    "unrecoverable": (r"Encountered unrecoverable state", Colors.RED, "Unrecoverable state"),
-    "validation_failed": (r"Cluster validation failed", Colors.RED, "Validation failed"),
-    "dram_failure": (r"DRAM training failed|gddr issue", Colors.RED, "DRAM/GDDR failures"),
-    "pcie_error": (r"PCIe error|AER:.*aer_status|\[Hardware Error\]", Colors.RED, "PCIe errors"),
-    "device_error": (r"Error starting devices|Error details:", Colors.RED, "Device startup errors"),
-    # Timeouts
-    "timeout": (r"Timeout \(\d+ ms\) waiting for physical cores", Colors.YELLOW, "Physical core timeout"),
-    "workload_timeout": (
-        r"Workload execution timed out|cluster is not in a healthy state",
-        Colors.YELLOW,
-        "Workload timeout",
-    ),
-    "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", Colors.YELLOW, "ARC timeout"),
-    # Connectivity
+    # Connectivity issues
     "missing_ports": (
         r"missing port/cable connections|Port Connections found in FSD but missing",
         Colors.BLUE,
@@ -94,21 +82,47 @@ CATEGORIES = {
         Colors.YELLOW,
         "Extra connections",
     ),
-    "discovery_failed": (r"Physical Discovery.*failed|Discovery Complete.*0 chips", Colors.RED, "Discovery failed"),
-    # Link health
-    "link_retrain": (r"Retrain.*detected|Link retrains detected", Colors.YELLOW, "Link retrains"),
-    "crc_error": (r"CRC Error|crc_error_count > 0", Colors.YELLOW, "CRC errors"),
-    "uncorrected_cw": (r"Uncorrected CW|uncorrected_codeword", Colors.YELLOW, "Uncorrected codewords"),
-    "data_mismatch": (r"Data Mismatch|mismatched_words|num_mismatched", Colors.RED, "Data mismatch"),
-    # Other
-    "fw_mismatch": (r"FW Bundle version mismatch|ERISC FW version.*mismatch", Colors.MAGENTA, "Firmware mismatch"),
-    "stack_trace": (r"TT_FATAL|TT_THROW|std::runtime_error", Colors.RED, "Stack trace/crash"),
+    # Timeouts and failures
+    "workload_timeout": (
+        r"Workload execution timed out|cluster is not in a healthy state",
+        Colors.YELLOW,
+        "Workload timeout",
+    ),
+    "dram_failure": (r"DRAM training failed|gddr issue", Colors.RED, "DRAM training failures"),
+    "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", Colors.YELLOW, "ARC timeout"),
+    # Connectivity issues
     "mpi_error": (r"PRTE has lost communication|MPI_ABORT", Colors.RED, "MPI error"),
     "ssh_error": (r"Permission denied \(publickey\)", Colors.YELLOW, "SSH error"),
-    "truncated": (r"Sending traffic across detected links", Colors.YELLOW, "Truncated run"),
+}
+
+# Patterns for detecting other issues (will be mapped to inconclusive)
+# These are detected but not reported as separate categories - they indicate
+# issues that require manual log review and triage
+# Note: Link retrains are not included - they are considered normal on Blackhole systems
+DETECTION_PATTERNS = {
+    "unrecoverable": (r"Encountered unrecoverable state", Colors.RED),
+    "validation_failed": (r"Cluster validation failed", Colors.RED),
+    "pcie_error": (r"PCIe error|AER:.*aer_status|\[Hardware Error\]", Colors.RED),  # Detected but mapped to inconclusive
+    "device_error": (r"Error starting devices|Error details:", Colors.RED),
+    "timeout": (r"Timeout \(\d+ ms\) waiting for physical cores", Colors.YELLOW),
+    "discovery_failed": (r"Physical Discovery.*failed|Discovery Complete.*0 chips", Colors.RED),
+    # link_retrain removed - not a failure mode on Blackhole systems
+    # Note: crc_error and uncorrected_cw are detected but not reported separately.
+    # Links with these metrics are already captured in the "unhealthy links" category,
+    # so no separate recommendations are needed - the top-level link health check covers these.
+    "crc_error": (r"CRC Error|crc_error_count > 0", Colors.YELLOW),
+    "uncorrected_cw": (r"Uncorrected CW|uncorrected_codeword", Colors.YELLOW),
+    "data_mismatch": (r"Data Mismatch|mismatched_words|num_mismatched", Colors.RED),
+    "fw_mismatch": (r"FW Bundle version mismatch|ERISC FW version.*mismatch", Colors.MAGENTA),
+    "stack_trace": (r"TT_FATAL|TT_THROW|std::runtime_error", Colors.RED),
+    "truncated": (r"Sending traffic across detected links", Colors.YELLOW),
 }
 
 PATTERNS = {k: re.compile(v[0], re.IGNORECASE if "gddr" in v[0].lower() else 0) for k, v in CATEGORIES.items()}
+DETECTION_PATTERNS_COMPILED = {
+    k: re.compile(v[0], re.IGNORECASE if "gddr" in v[0].lower() else 0)
+    for k, v in DETECTION_PATTERNS.items()
+}
 
 # Patterns for parsing structured data
 PORT_PATTERN = re.compile(
@@ -320,7 +334,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     result.metadata = parse_metadata(result.content, filepath)
     lines = result.content.split("\n")
 
-    # Match patterns
+    # Match patterns for reported categories
     for cat, pattern in PATTERNS.items():
         matched = [(i + 1, clean_line(line)[:200]) for i, line in enumerate(lines) if pattern.search(line)]
         if matched:
@@ -333,12 +347,16 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     if "missing_ports" in result.categories or "missing_channels" in result.categories:
         result.missing_connections = parse_missing_connections(result.content)
 
-    # Handle truncated detection
-    has_result = "healthy" in result.categories or "unhealthy" in result.categories
-    if "truncated" in result.categories and has_result:
-        result.categories.remove("truncated")
-    if not [c for c in result.categories if c != "truncated"]:
-        result.categories.append("indeterminate")
+    # If no reported categories found, check for other issues and mark as inconclusive
+    if not result.categories:
+        # Check for other issues that should be mapped to inconclusive
+        has_other_issues = False
+        for cat, pattern in DETECTION_PATTERNS_COMPILED.items():
+            if any(pattern.search(line) for line in lines):
+                has_other_issues = True
+                break
+        if has_other_issues:
+            result.categories.append("inconclusive")
 
     return result
 
@@ -404,38 +422,29 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
         print(f"{Colors.YELLOW}Warning: Expected 50 iterations, found {total}{Colors.NC}")
     print()
 
-    # Category breakdown
+    # Category breakdown - only show reported categories
     display_order = [
         "healthy",
         "unhealthy",
-        "unrecoverable",
-        "validation_failed",
-        "dram_failure",
-        "pcie_error",
-        "device_error",
-        "timeout",
-        "workload_timeout",
-        "arc_timeout",
         "missing_ports",
         "missing_channels",
         "extra_connections",
-        "discovery_failed",
-        "link_retrain",
-        "crc_error",
-        "uncorrected_cw",
-        "data_mismatch",
-        "fw_mismatch",
-        "stack_trace",
+        "workload_timeout",
+        "dram_failure",
+        "arc_timeout",
         "mpi_error",
         "ssh_error",
-        "truncated",
-        "indeterminate",
+        "inconclusive",
     ]
     for cat in display_order:
-        if cat not in CATEGORIES and cat != "indeterminate":
+        if cat not in CATEGORIES and cat != "inconclusive":
             continue
-        color = CATEGORIES.get(cat, (None, Colors.CYAN, "Indeterminate"))[1]
-        label = CATEGORIES.get(cat, (None, None, "Indeterminate"))[2]
+        if cat == "inconclusive":
+            color = Colors.CYAN
+            label = "Inconclusive"
+        else:
+            color = CATEGORIES[cat][1]
+            label = CATEGORIES[cat][2]
         count = len(cat_counts.get(cat, []))
         print(f"{color}{label}:{Colors.NC} {count} / {total}")
         if show_files and 0 < count <= 10:
@@ -579,7 +588,7 @@ def print_verbose(analyses: list[LogAnalysis]):
         printed_header = False
 
         for cat, matches in a.matched_lines.items():
-            if cat in ["healthy", "truncated"]:
+            if cat in ["healthy"]:
                 continue
             if not printed_header:
                 print(f"{Colors.BOLD}{log_name}{Colors.NC}")
@@ -620,105 +629,88 @@ def print_recommendations(analyses: list[LogAnalysis]):
     print("=" * 50 + "\nRecommendations\n" + "=" * 50 + "\n")
     recs = []
 
-    # Timeout issues
-    if cats["timeout"]:
-        recs.append(
-            f"- {Colors.YELLOW}Timeout issues:{Colors.NC} Power cycle the cluster. See {ts_ref('tensix_stall')}"
-        )
-
     # Missing connections
     if cats["missing_ports"] or cats["missing_channels"]:
         port_count, chan_count = cats["missing_ports"], cats["missing_channels"]
+        
+        # Check if missing connections are transient (appear in some but not all logs)
+        is_transient = (port_count + chan_count) < total
+        
+        # Check if any missing connections are QSFP
+        # PORT_PATTERN captures: (hostname, tray_id, port_type, port_id)
+        has_qsfp = False
+        for a in analyses:
+            if "missing_ports" in a.categories:
+                for conn in a.missing_connections:
+                    if conn[0] == "port":
+                        # conn[1] and conn[2] are tuples from PORT_PATTERN: (hostname, tray_id, port_type, port_id)
+                        # Index 2 is port_type
+                        if len(conn[1]) > 2 and "QSFP" in str(conn[1][2]).upper():
+                            has_qsfp = True
+                            break
+                        if len(conn[2]) > 2 and "QSFP" in str(conn[2][2]).upper():
+                            has_qsfp = True
+                            break
+                    if has_qsfp:
+                        break
+            if has_qsfp:
+                break
+        
+        # Build recommendation message
+        msg_parts = [f"- {Colors.BLUE}Missing connections:{Colors.NC}"]
+        
         if port_count and chan_count:
-            recs.append(
-                f"- {Colors.BLUE}Missing connections:{Colors.NC} Port ({port_count} logs) + "
-                f"Channel ({chan_count} logs). Check cables. See {ts_ref('missing_connections')}"
+            msg_parts.append(f"Port ({port_count} logs) + Channel ({chan_count} logs).")
+        elif port_count:
+            msg_parts.append(f"Port connections ({port_count} logs).")
+        elif chan_count:
+            msg_parts.append(f"Channel connections ({chan_count} logs).")
+        
+        if is_transient:
+            msg_parts.append(
+                "Missing connections are transient (tests fail some of the time) - "
+                "Factory System Descriptor is correct."
             )
-        else:
-            recs.append(
-                f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cable seating. "
-                f"Verify correct FSD. See {ts_ref('missing_connections')}"
-            )
+        
+        if has_qsfp:
+            msg_parts.append("If missing connections are over QSFP, check cable seating.")
+        
+        msg_parts.append("Report to cluster installation team/Syseng for triage.")
+        msg_parts.append(f"See {ts_ref('missing_connections')}")
+        
+        recs.append(" ".join(msg_parts))
 
-    # PCIe errors
-    if cats["pcie_error"]:
+    # Extra connections
+    if cats["extra_connections"]:
         recs.append(
-            f"- {Colors.RED}PCIe errors:{Colors.NC} Hardware issue. Machine may have rebooted. "
-            "Check dmesg/syslog. May need power cycle."
+            f"- {Colors.YELLOW}Extra connections:{Colors.NC} Unexpected links found. "
+            "Verify correct FSD file for your topology."
         )
-
-    # ARC timeout
-    if cats["arc_timeout"]:
-        recs.append(f"- {Colors.YELLOW}ARC timeout:{Colors.NC} Try tt-smi reset. If persists, power cycle needed.")
-
-    # Link retrains
-    if cats["link_retrain"]:
-        recs.append(f"- {Colors.YELLOW}Link retrains:{Colors.NC} Some links unstable. Check cables on affected trays.")
 
     # Workload timeout
     if cats["workload_timeout"]:
-        recs.append(
-            f"- {Colors.RED}Workload timeout:{Colors.NC} Cluster hung during traffic test. "
-            "Power cycle required. Check for GDDR/hardware issues."
+        timeout_rate = cats["workload_timeout"] / total * 100
+        msg = (
+            f"- {Colors.YELLOW}Workload timeout:{Colors.NC} Traffic tests timed out ({cats['workload_timeout']} "
+            f"occurrence(s), {timeout_rate:.1f}% of runs). This indicates an ethernet issue. "
+            "Document timeout occurrences. "
         )
-
-    # Device startup error
-    if cats["device_error"]:
-        recs.append(
-            f"- {Colors.RED}Device startup error:{Colors.NC} Failed to initialize devices. "
-            "Try tt-smi reset. If persists, power cycle."
-        )
-
-    # Unrecoverable/validation failure
-    if cats["unrecoverable"] or cats["validation_failed"]:
-        recs.append(
-            f"- {Colors.RED}Unrecoverable/validation failure:{Colors.NC} "
-            "Cluster in bad state. Full power cycle required."
-        )
-
-    # Discovery failed
-    if cats["discovery_failed"]:
-        recs.append(
-            f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips. "
-            "Check PCIe connections, tt-smi status. May need reboot."
-        )
-
-    # CRC/uncorrected codeword errors
-    if cats["crc_error"] or cats["uncorrected_cw"]:
-        recs.append(
-            f"- {Colors.YELLOW}CRC/codeword errors:{Colors.NC} Link quality issues. "
-            "Check cable seating. For Wormhole: may indicate bad cable."
-        )
+        if timeout_rate >= 10:  # 10% or higher failure rate
+            msg += "High failure rate - escalate to Syseng."
+        else:
+            msg += "Report statistics to Syseng."
+        recs.append(msg)
 
     # DRAM failures
     if cats["dram_failure"]:
         recs.append(
-            f"- {Colors.RED}DRAM failures:{Colors.NC} Hardware issue. Contact syseng. See {ts_ref('gddr_issue')}"
+            f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng. See {ts_ref('gddr_issue')}"
         )
 
-    # Unhealthy links - check for repeat offenders
-    if cats["unhealthy"]:
-        link_stats, _ = aggregate_stats(analyses)
-        repeats = [(k, v) for k, v in link_stats.items() if v["count"] >= 3]
-        if repeats:
-            recs.append(
-                f"- {Colors.RED}Repeated link failures:{Colors.NC} {len(repeats)} channel(s) failing 3+ times. "
-                "Likely bad cable. Check histogram."
-            )
-        else:
-            recs.append(f"- {Colors.YELLOW}Scattered link failures:{Colors.NC} Try power cycle. Check cables.")
-
-    # Firmware mismatch
-    if cats["fw_mismatch"]:
+    # ARC timeout
+    if cats["arc_timeout"]:
         recs.append(
-            f"- {Colors.MAGENTA}Firmware mismatch:{Colors.NC} UMD may ignore some links. See {ts_ref('fw_mismatch')}"
-        )
-
-    # Stack trace/crash
-    if cats["stack_trace"]:
-        recs.append(
-            f"- {Colors.RED}Stack trace/crash:{Colors.NC} Review full log for root cause. "
-            "May indicate software bug or hardware issue."
+            f"- {Colors.YELLOW}ARC timeout:{Colors.NC} ARC communication issues detected. Report statistics to Syseng."
         )
 
     # MPI/SSH errors
@@ -731,6 +723,33 @@ def print_recommendations(analyses: list[LogAnalysis]):
         recs.append(
             f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. "
             f"Ensure ssh-agent running and keys added. See {ts_ref('ssh_agent')}"
+        )
+
+    # Unhealthy links
+    if cats["unhealthy"]:
+        recs.append(
+            f"- {Colors.RED}Unhealthy links:{Colors.NC} Link failures detected ({cats['unhealthy']} occurrence(s)). "
+            "Review the failure histogram and timeline for details. Report to Syseng."
+        )
+
+    # Check for discovery_failed (critical red flag)
+    discovery_failed_count = 0
+    for a in analyses:
+        # Check if discovery_failed pattern was detected (even if mapped to inconclusive)
+        if DETECTION_PATTERNS_COMPILED["discovery_failed"].search(a.content):
+            discovery_failed_count += 1
+    
+    if discovery_failed_count > 0:
+        recs.append(
+            f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips ({discovery_failed_count} "
+            f"occurrence(s)). This is a critical red flag. Notify Syseng immediately."
+        )
+
+    # Inconclusive results
+    if cats["inconclusive"]:
+        recs.append(
+            f"- {Colors.CYAN}Inconclusive results:{Colors.NC} {cats['inconclusive']} log(s) contain issues "
+            "outside the reported categories. Review log files manually for triage."
         )
 
     # Overall health assessment
@@ -764,9 +783,9 @@ def print_timeline(analyses: list[LogAnalysis]):
             icons.append(("✗", Colors.RED))
         elif "missing_ports" in a.categories or "missing_channels" in a.categories:
             icons.append(("○", Colors.BLUE))
-        elif "dram_failure" in a.categories or "pcie_error" in a.categories:
+        elif "dram_failure" in a.categories:
             icons.append(("!", Colors.RED))
-        elif "indeterminate" in a.categories:
+        elif "inconclusive" in a.categories:
             icons.append(("?", Colors.CYAN))
         else:
             icons.append(("~", Colors.YELLOW))
