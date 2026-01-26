@@ -44,12 +44,6 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    const auto& mesh_shape = mesh_device->shape();
-    log_info(
-        tt::LogOp,
-        "DEBUG: create_mesh_workload - mesh_device shape: {}x{}",
-        mesh_shape[0],
-        mesh_shape.dims() > 1 ? mesh_shape[1] : 1);
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
@@ -323,12 +317,8 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
 
         if (secondary_cluster_axis.has_value()) {
             // Dual-axis mode
-            if (is_secondary_sender) {
-                // Secondary sender waits for data from primary sender
-                wait_output_semaphore = (link == 0);
-                reset_global_semaphore = (link == 0);
-            } else if (!is_sender) {
-                // Regular receivers wait for data from their column's broadcaster
+            if (is_secondary_sender || !is_sender) {
+                // Secondary sender and receivers wait for data
                 wait_output_semaphore = (link == 0);
                 reset_global_semaphore = (link == 0);
             }
