@@ -125,42 +125,17 @@ void BandwidthProfiler::trace_ring_traffic_path(
 
 void BandwidthProfiler::trace_line_or_mesh_traffic_path(
     const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-    auto remaining_hops = config.hops.value();  // Make a copy to modify
-    FabricNodeId current_node = src_node_id;
+    // Use the centralized trace_traffic_per_boundary which correctly handles:
+    // - Unicast: dimension-order routing
+    // - Multicast: trunk-and-spine pattern
+    auto traffic =
+        route_manager_.trace_traffic_per_boundary(src_node_id, config.hops.value(), config.parameters.chip_send_type);
 
-    // For mesh topology, use dimension-order routing
-    // Continue until all hops are consumed
-    while (true) {
-        // Check if all remaining hops are 0
-        bool all_hops_zero = true;
-        for (const auto& [direction, hop_count] : remaining_hops) {
-            if (hop_count > 0) {
-                all_hops_zero = false;
-                break;
-            }
+    // Merge results into outgoing_traffic_
+    for (const auto& [device_id, direction_map] : traffic) {
+        for (const auto& [direction, count] : direction_map) {
+            outgoing_traffic_[device_id][direction] += count;
         }
-        if (all_hops_zero) {
-            break;  // No more hops to process
-        }
-
-        // Find the next direction to route in
-        RoutingDirection next_direction = route_manager_.get_forwarding_direction(remaining_hops);
-
-        // Check if we have any remaining hops in this direction
-        if (!remaining_hops.contains(next_direction) || remaining_hops[next_direction] == 0) {
-            // If no hops left in this direction, mark as 0 and continue
-            remaining_hops[next_direction] = 0;
-            continue;
-        }
-
-        // Consume one hop in the chosen direction
-        remaining_hops[next_direction]--;
-
-        // Log traffic from current node in the chosen direction
-        outgoing_traffic_[current_node][next_direction]++;
-
-        // Move to next node in this direction
-        current_node = route_manager_.get_neighbor_node_id(current_node, next_direction);
     }
 }
 
@@ -340,7 +315,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 }
             } else if (topology == Topology::Ring) {
                 num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-            } else if (topology == Topology::Mesh) {
+            } else if (topology == Topology::Mesh || topology == Topology::Torus) {
                 num_devices = mesh_shape[0] * mesh_shape[1];
             }
 
