@@ -42,7 +42,6 @@ ttnn::Tensor ExecuteConv3d::invoke(
     }
 
     if (prepared_weight_tensor.layout() != Layout::TILE) {
-        // prepared_weight_tensor = prepared_weight_tensor.to_layout(Layout::TILE);
         prepared_weight_tensor = ttnn::to_layout(prepared_weight_tensor, ttnn::Layout::TILE);
     }
     return ttnn::prim::conv3d(

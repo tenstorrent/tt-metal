@@ -140,60 +140,38 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
 Tensor prepare_weights(
     const ttnn::Tensor& weights, uint32_t groups, uint32_t C_in_block, MeshDevice* device, uint32_t alignment) {
-    log_info(tt::LogOp, "weights shape: {}", weights.logical_shape());
-    auto weights_shape = weights.logical_shape();
-    // uint32_t C = weights_shape[1];
-    uint32_t out_channels = weights_shape[0];
     ttnn::Tensor prepare_weights = weights;
 
-    log_info(tt::LogOp, "Prepare weights for Conv3D with groups: {}", groups);
-    log_info(tt::LogOp, "Prepare weights storage_type: {}", prepare_weights.storage_type());
-    // if (groups > 1) {
     prepare_weights = convert_conv_weight_tensor_to_grouped_layout(weights, groups, weights.dtype());
     prepare_weights = ttnn::operations::core::to_device(prepare_weights, device, std::nullopt);
-    // }
-    log_info(tt::LogOp, "Prepare weights storage_type: {}", prepare_weights.storage_type());
-    log_info(tt::LogOp, "Prepare weights shape: {}", prepare_weights.logical_shape());
 
     ttnn::SmallVector<int64_t> dims_1 = {2, 3, 4, 1, 0};
     prepare_weights = ttnn::permute(prepare_weights, dims_1);
-    log_info(tt::LogOp, "Prepare weights permute shape: {}", prepare_weights.logical_shape());
     uint32_t C = prepare_weights.logical_shape()[3];
     uint32_t ALIGN_PAD = alignment - C % alignment;
-    log_info(tt::LogOp, "Prepare weights C: {}, alignment: {}, ALIGN_PAD: {}", C, alignment, ALIGN_PAD);
     if (C % alignment != 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding_shape({{0, 0}, {0, 0}, {0, 0}, {0, ALIGN_PAD}, {0, 0}});
         prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f);
     }
-    log_info(tt::LogOp, "Prepare weights pad shape: {}", prepare_weights.logical_shape());
     // Reshape and permute weights
-    weights_shape = prepare_weights.logical_shape();
+    auto weights_shape = prepare_weights.logical_shape();
     auto kD = weights_shape[0];
     auto kH = weights_shape[1];
     auto kW = weights_shape[2];
     auto C_in_aligned = weights_shape[3];
-    out_channels = weights_shape[4];
+    auto out_channels = weights_shape[4];
 
     if (C_in_block == 0) {
         C_in_block = C_in_aligned;
     }
     uint32_t num_C_in_blocks = C_in_aligned / C_in_block;
-    log_info(
-        tt::LogOp,
-        "Prepare weights num_C_in_blocks: {}, C_in_aligned: {}, C_in_block: {}",
-        num_C_in_blocks,
-        C_in_aligned,
-        C_in_block);
     TT_FATAL(num_C_in_blocks * C_in_block == C_in_aligned, "C_in_aligned must be divisible by C_in_block");
 
     prepare_weights =
         ttnn::reshape(prepare_weights, ttnn::Shape{kD, kH, kW, num_C_in_blocks, C_in_block, out_channels});
-    log_info(tt::LogOp, "Prepare weights reshape shape: {}", prepare_weights.logical_shape());
     ttnn::SmallVector<int64_t> dims_2 = {3, 0, 1, 2, 4, 5};
     prepare_weights = ttnn::permute(prepare_weights, dims_2);
-    log_info(tt::LogOp, "Prepare weights permute_2 shape: {}", prepare_weights.logical_shape());
     prepare_weights = ttnn::reshape(prepare_weights, ttnn::Shape{-1, out_channels});
-    log_info(tt::LogOp, "Prepare weights reshape_2 shape: {}", prepare_weights.logical_shape());
     return prepare_weights;
 }
 

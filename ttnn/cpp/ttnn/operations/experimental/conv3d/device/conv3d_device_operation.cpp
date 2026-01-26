@@ -117,8 +117,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     // Validate weight shape and config arguments
     const auto patch_size =
         args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2] * input_tensor_a.logical_shape()[4];
-    log_info(tt::LogOp, "weight_tensor.logical_shape()[0]: {}", weight_tensor.logical_shape()[0]);
-    log_info(tt::LogOp, "patch_size: {}", patch_size);
     TT_FATAL(
         weight_tensor.logical_shape()[0] == patch_size,
         "Weight patch size must match input patch size. got {} vs {}",
