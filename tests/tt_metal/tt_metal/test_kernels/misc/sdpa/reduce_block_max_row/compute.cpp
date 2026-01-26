@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce_custom.h"
+#include "compute_kernel_api/binary_max_min.h"
 
 void kernel_main() {
     constexpr uint32_t qk_im_cb = get_compile_time_arg_val(0);
@@ -40,7 +41,7 @@ void kernel_main() {
     cb_wait_front(qk_im_cb, num_tiles);
     cb_reserve_back(out_max_cb, rows);
 
-    max_tile_init();
+    binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
@@ -48,12 +49,12 @@ void kernel_main() {
         acquire_dst();
         reduce_block_max_row_init<cols>();
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
-        reduce_block_max_row_uninit();
+        reduce_block_max_row_uninit(qk_im_cb);
 
         if (do_eltwise) {
             copy_tile_to_dst_init_short(prev_max_cb);
             copy_tile(prev_max_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);
         }
 
         pack_tile(reduce_dst_idx, out_max_cb);
