@@ -117,6 +117,22 @@ void assign_per_core_runtime_args_full_precision(
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
 
+    // Hyperparameters are common for all cores
+    std::vector<uint32_t> compute_common_args = {
+        std::bit_cast<uint32_t>(beta1),
+        std::bit_cast<uint32_t>(beta2),
+        std::bit_cast<uint32_t>(epsilon),
+        std::bit_cast<uint32_t>(step_size),
+        std::bit_cast<uint32_t>(inv_sqrt_bc2),
+        std::bit_cast<uint32_t>(one_minus_beta1),
+        std::bit_cast<uint32_t>(one_minus_beta2),
+        std::bit_cast<uint32_t>(decay_factor),
+        0U};  // seed=0, stochastic rounding disabled
+    tt::tt_metal::SetCommonRuntimeArgs(program, kernels.compute_group_1, compute_common_args);
+    if (!core_group_2.ranges().empty()) {
+        tt::tt_metal::SetCommonRuntimeArgs(program, kernels.compute_group_2, compute_common_args);
+    }
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -142,39 +158,6 @@ void assign_per_core_runtime_args_full_precision(
              max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
              num_tiles_per_core,
              num_tiles_written});
-
-        // Compute kernel (seed=0 for full precision, no stochastic rounding)
-        if (core_group_1.contains(core)) {
-            SetRuntimeArgs(
-                program,
-                kernels.compute_group_1,
-                core,
-                {std::bit_cast<uint32_t>(beta1),
-                 std::bit_cast<uint32_t>(beta2),
-                 std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(step_size),
-                 std::bit_cast<uint32_t>(inv_sqrt_bc2),
-                 std::bit_cast<uint32_t>(one_minus_beta1),
-                 std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor),
-                 0U});  // seed=0, stochastic rounding disabled
-        } else if (core_group_2.contains(core)) {
-            SetRuntimeArgs(
-                program,
-                kernels.compute_group_2,
-                core,
-                {std::bit_cast<uint32_t>(beta1),
-                 std::bit_cast<uint32_t>(beta2),
-                 std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(step_size),
-                 std::bit_cast<uint32_t>(inv_sqrt_bc2),
-                 std::bit_cast<uint32_t>(one_minus_beta1),
-                 std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor),
-                 0U});  // seed=0, stochastic rounding disabled
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
-        }
 
         // Writer kernel
         SetRuntimeArgs(
@@ -407,7 +390,6 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = shared_variables.writer_kernel_id;
     auto& compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
@@ -432,10 +414,6 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, compute_kernel_group_1_id);
-    [[maybe_unused]] auto& compute_group_2_runtime_args = core_group_2.ranges().empty()
-                                                              ? compute_group_1_runtime_args
-                                                              : GetRuntimeArgs(program, compute_kernel_group_2_id);
 
     float one_minus_beta1 = 1.0f - beta1;
     float one_minus_beta2 = 1.0f - beta2;
@@ -449,6 +427,30 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
 
+    auto& compute_group_1_common_args = GetCommonRuntimeArgs(program, compute_kernel_group_1_id);
+    compute_group_1_common_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
+    compute_group_1_common_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
+    compute_group_1_common_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
+    compute_group_1_common_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+    compute_group_1_common_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+    compute_group_1_common_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
+    compute_group_1_common_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
+    compute_group_1_common_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+    compute_group_1_common_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
+
+    if (!core_group_2.ranges().empty()) {
+        auto& compute_group_2_common_args = GetCommonRuntimeArgs(program, compute_kernel_group_2_id);
+        compute_group_2_common_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
+        compute_group_2_common_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
+        compute_group_2_common_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
+        compute_group_2_common_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+        compute_group_2_common_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+        compute_group_2_common_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
+        compute_group_2_common_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
+        compute_group_2_common_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+        compute_group_2_common_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
+    }
+
     for (uint32_t i = 0; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -461,31 +463,6 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
             runtime_args[kExpAvgSqAddrIdx] = exp_avg_sq_buffer->address();
             runtime_args[kMaxExpAvgSqAddrIdx] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
-        }
-        if (core_group_1.contains(core)) {
-            [[maybe_unused]] auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
-            runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
-            runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
-            runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
-            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
-            runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
-            runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
-            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-            runtime_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
-        } else if (core_group_2.contains(core)) {
-            [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
-            runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
-            runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
-            runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
-            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
-            runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
-            runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
-            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-            runtime_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
         }
         // Update output buffer for the writer kernel
         {
