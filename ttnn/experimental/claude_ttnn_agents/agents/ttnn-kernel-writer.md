@@ -160,10 +160,8 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
+# Just add `device` as a parameter to test functions.
 
 def test_functional_correctness(device):
     """Verify output matches PyTorch reference."""
