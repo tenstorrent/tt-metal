@@ -6,7 +6,7 @@
 # This script:
 # 1. Downloads logs from GitHub Actions job URLs
 # 2. Prepares analysis context (logs, test files, code context)
-# 3. Uses GitHub Copilot CLI to analyze the failures and suggest fixes
+# 3. Uses Claude CLI to analyze the failures and suggest fixes
 
 set -eo pipefail
 
@@ -55,11 +55,9 @@ check_prerequisites() {
         missing_tools+=("jq")
     fi
 
-    # Check copilot CLI
-    if ! command -v github-copilot-cli &> /dev/null && ! command -v copilot &> /dev/null; then
-        log_warn "GitHub Copilot CLI not found. Will attempt to use 'copilot' command."
-        log_warn "If this fails, please install GitHub Copilot CLI:"
-        log_warn "  npm install -g @githubnext/github-copilot-cli"
+    # Check Claude CLI
+    if ! command -v claude &> /dev/null; then
+        missing_tools+=("claude (Claude CLI)")
     fi
 
     if [[ ${#missing_tools[@]} -gt 0 ]]; then
@@ -91,17 +89,42 @@ check_prerequisites() {
     log_info "All prerequisites met"
 }
 
-# Function to find copilot CLI command
-find_copilot_cmd() {
-    if command -v github-copilot-cli &> /dev/null; then
-        echo "github-copilot-cli"
-    elif command -v copilot &> /dev/null; then
-        echo "copilot"
-    else
-        log_error "GitHub Copilot CLI not found. Please install it:"
-        log_error "  npm install -g @githubnext/github-copilot-cli"
-        exit 1
-    fi
+# Function to validate Claude model selection
+validate_claude_model() {
+    local model=$1
+    case "$model" in
+        haiku|sonnet|sonnet-1M|opus)
+            return 0
+            ;;
+        *)
+            log_error "Invalid model: $model"
+            log_error "Valid models are: haiku, sonnet, sonnet-1M, opus"
+            return 1
+            ;;
+    esac
+}
+
+# Function to get Claude model flag
+get_claude_model_flag() {
+    local model=$1
+    # Map user-friendly names to Claude CLI model identifiers
+    case "$model" in
+        haiku)
+            echo "haiku"
+            ;;
+        sonnet)
+            echo "sonnet"
+            ;;
+        sonnet-1M)
+            echo "sonnet[1m]"
+            ;;
+        opus)
+            echo "opus"
+            ;;
+        *)
+            echo "sonnet"  # Default fallback
+            ;;
+    esac
 }
 
 # Function to prepare analysis context
@@ -113,7 +136,7 @@ prepare_analysis_context() {
 
     log_info "Preparing analysis context"
 
-    # Copy logs - Copilot will analyze them directly
+    # Copy logs - Claude will analyze them directly
     if [[ -d "${log_dir}/logs" ]]; then
         cp -r "${log_dir}/logs" "${context_dir}/" 2>/dev/null || true
     elif [[ -d "$log_dir" ]]; then
@@ -316,19 +339,23 @@ EOF
     echo "$output_file"
 }
 
-# Function to run copilot analysis
-run_copilot_analysis() {
+# Function to run Claude analysis
+run_claude_analysis() {
     local prompt_file=$1
     local output_file=$2
-    local copilot_cmd=$3
+    local model=$3
 
-    log_info "Running Copilot analysis..."
+    log_info "Running Claude analysis with model: $model..."
     log_info "Prompt file: $prompt_file"
     log_info "Output file: $output_file"
 
-    # Print the full prompt before sending to Copilot
+    # Get the Claude model flag
+    local model_flag
+    model_flag=$(get_claude_model_flag "$model")
+
+    # Print the full prompt before sending to Claude
     echo ""
-    log_info "=== Full Prompt to be sent to Copilot ==="
+    log_info "=== Full Prompt to be sent to Claude ==="
     cat "$prompt_file"
     echo ""
     log_info "=== End of Prompt ==="
@@ -336,23 +363,23 @@ run_copilot_analysis() {
 
     log_info "Note: This may take several minutes. Large prompts can take time to process..."
 
-    # Pipe prompt to copilot (reads from stdin)
-    # Use --allow-all-tools for non-interactive mode
+    # Claude CLI reads from stdin and uses --model flag
+    # Use -p flag for non-interactive/pipe mode (print and exit)
     # Use tee to show output in real-time while also saving to file
     if command -v timeout &> /dev/null; then
         log_info "Using timeout (10 minute limit)"
-        if timeout 600 sh -c "cat '$prompt_file' | '$copilot_cmd' --allow-all-tools" 2>&1 | tee "$output_file"; then
+        if timeout 600 sh -c "cat \"$prompt_file\" | claude --model \"$model_flag\" -p" 2>&1 | tee "$output_file"; then
             local exit_code=0
         else
             local exit_code=$?
             if [[ $exit_code -eq 124 ]]; then
-                log_error "Copilot analysis timed out after 10 minutes"
+                log_error "Claude analysis timed out after 10 minutes"
                 return 1
             fi
         fi
     else
         # No timeout - run directly
-        if cat "$prompt_file" | "$copilot_cmd" --allow-all-tools 2>&1 | tee "$output_file"; then
+        if cat "$prompt_file" | claude --model "$model_flag" -p 2>&1 | tee "$output_file"; then
             local exit_code=0
         else
             local exit_code=$?
@@ -364,7 +391,7 @@ run_copilot_analysis() {
         log_info "Analysis complete"
         return 0
     else
-        log_error "Copilot analysis failed (exit code: $exit_code)"
+        log_error "Claude analysis failed (exit code: $exit_code)"
         log_info "Check the output file for details: $output_file"
         return 1
     fi
@@ -376,6 +403,7 @@ main() {
     local urls_file=""
     local skip_download=false
     local keep_output=false
+    local claude_model="sonnet"  # Default model
 
     # Parse arguments
     local custom_output_dir=""
@@ -387,6 +415,13 @@ main() {
                 ;;
             --output-dir|-o)
                 custom_output_dir=$2
+                shift 2
+                ;;
+            --model|-m)
+                claude_model=$2
+                if ! validate_claude_model "$claude_model"; then
+                    exit 1
+                fi
                 shift 2
                 ;;
             --skip-download)
@@ -403,13 +438,15 @@ main() {
                 echo "Options:"
                 echo "  --file, -f <file>       Read URLs from file (one per line)"
                 echo "  --output-dir, -o <dir>  Base output directory (default: <repo_root>/build_ND_analysis)"
-                echo "  --skip-download         Skip downloading logs (use existing downloads)"
-                echo "  --keep-output           Keep output and downloaded folders (don't clean up)"
-                echo "  --help, -h              Show this help message"
+                echo "  --model, -m <model>    Claude model to use: haiku, sonnet, sonnet-1M, opus (default: sonnet)"
+                echo "  --skip-download        Skip downloading logs (use existing downloads)"
+                echo "  --keep-output          Keep output and downloaded folders (don't clean up)"
+                echo "  --help, -h             Show this help message"
                 echo ""
                 echo "Examples:"
                 echo "  $0 https://github.com/tenstorrent/tt-metal/actions/runs/1234567890/job/9876543210"
-                echo "  $0 --file urls.txt"
+                echo "  $0 --file urls.txt --model opus"
+                echo "  $0 --model sonnet-1M <job_url>"
                 exit 0
                 ;;
             *)
@@ -440,9 +477,11 @@ main() {
     # Check prerequisites
     check_prerequisites
 
-    # Find copilot command
-    local copilot_cmd
-    copilot_cmd=$(find_copilot_cmd)
+    # Validate Claude model
+    if ! validate_claude_model "$claude_model"; then
+        exit 1
+    fi
+    log_info "Using Claude model: $claude_model"
 
     # Temporary directory for initial downloads (before we know the run name)
     local temp_log_dir="${BASE_OUTPUT_DIR}/.temp_downloads"
@@ -515,7 +554,7 @@ main() {
 
         # Run analysis
         local output_file="${context_dir}/analysis_result.md"
-        run_copilot_analysis "$prompt_file" "$output_file" "$copilot_cmd"
+        run_claude_analysis "$prompt_file" "$output_file" "$claude_model"
 
         analysis_results+=("$output_file")
     done
