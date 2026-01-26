@@ -17,6 +17,7 @@ from models.common.utility_functions import (
     is_blackhole,
     skip_for_blackhole,
     run_for_wormhole_b0,
+    is_watcher_enabled,
 )
 from loguru import logger
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
@@ -519,6 +520,15 @@ def test_sharded_partial_op(
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    if (
+        is_watcher_enabled()
+        and output_dtype == ttnn.bfloat16
+        and activations_dtype == ttnn.bfloat8_b
+        and H == 2816
+        and num_cores == 20
+        and num_slices == 11
+    ):
+        pytest.skip("Skipping due to watcher being enabled, see issue #XXXXX")
     grid_size = (8, 8)
     in0_shape = [1, 1, H, 64]
     W = in0_shape[-1]
