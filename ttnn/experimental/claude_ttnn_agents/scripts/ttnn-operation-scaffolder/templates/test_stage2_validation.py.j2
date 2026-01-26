@@ -13,13 +13,7 @@ import pytest
 import torch
 import ttnn
 
-
-@pytest.fixture
-def device():
-    """Get a device for testing."""
-    device = ttnn.open_device(device_id=0)
-    yield device
-    ttnn.close_device(device)
+# NOTE: Uses the built-in `device` fixture from conftest.py - do NOT define your own.
 
 
 def _get_valid_shape(tensor_info):
@@ -62,7 +56,14 @@ _tensor_infos = [
     {
         "name": "{{ tensor.name }}",
         "cpp_name": "{{ tensor.cpp_name }}",
-        "required_rank": {{ tensor.required_rank | default('None') }},
+        {# Handle rank: extract numeric minimum from strings like ">=2", or use value directly #}
+        {% if tensor.required_rank is string %}
+        "required_rank": {{ tensor.required_rank | replace('>=', '') | replace('<=', '') | replace('>', '') | replace('<', '') | replace('==', '') | int }},
+        {% elif tensor.required_rank is defined and tensor.required_rank is not none %}
+        "required_rank": {{ tensor.required_rank }},
+        {% else %}
+        "required_rank": None,
+        {% endif %}
         "required_layout": {{ '"{}"'.format(tensor.required_layout) if tensor.required_layout else 'None' }},
 {% if tensor.shape_relative_to %}
         "shape_relative_to": "{{ tensor.shape_relative_to }}",
