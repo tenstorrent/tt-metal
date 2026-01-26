@@ -29,7 +29,9 @@ class Linear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        if self.activation_fn == "quick_gelu":
+        if (
+            self.activation_fn == "fused_quick_gelu"
+        ):  # Fused quickgelu runs slower than non-fused - default is non-fused
             self.activation_fn = None
             self.fused_activation_fn = ttnn.UnaryOpType.QUICKGELU
 
@@ -111,7 +113,7 @@ class ColParallelLinear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        if self.activation_fn == "quick_gelu":
+        if self.activation_fn == "quick_gelu_fused":
             self.activation_fn = None
             self.fused_activation_fn = ttnn.UnaryOpType.QUICKGELU
         self.mesh_device = mesh_device
@@ -313,6 +315,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
+    if activation_fn == "quick_gelu":
+        return ttnn.quickgelu(t)
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)

@@ -22,7 +22,7 @@ inline void calculate_quickgelu_appx() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
 
-        dst_reg[0] = val * (lut(val * 1.702, l0, l1, l2) + 0.5f);
+        dst_reg[0] = val * (lut(val * 1.702f, l0, l1, l2) + 0.5f);
 
         dst_reg++;
     }
