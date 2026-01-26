@@ -259,6 +259,38 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
+    uint32_t noc_xy_addr,
+    uint64_t total_length,
+    const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+    uint16_t num_sub_cmds,
+    uint32_t offset_idx) {
+    static_assert(sizeof(CQPrefetchRelayLinearPackedSubCmd) % sizeof(uint32_t) == 0);
+
+    uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
+    auto initialize_relay_linear_packed_cmd = [&](CQPrefetchCmdLarge* relay_linear_packed_cmd) {
+        relay_linear_packed_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED;
+        relay_linear_packed_cmd->relay_linear_packed.noc_xy_addr = noc_xy_addr;
+        relay_linear_packed_cmd->relay_linear_packed.total_length = total_length;
+        relay_linear_packed_cmd->relay_linear_packed.stride = increment_sizeB;
+        relay_linear_packed_cmd->relay_linear_packed.count = num_sub_cmds;
+        relay_linear_packed_cmd->relay_linear_packed.pad = 0;
+    };
+    CQPrefetchCmdLarge* relay_linear_packed_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmdLarge relay_linear_packed_cmd{};
+        initialize_relay_linear_packed_cmd(&relay_linear_packed_cmd);
+        this->memcpy(relay_linear_packed_cmd_dst, &relay_linear_packed_cmd, sizeof(CQPrefetchCmdLarge));
+    } else {
+        initialize_relay_linear_packed_cmd(relay_linear_packed_cmd_dst);
+    }
+
+    this->memcpy((char*)relay_linear_packed_cmd_dst + sizeof(CQPrefetchCmdLarge), &sub_cmds[offset_idx], sub_cmds_sizeB);
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_paged_to_ringbuffer(
     const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
