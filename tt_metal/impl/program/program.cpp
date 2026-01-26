@@ -1729,7 +1729,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    const DataflowBuffersGetter& dataflow_buffers_getter,
+    const DataflowBuffersGetter& /*dataflow_buffers_getter*/,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
@@ -1758,15 +1758,15 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers_getter(),
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+        // state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
+        //     index,
+        //     kernel_groups_getter(index),
+        //     dataflow_buffers_getter(),
+        //     state.offset,
+        //     state.dfb_offset,
+        //     state.dfb_size);
 
-        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+        // TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_kernel_bins(
             device,
