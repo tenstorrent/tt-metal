@@ -48,6 +48,15 @@ public:
 
     /**
      * Constructs an empty host tensor.
+     *
+     * The empty tensor has the following properties:
+     * - logical_shape(): Empty shape
+     * - padded_shape(): Empty shape
+     * - strides(): Empty
+     * - dtype(): DataType::INVALID
+     * - layout(): Layout::INVALID
+     * - get_host_buffer(): Empty buffer
+     * - element_size(): Throws an exception (invalid data type)
      */
     HostTensor();
     ~HostTensor();

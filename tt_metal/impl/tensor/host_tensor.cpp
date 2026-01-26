@@ -4,7 +4,6 @@
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 
-#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -29,20 +28,23 @@ HostTensor::HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology
     impl(std::make_unique<TensorAttributes>(Storage(HostStorage(buffer)), std::move(spec), std::move(topology))) {}
 
 // The default tensor spec for an empty Tensor
-// TODO: PageConfig(Layout::INVALID) is not valid, need to fix.
 TensorSpec DEFAULT_TENSOR_SPEC(Shape(), TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig()));
 
-// TODO: when and if we need to check whether a host tensor is empty
+/*
+ * Implementation note:
+ * This might be better implmeneted as an empty std::unique_ptr?
+ * expectation is this will always be assigned over.
+ * it's just we will have to check for nullptr everywhere.
+ */
 HostTensor::HostTensor() : HostTensor(HostBuffer(), DEFAULT_TENSOR_SPEC, TensorTopology{}) {}
 HostTensor::~HostTensor() = default;
 
 // Deep copy (of the config and topology?)
-HostTensor::HostTensor(const HostTensor& other) :
-    impl(other.impl ? std::make_unique<TensorAttributes>(*other.impl) : nullptr) {}
+HostTensor::HostTensor(const HostTensor& other) : impl(std::make_unique<TensorAttributes>(*other.impl)) {}
 
 HostTensor& HostTensor::operator=(const HostTensor& other) {
     if (this != &other) {
-        impl = other.impl ? std::make_unique<TensorAttributes>(*other.impl) : nullptr;
+        impl = std::make_unique<TensorAttributes>(*other.impl);
     }
     return *this;
 }
@@ -97,16 +99,13 @@ HostBuffer HostTensor::get_host_buffer() const {
 
 // String Conversion (tensor.cpp:391 + tensor_impl.cpp:527-529)
 std::string HostTensor::write_to_string() const {
-    // Simple implementation for now - can expand later
-    std::ostringstream os;
-    os << "HostTensor(shape=" << logical_shape() << ", dtype=" << dtype() << ", layout=";
+    std::string layout_str;
     switch (layout()) {
-        case Layout::ROW_MAJOR: os << "ROW_MAJOR"; break;
-        case Layout::TILE: os << "TILE"; break;
-        default: os << "INVALID"; break;
+        case Layout::ROW_MAJOR: layout_str = "ROW_MAJOR"; break;
+        case Layout::TILE: layout_str = "TILE"; break;
+        default: layout_str = "INVALID"; break;
     }
-    os << ")";
-    return os.str();
+    return fmt::format("HostTensor(shape={}, dtype={}, layout={})", logical_shape(), dtype(), layout_str);
 }
 
 // Mutation (stub per header TODO)
