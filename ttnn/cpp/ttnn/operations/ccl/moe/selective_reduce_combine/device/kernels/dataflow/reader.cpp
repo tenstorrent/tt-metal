@@ -19,12 +19,11 @@ inline void print_u32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t n
 namespace detail {
 
 template <uint32_t NumLocalExperts>
-inline uint32_t get_max_token_count(volatile tt_l1_ptr uint32_t* count_addrs) {
+inline uint32_t get_max_token_count(volatile tt_l1_ptr uint32_t* counts_ptr) {
     uint32_t max = 0;
     for(uint32_t i =0; i < NumLocalExperts; ++i){
-        auto* count_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(count_addrs[i]);
-        if (*count_ptr > max){
-            max = *count_ptr;
+        if (counts_ptr[i] > max) {
+            max = count_ptr[i];
         }
     }
     return max;
@@ -79,7 +78,6 @@ void token_work_split(
                     max_edt = edt[e];
                 }
             }
-            // DPRINT<<"dt: "<<dt<<" e: "<<"edt[e]: "<< edt[e]<<"\n";
         }
         if (end) {
             break;
@@ -100,7 +98,10 @@ void token_work_split(
 
 }//namespace detail
 void kernel_main() {
-    constexpr uint32_t dense_metadata_cb_id = 1;  // get_named_compile_time_arg_val("metadata_cb_id");
+    constexpr uint32_t dense_metadata_cb_id = get_named_compile_time_arg_val("metadata_cb_id");
+    constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
+    constexpr uint32_t token_counts_buffer_size_bytes =
+        get_named_compile_time_arg_val("token_counts_buffer_size_bytes");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t metadata_entry_size = get_named_compile_time_arg_val("metadata_entry_size");
     constexpr uint32_t metadata_entry_size_bytes = get_named_compile_time_arg_val("metadata_entry_size_bytes");
@@ -111,23 +112,33 @@ void kernel_main() {
     constexpr uint32_t metadata_size_bytes = metadata_entry_size_bytes * global_num_tokens;
 
     constexpr auto metadata_ta_args = TensorAccessorArgs<0>();
+    constexpr auto dense_token_counts_ta_args = TensorAccessorArgs<1>();
 
     uint32_t arg_index = 0;
     const auto dense_metadata_addr = get_arg_val<uint32_t>(arg_index++);
+    const auto dense_token_counts_addr = get_arg_val<uint32_t>(arg_index++);
     const auto token_parallel_core_id = get_arg_val<uint32_t>(arg_index++);
-    auto* dense_token_counts_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(arg_index++));
 
     const auto metadata_addrgen = TensorAccessor(metadata_ta_args, dense_metadata_addr, metadata_size_bytes);
+    const auto token_counts_addrgen =
+        TensorAccessor(metadata_ta_args, dense_metadata_addr, token_counts_buffer_size_bytes);
 
     // read dense metadata
     cb_reserve_back(dense_metadata_cb_id, 1);
     const uint32_t metadata_cb_addr = get_read_ptr(dense_metadata_cb_id);
     const uint64_t metadata_noc_addr = get_noc_addr(0, metadata_addrgen);
     noc_async_read(metadata_noc_addr, metadata_cb_addr, metadata_size_bytes);  // read_metadata;
+
+    cb_reserve_back(token_counts_cb_id, 1);
+    const uint32_t token_counts_cb_addr = get_read_ptr(dense_metadata_cb_id);
+    const uint64_t token_counts_noc_addr = get_noc_addr(0, metadata_addrgen);
+    noc_async_read(token_counts_noc_addr, token_counts_cb_addr, token_counts_buffer_size_bytes);  // read_token_counts;
+
     noc_async_read_barrier();
 
     const uint32_t metadata_addr = get_read_ptr(dense_metadata_cb_id);
     auto* metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
+    auto* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
 
     uint32_t metadata_start_idx_offset, token_end;
     int32_t edt[num_local_experts];
@@ -137,7 +148,7 @@ void kernel_main() {
         num_local_experts,
         num_token_parallel_cores,
         metadata_entry_size>(
-        dense_token_counts_addr, metadata_ptr, token_parallel_core_id, metadata_start_idx_offset, token_end, edt);
+        counts_ptr, metadata_ptr, token_parallel_core_id, metadata_start_idx_offset, token_end, edt);
 
     // this is cheesy, but pass token starts and ends to the reader through the end of the metadata buffer
     metadata_ptr[global_num_tokens * metadata_entry_size] = metadata_start_idx_offset;
