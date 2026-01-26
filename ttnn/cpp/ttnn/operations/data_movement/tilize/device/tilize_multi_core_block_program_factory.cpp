@@ -36,7 +36,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    uint32_t max_l1_size = get_max_l1_space(a);
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 

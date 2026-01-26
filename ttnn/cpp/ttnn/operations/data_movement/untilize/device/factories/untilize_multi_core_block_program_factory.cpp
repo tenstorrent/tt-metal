@@ -48,7 +48,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
 
     uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (a_tile_height * a_tile_width);
 
-    uint32_t max_l1_size = get_max_l1_space(a);
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
     uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
