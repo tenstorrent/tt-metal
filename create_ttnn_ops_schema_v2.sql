@@ -1,4 +1,4 @@
--- TTNN Ops Database Schema v2 (Junction Table Design)
+-- TTNN Ops Database Schema v2 (Direct FK Design - mesh included in config identity)
 -- Drop and recreate schema
 DROP SCHEMA IF EXISTS ttnn_ops CASCADE;
 CREATE SCHEMA ttnn_ops;
@@ -66,11 +66,12 @@ CREATE INDEX ttnn_mesh_config_placement_idx ON ttnn_ops.ttnn_mesh_config(placeme
 INSERT INTO ttnn_ops.ttnn_mesh_config (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
 VALUES ('{1,1}', 1, 'replicate', NULL, NULL);
 
--- 5. ttnn_configuration (NO mesh_config_id - linked via junction table)
+-- 5. ttnn_configuration (mesh_config_id included - mesh affects test execution)
 CREATE TABLE ttnn_ops.ttnn_configuration (
     ttnn_configuration_id SERIAL PRIMARY KEY,
     operation_id INTEGER NOT NULL REFERENCES ttnn_ops.ttnn_operation(ttnn_operation_id),
     hardware_id INTEGER REFERENCES ttnn_ops.ttnn_hardware(ttnn_hardware_id),
+    mesh_config_id INTEGER REFERENCES ttnn_ops.ttnn_mesh_config(ttnn_mesh_config_id),
     primary_dtype TEXT,
     primary_storage_type TEXT,
     primary_layout TEXT,
@@ -88,6 +89,7 @@ CREATE TABLE ttnn_ops.ttnn_configuration (
 );
 CREATE INDEX ttnn_configuration_operation_id_idx ON ttnn_ops.ttnn_configuration(operation_id);
 CREATE INDEX ttnn_configuration_hardware_id_idx ON ttnn_ops.ttnn_configuration(hardware_id);
+CREATE INDEX ttnn_configuration_mesh_config_id_idx ON ttnn_ops.ttnn_configuration(mesh_config_id);
 CREATE INDEX ttnn_configuration_dtype_idx ON ttnn_ops.ttnn_configuration(primary_dtype);
 CREATE INDEX ttnn_configuration_memory_layout_idx ON ttnn_ops.ttnn_configuration(primary_memory_layout);
 CREATE INDEX ttnn_configuration_status_idx ON ttnn_ops.ttnn_configuration(status);
@@ -136,16 +138,6 @@ CREATE TABLE ttnn_ops.ttnn_configuration_model (
     PRIMARY KEY (configuration_id, model_id)
 );
 CREATE INDEX ttnn_config_model_model_id_idx ON ttnn_ops.ttnn_configuration_model(model_id);
-
--- 8. ttnn_configuration_mesh (junction table: config <-> mesh)
-CREATE TABLE ttnn_ops.ttnn_configuration_mesh (
-    configuration_id INTEGER NOT NULL REFERENCES ttnn_ops.ttnn_configuration(ttnn_configuration_id),
-    mesh_config_id INTEGER NOT NULL REFERENCES ttnn_ops.ttnn_mesh_config(ttnn_mesh_config_id),
-    first_seen_ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (configuration_id, mesh_config_id)
-);
-CREATE INDEX ttnn_config_mesh_mesh_id_idx ON ttnn_ops.ttnn_configuration_mesh(mesh_config_id);
 
 -- Verify schema created
 SELECT table_name FROM information_schema.tables WHERE table_schema = 'ttnn_ops' ORDER BY table_name;
