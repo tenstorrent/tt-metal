@@ -19,8 +19,8 @@ struct ExecuteDeepseekMoEReduceScatter {
         const std::vector<ttnn::Tensor>& input_tensors,
         const tt::tt_metal::MemoryConfig& output_memory_config,
         int32_t dim,
-        uint32_t num_links = 1,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+        uint32_t num_links = 4,
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 

@@ -19,14 +19,13 @@ ttnn::Tensor ExecuteDeepseekMoEReduceScatter::invoke(
     const tt::tt_metal::MemoryConfig& output_memory_config,
     int32_t dim,
     uint32_t num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
+    tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis) {
     uint32_t scatter_dim = (dim < 0) ? dim + input_tensors.at(0).logical_shape().rank() : (uint32_t)dim;
 
     // topology
     const ttnn::ccl::Topology required_topology = tt::tt_fabric::Topology::Ring;
-    ttnn::ccl::Topology usable_topology = ttnn::ccl::get_usable_topology(
-        input_tensors.at(0), topology.has_value() ? topology.value() : required_topology, cluster_axis);
+    ttnn::ccl::Topology usable_topology = ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     usable_topology = ttnn::ccl::convert_2d_to_1d_topology(usable_topology);
     TT_FATAL(
         usable_topology == required_topology,
