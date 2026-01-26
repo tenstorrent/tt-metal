@@ -85,6 +85,10 @@ jobs:
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--tag-output --allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity"
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_glx_2.5d_torus_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_bh_galaxy_rank_binding.yaml --mpi-args "--tag-output --allow-run-as-root"  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*TestBHGalaxyTorusXYControlPlaneQueries*"
 
+          # 6U Split Galaxy tests (8x2 and 4x4)
+          tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_split_8x2_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_8x2_rank_bindings.yaml --mpi-args "--tag-output --allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.Test6uSplit8x2ControlPlaneInit"
+          tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_split_4x4_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_4x4_rank_bindings.yaml --mpi-args "--tag-output --allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.Test6uSplit4x4ControlPlaneInit"
+
           # Flipped test
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/flipped_6u_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--tag-output --allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInitFlipped"
 
