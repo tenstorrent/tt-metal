@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/all_gather/all_gather_nanobind.hpp"
 #include "ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_nanobind.hpp"
 #include "ttnn/operations/ccl/reduce_to_root/reduce_to_root_nanobind.hpp"
+#include "ttnn/operations/ccl/reduce_to_one/reduce_to_one_nanobind.hpp"
 #include "ttnn/operations/ccl/broadcast/broadcast_nanobind.hpp"
 #include "ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_nanobind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_nanobind.hpp"
@@ -39,6 +40,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_all_gather(mod);
     ccl::bind_all_to_all_combine(mod);
     ccl::bind_reduce_to_root(mod);
+    ccl::bind_reduce_to_one(mod);
     ccl::bind_all_to_all_dispatch(mod);
     ccl::bind_reduce_scatter(mod);
     ccl::bind_all_reduce(mod);

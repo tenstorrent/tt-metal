@@ -91,6 +91,9 @@ target_sources(
         reduce_to_root/reduce_to_root.cpp
         reduce_to_root/device/reduce_to_root_op.cpp
         reduce_to_root/device/reduce_to_root_program.cpp
+        reduce_to_one/reduce_to_one.cpp
+        reduce_to_one/device/reduce_to_one_op.cpp
+        reduce_to_one/device/reduce_to_one_program.cpp
         reduce_scatter/reduce_scatter.cpp
         reduce_scatter/device/reduce_scatter_device_operation.cpp
         reduce_scatter/device/reduce_scatter_program_factory.cpp
