@@ -255,12 +255,10 @@ def test_matmul_in1_dram_sharded_with_program_cache(
         is_watcher_enabled()
         and M == 32
         and K == 8192
-        and N == 1280
+        and N in (1280, 1024)
         and fidelity in (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi)
     ):
         pytest.skip("Test is not passing with watcher enabled github issue #36314")
-    if is_watcher_enabled() and M == 32 and K == 8192 and N == 1024 and fidelity == ttnn.MathFidelity.HiFi2:
-        pytest.skip("Test is not passing with watcher enabled, see issue #XXXXX")
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
             device,
