@@ -398,3 +398,74 @@ def maybe_trace(op_func, enable_trace, device):
     else:
         output = op_func()
     return output
+
+
+def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
+    """
+    Generate all possible bfloat16 bit patterns as a test tensor.
+
+    This function creates an exhaustive test dataset by generating all 65,536 (2^16) possible
+    bfloat16 bit patterns. This is useful for comprehensive testing of operations across the
+    entire bfloat16 value space, including edge cases like infinities, NaNs, and subnormals.
+
+    Args:
+        dtype (torch.dtype, optional): The target dtype to cast the bit patterns to.
+                                       Defaults to torch.bfloat16.
+
+    Returns:
+        torch.Tensor: A tensor of shape (256, 256) containing all possible bfloat16 values,
+                     cast to the specified dtype. The tensor is shaped as a square grid for
+                     convenient TILE_LAYOUT compatibility (32x32 tile divisibility).
+
+    Notes:
+        - The function generates values by iterating through all 16-bit integer patterns
+          and reinterpreting them as bfloat16 values.
+        - The resulting tensor includes all special values: +/-0, +/-infinity, NaNs,
+          subnormals, and all normal values in the bfloat16 range.
+        - When dtype is set to a higher precision format (e.g., torch.float32), the bfloat16
+          values are promoted without loss of information.
+
+    Example:
+        >>> all_bf16 = generate_all_bfloat16_bitpatterns(torch.float32)
+        >>> all_bf16.shape
+        torch.Size([256, 256])
+    """
+    # Generate all possible bfloat16 bit patterns (2^16 = 65536 values)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    bf16_bitpatterns = all_bitpatterns.view(torch.bfloat16)  # Reinterpret as bfloat16
+
+    # Cast to target dtype
+    bitpatterns = bf16_bitpatterns.to(dtype)
+
+    # Reshape tensor to 256 x 256 for tile layout compatibility
+    bitpatterns = bitpatterns.reshape(256, 256)
+
+    return bitpatterns
+
+
+def flush_subnormal_values_to_zero(tensor):
+    """
+    Flush subnormal (denormalized) floating-point values to zero.
+
+    Subnormal numbers are floating-point values smaller than the smallest normalized number.
+    Tenstorrent hardware flushes subnormals to zero for performance reasons.
+    This function replicates that behavior for testing purposes.
+
+    Args:
+        tensor (torch.Tensor): Input tensor with floating-point values.
+
+    Returns:
+        torch.Tensor: The input tensor with all subnormal values replaced by zero.
+                     The tensor is modified in-place.
+
+    Notes:
+        - This function only works for float32 and bfloat16 as they share the same exponent range.
+        - For float32 and bfloat16, subnormal values are those where the exponent bits are all zero,
+          which corresponds to absolute values less than 2^(-126).
+    """
+    # Float32 and bfloat16 numbers are subnormal if exponent == 0
+    # This corresponds to absolute values < 2^(-126)
+    SUBNORMAL_THRESHOLD = 2.0 ** (-126)
+    mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
+    tensor[mask] = 0.0
+    return tensor

@@ -44,7 +44,7 @@ runs:
       run: |
         echo "🔍 Verifying tools..."
         command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
-        command -v pip3 >/dev/null 2>&1 && pip3 --version || { echo "❌ pip3 not found"; exit 1; }
+        command -v uv >/dev/null 2>&1 && uv --version || { echo "❌ uv not found"; exit 1; }
       shell: bash
 
     - name: 📦 Download Build Artifact
@@ -76,7 +76,7 @@ runs:
         ls -la
         WHEEL_FILENAME=$(ls -1 *.whl)
         echo "📦 Installing $WHEEL_FILENAME"
-        pip3 install "$WHEEL_FILENAME"
+        uv pip install "$WHEEL_FILENAME"
       shell: bash
 
     - name: Set up env vars for watcher
@@ -84,7 +84,7 @@ runs:
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal Watcher"
-        echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
+        echo "TT_METAL_WATCHER=120" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
       shell: bash

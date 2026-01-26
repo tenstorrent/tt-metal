@@ -25,7 +25,7 @@ mem_configs = [
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -42,13 +42,13 @@ class TestDiv:
     def test_run_div(
         self,
         fast_and_approximate_mode,
-        round_mode,
+        rounding_mode,
         input_shapes,
         dst_mem_config,
         device,
     ):
         if is_grayskull():
-            if round_mode in ["trunc", "floor"]:
+            if rounding_mode in ["trunc", "floor"]:
                 pytest.skip("does not work for Grayskull -skipping")
         if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
             datagen_func = [
@@ -70,7 +70,7 @@ class TestDiv:
         test_args.update(
             {
                 "fast_and_approximate_mode": fast_and_approximate_mode,
-                "round_mode": round_mode,
+                "rounding_mode": rounding_mode,
             }
         )
         test_args.update({"output_mem_config": dst_mem_config})

@@ -162,7 +162,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t num_programs,
     CoreCoord worker_grid_size,
-    uint32_t seed,
+    uint32_t /*seed*/,
     const std::unordered_set<CoreCoord>& active_eth_cores) {
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;

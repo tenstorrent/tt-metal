@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include <optional>
@@ -17,16 +17,15 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllGatherMatmulAsyncParams {
     /* All Gather Params */
-    all_gather_async::AllGatherAsyncDeviceOperation::operation_attributes_t all_gather_async_attributes;
-    all_gather_async::AllGatherAsyncDeviceOperation::tensor_args_t all_gather_async_tensor_args;
+    AllGatherAsyncParams all_gather_async_attributes;
+    AllGatherAsyncInputs all_gather_async_tensor_args;
 
     /* Matmul Params */
-    operations::matmul::Matmul
-        matmul{};  // TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+    ttnn::prim::MatmulParams matmul{};
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
@@ -34,14 +33,14 @@ struct operation_attributes_t {
     auto attribute_values() const { return std::forward_as_tuple(this->matmul, this->all_gather_core_grid_offset); }
 };
 
-struct tensor_args_t {
+struct AllGatherMatmulAsyncInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias;
     std::optional<Tensor> persistent_output_buffer;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
+using AllGatherMatmulAsyncResult = std::vector<Tensor>;
+using AllGatherMatmulAsyncResultSpec = std::vector<ttnn::TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async
+}  // namespace ttnn::experimental::prim

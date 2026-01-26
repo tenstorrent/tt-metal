@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::dropout::program {
+namespace ttnn::experimental::prim {
 
 struct DropoutSharedVariables {
     tt::tt_metal::KernelHandle dropout_reader_kernel_id = 0;
@@ -25,15 +25,14 @@ struct DropoutProgramFactory {
     using shared_variables_t = DropoutSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output);
+    static cached_program_t create(const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output);
 
     // operation_attributes_t with some seed value
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+        const DropoutParams& operation_attributes,
+        const DropoutInputs& tensor_args,
+        Tensor& output);
 };
 
 struct DropoutMeshWorkloadFactory {
@@ -45,16 +44,16 @@ struct DropoutMeshWorkloadFactory {
     // override the runtime arguments for each device. In addition, use `CachedMeshWorkload` instead of
     // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& args,
+        const DropoutParams& args,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+        const DropoutInputs& tensor_args,
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const DropoutParams& args,
+        const DropoutInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::dropout::program
+}  // namespace ttnn::experimental::prim

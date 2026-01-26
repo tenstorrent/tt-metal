@@ -249,7 +249,13 @@ class RowParallelLinear(Module):
                 bias = torch.cat([bias, zero_bias], dim=-1)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        use_persistent_buffer: bool = True,
+    ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         Return output fractured on columns.
@@ -280,18 +286,8 @@ class RowParallelLinear(Module):
             if needs_reshape:
                 output = ttnn.unsqueeze(output, 0)
 
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                output,
-                persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
-                    output.shape, dim=3, mesh_axis=self.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
-                num_links=self.ccl_manager.num_links,
-                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.mesh_axis,
-                **self.ccl_manager.get_rs_hyperparams(output.shape),
+            output = self.ccl_manager.reduce_scatter(
+                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
 
             if needs_reshape:

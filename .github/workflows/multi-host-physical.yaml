@@ -19,7 +19,14 @@ on:
         type: boolean
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
-    - cron: '0 */3 * * *'  # Every 3 hours - T3K schedule
+    - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
+
+run-name: >
+  ${{ github.event_name == 'schedule' &&
+      (github.event.schedule == '0 */3 * * *' && 'T3K/Dual Validation' ||
+       github.event.schedule == '0 2 * * *'  && 'Quad Nightly' ||
+       'Scheduled Run')
+      || 'Manual Run' }}
 
 jobs:
   build-artifact:
@@ -87,7 +94,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ github.event.inputs.glx_2x_multihost == 'true' }}
+    if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy

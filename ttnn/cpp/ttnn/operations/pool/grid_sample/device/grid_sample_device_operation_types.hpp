@@ -6,9 +6,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct GridSampleParams {
     std::string mode = "bilinear";
     std::string padding_mode = "zeros";
     bool align_corners = false;
@@ -29,12 +29,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct GridSampleInputs {
     Tensor input_tensor;
     Tensor grid;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim
