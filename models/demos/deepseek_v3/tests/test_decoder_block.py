@@ -3,6 +3,7 @@
 
 
 from pathlib import Path
+from typing import Dict
 
 import pytest
 import torch
@@ -16,6 +17,13 @@ from models.demos.deepseek_v3.tests.pytest_utils import (
     build_expanded_test_ids,
     expand_test_cases_with_position_ids_ranges,
 )
+
+# Import synthetic weight generators from existing tests
+from models.demos.deepseek_v3.tests.test_mla import generate_synthetic_mla_weights
+from models.demos.deepseek_v3.tests.test_mlp import generate_synthetic_mlp_weights
+from models.demos.deepseek_v3.tests.test_moe_experts import generate_synthetic_moe_expert_weights
+from models.demos.deepseek_v3.tests.test_moe_gate import ExpertDistribution, generate_synthetic_moe_weights
+from models.demos.deepseek_v3.tests.test_rms_norm import generate_synthetic_rms_norm_weights
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
@@ -39,6 +47,94 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 
+def generate_synthetic_decoder_block_weights(
+    hf_config,
+    layer_idx: int,
+    seed: int = 42,
+) -> Dict[str, torch.Tensor]:
+    """Generate synthetic weights for a complete decoder block.
+
+    This function combines synthetic weights from all sub-components to create
+    a complete decoder block with realistic weight distributions.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        layer_idx: Layer index (determines if it's MoE or regular MLP)
+        seed: Random seed for reproducibility
+
+    Returns:
+        Dictionary containing weight tensors for all decoder block components
+    """
+    weights = {}
+
+    # Generate MLA (attention) weights
+    mla_weights = generate_synthetic_mla_weights(hf_config, seed=seed + layer_idx)
+    for key, value in mla_weights.items():
+        weights[f"self_attn.{key}"] = value
+
+    # Determine if this layer uses MoE or regular MLP
+    # Based on DeepSeek V3 architecture:
+    # - First few layers (< first_k_dense_replace) use regular MLP
+    # - After that, layers at moe_layer_freq intervals use MoE
+    use_moe = (
+        hf_config.n_routed_experts is not None
+        and layer_idx >= hf_config.first_k_dense_replace
+        and layer_idx % hf_config.moe_layer_freq == 0
+    )
+
+    if use_moe:
+        # Generate MoE weights (gate + experts + shared expert)
+        # MoE gate weights
+        moe_gate_weights = generate_synthetic_moe_weights(
+            hf_config, distribution=ExpertDistribution.UNIFORM, seed=seed + layer_idx + 1000
+        )
+        for key, value in moe_gate_weights.items():
+            weights[f"mlp.gate.{key}"] = value
+
+        # MoE expert weights (all 256 experts)
+        moe_expert_weights = generate_synthetic_moe_expert_weights(hf_config, seed=seed + layer_idx + 2000)
+        for key, value in moe_expert_weights.items():
+            # The expert weights already have "experts.N." prefix, just add "mlp."
+            weights[f"mlp.{key}"] = value
+
+        # Shared expert weights (uses same structure as regular MLP but different size)
+        shared_expert_weights = generate_synthetic_mlp_weights(
+            hf_config, mlp_type="shared_expert", seed=seed + layer_idx + 3000
+        )
+        for key, value in shared_expert_weights.items():
+            weights[f"mlp.shared_experts.{key}"] = value
+    else:
+        # Generate regular MLP weights
+        # Determine MLP type based on layer index
+        if layer_idx < hf_config.first_k_dense_replace:
+            # First few layers use non-expert MLP
+            mlp_type = "non_expert"
+        else:
+            # Later non-MoE layers use regular MLP
+            mlp_type = "regular"
+
+        mlp_weights = generate_synthetic_mlp_weights(hf_config, mlp_type=mlp_type, seed=seed + layer_idx + 1000)
+        for key, value in mlp_weights.items():
+            weights[f"mlp.{key}"] = value
+
+    # Generate RMS norm weights
+    # Input layernorm
+    input_norm_weights = generate_synthetic_rms_norm_weights(
+        norm_type="input_layernorm", hidden_size=hf_config.hidden_size, seed=seed + layer_idx + 4000
+    )
+    for key, value in input_norm_weights.items():
+        weights[f"input_layernorm.{key}"] = value
+
+    # Post-attention layernorm
+    post_norm_weights = generate_synthetic_rms_norm_weights(
+        norm_type="post_attention_layernorm", hidden_size=hf_config.hidden_size, seed=seed + layer_idx + 5000
+    )
+    for key, value in post_norm_weights.items():
+        weights[f"post_attention_layernorm.{key}"] = value
+
+    return weights
+
+
 def generate_reference_io(
     model_path: Path,
     module_path: str | None,
@@ -49,9 +145,19 @@ def generate_reference_io(
     mode: str,
     state_dict: dict[str, torch.Tensor],
     decode_position_id: int | None = None,
+    use_synthetic_weights: bool = False,
 ):
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-    if module_path is not None:
+
+    if use_synthetic_weights:
+        # Use synthetic weights that match real DeepSeek V3 distributions
+        synthetic_weights = generate_synthetic_decoder_block_weights(hf_config, layer_idx=layer_idx, seed=42)
+        # Dequantize synthetic weights for the reference model
+        state_dict = dequantize_state_dict(synthetic_weights, hf_config)
+        reference_model.load_state_dict(state_dict)
+        # Keep the quantized version for TTNN
+        state_dict = synthetic_weights
+    elif module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
     else:
@@ -105,6 +211,7 @@ def run_test_forward_pass_decoder1d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    use_synthetic_weights: bool = False,
 ):
     # Check params
     if mode == "prefill":
@@ -122,6 +229,7 @@ def run_test_forward_pass_decoder1d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
     # Set up page config
@@ -217,6 +325,7 @@ def run_test_forward_pass_decoder2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    use_synthetic_weights: bool = False,
 ):
     # Check params
     if mode == "prefill":
@@ -236,6 +345,7 @@ def run_test_forward_pass_decoder2d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
     # Set up page config
@@ -343,6 +453,10 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "use_synthetic_weights",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
         pytest.param(
@@ -401,6 +515,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     ids=EXPANDED_TEST_IDS,
 )
 def test_forward_pass(
+    use_synthetic_weights,
     DecoderBlockClass: type[DecoderBlock1DBase],
     module_path,
     reference_layer_idx,
@@ -436,6 +551,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights,
     )
 
 
