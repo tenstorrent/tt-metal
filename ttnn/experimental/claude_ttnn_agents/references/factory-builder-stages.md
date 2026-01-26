@@ -11,13 +11,13 @@
 | Need | Grep Pattern | ~Lines |
 |------|--------------|--------|
 | TensorAccessor code snippets | `### TensorAccessor Code Snippets` | 33 |
-| Official patterns reference | `## Official TTNN Patterns Reference` | 106 |
+| Official patterns reference | `## Official TTNN Patterns Reference` | 127 |
 | Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 137 |
 | Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 179 |
-| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 310 |
-| Kernel stub templates | `### Kernel Stub Templates` | 108 |
-| Debugging guidance | `## Debugging` | 28 |
-| Execution logging template | `## Execution Logging (Optional)` | 192 |
+| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 127 |
+| Empty kernel stub templates | `### Empty Kernel Stub Templates` | 63 |
+| Debugging guidance | `## Debugging` | 18 |
+| Execution logging template | `## Execution Logging (Optional)` | 191 |
 
 ---
 
@@ -114,6 +114,27 @@ auto [num_cores, all_cores, core_group_1, core_group_2,
     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work_units);
 ```
 
+### Bfloat16 Packing Pattern
+
+When you need to pass bfloat16 scalar values as compile-time args (e.g., for scalers, epsilon):
+
+```cpp
+#include <tt-metalium/bfloat16.hpp>
+
+// Pack two bfloat16 values into a single uint32 for compile-time args
+const float scaler_value = 1.0f / static_cast<float>(width);
+const bfloat16 bfloat_scaler(scaler_value);
+const uint32_t packed_scaler = pack_two_bfloat16_into_uint32({bfloat_scaler, bfloat_scaler});
+
+// Use in compile-time args
+std::vector<uint32_t> compute_compile_args = {
+    Wt,
+    packed_scaler,  // Packed bfloat16 value
+};
+```
+
+**Note**: Do NOT use `bfloat16().to_packed()` or `bfloat16().to_uint32()` - these methods don't exist. Always use `pack_two_bfloat16_into_uint32()`.
+
 ### Circular Buffer Pattern
 
 ```cpp
@@ -173,12 +194,8 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    # Note: Run 'tt-smi -ls' first to verify device 0 is available
-    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
+# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
 
 def test_device_op_called(device):
     """Operation should reach program factory, not fail at validation"""
@@ -310,12 +327,8 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    # Note: Run 'tt-smi -ls' first to verify device 0 is available
-    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
+# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
 
 def test_program_factory_creates_cbs(device):
     """Program factory should create CBs before failing at kernel creation"""
@@ -479,7 +492,13 @@ ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation
 ## Stage 6: Kernel Compilation
 
 ### Goal
-Create stub kernels that compile at runtime and pass data through (passthrough operation).
+Create **empty** stub kernels that compile at runtime. The kernels should immediately return without doing any work.
+
+**CRITICAL**: Stage 6 stub kernels must be completely empty:
+- Kernels should just return immediately (empty `kernel_main()` or `MAIN`)
+- Do NOT implement any data movement, CB operations, or compute logic
+- All kernel implementation is deferred to Stage 7 (kernel-writer agent)
+- The only goal is to verify the program factory infrastructure works (kernel paths, compile-time args, runtime args)
 
 **Important**: Kernels are JIT-compiled at runtime. The only way to verify kernel compilation is to run the operation and check for compilation errors in the output.
 
@@ -491,12 +510,7 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    # Note: Run 'tt-smi -ls' first to verify device 0 is available
-    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
 
 def test_kernels_compile_at_runtime(device):
     """Kernels should compile without errors when operation runs"""
@@ -505,180 +519,74 @@ def test_kernels_compile_at_runtime(device):
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Run the operation - kernel compilation happens here
-    # If there's a compilation error, it will raise RuntimeError
-    # with messages containing the kernel source path or "error"
+    # Empty stub kernels will produce garbage output, but should not error
     try:
         result = ttnn.{operation_name}(input_tensor{, required_params})
     except RuntimeError as e:
         error_str = str(e)
-        # Check if this is a kernel compilation error
-        # Compilation errors typically contain source file paths or "error:"
         if ".cpp" in error_str or "error:" in error_str.lower():
             pytest.fail(f"Kernel compilation failed: {e}")
-        # Re-raise if it's a different runtime error
         raise
 
 def test_program_executes_without_hang(device):
-    """Program should execute without hanging (stub kernels may produce garbage output)"""
+    """Program should execute without hanging (empty stubs return immediately)"""
     input_tensor = ttnn.from_torch(
         torch.randn(1, 1, 32, 32, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Should complete without hanging
+    # Empty stub kernels return immediately - no hang possible
     result = ttnn.{operation_name}(input_tensor{, required_params})
-
-    # Basic sanity checks
     assert result is not None
-
-def test_output_shape_dtype(device):
-    """Output tensor should have correct shape and dtype"""
-    input_tensor = ttnn.from_torch(
-        torch.randn(1, 1, 32, 32, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    result = ttnn.{operation_name}(input_tensor{, required_params})
-
-    # Shape from spec's "Output Tensor Specification"
-    expected_shape = {shape_formula_applied}
-    assert result.shape == expected_shape, f"Expected {expected_shape}, got {result.shape}"
-
-    # Dtype should match input (for most ops)
-    assert result.dtype == input_tensor.dtype
-
-def test_multi_tile_execution(device):
-    """Should handle multi-tile inputs across multiple cores"""
-    # Multiple tiles to test work distribution
-    input_tensor = ttnn.from_torch(
-        torch.randn(1, 4, 64, 64, dtype=torch.bfloat16),  # 16 tiles
-        dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    result = ttnn.{operation_name}(input_tensor{, required_params})
-
-    # Should complete and have correct shape
-    assert result.shape[0] == input_tensor.shape[0]
 ```
-
-**Run tests to confirm they fail:**
-```bash
-./build_metal.sh -b Debug && pytest test_dev/test_stage6_kernel_compilation.py -v
-```
-
-Expected: Tests fail because kernel files don't exist or TT_THROW at kernel creation.
 
 ### Step 6.2: Create Kernel Directory Structure
 
 ```
 device/kernels/
 ├── dataflow/
-│   ├── reader_{operation_name}_interleaved.cpp
-│   └── writer_{operation_name}_interleaved.cpp
+│   ├── reader_{operation_name}.cpp
+│   └── writer_{operation_name}.cpp
 └── compute/
     └── {operation_name}_compute.cpp  (if needed)
 ```
 
-### Kernel Stub Templates
+### Empty Kernel Stub Templates
 
-**Reader kernel stub** `device/kernels/dataflow/reader_{operation_name}_interleaved.cpp`:
+**Reader kernel stub** `device/kernels/dataflow/reader_{operation_name}.cpp`:
 ```cpp
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Compile-time args
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();  // TensorAccessor args start at index 1
-
-    // Runtime args
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-
-    // Setup TensorAccessor
-    const uint32_t tile_bytes = get_tile_size(cb_id_in);
-    const auto s = TensorAccessor(src_tensor_args, src_addr, tile_bytes);
-
-    // Read tiles from source to CB
-    uint32_t tile_id = start_tile_id;
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id_in, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-        noc_async_read(s.get_noc_addr(tile_id), l1_write_addr, tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in, 1);
-        tile_id++;
-    }
+    // Empty stub - implementation in Stage 7
 }
 ```
 
-**Writer kernel stub** `device/kernels/dataflow/writer_{operation_name}_interleaved.cpp`:
+**Writer kernel stub** `device/kernels/dataflow/writer_{operation_name}.cpp`:
 ```cpp
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Compile-time args
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_tensor_args = TensorAccessorArgs<1>();  // TensorAccessor args start at index 1
-
-    // Runtime args
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-
-    // Setup TensorAccessor
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto d = TensorAccessor(dst_tensor_args, dst_addr, tile_bytes);
-
-    // Write tiles from CB to destination
-    uint32_t tile_id = start_tile_id;
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_id_out, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write(l1_read_addr, d.get_noc_addr(tile_id), tile_bytes);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, 1);
-        tile_id++;
-    }
+    // Empty stub - implementation in Stage 7
 }
 ```
 
-**Compute kernel stub (passthrough)** `device/kernels/compute/{operation_name}_compute.cpp`:
+**Compute kernel stub** `device/kernels/compute/{operation_name}_compute.cpp`:
 ```cpp
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
 
 namespace NAMESPACE {
 
 void MAIN {
-    // Compile-time args
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-
-    constexpr uint32_t cb_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_out = tt::CBIndex::c_2;
-
-    // Passthrough: copy input to output
-    copy_tile_init();
-
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_in, 1);
-        cb_reserve_back(cb_out, 1);
-
-        // Copy tile from input CB to output CB
-        copy_tile(cb_in, 0, cb_out);
-
-        cb_push_back(cb_out, 1);
-        cb_pop_front(cb_in, 1);
-    }
+    // Empty stub - implementation in Stage 7
 }
 
 }  // namespace NAMESPACE
@@ -686,93 +594,15 @@ void MAIN {
 
 ### Step 6.3: Complete Program Factory
 
-In `device/{operation_name}_program_factory.cpp`, remove the `TT_THROW` and add kernel creation:
+In `device/{operation_name}_program_factory.cpp`, remove the `TT_THROW` and add kernel creation.
 
-**Important**: Add this include at the top of the file:
-```cpp
-#include <tt-metalium/tensor_accessor_args.hpp>
-```
+The program factory should:
+1. Create all circular buffers (from spec)
+2. Create kernel handles with `CreateKernel()` pointing to the empty stub files
+3. Set runtime args (even though empty kernels don't use them)
+4. Return the cached program with shared variables
 
-```cpp
-// Replace the TT_THROW with:
-
-// Compile-time args for reader - use TensorAccessorArgs to handle memory type automatically
-std::vector<uint32_t> reader_compile_time_args = {cb_input_idx};
-TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-
-// Compile-time args for writer - use TensorAccessorArgs to handle memory type automatically
-std::vector<uint32_t> writer_compile_time_args = {cb_output_idx};
-TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-// Create reader kernel (RISCV_0 / BRISC)
-tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation_name}/device/kernels/dataflow/reader_{operation_name}_interleaved.cpp",
-    all_cores,
-    tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-// Create writer kernel (RISCV_1 / NCRISC)
-tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation_name}/device/kernels/dataflow/writer_{operation_name}_interleaved.cpp",
-    all_cores,
-    tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-// Create compute kernel (if needed by spec)
-std::vector<uint32_t> compute_args_group_1 = {num_work_per_core_group_1};
-tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation_name}/device/kernels/compute/{operation_name}_compute.cpp",
-    core_group_1,
-    tt::tt_metal::ComputeConfig{
-        .math_fidelity = MathFidelity::HiFi4,
-        .compile_args = compute_args_group_1});
-
-if (!core_group_2.ranges().empty()) {
-    std::vector<uint32_t> compute_args_group_2 = {num_work_per_core_group_2};
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/{category}/{operation_name}/device/kernels/compute/{operation_name}_compute.cpp",
-        core_group_2,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .compile_args = compute_args_group_2});
-}
-
-// Build cores vector for shared_variables
-std::vector<CoreCoord> cores;
-for (uint32_t i = 0; i < num_cores; i++) {
-    cores.push_back({i / num_cores_y, i % num_cores_y});
-}
-
-// Set runtime args for each core
-for (uint32_t i = 0, tiles_written = 0; i < num_cores; i++) {
-    CoreCoord core = cores[i];
-    uint32_t num_tiles_per_core = core_group_1.contains(core)
-        ? num_work_per_core_group_1
-        : num_work_per_core_group_2;
-
-    tt::tt_metal::SetRuntimeArgs(
-        program, reader_kernel_id, core,
-        {src_buffer->address(), num_tiles_per_core, tiles_written});
-
-    tt::tt_metal::SetRuntimeArgs(
-        program, writer_kernel_id, core,
-        {dst_buffer->address(), num_tiles_per_core, tiles_written});
-
-    tiles_written += num_tiles_per_core;
-}
-
-return {
-    std::move(program),
-    {OperationName}SharedVariables{
-        .reader_kernel_id = reader_kernel_id,
-        .compute_kernel_id = compute_kernel_id,
-        .writer_kernel_id = writer_kernel_id,
-        .cores = std::move(cores)}};
-```
-
-**Note on override_runtime_arguments**: The scaffolder already creates this in `device/{operation_name}_op.cpp`. It uses `cached_program.shared_variables.cores` to iterate and update buffer addresses.
+Empty kernels don't need compile-time args, but you should still pass them so the infrastructure is ready for Stage 7.
 
 ### Step 6.4: Verify Tests Pass (GREEN)
 ```bash
@@ -781,34 +611,23 @@ return {
 
 If kernel compilation fails at runtime, check the error output for:
 - Source file paths (indicates which kernel failed)
-- Line numbers and error messages
-- Missing includes or undefined symbols
+- Syntax errors or missing includes
 
 ## Debugging
 
 ### Build Errors (Host-side C++)
 - Missing includes: Add required headers
-- Undefined symbols: Check namespace and include paths
 - Kernel path not found: Verify kernel path string in CreateKernel
 
 ### Runtime Kernel Compilation Errors
 Kernel compilation happens at runtime. If the operation fails with a compilation error:
 - Check the error message for the kernel source file path
-- Look for syntax errors, missing includes, or undefined symbols in that kernel
-- Verify compile-time arg indices match between factory and kernel
-- Check that CB IDs are consistent
+- Look for syntax errors or missing includes in that kernel
 
 ### Test Failures
 - Stage 4: Check select_program_factory returns valid type
 - Stage 5: Check CB creation doesn't throw, work distribution is correct
-- Stage 6: Check kernel paths, compile-time args, runtime args; run operation to trigger JIT compilation
-
-### Common Mistakes
-- Wrong CB index: c_0 for input, c_2 for output (convention)
-- Mismatched tile counts between reader/compute/writer
-- Missing noc_async_read_barrier() or noc_async_write_barrier()
-- Wrong kernel config type (Reader vs Writer vs Compute)
-- Incorrect compile-time arg order or count
+- Stage 6: Check kernel paths exist and kernels have valid syntax
 
 ---
 
