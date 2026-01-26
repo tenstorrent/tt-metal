@@ -121,16 +121,6 @@ public:
     }
 };
 
-class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
-};
-
-class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
-public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
-};
-
 template <typename ProgramContainer>
 static void build_and_enqueue(
     const std::vector<std::shared_ptr<MeshDevice>>& devices, ProgramContainer& programs, bool enqueue_only = false) {
