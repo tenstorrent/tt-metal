@@ -620,8 +620,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_volume_except_width = 1;
     uint32_t to_volume_except_width = 1;
 
-    const int from_rank = static_cast<int>(from_shape.rank());
-    const int to_rank = static_cast<int>(to_shape.rank());
+    const auto from_rank = static_cast<int>(from_shape.rank());
+    const auto to_rank = static_cast<int>(to_shape.rank());
 
     for (int i = 0; i < from_rank - 1; ++i) {
         from_volume_except_width *= from_shape[i];
