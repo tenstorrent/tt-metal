@@ -88,13 +88,15 @@ try_download_artifacts() {
   local download_script="./build_bisect/download_artifacts.sh"
 
   if [ ! -f "$download_script" ]; then
+    echo "Download script not found: $download_script"
     return 1
   fi
 
+  echo "Attempting to download artifacts for $commit_sha..."
   if [ "$tracy_enabled" -eq 1 ]; then
-    "$download_script" "$commit_sha" --tracy >/dev/null 2>&1
+    "$download_script" "$commit_sha" --tracy
   else
-    "$download_script" "$commit_sha" >/dev/null 2>&1
+    "$download_script" "$commit_sha"
   fi
 }
 

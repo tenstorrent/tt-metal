@@ -380,6 +380,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Save original branch and restore on exit
+          ORIGINAL_REF=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || git rev-parse HEAD)
+          trap 'git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true' EXIT
+
           echo "════════════════════════════════════════════════════════════════"
           echo "Determining retry count by running test until failure"
           echo "════════════════════════════════════════════════════════════════"
