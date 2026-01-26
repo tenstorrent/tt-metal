@@ -200,7 +200,13 @@ def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
     all_groups_per_bank = torch_w0_w1_reordered.view(L, E, 12, -1, K, 2 * ttnn.TILE_SIZE)  # (L, E, 12, 6, K, 64)
     all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 6, K, 64)
 
-    return all_groups_per_bank
+    # Let us further make the 6 as 3 and 64 as 128.
+    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(12, L, E, 3, -1, K, 2 * ttnn.TILE_SIZE)
+    # (12, L, E, 3, 2, K, 64) -> (12, L, E, 3, K, 2, 64)
+    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(12, L, E, 3, -1, 4 * ttnn.TILE_SIZE)
+
+    return torch_w0_w1_paired
 
 
 def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
@@ -376,8 +382,8 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
     # Create DRAM shard spec for w0_w1
     # Tensor shape: (L, E, K, 4608) -> padded and reordered to (12, L, E, 6, K, 64)
     # ------------------------------------------------------------------------
-    w0_w1_shard_height = L * E * 6 * K
-    w0_w1_shard_width = 2 * ttnn.TILE_SIZE
+    w0_w1_shard_height = L * E * 3 * K
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
@@ -582,7 +588,7 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
     command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-dispatch_row]"
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
-    duration_us = r["DEVICE KERNEL DURATION [ns]"].mean() / 1000.0
+    duration_us = r["DEVICE KERNEL DURATION [ns]"].sum() / 1000.0
     logger.info(f"Duration per layer: {duration_us / L} us")
     logger.info(f"Duration per layer per expert: {duration_us / L / E} us")
     logger.warning(f"Total Duration: {duration_us} us")
@@ -593,7 +599,7 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
 
     Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
     w0_w1_padded_tiles_per_core = 2 * math.ceil(Nt / num_cores) * Kt
-    w2_padded_tiles_per_core = 2 * math.ceil(Kt / num_cores / 2) * (math.ceil(Nt / 7) * 7)
+    w2_padded_tiles_per_core = 4 * math.ceil(Kt / num_cores / 4) * (math.ceil(Nt / 7) * 7)
     total_padded_tiles_per_core = w0_w1_padded_tiles_per_core + w2_padded_tiles_per_core
 
     total_bytes_transferred = L * E * num_cores * total_padded_tiles_per_core * bytes_per_tile
