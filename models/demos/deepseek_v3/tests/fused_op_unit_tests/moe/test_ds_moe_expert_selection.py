@@ -596,6 +596,7 @@ def test_ds_moe_expert_selection(
     set_deterministic_env,
     state_dict,
 ):
+    assert not trace_mode, "Known issue with trace mode for expert selection due to invalid reads during trace FIXME!!"
     if mode == "decode":
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
@@ -707,6 +708,7 @@ def test_ds_moe_expert_selection_single_device(
     set_deterministic_env,
     state_dict,
 ):
+    assert not trace_mode, "Trace mode is disabled for expert selection due to invalid reads."
     if mode == "decode":
         assert seq_len == 1, "Decode only supports seq_len=1"
         seq_len_per_device = seq_len
