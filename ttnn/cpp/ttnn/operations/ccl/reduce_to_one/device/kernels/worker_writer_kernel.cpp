@@ -15,7 +15,8 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_types.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 void kernel_main() {
     // Compile-time args

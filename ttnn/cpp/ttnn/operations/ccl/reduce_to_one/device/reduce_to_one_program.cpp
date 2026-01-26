@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <unordered_set>
 #include "reduce_to_one_op.hpp"
 
 #include "ttnn/operations/creation.hpp"
@@ -38,22 +39,75 @@ inline uint32_t get_device_role(const MeshCoordinate& coord, const MeshCoordinat
     if (coord == root_coord) {
         return MESH_ROOT1;
     }
-    if (coord[1] == 1) {
+
+    uint32_t root_row = root_coord[0];
+    uint32_t my_row = coord[0];
+
+    // ROOT2: same row as ROOT1, different column
+    if (my_row == root_row) {
         return MESH_ROOT2;
     }
-    if (coord[1] == 2) {
+
+    // ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
+    // Inner rows are 1 and 2 in a 4-row mesh
+    uint32_t root3_row = (root_row == 1) ? 2 : 1;
+    if (my_row == root3_row) {
         return MESH_ROOT3;
     }
+
     return MESH_LEAF;
 }
 
-inline bool is_row0_sender(const MeshCoordinate& coord) { return coord[1] == 0; }
+inline bool is_row0_sender(const MeshCoordinate& coord) { return coord[0] == 0; }
 
-inline bool is_row3_sender(const MeshCoordinate& coord) { return coord[1] == 3; }
+inline bool is_row3_sender(const MeshCoordinate& coord) { return coord[0] == 3; }
 
-inline bool is_bottom_core(const CoreCoord& core) { return core.y == 3; }
+// Helper struct to hold bottom core information
+struct BottomCoresInfo {
+    std::unordered_map<uint32_t, CoreCoord> column_to_bottom_core;
+    std::unordered_set<CoreCoord> bottom_cores_lookup;
+    std::vector<CoreCoord> bottom_cores_vec;
+    std::vector<CoreCoord> non_bottom_cores_vec;
+    std::unordered_map<CoreCoord, uint32_t> bottom_core_to_link;
+};
 
-inline CoreCoord get_bottom_core_for_column(uint32_t col) { return CoreCoord(col, 3); }
+// Build bottom core information from shard cores
+// Bottom core for each column is the core with the maximum y value in that column
+inline BottomCoresInfo build_bottom_cores_info(const std::vector<CoreCoord>& all_coord_cores, uint32_t num_links = 2) {
+    BottomCoresInfo info;
+
+    // Build map from column to bottom core (core with max y in each column)
+    for (const auto& core : all_coord_cores) {
+        auto it = info.column_to_bottom_core.find(core.x);
+        if (it == info.column_to_bottom_core.end() || core.y > it->second.y) {
+            info.column_to_bottom_core[core.x] = core;
+        }
+    }
+
+    // Build set of bottom cores for fast lookup
+    for (const auto& [col, bottom_core] : info.column_to_bottom_core) {
+        info.bottom_cores_lookup.insert(bottom_core);
+    }
+
+    // Separate bottom cores from non-bottom cores
+    for (const auto& core : all_coord_cores) {
+        if (info.bottom_cores_lookup.count(core)) {
+            info.bottom_cores_vec.push_back(core);
+        } else {
+            info.non_bottom_cores_vec.push_back(core);
+        }
+    }
+
+    // Assign link indices to bottom cores - split evenly between links
+    const uint32_t num_bottom_cores = info.bottom_cores_vec.size();
+    const uint32_t cores_per_link = num_bottom_cores / num_links;
+    for (uint32_t i = 0; i < num_bottom_cores; i++) {
+        uint32_t link_idx = (i < cores_per_link) ? 0 : 1;
+        info.bottom_core_to_link[info.bottom_cores_vec[i]] = link_idx;
+    }
+
+    return info;
+}
 
 inline MeshCoordinate get_fabric_destination(
     uint32_t role,
@@ -107,7 +161,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const MeshCoordinate& device_coordinate,
     std::optional<ttnn::MeshCoordinate>& forward_coord,
     std::optional<ttnn::MeshCoordinate>& backward_coord,
-    ReduceToOneOp::tensor_return_value_t& /*output_tensor*/,
+    ReduceToOneOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& input_tensor = tensor_args.input_tensor;
@@ -152,14 +206,13 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const CoreRangeSet all_cores = shard_grid;
     const uint32_t num_shard_cores = all_coord_cores.size();
 
-    std::vector<CoreCoord> bottom_cores_vec, non_bottom_cores_vec;
-    for (const auto& core : all_coord_cores) {
-        if (is_bottom_core(core)) {
-            bottom_cores_vec.push_back(core);
-        } else {
-            non_bottom_cores_vec.push_back(core);
-        }
-    }
+    // Build bottom core information
+    auto bottom_cores_info = build_bottom_cores_info(all_coord_cores);
+    const auto& column_to_bottom_core = bottom_cores_info.column_to_bottom_core;
+    const auto& bottom_cores_lookup = bottom_cores_info.bottom_cores_lookup;
+    const auto& bottom_cores_vec = bottom_cores_info.bottom_cores_vec;
+    const auto& non_bottom_cores_vec = bottom_cores_info.non_bottom_cores_vec;
+    const auto& bottom_core_to_link = bottom_cores_info.bottom_core_to_link;
     CoreRangeSet bottom_cores_set = CoreRangeSet(bottom_cores_vec);
     CoreRangeSet non_bottom_cores_set = CoreRangeSet(non_bottom_cores_vec);
 
@@ -192,7 +245,9 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     constexpr auto packet_cb = tt::CBIndex::c_3;
 
     // === Create CBs on all cores for simplicity ===
-    const uint32_t num_worker_slots = 3;
+    // num_worker_slots = non-bottom cores per column (cores that send to bottom core)
+    const uint32_t num_columns = bottom_cores_vec.size();
+    const uint32_t num_worker_slots = non_bottom_cores_vec.size() / num_columns;
 
     auto cb_local_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{local_cb, input_dataformat}})
                                .set_page_size(local_cb, payload_size_bytes)
@@ -223,14 +278,14 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(dest_coord);
 
-    // Calculate num_hops (simplified: assume 1 hop for adjacent devices)
-    // TODO: Calculate actual hops based on mesh topology
-    const uint32_t num_hops = 1;
+    // Calculate num_hops as Manhattan distance between source and destination mesh coordinates
+    auto abs_diff = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a - b : b - a; };
+    const uint32_t num_hops =
+        abs_diff(device_coordinate[0], dest_coord[0]) + abs_diff(device_coordinate[1], dest_coord[1]);
 
-    // Destination L1 address will be the received_cb address on the destination device
-    // Since CB layout is deterministic, we use a placeholder that will be filled at runtime
-    // For now, use 0 as placeholder - this should be fixed properly
-    uint32_t dst_l1_addr = 0;  // TODO: Get actual received_cb address
+    // Destination L1 address is the intermediate tensor buffer address on the destination device
+    const auto& intermediate_tensor = output_tensors[0][0];
+    const uint32_t dst_l1_addr = intermediate_tensor.buffer()->address();
 
     // === Create Kernels ===
 
@@ -301,7 +356,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         auto core_noc_x = phys_core.x;
         auto core_noc_y = phys_core.y;
 
-        CoreCoord my_bottom_core = get_bottom_core_for_column(c.x);
+        CoreCoord my_bottom_core = column_to_bottom_core.at(c.x);
         auto bottom_phys = device->worker_core_from_logical_core(my_bottom_core);
 
         // === Reader runtime args ===
@@ -322,7 +377,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_rt_args);
 
         // === Writer runtime args ===
-        if (is_bottom_core(c)) {
+        if (bottom_cores_lookup.count(c)) {
             // Fabric writer runtime args
             std::vector<uint32_t> fabric_rt_args = {
                 dst_l1_addr,
@@ -334,14 +389,12 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                 slot_size_bytes,
                 num_hops};
 
-            // Append raw fabric connection args (always, even for root1)
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                dst_fabric_node_id,
-                0,  // link_idx
-                program,
-                c,
-                fabric_rt_args);
+            // Append raw fabric connection args (only for non-ROOT1, ROOT1 doesn't send)
+            if (!is_mesh_root1) {
+                uint32_t link_idx = bottom_core_to_link.at(c);
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id, dst_fabric_node_id, link_idx, program, c, fabric_rt_args);
+            }
 
             tt::tt_metal::SetRuntimeArgs(program, fabric_writer_kernel, c, fabric_rt_args);
 

@@ -28,10 +28,11 @@ struct ReduceToOneOp {
     struct tensor_args_t {
         const Tensor input_tensor;
         const std::optional<Tensor> optional_output_tensor;
+        const std::optional<Tensor> optional_intermediate_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
-    using tensor_return_value_t = ttnn::Tensor;
+    using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
+    using tensor_return_value_t = std::array<std::vector<ttnn::Tensor>, 2>;
 
     struct ReduceToOne {
         struct shared_variables_t {
@@ -110,15 +111,16 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
-    ReduceToOneOp::tensor_return_value_t& output_tensor,
+    ReduceToOneOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl
 
 namespace prim {
-ttnn::Tensor reduce_to_one(
+ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

@@ -46,10 +46,10 @@ def test_reduce_to_one(bh_2d_mesh_device):
     root_coord = (1, 1)  # b1 is the final root
 
     topology = ttnn.Topology.Linear
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((2, 4)))
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh_device.shape}")
 
-    assert submesh_device.shape == (2, 4), f"Expected 2x4 mesh, got {submesh_device.shape}"
+    assert submesh_device.shape == ttnn.MeshShape((4, 2)), f"Expected 4x2 mesh, got {submesh_device.shape}"
 
     # Tensor shape: (1, 7168) sharded across 8 cores
     # Each core gets 7168/8 = 896 elements
@@ -80,6 +80,19 @@ def test_reduce_to_one(bh_2d_mesh_device):
     mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh_device.shape)
     mesh_mapper = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config)
 
+    # Create intermediate tensor (same shape as input, used as receive buffer)
+    # Use same shape [4, 2, 1, 7168] and same mesh_mapper as input
+    intermediate_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
+    intermediate_tensor = ttnn.from_torch(
+        intermediate_data,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
     print("\n=== Testing reduce_to_one ===")
 
     # Generate test data - different values for each device
@@ -91,8 +104,10 @@ def test_reduce_to_one(bh_2d_mesh_device):
         data = torch.randn(tensor_shape, dtype=torch.bfloat16) * 0.5 + device_idx
         data_per_device.append(data)
 
-    # Stack data for all devices
-    data_all = torch.stack(data_per_device, dim=0)
+    # Reshape data to match mesh shape (4 rows, 2 cols)
+    # data_per_device has 8 tensors, reshape to [4, 2, 1, 7168] for mesh mapping
+    data_all = torch.stack(data_per_device, dim=0)  # [8, 1, 7168]
+    data_all = data_all.reshape(4, 2, *tensor_shape)  # [4, 2, 1, 7168]
 
     # Create input tensor on mesh
     input_tensor = ttnn.from_torch(
@@ -114,6 +129,7 @@ def test_reduce_to_one(bh_2d_mesh_device):
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         topology=topology,
+        intermediate_tensor=intermediate_tensor,
     )
     ttnn.synchronize_device(submesh_device)
 
