@@ -333,29 +333,70 @@ EOF
     # Stage all changes
     git add -A
 
-    # Create commit
+    # Create commit - pre-commit hooks may modify files
     local commit_msg="Fix non-deterministic test failure
 
 Based on automated analysis of CI failures.
 
 Co-authored-by: Claude <claude@anthropic.com>"
 
-    git commit -m "$commit_msg"
+    log_info "Committing changes (pre-commit hooks will run)..."
+    if ! git commit -m "$commit_msg"; then
+        log_warn "Initial commit failed (likely pre-commit hooks modified files)"
+    fi
+
+    # Check if pre-commit hooks modified files - if so, add and commit again
+    local max_attempts=3
+    local attempt=1
+    while ! git diff --quiet || ! git diff --cached --quiet; do
+        if [[ $attempt -ge $max_attempts ]]; then
+            log_error "Pre-commit hooks keep modifying files after $max_attempts attempts. Giving up."
+            return 1
+        fi
+        log_info "Pre-commit hooks modified files, adding changes (attempt $attempt/$max_attempts)..."
+        git add -A
+        if ! git commit --amend --no-edit; then
+            log_warn "Amend failed, trying new commit..."
+            git commit -m "Apply formatting fixes" || true
+        fi
+        attempt=$((attempt + 1))
+    done
 
     log_info "Changes committed to branch: $branch_name"
 
+    # Verify we have commits ahead of base
+    local commits_ahead
+    commits_ahead=$(git rev-list --count "origin/$base_branch..HEAD" 2>/dev/null || echo "0")
+    if [[ "$commits_ahead" == "0" ]]; then
+        log_error "No commits to push. Something went wrong with the commit."
+        return 1
+    fi
+    log_info "Branch has $commits_ahead commit(s) ahead of origin/$base_branch"
+
     # Push branch
     log_info "Pushing branch to origin..."
-    git push -u origin "$branch_name"
+    if ! git push -u origin "$branch_name"; then
+        log_error "Failed to push branch to origin"
+        return 1
+    fi
 
     # Create PR
     log_info "Creating PR..."
     local pr_url
+    local pr_exit_code
     pr_url=$(gh pr create \
         --title "$pr_title" \
         --body "$pr_body" \
         --base "$base_branch" \
-        --head "$branch_name")
+        --head "$branch_name" 2>&1) || pr_exit_code=$?
+
+    # Check if PR creation succeeded
+    if [[ -n "$pr_exit_code" ]] || [[ -z "$pr_url" ]] || [[ "$pr_url" == *"failed"* ]] || [[ "$pr_url" != "https://"* ]]; then
+        log_error "Failed to create PR: $pr_url"
+        log_info "Cleaning up: deleting remote branch..."
+        git push origin --delete "$branch_name" 2>/dev/null || true
+        return 1
+    fi
 
     echo ""
     log_info "========================================="
@@ -493,8 +534,15 @@ main() {
 
         # Delete the branch we created if it exists
         if [[ "$branch_created" == "true" ]] && [[ -n "$branch_name" ]]; then
-            log_info "Deleting branch '$branch_name'..."
+            # First checkout a different branch
             git checkout "$original_branch" 2>/dev/null || git checkout "$base_branch" 2>/dev/null || git checkout main 2>/dev/null || true
+
+            # Always try to delete remote branch (won't error if it doesn't exist)
+            log_info "Deleting remote branch 'origin/$branch_name' (if exists)..."
+            git push origin --delete "$branch_name" 2>/dev/null || true
+
+            # Delete local branch
+            log_info "Deleting local branch '$branch_name'..."
             git branch -D "$branch_name" 2>/dev/null || true
         elif [[ -n "$original_branch" ]] && [[ "$original_branch" != "HEAD" ]]; then
             git checkout "$original_branch" 2>/dev/null || true
