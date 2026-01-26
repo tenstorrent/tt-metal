@@ -758,7 +758,7 @@ all_gather_minimal_matmul_async_factory_helper(
         mux_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
@@ -778,12 +778,11 @@ all_gather_minimal_matmul_async_factory_helper(
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
     // div_up-based ranges for M and N.
 
-    uint32_t num_mux_cores_per_direction = num_mux_cores / 2;
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
-        uint32_t dir = mux_id >= num_mux_cores_per_direction;
+        uint32_t dir = 1 - (mux_id % 2);  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             auto mux_logical_core = CoreCoord(mux_id, full_grid_size.y - 1);
-            uint32_t link = mux_id % num_mux_cores_per_direction;
+            uint32_t link = mux_id / 2;  // 2 is the num directions
 
             std::vector<uint32_t> mux_rt_args = {};
             const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -894,7 +893,10 @@ all_gather_minimal_matmul_async_factory_helper(
             device->worker_core_from_logical_core(termination_master_logical_core);
 
         // in0 backward sender
-        uint32_t mux_core_index_backward = in1_core_order_index / num_workers_per_link;
+        uint32_t mux_core_index_backward = (in1_core_order_index / num_workers_per_link) * num_workers_per_link + 1;
+        if (mux_core_index_backward >= in1_core_order.size()) {
+            mux_core_index_backward = mux_core_index_backward - in1_core_order.size();
+        }
         auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
         fabric_mux_connection_rt_args(
@@ -910,7 +912,10 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_args);
 
         // in0 forward sender
-        uint32_t mux_core_index_forward = num_links + in1_core_order_index / num_workers_per_link;
+        uint32_t mux_core_index_forward = (in1_core_order_index / num_workers_per_link) * num_workers_per_link + 2;
+        if (mux_core_index_forward >= in1_core_order.size()) {
+            mux_core_index_forward = mux_core_index_forward - in1_core_order.size();
+        }
         auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
         fabric_mux_connection_rt_args(
