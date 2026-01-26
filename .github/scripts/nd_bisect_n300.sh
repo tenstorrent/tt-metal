@@ -7,8 +7,7 @@ set -euo pipefail
 #
 # Options:
 #   --bad-commit <sha>         Known-bad commit to start search from (default: HEAD)
-#   --target-commit <sha>      Commit to test for failure count (default: same as --bad-commit)
-#   --retries <num>            Number of retries per commit (if not provided, will auto-determine)
+#   --retries <num>            Number of retries per commit (auto-determined on CI if not provided)
 #   --timeout <minutes>        Timeout per test run (default: 60)
 #   --runner-label <label>     Runner label (default: N300)
 #   --tracy                    Enable Tracy profiling (default: true)
@@ -16,14 +15,11 @@ set -euo pipefail
 #   --commit-range <good,bad>  Commit range for bisect (required if --no-search)
 #
 # Examples:
-#   # Start search from specific known-bad commit
-#   ./nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f284972f46f32bb1ad77c1e6f535c6a2e --retries 30
+#   # Start search from specific known-bad commit (auto-determines retry count on CI)
+#   ./nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28
 #
-#   # Auto-determine retries by testing specific commit (also uses it as search start)
-#   ./nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f284972f46f32bb1ad77c1e6f535c6a2e
-#
-#   # Use specific retry count with HEAD as start
-#   ./nd_bisect_n300.sh run_resnet_func --retries 30
+#   # Same but with pre-determined retry count (faster)
+#   ./nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28 --retries 30
 #
 #   # Use commit range instead of search mode
 #   ./nd_bisect_n300.sh run_bert_func --no-search --commit-range abc123,def456 --retries 30
@@ -39,8 +35,7 @@ Required:
 
 Options:
   --bad-commit <sha>        Known-bad commit to start search from (default: HEAD)
-  --target-commit <sha>     Commit to test for failure count (default: same as --bad-commit)
-  --retries <num>           Number of retries per commit (auto-determined if not provided)
+  --retries <num>           Number of retries per commit (auto-determined on CI if not provided)
   --timeout <minutes>       Timeout per test run (default: 60)
   --runner-label <label>    Runner label (default: N300)
   --tracy                   Enable Tracy profiling (default: true)
@@ -49,9 +44,8 @@ Options:
   --commit-range <good,bad> Commit range for bisect (required if --no-search)
 
 Examples:
-  $0 run_bert_func --bad-commit 51fc518f --retries 30
-  $0 run_bert_func --bad-commit 51fc518f
-  $0 run_resnet_func --retries 30
+  $0 run_bert_func --bad-commit 51fc518f28
+  $0 run_bert_func --bad-commit 51fc518f28 --retries 30
   $0 run_bert_func --no-search --commit-range abc123,def456 --retries 30
 EOF
   exit 1
@@ -60,7 +54,6 @@ EOF
 # Parse arguments
 TEST_FUNCTION=""
 BAD_COMMIT=""
-TARGET_COMMIT=""
 RETRIES=""
 TIMEOUT=60
 RUNNER_LABEL="N300"
@@ -79,10 +72,6 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --bad-commit)
       BAD_COMMIT="$2"
-      shift 2
-      ;;
-    --target-commit)
-      TARGET_COMMIT="$2"
       shift 2
       ;;
     --retries)
@@ -132,105 +121,24 @@ if [ -z "$BAD_COMMIT" ]; then
   BAD_COMMIT="HEAD"
 fi
 
-# Default TARGET_COMMIT to BAD_COMMIT if not provided (for retry count determination)
-if [ -z "$TARGET_COMMIT" ]; then
-  TARGET_COMMIT="$BAD_COMMIT"
-fi
-
 # Validate search mode requirements
 if [ "$SEARCH_MODE" = false ] && [ -z "$COMMIT_RANGE" ]; then
   die "When --no-search is used, --commit-range must be provided"
 fi
 
-# Detect environment (local vs CI) and determine repo root
+# Determine repo root for git commands
 if [ -d "/work" ]; then
-  # CI environment
   REPO_ROOT="/work"
-  TEST_SCRIPT_PATH="/work/tests/scripts/single_card/run_single_card_demo_tests.sh"
-  TEST_COMMAND="source $TEST_SCRIPT_PATH && $TEST_FUNCTION"
 else
-  # Local environment - find repo root
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  TEST_SCRIPT_PATH="$REPO_ROOT/tests/scripts/single_card/run_single_card_demo_tests.sh"
-
-  if [ ! -f "$TEST_SCRIPT_PATH" ]; then
-    die "Test script not found: $TEST_SCRIPT_PATH"
-  fi
-
-  # For local runs, use absolute path to ensure it works from any directory
-  TEST_COMMAND="source \"$TEST_SCRIPT_PATH\" && $TEST_FUNCTION"
 fi
+cd "$REPO_ROOT" || die "Could not cd to repo root: $REPO_ROOT"
 
-# Determine retry count if not provided
+# Determine retry count - if not provided, use "auto" to let CI determine
 if [ -z "$RETRIES" ]; then
-  echo "════════════════════════════════════════════════════════════════"
-  echo "Step 1: Determining retry count by testing commit $TARGET_COMMIT"
-  echo "This will run the test until it fails to determine retry count"
-  echo "════════════════════════════════════════════════════════════════"
-  echo ""
-
-  # Save current branch/commit
-  ORIGINAL_REF=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || git rev-parse HEAD)
-
-  # Set up trap to restore original branch on exit/interrupt
-  trap 'echo ""; echo "Interrupted - restoring original branch..."; git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true' EXIT INT TERM
-
-  # Checkout target commit
-  if ! git checkout "$TARGET_COMMIT" >/dev/null 2>&1; then
-    die "Could not checkout commit: $TARGET_COMMIT"
-  fi
-
-  # Ensure we're in the repo root
-  cd "$REPO_ROOT" || die "Could not cd to repo root: $REPO_ROOT"
-
-  # Set up environment if needed
-  if [ -z "${TT_METAL_HOME:-}" ]; then
-    export TT_METAL_HOME="$REPO_ROOT"
-  fi
-
-  if [ -z "${ARCH_NAME:-}" ]; then
-    export ARCH_NAME="wormhole_b0"
-  fi
-
-  # Ensure PYTHONPATH is set if not already
-  if [ -z "${PYTHONPATH:-}" ]; then
-    export PYTHONPATH="$TT_METAL_HOME"
-  fi
-
-  # Run test until failure
-  ATTEMPT=1
-  MAX_ATTEMPTS=1000
-  FAILED=false
-
-  while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-    echo "Attempt $ATTEMPT: Running $TEST_FUNCTION..."
-
-    if bash -c "cd \"\$TT_METAL_HOME\" && $TEST_COMMAND" 2>&1; then
-      echo "Attempt $ATTEMPT: PASSED"
-      ATTEMPT=$((ATTEMPT + 1))
-    else
-      FAILED=true
-      echo "Attempt $ATTEMPT: FAILED"
-      break
-    fi
-  done
-
-  if [ "$FAILED" = false ]; then
-    git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true
-    trap - EXIT INT TERM
-    die "Test did not fail after $MAX_ATTEMPTS attempts"
-  fi
-
-  RETRIES=$((ATTEMPT * 3))
-  echo ""
-  echo "Test failed after $ATTEMPT attempt(s)"
-  echo "Setting ND bisect retries to: $RETRIES (3x $ATTEMPT)"
-  echo ""
-
-  # Return to original branch and clear trap
-  git checkout "$ORIGINAL_REF" >/dev/null 2>&1 || true
-  trap - EXIT INT TERM
+  RETRIES="auto"
+  echo "Retry count will be auto-determined on CI by running until failure"
 else
   echo "Using provided retry count: $RETRIES"
 fi
@@ -240,7 +148,7 @@ BAD_COMMIT_SHA=$(git rev-parse "$BAD_COMMIT")
 
 # Dispatch the workflow
 echo "════════════════════════════════════════════════════════════════"
-echo "Step 2: Dispatching ND bisect workflow"
+echo "Dispatching ND bisect workflow"
 echo "Test function: $TEST_FUNCTION"
 echo "Runner label: $RUNNER_LABEL"
 echo "Retries per commit: $RETRIES"

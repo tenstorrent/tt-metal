@@ -5,14 +5,14 @@ Generic scripts to run non-deterministic (ND) bisect workflows for any N300 test
 ## Quick Start
 
 ```bash
-# Find first commit that caused ND failure, starting from a known-bad commit
-./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f284972f46f32bb1ad77c1e6f535c6a2e --retries 30
+# Find first commit that caused ND failure, starting from a known-bad commit (auto-determines retry count on CI)
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28
 
-# Run ND bisect starting from HEAD (auto-determines retry count)
+# Same, but with a pre-determined retry count (faster - skips retry determination)
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28 --retries 30
+
+# Run ND bisect starting from HEAD
 ./.github/scripts/nd_bisect_n300.sh run_bert_func
-
-# Run with pre-determined retry count from HEAD
-./.github/scripts/nd_bisect_n300.sh run_resnet_func --retries 30
 ```
 
 ## Usage
@@ -32,8 +32,7 @@ Generic scripts to run non-deterministic (ND) bisect workflows for any N300 test
 ### Options
 
 - `--bad-commit <sha>`: Known-bad commit to start the search from (default: `HEAD`)
-- `--target-commit <sha>`: Commit to test for failure count determination (default: same as `--bad-commit`)
-- `--retries <num>`: Number of retries per commit (auto-determined if not provided)
+- `--retries <num>`: Number of retries per commit (auto-determined on CI if not provided)
 - `--timeout <minutes>`: Timeout per test run (default: `60`)
 - `--runner-label <label>`: Runner label (default: `N300`)
 - `--tracy`: Enable Tracy profiling (default: `true`)
@@ -43,33 +42,26 @@ Generic scripts to run non-deterministic (ND) bisect workflows for any N300 test
 
 ## Examples
 
-### Find first bad commit starting from known-bad commit (recommended)
+### Find first bad commit with auto retry count (recommended)
 
 ```bash
-./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f284972f46f32bb1ad77c1e6f535c6a2e --retries 30
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28
 ```
 
 This will:
-1. Start the search from commit `51fc518f...` (not HEAD)
-2. Search backward to find a good commit (exponential backoff: 1 day, 2 days, 4 days, etc.)
-3. Bisect between the good commit and `51fc518f...` to find the first bad commit
+1. Dispatch the workflow to CI
+2. CI will run the test on `51fc518f28` repeatedly until it fails
+3. CI sets retry count to 3× the number of attempts needed
+4. CI searches backward to find a good commit (exponential backoff: 1 day, 2 days, etc.)
+5. CI bisects between the good and bad commits to find the first bad commit
 
-### Auto-determine retry count from specific commit
-
-```bash
-./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f284972f46f32bb1ad77c1e6f535c6a2e
-```
-
-This will:
-1. Test the specified commit locally until it fails to determine retry count
-2. Set retries to 3× the number of attempts needed
-3. Dispatch the bisect workflow starting from that commit
-
-### Start from HEAD with pre-determined retry count
+### With pre-determined retry count (faster)
 
 ```bash
-./.github/scripts/nd_bisect_n300.sh run_resnet_func --retries 30
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28 --retries 30
 ```
+
+Skips retry determination step - useful if you already know how flaky the test is.
 
 ### Use commit range instead of search mode
 
@@ -83,27 +75,37 @@ This will:
 ### Different timeout
 
 ```bash
-./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f --retries 30 --timeout 90
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28 --timeout 90
 ```
 
 ### Disable Tracy
 
 ```bash
-./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f --retries 30 --no-tracy
+./.github/scripts/nd_bisect_n300.sh run_bert_func --bad-commit 51fc518f28 --no-tracy
 ```
 
 ## How It Works
 
-1. **Retry Count Determination** (if not provided):
-   - Checks out the target commit (default: HEAD)
-   - Runs the test repeatedly until it fails
-   - Counts the number of attempts
-   - Sets retries to 3× that count
-
-2. **Workflow Dispatch**:
-   - Dispatches the `bisect-dispatch.yaml` workflow
+1. **Workflow Dispatch**:
+   - Dispatches the `bisect-dispatch.yaml` workflow to CI
    - Uses search mode by default (finds failure boundary automatically)
    - Always attempts to download artifacts first (falls back to building if needed)
+
+2. **Retry Count Determination** (on CI, if not provided):
+   - CI checks out the target commit
+   - CI builds/downloads artifacts for that commit
+   - CI runs the test repeatedly until it fails
+   - CI sets retries to 3× the number of attempts needed
+
+3. **Search for Good Commit** (on CI):
+   - CI tests commits going back in time (1 day, 2 days, 4 days, etc.)
+   - CI stops when it finds a commit that passes all retries
+   - This becomes the "good commit" for bisect
+
+4. **Git Bisect** (on CI):
+   - CI runs git bisect between good and bad commits
+   - Each commit is tested with the determined retry count
+   - CI identifies the first commit that introduced the failure
 
 ## Available Test Functions
 
@@ -127,8 +129,7 @@ See `tests/scripts/single_card/run_single_card_demo_tests.sh` for the complete l
 
 - `gh` CLI installed and authenticated
 - Git repository with the test code
-- For local testing: N300 hardware and proper environment setup
-- For retry count determination: The test must be able to run locally
+- Access to dispatch GitHub Actions workflows
 
 ## Notes
 

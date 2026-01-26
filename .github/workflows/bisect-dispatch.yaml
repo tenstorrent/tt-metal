@@ -51,8 +51,8 @@ on:
       attempts:
         required: true
         type: string
-        default: "3"
-        description: "Number of retry attempts for each test run (default: 3)"
+        default: "auto"
+        description: "Number of retry attempts for each test run. Use 'auto' to determine by running until failure (3x attempts needed)"
       download-artifacts:
         required: false
         type: boolean
@@ -340,19 +340,17 @@ jobs:
             exit 1
           fi
 
-          # Validate attempts is a positive integer
-          if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: Attempts must be a positive integer (got: '$ATTEMPTS')"
-            exit 1
-          fi
-
-          if [ "$ATTEMPTS" -le 0 ]; then
-            echo "ERROR: Attempts must be greater than 0 (got: $ATTEMPTS)"
+          # Validate attempts is either "auto" or a positive integer
+          if [ "$ATTEMPTS" == "auto" ]; then
+            echo "✓ Attempts: auto (will be determined by running until failure)"
+          elif [[ "$ATTEMPTS" =~ ^[0-9]+$ ]] && [ "$ATTEMPTS" -gt 0 ]; then
+            echo "✓ Attempts: $ATTEMPTS"
+          else
+            echo "ERROR: Attempts must be 'auto' or a positive integer (got: '$ATTEMPTS')"
             exit 1
           fi
 
           echo "✓ Timeout: $TIMEOUT minutes"
-          echo "✓ Attempts: $ATTEMPTS"
 
           # Validate test-script is provided
           TEST_SCRIPT='${{ inputs.test-script }}'
@@ -370,6 +368,109 @@ jobs:
 
           echo ""
           echo "All inputs validated successfully"
+
+      - name: Determine Retry Count
+        if: ${{ inputs.attempts == 'auto' }}
+        id: determine-retries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
+        run: |
+          set -euo pipefail
+
+          echo "════════════════════════════════════════════════════════════════"
+          echo "Determining retry count by running test until failure"
+          echo "════════════════════════════════════════════════════════════════"
+
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/test_single_commit.sh ./build_bisect/
+          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
+          chmod +x ./build_bisect/test_single_commit.sh
+          chmod +x ./build_bisect/download_artifacts.sh
+
+          TIMEOUT='${{ inputs.timeout }}'
+
+          # Determine start commit
+          START_COMMIT='${{ inputs.start-commit }}'
+          if [ -n "$START_COMMIT" ]; then
+            if ! git cat-file -e "$START_COMMIT^{commit}" 2>/dev/null; then
+              echo "ERROR: Start commit does not exist: $START_COMMIT"
+              exit 1
+            fi
+            TARGET_COMMIT=$(git rev-parse "$START_COMMIT")
+          else
+            TARGET_COMMIT=$(git rev-parse HEAD)
+          fi
+
+          echo "Testing commit: $TARGET_COMMIT"
+
+          # Create test script in /tmp/
+          TEST_SCRIPT='${{ inputs.test-script }}'
+          if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
+            SCRIPT_PATH="/tmp/bisect_gist_script.sh"
+            cp /work/bisect_gist_script.sh /tmp/bisect_gist_script.sh
+          else
+            cat > /tmp/bisect_command_script.sh << 'EOF'
+          #!/bin/bash
+          set -eo pipefail
+          ${{ inputs.test-script }}
+          EOF
+            chmod +x /tmp/bisect_command_script.sh
+            SCRIPT_PATH="/tmp/bisect_command_script.sh"
+          fi
+
+          # Build test arguments (single attempt per run, no ND mode for counting)
+          declare -a test_args
+          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
+            test_args+=(--tracy)
+          fi
+          test_args+=(--artifact-mode)
+
+          # Run test until failure
+          ATTEMPT=1
+          MAX_ATTEMPTS=100
+          FAILED=false
+
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo ""
+            echo "════════════════════════════════════════════════════════════════"
+            echo "Retry determination: Attempt $ATTEMPT"
+            echo "════════════════════════════════════════════════════════════════"
+
+            # Run test_single_commit.sh with 1 attempt (no ND mode)
+            if ./build_bisect/test_single_commit.sh "$TARGET_COMMIT" "$SCRIPT_PATH" "$TIMEOUT" "1" "${test_args[@]}" 2>&1; then
+              echo "Attempt $ATTEMPT: PASSED"
+              ATTEMPT=$((ATTEMPT + 1))
+            else
+              RC=$?
+              if [ $RC -eq 2 ]; then
+                echo "Attempt $ATTEMPT: SKIPPED (build failed or timeout)"
+                echo "ERROR: Cannot determine retry count - test was skipped"
+                exit 1
+              else
+                echo "Attempt $ATTEMPT: FAILED"
+                FAILED=true
+                break
+              fi
+            fi
+          done
+
+          if [ "$FAILED" = false ]; then
+            echo "ERROR: Test did not fail after $MAX_ATTEMPTS attempts"
+            echo "Cannot determine retry count - test appears to always pass"
+            exit 1
+          fi
+
+          RETRIES=$((ATTEMPT * 3))
+          echo ""
+          echo "════════════════════════════════════════════════════════════════"
+          echo "Test failed after $ATTEMPT attempt(s)"
+          echo "Setting ND bisect retries to: $RETRIES (3x $ATTEMPT)"
+          echo "════════════════════════════════════════════════════════════════"
+
+          echo "retry-count=$RETRIES" >> $GITHUB_OUTPUT
 
       - name: Search for Failure Boundary
         if: ${{ inputs.search-mode == true }}
@@ -390,7 +491,14 @@ jobs:
           chmod +x ./build_bisect/download_artifacts.sh
 
           TIMEOUT='${{ inputs.timeout }}'
-          ATTEMPTS='${{ inputs.attempts }}'
+
+          # Use determined retry count if auto, otherwise use provided value
+          if [ '${{ inputs.attempts }}' == 'auto' ]; then
+            ATTEMPTS='${{ steps.determine-retries.outputs.retry-count }}'
+            echo "Using auto-determined retry count: $ATTEMPTS"
+          else
+            ATTEMPTS='${{ inputs.attempts }}'
+          fi
 
           # Determine which script to run based on test-script input
           # IMPORTANT: Store test scripts in /tmp/ to ensure they don't change during git checkouts
@@ -591,7 +699,14 @@ jobs:
             BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
           fi
           TIMEOUT='${{ inputs.timeout }}'
-          ATTEMPTS='${{ inputs.attempts }}'
+
+          # Use determined retry count if auto, otherwise use provided value
+          if [ '${{ inputs.attempts }}' == 'auto' ]; then
+            ATTEMPTS='${{ steps.determine-retries.outputs.retry-count }}'
+            echo "Using auto-determined retry count: $ATTEMPTS"
+          else
+            ATTEMPTS='${{ inputs.attempts }}'
+          fi
 
           # IMPORTANT: Store test scripts in /tmp/ to ensure they don't change during git checkouts
           # The bisect process checks out different commits, which would change files in /work/
