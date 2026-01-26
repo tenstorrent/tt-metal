@@ -1,5 +1,7 @@
 import ttnn
 
+from .patchtsmixer_utils import apply_linear_height_sharded
+
 
 class TtPatchTSMixerGatedAttention:
     """
@@ -166,11 +168,14 @@ class TtPatchTSMixerMLP:
     Applies:
         x = gelu(x @ W1 + b1)
         x = x @ W2 + b2
+
+    Supports HEIGHT sharding optimization for improved parallelization.
     """
 
-    def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0):
+    def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0, use_height_sharding: bool = True):
         self.device = device
         self.base = base_address
+        self.use_height_sharding = use_height_sharding
 
         # Keep weights in DRAM (hardware multicasts to cores during matmul)
         self.w1 = parameters[f"{self.base}.fc1.weight"]
@@ -178,45 +183,73 @@ class TtPatchTSMixerMLP:
         self.w2 = parameters[f"{self.base}.fc2.weight"]
         self.b2 = parameters[f"{self.base}.fc2.bias"]
 
+        # Compute kernel configuration
+        self.compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
     def __call__(self, x):
         # x shape: (B, C, Np, D) or (B, C, D, Np) depending on mixer
-        B, C, dim3, dim4 = x.shape
+        B, C, dim3, K = x.shape
 
         # Calculate effective M dimension for matmul parallelization
         # For patch mixing: (B,C,D,Np) → M_eff = B*C*D
         # For feature mixing: (B,C,Np,D) → M_eff = B*C*Np
-        M_eff = B * C * dim3
+        M = B * C * dim3
 
-        # First linear with GELU: Use proper M dimension for core grid
-        x = ttnn.linear(
+        if not self.use_height_sharding:
+            # Non-sharded path: use simple linear with activation fusion
+            x = ttnn.linear(
+                x,
+                self.w1,
+                bias=self.b1,
+                activation="gelu",
+                compute_kernel_config=self.compute_config,
+            )
+            x_out = ttnn.linear(
+                x,
+                self.w2,
+                bias=self.b2,
+                compute_kernel_config=self.compute_config,
+            )
+            ttnn.deallocate(x)
+            return x_out
+
+        # HEIGHT-sharded path: manually split FC1 and GELU for sharding
+        # (activation fusion not compatible with sharding)
+
+        # FC1: (M, K) @ (K, expansion*K) → (M, expansion*K)
+        expansion_K = int(self.w1.shape[0])  # Output features of FC1
+        y = apply_linear_height_sharded(
             x,
             self.w1,
-            bias=self.b1,
-            activation="gelu",
-            core_grid=ttnn.CoreGrid(y=min(M_eff, 8), x=8),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            ),
+            self.b1,
+            M=M,
+            K=K,
+            out_shape=(B, C, dim3, expansion_K),
+            use_sharding=True,
+            compute_config=self.compute_config,
         )
 
-        # Second linear: Use same M_eff for consistent parallelization
-        x_out = ttnn.linear(
-            x,
+        # GELU activation (on interleaved tensor from apply_linear_height_sharded)
+        y = ttnn.gelu(y)
+
+        # FC2: (M, expansion*K) @ (expansion*K, K) → (M, K)
+        out_K = int(self.w2.shape[0])  # Output features of FC2
+        x_out = apply_linear_height_sharded(
+            y,
             self.w2,
-            bias=self.b2,
-            core_grid=ttnn.CoreGrid(y=min(M_eff, 8), x=8),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            ),
+            self.b2,
+            M=M,
+            K=expansion_K,
+            out_shape=(B, C, dim3, out_K),
+            use_sharding=True,
+            compute_config=self.compute_config,
         )
-
-        ttnn.deallocate(x)
+        ttnn.deallocate(y)
 
         return x_out
 
