@@ -91,31 +91,74 @@ Given one or more GitHub Actions job logs from failed runs, you must:
 
 ### Output Format
 
-Provide your analysis in the following structure:
+Your response must BE the analysis document itself (not a summary of it). Start directly with the markdown content below - no preamble like "I've completed an analysis" or "Here's my analysis".
+
+Structure your response EXACTLY as follows:
 
 ```markdown
 ## Failure Summary
-[Brief description of what failed and when]
+
+**Test**: [exact test name/file that was running]
+**Error**: [exact error message from logs]
+**When**: [at what point - initialization, mid-test, cleanup]
+
+## Code Path to Failure
+
+Show the exact execution path that led to the failure. Include:
+- The source file(s) and function(s) involved
+- The specific lines of code that were executing when the failure occurred
+- Quote the relevant code with file paths and line numbers
+
+Example format:
+```
+File: tt_metal/impl/device/device.cpp (lines 234-245)
+```cpp
+void Device::initialize() {
+    // This is where the timeout occurs
+    auto result = firmware_loader_.load();  // <-- FAILURE POINT
+    if (!result.ok()) {
+        throw std::runtime_error("Failed to load firmware");
+    }
+}
+```
+```
 
 ## Root Cause Analysis
-[Detailed analysis of why the failure occurred, including relevant log excerpts]
 
-## Fixability Assessment
-[Is this fixable in tt-metal? If not, why?]
+Explain WHY this code fails intermittently. Include:
+- What hardware operation is happening
+- Why it sometimes fails (timing, race condition, resource contention, etc.)
+- Relevant log excerpts that show the failure
 
-## Recommended Code Changes
+## Recommended Fix
 
-### Priority 1: [High Impact, High Feasibility]
-[Specific code changes with file paths and line numbers if possible]
+For EACH fix, provide:
 
-### Priority 2: [Medium Impact or Feasibility]
-[Additional suggestions]
+### Fix 1: [descriptive name]
 
-### Priority 3: [Lower Priority but Still Valuable]
-[Other improvements]
+**File**: [exact file path]
+**Location**: [function name, line numbers]
 
-## Implementation Notes
-[Any important considerations for implementing these changes]
+**Current Code**:
+```cpp
+// Show the actual current code that needs to change
+```
+
+**Proposed Code**:
+```cpp
+// Show exactly what the code should look like after the fix
+```
+
+**Why This Helps**: [1-2 sentences explaining the fix]
+
+### Fix 2: [if applicable]
+[Same format as above]
+
+## Summary
+
+- **Root cause**: [one sentence]
+- **Primary fix**: [which file, what change]
+- **Expected impact**: [estimated reduction in failure rate]
 ```
 
 ## Important Considerations
@@ -152,4 +195,16 @@ When analyzing multiple jobs that failed for the same reason:
 
 ---
 
-Now analyze the provided job logs and provide your recommendations.
+## CRITICAL OUTPUT REQUIREMENTS
+
+1. **Start directly with "## Failure Summary"** - no introductory text
+2. **Include actual code** - quote the real source code from files you find, with file paths and line numbers
+3. **Show before/after** - for each fix, show the current code and the proposed replacement
+4. **Be specific** - file paths, function names, line numbers, exact error messages
+5. **Self-contained** - someone with NO experience with these files should understand the problem and solution after reading your analysis
+
+Your entire response should be the analysis document in markdown format. Do NOT summarize or describe what you found - just output the document itself.
+
+---
+
+Now analyze the provided job logs. Read the relevant source files from the codebase to understand the failure, then output your analysis document.
