@@ -335,6 +335,144 @@ def test_distributed_dit_layernorm_affine_layouts_and_dtypes(
     )
 
 
+def run_distributed_dit_layernorm_batched_affine(
+    device,
+    num_simulated_devices,
+    batch_size,
+    seq_len,
+    embedding_dim,
+    dtype,
+    stats_dtype,
+):
+    """
+    Test distributed DIT layernorm with batched weight/bias (different affine per batch).
+
+    This tests the Motif-style usage where weight/bias have shape [batch, 1, embedding_dim],
+    applying different affine transformations to each batch element.
+
+    Args:
+        device: The ttnn device
+        num_simulated_devices: Number of TP devices to simulate
+        batch_size: Number of batch elements (each gets different weight/bias)
+        seq_len: Sequence length
+        embedding_dim: Hidden dimension
+        dtype: Input data type
+        stats_dtype: Stats data type
+    """
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    torch.manual_seed(1234)
+
+    inp_shape = (1, batch_size, seq_len, embedding_dim)
+    torch_input = torch.randn(inp_shape) * 4 - 1
+
+    # Create batched weight and bias: shape [batch_size, 1, embedding_dim]
+    # Each batch element gets different affine parameters
+    torch_weight = torch.rand(batch_size, 1, embedding_dim)
+    torch_bias = torch.rand(batch_size, 1, embedding_dim)
+
+    epsilon = 1e-5
+
+    # Chunk input across simulated devices on the last dimension
+    tt_inp = chunk_and_shard_tensor(torch_input, num_simulated_devices, device, -1, dtype)
+
+    # For TILE_LAYOUT with batched affine, we need shape [batch_size, TILE_HEIGHT, embedding_dim]
+    # But the op expects [batch, 1, dim] style broadcasting, so we use [batch_size, 32, embedding_dim/num_devices]
+    # Actually, for tile layout the shape needs to be [batch, 32, dim] where 32 is TILE_HEIGHT
+    # Let's just use the simpler approach: shape [batch_size, 32, embedding_dim] and chunk
+    weight_tiled = torch_weight.expand(batch_size, TILE_SIZE, embedding_dim)
+    bias_tiled = torch_bias.expand(batch_size, TILE_SIZE, embedding_dim)
+
+    tt_weight = chunk_and_shard_tensor(weight_tiled, num_simulated_devices, device, -1, dtype)
+    tt_bias = chunk_and_shard_tensor(bias_tiled, num_simulated_devices, device, -1, dtype)
+
+    tt_stats = []
+    for tt_inp_chunk in tt_inp:
+        tt_stats.append(
+            ttnn.experimental.dit_layernorm_pre_allgather(
+                tt_inp_chunk, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+            )
+        )
+
+    # Simulate all-gather by concatenating stats from all devices
+    tt_stats_gathered = ttnn.concat(tt_stats, -1)
+
+    # Run post_allgather on each chunk with gathered stats and batched weight/bias
+    tt_out = []
+    for idx in range(len(tt_inp)):
+        tt_out.append(
+            ttnn.experimental.dit_layernorm_post_allgather(
+                tt_inp[idx],
+                tt_stats_gathered,
+                epsilon=epsilon,
+                weight=tt_weight[idx],
+                bias=tt_bias[idx],
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
+
+    # Concat the output on the sharded dimension
+    tt_out = ttnn.concat(tt_out, -1)
+    tt_out = ttnn.to_torch(tt_out)
+
+    # Reference implementation: layer_norm then apply batched affine
+    out_torch = torch.nn.functional.layer_norm(
+        torch_input, normalized_shape=(embedding_dim,), weight=None, bias=None, eps=epsilon
+    )
+    # Apply batched affine: weight/bias shape [batch, 1, dim] broadcasts over [1, batch, seq, dim]
+    out_torch = out_torch * torch_weight  # broadcasts [batch, 1, dim] over [1, batch, seq, dim]
+    out_torch = out_torch + torch_bias
+
+    passing, output_str = comp_allclose(tt_out, out_torch, rtol=1e-1, atol=1e-01)
+    logger.debug(f"torch vs tt distributed dit layernorm (batched affine) = {output_str}")
+    assert passing
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize("batch_size", [2, 4], ids=["batch2", "batch4"])
+@pytest.mark.parametrize("seq_len", [512, 4096], ids=["seq512", "seq4096"])
+@pytest.mark.parametrize("embedding_dim", [1920, 2048], ids=["dim1920_motif", "dim2048"])
+@pytest.mark.parametrize("num_simulated_devices", [1, 2], ids=["tp1", "tp2"])
+def test_distributed_dit_layernorm_batched_affine(
+    device,
+    num_simulated_devices,
+    batch_size,
+    seq_len,
+    embedding_dim,
+    dtype,
+    stats_dtype,
+    reset_seeds,
+):
+    """
+    Test batched weight/bias broadcasting for Motif-style dynamic affine.
+
+    In Motif, the dynamic weight/bias have shape [batch, 1, embedding_dim], meaning
+    each batch element gets different affine parameters. This tests that the op
+    correctly applies different weight/bias per batch.
+    """
+    # Skip if embedding_dim is not divisible by num_simulated_devices * TILE_SIZE
+    if embedding_dim % (num_simulated_devices * TILE_SIZE) != 0:
+        pytest.skip(
+            f"embedding_dim ({embedding_dim}) must be divisible by num_simulated_devices * TILE_SIZE ({num_simulated_devices * TILE_SIZE})"
+        )
+
+    run_distributed_dit_layernorm_batched_affine(
+        device,
+        num_simulated_devices,
+        batch_size,
+        seq_len,
+        embedding_dim,
+        dtype,
+        stats_dtype,
+    )
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize("seqlen", [2048])

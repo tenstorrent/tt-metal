@@ -255,13 +255,20 @@ TP_SWEEP = [
 
 @pytest.mark.parametrize(
     "embedding_dim",
-    [2048, 2432, 3072, 5120],
-    ids=["dim0", "dim1", "dim2", "dim3"],
+    [1920, 2048, 2432, 3072, 5120],
+    ids=["dim_motif", "dim0", "dim1", "dim2", "dim3"],
 )
 @pytest.mark.parametrize(
-    "seq_len",
-    [512, 2048, 4096, 9472],
-    ids=["len0", "len1", "len2", "len3"],
+    "batch_size, seq_len",
+    [
+        (1, 512),
+        (1, 2048),
+        (1, 4096),
+        (1, 9472),
+        (2, 334),  # Motif prompt
+        (2, 4100),  # Motif spatial
+    ],
+    ids=["b1_len0", "b1_len1", "b1_len2", "b1_len3", "motif_prompt", "motif_spatial"],
 )
 @pytest.mark.parametrize(
     "affine_parameters, affine_dynamic",
@@ -278,6 +285,7 @@ def test_distributed_layernorm(
     mesh_device: ttnn.MeshDevice,
     mesh_axis: int,
     embedding_dim: int,
+    batch_size: int,
     seq_len: int,
     affine_parameters: bool,
     affine_dynamic: bool,
@@ -302,20 +310,21 @@ def test_distributed_layernorm(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch_input_tensor = torch.randn((1, 1, seq_len, embedding_dim), dtype=torch_dtype) * 2 + 4
+    torch_input_tensor = torch.randn((1, batch_size, seq_len, embedding_dim), dtype=torch_dtype) * 2 + 4
     tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1)
 
     if affine_dynamic:
         torch_model.norm_elementwise_affine = True
         torch_model.use_bias = True
-        torch_model.weight = torch.nn.Parameter(torch.randn((embedding_dim), dtype=torch_dtype))
-        torch_model.bias = torch.nn.Parameter(torch.randn((embedding_dim), dtype=torch_dtype))
+        # Note: Use batch_size if using dynamic affine since Motif dynamics include batch dim
+        torch_model.weight = torch.nn.Parameter(torch.randn((batch_size, 1, embedding_dim), dtype=torch_dtype))
+        torch_model.bias = torch.nn.Parameter(torch.randn((batch_size, 1, embedding_dim), dtype=torch_dtype))
         # Tilized weights and bias for dynamic affine
         tt_dynamic_weight_tensor = bf16_tensor(
-            torch_model.weight.data.unsqueeze(0), device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
+            torch_model.weight.data, device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
         )
         tt_dynamic_bias_tensor = bf16_tensor(
-            torch_model.bias.data.unsqueeze(0), device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
+            torch_model.bias.data, device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1
         )
     else:
         tt_dynamic_weight_tensor = None
