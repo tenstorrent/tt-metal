@@ -123,11 +123,11 @@ As a result, ``10`` cores are assigned ``8`` output tiles each, and the ``11``th
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
-.. figure:: ../../../../../common/images/matmul-spmd-core-works-distribution.webp
-   :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD (Each color represents a different core)
+.. figure:: images/work_distribution_11_cores.png
+   :alt: Output Tile Distribution on Multiple Cores (Each color represents a different core)
    :align: center
 
-   Figure 2: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD
+   Figure 2: Output Tile Distribution on Multiple Cores
 
 TT-Metalium includes utilities to simplify work distribution across cores.
 This is done in two steps:
@@ -354,35 +354,15 @@ rectangular blocks and assign such rectangular blocks to cores. For example, con
 Core 1 needs the first row of ``A`` and the last column of ``B`` to compute the output tile in the top right
 corner of the output, and only for that tile. Therefore, this data cannot be reused for any other computation.
 If we distribute work across 9 cores instead, such that each core computes ``3x3`` output tiles, then each core
-can reuse a row of ``A`` to produce output of three tiles in the same row of the output. Similarly, each core
-can reuse a column of ``B`` to produce output of three tiles in the same column of the output.
+can use a row of ``A`` to produce output of three tiles in the same row of the output. Similarly, each core
+can use a column of ``B`` to produce output of three tiles in the same column of the output.
 This is shown in Figure 3.
 
-       +----+----+----+----+----+----+----+----+----+
-       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
-       +----+----+----+----+----+----+----+----+----+
-       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
-       +----+----+----+----+----+----+----+----+----+
-       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
-       +----+----+----+----+----+----+----+----+----+
-       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
-       +----+----+----+----+----+----+----+----+----+
-       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
-       +----+----+----+----+----+----+----+----+----+
-       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
-       +----+----+----+----+----+----+----+----+----+
-       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
-       +----+----+----+----+----+----+----+----+----+
-       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
-       +----+----+----+----+----+----+----+----+----+
-       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
-       +----+----+----+----+----+----+----+----+----+
-
-.. figure:: ../../../../../common/images/matmul-blocked-core-works-distribution.webp
-   :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked
+.. figure:: images/work_distribution_9_cores.png
+   :alt: Output Tile Distribution on Multiple Cores Using Blocking (Each color represents a different core)
    :align: center
 
-   Figure 3: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked
+   Figure 3: Output Tile Distribution on Multiple Cores Using Blocking
 
 Observe that there is no data reuse across cores; each core still needs to read input data for its own
 block of output tiles, some of which is the same as the data read by other cores.
@@ -442,16 +422,21 @@ We can split the sum over ``k`` into consecutive chunks corresponding to K-block
 * Each K-block ``b`` spans some range of ``k`` values: ``b * K_block_tiles .. (b + 1) * K_block_tiles``.
   Then:
 
-    ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``.
-
+.. figure:: images/sum_composite.png
+   :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
+   :align: center
 
 Define the partial result from block b as:
 
-``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``.
+.. figure:: images/sum_blok_b.png
+   :alt: ``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``
+   :align: center
 
 Then:
 
-``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``.
+.. figure:: images/sum_across_blocks.png
+   :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
+   :align: center
 
 The overall approach can be summarized by the following pseudo-code:
 
