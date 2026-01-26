@@ -10,8 +10,13 @@ Tensor migration represents work with significant transient states.
 
 This folder
 - allows Runtime to continue the effort with arbitrary steps and minimal distraction to other functions.
-- unblocks other efforts intersted in Host/Device Tensor but not the TTNN migration
+- unblocks other efforts interested in Host/Device Tensor but not the TTNN migration
 - allows experimentation without the restrictions of our deprecation policy.
+
+## namespace
+
+Headers in this folder are not in the experimental folder as this staging area is meant to be short lived,
+most of the concepts hosted are well tested, production code already.
 
 ## Life-time
 
