@@ -147,7 +147,17 @@ jobs:
               "timeout": 20,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
               "owner_id": "U08TED0JM9D"
-            } # Samuel Adesoye
+            }, # Samuel Adesoye
+              "name": "GPT-OSS op perf unit tests",
+              "model-type": "GPT-OSS",
+              "model-name": "gpt-oss",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 30,
+              "tracy": true,
+              "cmd": "pip install -r models/demos/gpt_oss/requirements.txt && export HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ && pytest models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_all_fused_ops_device_perf.py::test_all_fused_ops_device_perf -k \"decode and 1\"",
+              "owner_id": "U08TJ70UFRT"
+            } # Harry Andrews
           ]' --compact-output)
 
           # Combine both arrays into full matrix
