@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -152,17 +152,29 @@ create_program_batch_sharded(
             output_storage_cores_ordered[i].y);
     }
 
-    // Validate core counts match
+    // Validate core counts
     uint32_t num_workers = all_worker_cores_ordered.size();
+    uint32_t num_input_storage_cores = input_storage_cores_ordered.size();
+    uint32_t num_output_storage_cores = output_storage_cores_ordered.size();
+
+    log_debug(tt::LogOp, "num_workers (DRAM banks): {}", num_workers);
+    log_debug(tt::LogOp, "num_input_storage_cores: {}", num_input_storage_cores);
+    log_debug(tt::LogOp, "num_output_storage_cores: {}", num_output_storage_cores);
+
     TT_FATAL(
-        input_storage_cores_ordered.size() == num_workers,
-        "Input storage cores ({}) must match number of workers ({})",
-        input_storage_cores_ordered.size(),
+        num_input_storage_cores == num_workers,
+        "Input storage cores ({}) must match number of workers/DRAM banks ({}). "
+        "For batch sharding, use an L1 shard grid with {} cores.",
+        num_input_storage_cores,
+        num_workers,
         num_workers);
+
     TT_FATAL(
-        output_storage_cores_ordered.size() == num_workers,
-        "Output storage cores ({}) must match number of workers ({})",
-        output_storage_cores_ordered.size(),
+        num_output_storage_cores == num_workers,
+        "Output storage cores ({}) must match number of workers/DRAM banks ({}). "
+        "For batch sharding, use an L1 shard grid with {} cores.",
+        num_output_storage_cores,
+        num_workers,
         num_workers);
 
     // Build NOC coordinate vectors for input and output storage cores
@@ -507,7 +519,7 @@ create_program_batch_sharded(
             .defines = mm_kernel_defines});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
-    // Following the pattern from the 1D DRAM sharded factory
+    // Following the pattern from the mcast DRAM sharded factory
     std::vector<CoreCoord> all_cores_in_rect_grid_vec = corerange_to_cores(all_cores_in_rect_grid);
 
     // Build a set of worker cores for fast lookup
@@ -516,7 +528,7 @@ create_program_batch_sharded(
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<uint32_t> bank_ids;  // Track bank_ids for vc calculation
 
-    // Set args for all cores in the bounding box
+    // First, set idle args for non-worker cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
         bool is_worker = worker_cores_set.find(core) != worker_cores_set.end();
 
@@ -530,66 +542,67 @@ create_program_batch_sharded(
 
             std::vector<uint32_t> compute_idle_args = {0u};  // is_worker_core = 0
             tt_metal::SetRuntimeArgs(program, mm_kernel_compute_id, core, compute_idle_args);
-        } else {
-            // Worker core - find its index and set full args
-            uint32_t worker_idx = std::distance(
-                all_worker_cores_ordered.begin(),
-                std::find(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end(), core));
-
-            uint32_t bank_id = worker_idx;  // Worker i reads from DRAM bank i (optimal assignment)
-
-            // Calculate VC (virtual channel) to avoid conflicts
-            uint32_t vc = bank_id & 0x3;
-            bank_ids.push_back(bank_id);
-            for (uint32_t j = 0; j < worker_idx; ++j) {
-                auto core_prev = all_worker_cores_ordered[j];
-                if (core_prev.y == core.y && ((bank_id & 0x3) == (bank_ids[j] & 0x3))) {
-                    vc = (vc + 1) & 0x3;
-                    break;
-                }
-            }
-
-            log_debug(
-                tt::LogOp,
-                "Worker {} at core ({}, {}): in0 from storage ({}, {}), DRAM bank {}, out to storage ({}, {})",
-                worker_idx,
-                core.x,
-                core.y,
-                input_storage_cores_ordered[worker_idx].x,
-                input_storage_cores_ordered[worker_idx].y,
-                bank_id,
-                output_storage_cores_ordered[worker_idx].x,
-                output_storage_cores_ordered[worker_idx].y);
-
-            // in0 reader runtime args
-            std::vector<uint32_t> in0_reader_runtime_args = {
-                1u,                               // worker_core_type (1 = active worker)
-                input_storage_noc_x[worker_idx],  // input storage core NOC x
-                input_storage_noc_y[worker_idx],  // input storage core NOC y
-                in0_buffer->address(),            // L1 address of in0 shard on storage core
-            };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_reader_runtime_args);
-
-            // in1 writer runtime args
-            std::vector<uint32_t> in1_writer_runtime_args = {
-                1u,  // is_worker_core
-                in1_buffer->address(),
-                bias_buffer != nullptr ? bias_buffer->address() : 0u,
-                bank_id,
-                vc,
-                output_storage_noc_x[worker_idx],  // output storage core NOC x
-                output_storage_noc_y[worker_idx],  // output storage core NOC y
-                out_buffer->address(),             // L1 address of output shard on storage core
-            };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_writer_id, core, in1_writer_runtime_args);
-            writer_kernel_ids.push_back(mm_kernel_in1_writer_id);
-
-            // Compute runtime args
-            std::vector<uint32_t> compute_runtime_args = {
-                1u,  // is_worker_core
-            };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_compute_id, core, compute_runtime_args);
         }
+    }
+
+    // Then, iterate over workers in all_worker_cores_ordered order (like mcast factory)
+    // This ensures bank_ids[i] corresponds to all_worker_cores_ordered[i]
+    for (uint32_t worker_idx = 0; worker_idx < all_worker_cores_ordered.size(); ++worker_idx) {
+        auto core = all_worker_cores_ordered[worker_idx];
+
+        uint32_t bank_id = worker_idx;  // Worker i reads from DRAM bank i (optimal assignment)
+
+        // Calculate VC (virtual channel) to avoid conflicts
+        uint32_t vc = bank_id & 0x3;
+        bank_ids.push_back(bank_id);
+        for (uint32_t j = 0; j < worker_idx; ++j) {
+            auto core_prev = all_worker_cores_ordered[j];
+            if (core_prev.y == core.y && ((bank_id & 0x3) == (bank_ids[j] & 0x3))) {
+                vc = (vc + 1) & 0x3;
+                break;
+            }
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Worker {} at core ({}, {}): in0 from storage ({}, {}), DRAM bank {}, out to storage ({}, {})",
+            worker_idx,
+            core.x,
+            core.y,
+            input_storage_cores_ordered[worker_idx].x,
+            input_storage_cores_ordered[worker_idx].y,
+            bank_id,
+            output_storage_cores_ordered[worker_idx].x,
+            output_storage_cores_ordered[worker_idx].y);
+
+        // in0 reader runtime args
+        std::vector<uint32_t> in0_reader_runtime_args = {
+            1u,                               // worker_core_type (1 = active worker)
+            input_storage_noc_x[worker_idx],  // input storage core NOC x
+            input_storage_noc_y[worker_idx],  // input storage core NOC y
+            in0_buffer->address(),            // L1 address of in0 shard on storage core
+        };
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_reader_runtime_args);
+
+        // in1 writer runtime args
+        std::vector<uint32_t> in1_writer_runtime_args = {
+            1u,  // is_worker_core
+            in1_buffer->address(),
+            bias_buffer != nullptr ? bias_buffer->address() : 0u,
+            bank_id,
+            vc,
+            output_storage_noc_x[worker_idx],  // output storage core NOC x
+            output_storage_noc_y[worker_idx],  // output storage core NOC y
+            out_buffer->address(),             // L1 address of output shard on storage core
+        };
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_writer_id, core, in1_writer_runtime_args);
+        writer_kernel_ids.push_back(mm_kernel_in1_writer_id);
+
+        // Compute runtime args
+        std::vector<uint32_t> compute_runtime_args = {
+            1u,  // is_worker_core
+        };
+        tt_metal::SetRuntimeArgs(program, mm_kernel_compute_id, core, compute_runtime_args);
     }
 
     return {

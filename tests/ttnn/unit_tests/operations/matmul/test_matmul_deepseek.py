@@ -525,35 +525,22 @@ def test_matmul_batched_hs_dram_sharded_config(device):
     num_dram_banks = 12  # Wormhole has 12 DRAM banks
     num_cores_x, num_cores_y = 6, 2  # 6x2 = 12 L1 cores
     num_cores = num_cores_x * num_cores_y
-    batch = 12  # Total batches = num_dram_banks
-    m, n, k = 32, 64, 32  # Each matmul: [M, N] x [N, K] = [M, K]
+    batch = 48  # Batches needs to be a multiple of DRAM banks for now
+    m, n, k = 64, 96, 32  # Each matmul: [M, N] x [N, K] = [M, K]
     tile_h, tile_w = 32, 32
-    batches_per_core = batch // num_cores  # 1 batch per core
+    batches_per_core = batch // num_cores  # batches per core (24/12 = 2)
 
     # Shapes: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
     in0_shape = [1, batch, m, n]
     in1_shape = [1, batch, n, k]
     out_shape = [1, batch, m, k]
 
-    # Create simple identifiable patterns:
-    # - in0[b] = identity matrix (so output = in1)
-    # - in1[b] = all values are (b+1), so batch 0 is all 1s, batch 1 is all 2s, ..., batch 11 is all 12s
-    # Expected output: out[b] = identity @ (b+1) = all (b+1)
-    in0 = torch.zeros(in0_shape, dtype=torch.bfloat16)
-    in1 = torch.zeros(in1_shape, dtype=torch.bfloat16)
-    for b in range(batch):
-        # Create identity matrix for in0[b]
-        # Since M=32, N=64, we create a 32x32 identity in the first 32 columns
-        for i in range(m):
-            in0[0, b, i, i] = 1.0
-        # Fill in1[b] with batch number (1-indexed: 1, 2, 3, ..., 12)
-        in1[0, b, :, :] = float(b + 1)
+    # Create random input data
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
 
-    print(f"\n=== Debug: Simplified identifiable patterns ===")
-    print(f"in0[b] = identity matrix")
-    print(f"in1[b] = all (b+1), so batch 0 is all 1s, batch 11 is all 12s")
-    print(f"Expected output: out[b] = identity @ (b+1) = all (b+1)")
-    print(f"So batch 0 output should be all 1s, batch 6 should be all 7s, batch 11 should be all 12s")
+    print(f"\n=== Batch-sharded DRAM matmul test ===")
+    print(f"in0_shape: {in0_shape}, in1_shape: {in1_shape}, out_shape: {out_shape}")
 
     # L1 shard grid: 6x2 = 12 compute cores (fits on Wormhole)
     l1_shard_grid = ttnn.CoreRangeSet(
@@ -630,7 +617,6 @@ def test_matmul_batched_hs_dram_sharded_config(device):
         in1_t,
         program_config=program_config,
         memory_config=out_memory_config,
-        # memory_config=ttnn.DRAM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
 
@@ -638,55 +624,6 @@ def test_matmul_batched_hs_dram_sharded_config(device):
     output_tensor = ttnn.to_torch(output_t)
     # PyTorch batched matmul
     pt_out = torch.matmul(in0, in1)
-
-    # Debug: print values from each batch
-    # Expected: identity @ (b+1) = all (b+1)
-    print("\n=== Debug: Output values per batch ===")
-    print(f"Expected: batch b should output all (b+1) values")
-    print(f"Grid: {num_cores_x}x{num_cores_y}")
-
-    for b in range(batch):
-        expected_val = b + 1  # Simple: just the batch number (1-indexed)
-        pt_val = pt_out[0, b, 0, 0].item()
-        tt_val = output_tensor[0, b, 0, 0].item()
-        row = b // num_cores_x
-        col = b % num_cores_x
-
-        # Check if TT output matches expected value
-        match = "✓" if abs(tt_val - expected_val) < 0.5 else "✗"
-
-        # If mismatch, try to identify which batch this actually is
-        computed_batch = "?"
-        if abs(tt_val - expected_val) >= 0.5:
-            for test_b in range(batch):
-                if abs(tt_val - (test_b + 1)) < 0.5:
-                    computed_batch = f"batch {test_b}"
-                    break
-        else:
-            computed_batch = "correct"
-
-        print(
-            f"Batch {b:2d} (row={row},col={col}): expected={expected_val:4.0f}, PT={pt_val:6.1f}, TT={tt_val:6.1f} {match} ({computed_batch})"
-        )
-
-    # Detailed analysis for batches 6-11 (row 1 of 6x2 grid)
-    print("\n=== Detailed comparison of batches 6-11 (second row of grid) ===")
-    for b in range(batch):
-        print(f"\n--- Batch {b} ---")
-        print(f"Expected: all {b+1}s")
-        print(f"PT output (first 8 elements): {pt_out[0, b, 0, :8].tolist()}")
-        print(f"TT output (first 8 elements): {output_tensor[0, b, 0, :8].tolist()}")
-
-    # Check if the INPUT tensors were sharded correctly
-    # Read back in0 and check where each batch's data ended up
-    print("\n=== Checking in0 shard distribution ===")
-    in0_readback = ttnn.to_torch(in0_t)
-    print("in0 first element of each batch (should be b+1):")
-    for b in range(batch):
-        val = in0_readback[0, b, 0, 0].item()
-        expected = b + 1
-        match = "✓" if abs(val - expected) < 0.5 else f"✗ (got {val})"
-        print(f"  Batch {b}: expected={expected}, got={val:.1f} {match}")
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     expected_pcc = 0.97

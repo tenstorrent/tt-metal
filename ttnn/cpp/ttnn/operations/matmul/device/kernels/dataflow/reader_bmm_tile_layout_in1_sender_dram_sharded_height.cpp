@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,28 +12,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "api/debug/dprint.h"
-
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -86,9 +64,6 @@ void kernel_main() {
     // Output reshard setup - build NOC address for remote output storage core
     uint64_t remote_out_base_noc_addr = get_noc_addr(output_storage_noc_x, output_storage_noc_y, output_shard_l1_addr);
 
-    DPRINT << "in1 writer: NOC writing to storage core (" << output_storage_noc_x << ", " << output_storage_noc_y << ")"
-           << ENDL();
-
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
         uint32_t in1_batch_offset = batch * in1_tensor_stride_batch_bytes;
@@ -139,9 +114,6 @@ void kernel_main() {
         noc_async_write(local_out_read_addr, remote_out_noc_addr, out_block_size_bytes);
         noc_async_write_barrier();
 #endif
-
-        // DPRINT << "Batch " << batch << " output written to remote storage" << ENDL();
-        // print_full_tile(cb_id_out, 0);
 
         cb_pop_front(cb_id_out, out_block_num_tiles);
     }

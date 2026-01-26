@@ -1111,35 +1111,26 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::
                                              MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                    const auto M =
-                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
-                    const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
-                    const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                    // For batch sharding: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+                    // Each core handles B/num_cores complete matmuls
+                    // Output shard grid should match input A's shard grid (L1 sharded by batch)
+                    const auto& input_shard_spec = input_tensor_a.shard_spec().value();
+                    CoreRangeSet all_cores = input_shard_spec.grid;
 
-                    uint32_t per_core_M = program_config.per_core_M;
+                    // Output shard shape should match input's batch sharding:
+                    // Input A shard: [batches_per_core * M, N]
+                    // Output shard: [batches_per_core * M, K]
+                    uint32_t input_shard_height = input_shard_spec.shape[0];  // batches_per_core * M
                     uint32_t per_core_N = program_config.per_core_N;
-                    uint32_t per_core_K = input_tensor_a.shard_spec().value().shape[1] / in0_tile.get_width();
-
-                    TT_FATAL(
-                        K % per_core_K == 0,
-                        "in batched DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
-                        "per_core_K: {}.",
-                        K,
-                        per_core_K);
 
                     TT_FATAL(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
-                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                    uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
-                    CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores,
-                        {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
-                        ShardOrientation::ROW_MAJOR};
+                        {input_shard_height, per_core_N * in1_tile.get_width()},
+                        input_shard_spec.orientation};
                     auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
                     return {TensorSpec(
                         output_shape,
