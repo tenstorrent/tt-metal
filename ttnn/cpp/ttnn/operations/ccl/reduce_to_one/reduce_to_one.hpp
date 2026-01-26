@@ -18,7 +18,8 @@ struct ExecuteReduceToOne {
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& root_coord,
         tt::tt_fabric::Topology topology,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
 };
 
 }  // namespace operations::ccl
