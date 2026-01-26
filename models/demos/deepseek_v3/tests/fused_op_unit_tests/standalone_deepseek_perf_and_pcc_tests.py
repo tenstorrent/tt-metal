@@ -152,8 +152,8 @@ def test_fast_reduce_wq_kv_a_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("wq_kv_a_ag_decode", 10, 106),  # Target based on typical all-gather performance
-        ("wo_ag_decode", 10, 118),  # Target based on typical all-gather performance
+        ("wq_kv_a_ag_decode", 10, 48.2),  # Target based on typical all-gather performance
+        ("wo_ag_decode", 10, 50.6),  # Target based on typical all-gather performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -1069,7 +1069,7 @@ def test_wq_kv_a_sequence_deepseek_perf(
         (
             "norm_and_rope_sequence",
             10,
-            120,
+            119,
         ),  # Sum: q_norm(7.34) + kv_norm(6.68) + to_mem(0.75) + permute(7.6) + reshard(1.04) + rope(4.5) + reshard(1.19) + permute(1.5) + concat(1.36) + pad(45) + permute(31) + reshard(2.8)
     ],
 )

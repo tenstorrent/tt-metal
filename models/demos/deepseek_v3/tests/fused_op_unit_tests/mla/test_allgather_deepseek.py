@@ -121,7 +121,7 @@ def run_allgather_deepseek_with_trace(
     ],
     ids=["wq_kv_a_ag_decode", "wo_ag_decode"],
 )
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("warmup_iters, num_iters", [(10, 100)])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -130,9 +130,9 @@ def run_allgather_deepseek_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 550912,
+            "trace_region_size": 876544,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -225,7 +225,7 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
         ),
     )
 
-    all_gather_topology = ttnn.Topology.Linear
+    all_gather_topology = ttnn.Topology.Ring
     profiler = BenchmarkProfiler()
 
     try:
