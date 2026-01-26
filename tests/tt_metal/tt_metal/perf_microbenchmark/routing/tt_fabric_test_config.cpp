@@ -950,117 +950,58 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
 
     if (parsed_test.defaults.has_value()) {
-        auto resolved_defaults = resolve_traffic_pattern(parsed_test.defaults.value());
-        TT_FATAL(
-            resolved_defaults.size() == 1,
-            "Test '{}': defaults cannot use core sweep (got {} patterns, expected 1)",
-            parsed_test.name,
-            resolved_defaults.size());
-        resolved_test.defaults = std::move(resolved_defaults.front());
+        resolved_test.defaults = resolve_traffic_pattern(parsed_test.defaults.value());
     }
 
     // Resolve senders
     resolved_test.senders.reserve(parsed_test.senders.size());
     for (const auto& parsed_sender : parsed_test.senders) {
-        std::vector<SenderConfig> resolved_senders = resolve_sender_config(parsed_sender);
-        resolved_test.senders.insert(resolved_test.senders.end(), resolved_senders.begin(), resolved_senders.end());
+        resolved_test.senders.push_back(resolve_sender_config(parsed_sender));
     }
 
     return resolved_test;
 }
 
-std::vector<SenderConfig> TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& parsed_sender) {
-    std::vector<SenderConfig> resolved_senders;
+SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& parsed_sender) {
+    // Note: core: "all" expansion is handled earlier in expand_high_level_patterns.
+    // By this point, core should be either a specific CoreCoord or omitted (for allocator assignment).
+    SenderConfig resolved_sender;
+    resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
+    resolved_sender.noc_id = parsed_sender.noc_id;
+    resolved_sender.link_id = parsed_sender.link_id.value_or(0);
 
-    // Check if sweeping all sender cores
-    if (parsed_sender.core.has_value() && std::holds_alternative<std::string>(parsed_sender.core.value()) &&
-        std::get<std::string>(parsed_sender.core.value()) == "all") {
-        tt::tt_metal::CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
-        for (uint32_t x = 0; x < worker_grid.x; ++x) {
-            for (uint32_t y = 0; y < worker_grid.y; ++y) {
-                SenderConfig resolved_sender;
-                resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
-                resolved_sender.noc_id = parsed_sender.noc_id;
-                resolved_sender.link_id = parsed_sender.link_id.value_or(0);
-                resolved_sender.core = CoreCoord{x, y};
-                resolved_sender.patterns.reserve(parsed_sender.patterns.size());
-                for (const auto& parsed_pattern : parsed_sender.patterns) {
-                    auto traffic_patterns = resolve_traffic_pattern(parsed_pattern);
-                    resolved_sender.patterns.insert(
-                        resolved_sender.patterns.end(), traffic_patterns.begin(), traffic_patterns.end());
-                }
-                resolved_senders.push_back(std::move(resolved_sender));
-            }
-        }
-    } else {
-        SenderConfig resolved_sender;
-        resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
-        resolved_sender.noc_id = parsed_sender.noc_id;
-        resolved_sender.link_id = parsed_sender.link_id.value_or(0);
-        // Extract CoreCoord if present
-        if (parsed_sender.core.has_value() && std::holds_alternative<CoreCoord>(parsed_sender.core.value())) {
-            resolved_sender.core = std::get<CoreCoord>(parsed_sender.core.value());
-        }
-        resolved_sender.patterns.reserve(parsed_sender.patterns.size());
-        for (const auto& parsed_pattern : parsed_sender.patterns) {
-            auto traffic_patterns = resolve_traffic_pattern(parsed_pattern);
-            resolved_sender.patterns.insert(
-                resolved_sender.patterns.end(), traffic_patterns.begin(), traffic_patterns.end());
-        }
-        resolved_senders.push_back(std::move(resolved_sender));
+    // Extract CoreCoord if present
+    if (parsed_sender.core.has_value() && std::holds_alternative<CoreCoord>(parsed_sender.core.value())) {
+        resolved_sender.core = std::get<CoreCoord>(parsed_sender.core.value());
     }
 
-    return resolved_senders;
+    resolved_sender.patterns.reserve(parsed_sender.patterns.size());
+    for (const auto& parsed_pattern : parsed_sender.patterns) {
+        TrafficPatternConfig traffic_pattern = resolve_traffic_pattern(parsed_pattern);
+        resolved_sender.patterns.push_back(std::move(traffic_pattern));
+    }
+
+    return resolved_sender;
 }
 
-std::vector<TrafficPatternConfig> TestConfigBuilder::resolve_traffic_pattern(
-    const ParsedTrafficPatternConfig& parsed_pattern) {
-    std::vector<TrafficPatternConfig> resolved_patterns;
+TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern) {
+    // Note: destination.core: "all" expansion is handled earlier in expand_high_level_patterns.
+    // By this point, core should be either a specific CoreCoord or omitted (for allocator assignment).
+    TrafficPatternConfig resolved_pattern;
+    resolved_pattern.ftype = parsed_pattern.ftype;
+    resolved_pattern.ntype = parsed_pattern.ntype;
+    resolved_pattern.size = parsed_pattern.size;
+    resolved_pattern.num_packets = parsed_pattern.num_packets;
+    resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
+    resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
+    resolved_pattern.sender_credit_info = std::nullopt;
+    resolved_pattern.credit_return_batch_size = std::nullopt;
 
-    // Check if we need to sweep all destination cores
-    if (parsed_pattern.destination.has_value() && parsed_pattern.destination->core.has_value() &&
-        std::holds_alternative<std::string>(parsed_pattern.destination->core.value()) &&
-        std::get<std::string>(parsed_pattern.destination->core.value()) == "all") {
-        tt::tt_metal::CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
-        for (uint32_t x = 0; x < worker_grid.x; ++x) {
-            for (uint32_t y = 0; y < worker_grid.y; ++y) {
-                TrafficPatternConfig resolved_pattern;
-                resolved_pattern.ftype = parsed_pattern.ftype;
-                resolved_pattern.ntype = parsed_pattern.ntype;
-                resolved_pattern.size = parsed_pattern.size;
-                resolved_pattern.num_packets = parsed_pattern.num_packets;
-                resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-                resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
-                resolved_pattern.sender_credit_info = std::nullopt;
-                resolved_pattern.credit_return_batch_size = std::nullopt;
-
-                // Copy destination and set specific core
-                ParsedDestinationConfig dest_copy = parsed_pattern.destination.value();
-                dest_copy.core = CoreCoord{x, y};
-                resolved_pattern.destination = resolve_destination_config(dest_copy);
-
-                resolved_patterns.push_back(std::move(resolved_pattern));
-            }
-        }
-    } else {
-        TrafficPatternConfig resolved_pattern;
-        resolved_pattern.ftype = parsed_pattern.ftype;
-        resolved_pattern.ntype = parsed_pattern.ntype;
-        resolved_pattern.size = parsed_pattern.size;
-        resolved_pattern.num_packets = parsed_pattern.num_packets;
-        resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-        resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
-        resolved_pattern.sender_credit_info = std::nullopt;
-        resolved_pattern.credit_return_batch_size = std::nullopt;
-
-        if (parsed_pattern.destination.has_value()) {
-            resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
-        }
-
-        resolved_patterns.push_back(std::move(resolved_pattern));
+    if (parsed_pattern.destination.has_value()) {
+        resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
     }
 
-    return resolved_patterns;
+    return resolved_pattern;
 }
 
 DestinationConfig TestConfigBuilder::resolve_destination_config(const ParsedDestinationConfig& parsed_dest) {

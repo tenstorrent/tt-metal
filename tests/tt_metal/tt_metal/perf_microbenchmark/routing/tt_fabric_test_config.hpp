@@ -418,8 +418,8 @@ private:
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number);
-    std::vector<SenderConfig> resolve_sender_config(const ParsedSenderConfig& parsed_sender);
-    std::vector<TrafficPatternConfig> resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern);
+    SenderConfig resolve_sender_config(const ParsedSenderConfig& parsed_sender);
+    TrafficPatternConfig resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern);
     DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest);
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
