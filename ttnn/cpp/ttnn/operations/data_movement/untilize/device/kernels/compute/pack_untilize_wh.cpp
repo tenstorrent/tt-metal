@@ -15,10 +15,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    // Unified untilize automatically:
-    // - Detects DEST limit from DST_SYNC_MODE and DST_ACCUM_MODE
-    // - Detects data format (integer vs non-integer) from unpack_dst_format
-    // - Uses block-based pack_untilize for wide integer types (hardware-accelerated)
-    // - Falls back to standard untilize for wide non-integer types
-    compute_kernel_lib::untilize<block_size_row, tt::CBIndex::c_0, tt::CBIndex::c_16>(block_size_col * third_dim);
+    compute_kernel_lib::untilize<
+        UntilizeConfig<WidthInTiles<block_size_row>, InputCB<tt::CBIndex::c_0>, OutputCB<tt::CBIndex::c_16>>>(
+        block_size_col * third_dim);
 }

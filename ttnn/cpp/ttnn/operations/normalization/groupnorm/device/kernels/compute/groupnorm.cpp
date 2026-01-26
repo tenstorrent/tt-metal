@@ -212,15 +212,12 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
-    compute_kernel_lib::tilize(cb_in_rm, per_core_N, cb_in, per_core_M);
+    constexpr TilizeFlags tilize_flags = TilizeFlags::NONE;
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
-    compute_kernel_lib::tilize<true, true, false, false, true>(  // skip_wait=true
-        cb_in_rm,
-        per_core_N,
-        cb_in,
-        per_core_M);
+    constexpr TilizeFlags tilize_flags = TilizeFlags::SKIP_WAIT;
 #endif
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>, tilize_flags>>(per_core_N, per_core_M);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_input_mask, cb_x);
@@ -726,8 +723,11 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
                 // untilize - DEST capacity auto-detected
-                compute_kernel_lib::untilize<per_core_N, cb_untilize_in, cb_untilize_out, true, true, true>(
-                    per_core_M, 1, per_core_MN);
+                compute_kernel_lib::untilize<UntilizeConfig<
+                    WidthInTiles<per_core_N>,
+                    InputCB<cb_untilize_in>,
+                    OutputCB<cb_untilize_out>,
+                    UntilizeFlags::WAIT_UPFRONT>>(per_core_M, 1, per_core_MN);
 #endif
             }
             // End Final Val Calc

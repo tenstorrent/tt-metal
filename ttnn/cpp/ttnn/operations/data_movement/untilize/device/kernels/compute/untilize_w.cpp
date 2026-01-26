@@ -12,6 +12,9 @@ void kernel_main() {
     uint32_t third_dim = get_compile_time_arg_val(2);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    compute_kernel_lib::untilize(
-        tt::CBIndex::c_0, 1, tt::CBIndex::c_16, per_core_block_cnt * per_core_block_tile_cnt * third_dim);
+
+    // tile_width=1 (single tile per row)
+    compute_kernel_lib::untilize<
+        UntilizeConfig<WidthInTiles<1>, InputCB<tt::CBIndex::c_0>, OutputCB<tt::CBIndex::c_16>>>(
+        per_core_block_cnt * per_core_block_tile_cnt * third_dim);
 }
