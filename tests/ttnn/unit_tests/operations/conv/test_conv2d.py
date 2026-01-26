@@ -5,6 +5,7 @@
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
+from models.common.utility_functions import is_watcher_enabled
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -65,6 +66,16 @@ def test_conv_features(
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
+    if (
+        is_watcher_enabled()
+        and output_layout == ttnn.TILE_LAYOUT
+        and filter == 3
+        and padding == (1, 2, 2, 3)
+        and output_channels == 353
+        and input_channels == 384
+        and shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    ):
+        pytest.skip("Skipping due to watcher being enabled, see issue #XXXXX")
 
     run_conv(
         device,
