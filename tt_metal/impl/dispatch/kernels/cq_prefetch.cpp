@@ -1643,6 +1643,7 @@ uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_
 }
 
 // Separate implementation that fetches more data from exec buf when cmd has been split
+// This command uses CQPrefetchCmdLarge (32 bytes) so we need custom handling
 static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t& cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
@@ -1651,10 +1652,39 @@ static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
 
-    void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
+    // Custom copy logic because CQPrefetchCmdLarge is 32 bytes, not 16 bytes like CQPrefetchCmd
+    // This is similar to copy_into_l1_cache but with correct offset for large command
+    uint32_t remaining_stride = exec_buf_state.length;
+    uint32_t remaining = (exec_buf_state.length - sizeof(CQPrefetchCmdLarge));
+    volatile uint32_t tt_l1_ptr* l1_ptr = (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchCmdLarge));
+    uint32_t* l1_cache_pos = l1_cache;
+    while (sub_cmds_length > remaining) {
+        uint32_t amt = remaining / sizeof(uint32_t);
+        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+            l1_ptr, amt, l1_cache_pos);
+
+        l1_cache_pos += amt;
+        sub_cmds_length -= remaining;
+        stride -= remaining_stride;
+        exec_buf_state.length = 0;
+        cmd_ptr += remaining_stride;
+        paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
+        l1_ptr = (volatile uint32_t tt_l1_ptr*)(cmd_ptr);
+        remaining = exec_buf_state.length;
+        remaining_stride = exec_buf_state.length;
+    }
+    uint32_t amt = sub_cmds_length / sizeof(uint32_t);
+    // Check that the final write does not overflow the L1 cache and corrupt the stack.
+    ASSERT(
+        (uint32_t)(l1_cache_pos +
+                   ((amt + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
+                       l1_to_local_cache_copy_chunk -
+                   l1_cache) < l1_cache_elements_rounded);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        l1_ptr, amt, l1_cache_pos);
 
     // Store a sentinal non 0 value at the end to save a test/branch in read path
-    ((CQPrefetchRelayLinearPackedSubCmd*)end)->length = 1;
+    ((CQPrefetchRelayLinearPackedSubCmd*)&l1_cache_pos[amt])->length = 1;
 
     process_relay_linear_packed_sub_cmds(noc_xy_addr, total_length, l1_cache);
     return stride;
