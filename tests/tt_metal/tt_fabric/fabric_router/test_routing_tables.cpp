@@ -310,19 +310,22 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto control_plane = make_control_plane(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
 
-    // Generate unique golden file name based on mesh graph descriptor path
+    // Generate unique golden file name based on mesh graph descriptor path only
+    // Use the full path to ensure uniqueness even for duplicate descriptor filenames
     std::string golden_name = get_golden_name_from_mesh_graph_path(mesh_graph_desc_path);
-    // Add test index to make it unique for duplicate descriptors
+    // Add test index to make it unique for duplicate descriptors (extracted from parameterized test)
     auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     if (test_info) {
+        // Extract parameter index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
+        // This is only used for uniqueness when the same descriptor appears multiple times
         std::string test_name = test_info->name();
-        // Extract index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
         size_t slash_pos = test_name.find('/');
         if (slash_pos != std::string::npos) {
             std::string index_str = test_name.substr(slash_pos + 1);
             golden_name += "_" + index_str;
         }
     }
+    // Use a generic test name for logging, but golden_name is always based on mesh graph descriptor path
     check_asic_mapping_against_golden("TestT3kControlPlaneInit", golden_name);
 }
 
