@@ -613,27 +613,34 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                                                    sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        for (int retry = 0; retry < kMaxRetries; ++retry) {
-            if (wait_for_fetch_q_space()) {
-                break;  // Success
-            }
 
-            if (retry < kMaxRetries - 1) {
-                log_warning(
-                    tt::LogMetal,
-                    "Fetch queue wait (after wrap) timed out on device {} cq {}, attempt {}/{}, retrying...",
-                    this->device_id,
-                    cq_id,
-                    retry + 1,
-                    kMaxRetries);
-                std::this_thread::sleep_for(kRetryDelayMs);
-            } else {
-                MetalContext::instance().on_dispatch_timeout_detected();
-                TT_THROW(
-                    "TIMEOUT: device timeout in fetch queue wait after {} retries, potential hang detected",
-                    kMaxRetries);
+        auto retry_wait_for_fetch_q_space = [this, cq_id](const char* context_description) {
+            for (int retry = 0; retry < kMaxRetries; ++retry) {
+                if (wait_for_fetch_q_space()) {
+                    return;  // Success
+                }
+
+                if (retry < kMaxRetries - 1) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Fetch queue wait ({}) timed out on device {} cq {}, attempt {}/{}, retrying...",
+                        context_description,
+                        this->device_id,
+                        cq_id,
+                        retry + 1,
+                        kMaxRetries);
+                    std::this_thread::sleep_for(kRetryDelayMs);
+                } else {
+                    MetalContext::instance().on_dispatch_timeout_detected();
+                    TT_THROW(
+                        "TIMEOUT: device timeout in fetch queue wait ({}) after {} retries, potential hang detected",
+                        context_description,
+                        kMaxRetries);
+                }
             }
-        }
+        };
+
+        retry_wait_for_fetch_q_space("after wrap");
     }
 }
 
