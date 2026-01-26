@@ -79,7 +79,7 @@ void kernel_main() {
          * sum(x**2)
          */
         compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::TileShape::single());
+            intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::InputBlockShape::single());
     }
     cb_pop_front(reduce_scalar_cb, onetile);
 }
