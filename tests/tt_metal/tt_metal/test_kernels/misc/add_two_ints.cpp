@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,6 @@ void kernel_main() {
 
     volatile tt_l1_ptr std::uint32_t* result = (tt_l1_ptr uint32_t*)(l1_address);
 
-    // Sample print statement
-    //  DPRINT << 123;
     result[0] = arg_a[0] + arg_b[0];
+    DPRINT << "Adding two ints: " << arg_a[0] << " + " << arg_b[0] << " = " << result[0] << ENDL();
 }

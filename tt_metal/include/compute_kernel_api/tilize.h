@@ -83,7 +83,7 @@ ALWI void tilizeA_B_reduce_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
 }

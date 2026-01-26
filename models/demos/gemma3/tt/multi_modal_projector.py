@@ -124,7 +124,6 @@ class TtGemma3MultiModalProjector(LightweightModule):
         # # Flatten(2)
         pooled_vision_outputs = ttnn.transpose(pooled_vision_outputs, 1, 2)
         normed_vision_outputs = self.mm_soft_emb_norm(pooled_vision_outputs, mode=mode)
-        self.mm_input_projection_weight = ttnn.to_layout(self.mm_input_projection_weight, ttnn.TILE_LAYOUT)
         projected_vision_outputs = ttnn.matmul(normed_vision_outputs, self.mm_input_projection_weight)
 
         ttnn.deallocate(pooled_vision_outputs)

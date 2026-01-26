@@ -18,7 +18,7 @@ autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim, s
     /* d(x_0 + x_1 + ... + x_n) / dx_i = 1 for i=0,1,...,n and 0 otherwise */
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis));
+            tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
         }
     };
     auto links = autograd::get_links(tensor);
