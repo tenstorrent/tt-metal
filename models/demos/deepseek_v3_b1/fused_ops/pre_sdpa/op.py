@@ -240,30 +240,38 @@ class PreSDPA:
         )
 
         # ========================================================================
-        # SDPA grid configuration (for receiving interleaved QNOPE/QROPE data)
-        # SDPA cores: column 12, rows 0-7 (8 cores total, 1 per row)
-        # Each SDPA core receives 8 interleaved heads from its row:
-        #   - 8 QNOPE unicasts: [1, 512] each from columns 0-7
-        #   - 8 QROPE unicasts: [1, 64] each from columns 8-11 (2 per QROPE core)
-        # Total per SDPA core: 8 × (512 + 64) = 8 × 576 = 4608 elements
+        # SDPA Input grid configuration (for receiving interleaved QNOPE/QROPE data)
+        # SDPA Input cores: 4×2 grid (4 columns × 2 rows) at logical (0,1)-(3,2)
+        # Each SDPA Input core receives 8 interleaved heads:
+        #   - 8 QNOPE unicasts: [1, 512] each from the source row
+        #   - 8 QROPE unicasts: [1, 64] each from the source row
+        # Total per SDPA Input core: 8 × (512 + 64) = 8 × 576 = 4608 elements
+        #
+        # Mapping: source_row → target_core
+        #   row 0 → (0, 1), row 1 → (1, 1), row 2 → (2, 1), row 3 → (3, 1)
+        #   row 4 → (0, 2), row 5 → (1, 2), row 6 → (2, 2), row 7 → (3, 2)
+        # Formula: target_x = row % 4, target_y = 1 + row // 4
         # ========================================================================
-        SDPA_GRID_COL = QNOPE_GRID_COLS + QROPE_GRID_COLS  # Column 12
-        sdpa_grid = ttnn.CoreRangeSet(
+        SDPA_INPUT_GRID_START_X = 0
+        SDPA_INPUT_GRID_START_Y = 1
+        SDPA_INPUT_GRID_END_X = 3  # 4 columns: 0, 1, 2, 3
+        SDPA_INPUT_GRID_END_Y = 2  # 2 rows: 1, 2
+        sdpa_input_grid = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(SDPA_GRID_COL, 0),
-                    ttnn.CoreCoord(SDPA_GRID_COL, HEAD_GRID_ROWS - 1),
+                    ttnn.CoreCoord(SDPA_INPUT_GRID_START_X, SDPA_INPUT_GRID_START_Y),
+                    ttnn.CoreCoord(SDPA_INPUT_GRID_END_X, SDPA_INPUT_GRID_END_Y),
                 )
             ]
         )
-        SDPA_NUM_CORES = HEAD_GRID_ROWS  # 8 cores
+        SDPA_INPUT_NUM_CORES = 8  # 4 × 2 = 8 cores
 
         # Unicast parameters for interleaved layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
         QNOPE_DATA_SIZE = 512  # Elements per QNOPE head
         QROPE_DATA_SIZE = 64  # Elements per QROPE head
-        HEADS_PER_SDPA_CORE = 8  # 8 interleaved heads per SDPA core
-        UNICAST_NUM_SENDERS_PER_SDPA = 16  # 8 QNOPE + 8 QROPE heads (4 QROPE cores × 2 heads)
+        HEADS_PER_SDPA_INPUT_CORE = 8  # 8 interleaved heads per SDPA Input core
+        UNICAST_NUM_SENDERS_PER_SDPA_INPUT = 16  # 8 QNOPE + 8 QROPE heads (4 QROPE cores × 2 heads)
 
         # ========================================================================
         # Mcast grid configuration (decoupled from matmul weights tensor)
@@ -300,8 +308,8 @@ class PreSDPA:
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
 
-        # Semaphore ID for unicast synchronization (QNOPE/QROPE -> SDPA)
-        unicast_receiver_semaphore_id = 4
+        # Semaphore ID for gather heads synchronization (QNOPE/QROPE -> SDPA)
+        gather_heads_receiver_semaphore_id = 4
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -336,9 +344,11 @@ class PreSDPA:
         matmul3_weights_cb = 17  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 18  # Output CB for third matmul (Qnope final output)
         qrope_output_cb = 19  # Output CB for Qrope (matmul2 output passed through)
-        # SDPA CBs
-        sdpa_receive_cb = 20  # Dynamic CB for receiving unicasts (allocated on sender+receiver grids)
-        sdpa_output_cb = 21  # Output CB for SDPA (linked to tensor, SDPA grid only)
+        # SDPA Input CBs (for gather heads)
+        # CB 20: Staging buffer (allocated on sender+receiver grids for address computation)
+        # CB 21: Output buffer (linked to tensor, receiver cores only)
+        sdpa_input_receive_cb = 20  # Staging CB for gather heads (for address computation)
+        sdpa_input_output_cb = 21  # Output CB for SDPA Input (linked to tensor)
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -489,56 +499,73 @@ class PreSDPA:
         ]
 
         # ========================================================================
-        # Unicast parameters (QNOPE/QROPE -> SDPA interleaved transfer)
-        # QNOPE cores unicast [1, 512] = 16 tiles of 1x32 to SDPA
-        # QROPE cores unicast [2, 64] = 2 heads × 2 tiles of 1x32 each to SDPA
-        # Interleaved layout in SDPA: 8 × (512 + 64) = 8 × 576 = 4608 elements per core
+        # Unicast parameters (QNOPE/QROPE -> SDPA Input interleaved transfer)
+        # QNOPE cores unicast [1, 512] = 16 tiles of 1x32 to SDPA Input
+        # QROPE cores unicast [2, 64] = 2 heads × 2 tiles of 1x32 each to SDPA Input
+        # Interleaved layout in SDPA Input: 8 × (512 + 64) = 8 × 576 = 4608 elements per core
+        #
+        # 4×2 grid mapping: source_row → target_core
+        #   row 0 → (0, 1), row 1 → (1, 1), row 2 → (2, 1), row 3 → (3, 1)
+        #   row 4 → (0, 2), row 5 → (1, 2), row 6 → (2, 2), row 7 → (3, 2)
         # ========================================================================
-        # Get NOC coordinates for all SDPA cores (one per row)
-        sdpa_noc_coords = []
-        for row in range(HEAD_GRID_ROWS):
-            sdpa_logical_core = ttnn.CoreCoord(SDPA_GRID_COL, row)
-            sdpa_noc_core = device.worker_core_from_logical_core(sdpa_logical_core)
-            sdpa_noc_coords.append((sdpa_noc_core.x, sdpa_noc_core.y))
+        # Get NOC coordinates for all SDPA Input cores (4×2 grid, indexed by source row)
+        sdpa_input_noc_coords = []
+        for src_row in range(HEAD_GRID_ROWS):
+            # Mapping: target_x = row % 4, target_y = 1 + row // 4
+            target_x = SDPA_INPUT_GRID_START_X + (src_row % 4)
+            target_y = SDPA_INPUT_GRID_START_Y + (src_row // 4)
+            sdpa_input_logical_core = ttnn.CoreCoord(target_x, target_y)
+            sdpa_input_noc_core = device.worker_core_from_logical_core(sdpa_input_logical_core)
+            sdpa_input_noc_coords.append((sdpa_input_noc_core.x, sdpa_input_noc_core.y))
 
         # Common unicast parameters
-        unicast_head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes
-        unicast_qnope_data_size_bytes = QNOPE_DATA_SIZE * 2  # 512 * 2 = 1024 bytes
-        unicast_qrope_data_size_bytes = QROPE_DATA_SIZE * 2  # 64 * 2 = 128 bytes
-        unicast_sdpa_output_pages = HEADS_PER_SDPA_CORE * COMBINED_HEAD_SIZE // 32  # 8 * 576 / 32 = 144 tiles of 1x32
+        head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes (2 bytes per bfloat16 element)
+        qnope_data_size_bytes = QNOPE_DATA_SIZE * 2  # 512 * 2 = 1024 bytes
+        qrope_data_size_bytes = QROPE_DATA_SIZE * 2  # 64 * 2 = 128 bytes
+        sdpa_input_output_pages = (
+            HEADS_PER_SDPA_INPUT_CORE * COMBINED_HEAD_SIZE // 32
+        )  # 8 * 576 / 32 = 144 tiles of 1x32
 
-        # BRISC sender compile-time args (QNOPE/QROPE -> SDPA)
-        # NOC coordinates for each row's SDPA core
-        unicast_brisc_named_compile_time_args = [
-            ("unicast_sdpa_noc_x", sdpa_noc_coords[0][0]),  # Same X for all rows (same column)
-            ("unicast_sdpa_noc_y_row0", sdpa_noc_coords[0][1]),
-            ("unicast_sdpa_noc_y_row1", sdpa_noc_coords[1][1]),
-            ("unicast_sdpa_noc_y_row2", sdpa_noc_coords[2][1]),
-            ("unicast_sdpa_noc_y_row3", sdpa_noc_coords[3][1]),
-            ("unicast_sdpa_noc_y_row4", sdpa_noc_coords[4][1]),
-            ("unicast_sdpa_noc_y_row5", sdpa_noc_coords[5][1]),
-            ("unicast_sdpa_noc_y_row6", sdpa_noc_coords[6][1]),
-            ("unicast_sdpa_noc_y_row7", sdpa_noc_coords[7][1]),
-            ("unicast_head_stride_bytes", unicast_head_stride_bytes),
-            ("unicast_qnope_data_size_bytes", unicast_qnope_data_size_bytes),
-            ("unicast_qrope_data_size_bytes", unicast_qrope_data_size_bytes),
-            ("unicast_receiver_semaphore_id", unicast_receiver_semaphore_id),
-            ("unicast_qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
-            ("unicast_qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
-            ("unicast_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
-            ("unicast_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
-            ("unicast_qnope_grid_cols", QNOPE_GRID_COLS),  # 8
-            ("unicast_qrope_grid_start_col", qrope_grid_start_x),  # 8
-            ("unicast_receive_cb", sdpa_receive_cb),  # Receive CB for unicast (dynamic, on sender+receiver grids)
+        # BRISC sender compile-time args (QNOPE/QROPE -> SDPA Input)
+        # NOC coordinates for each row's target SDPA Input core (need both X and Y per row)
+        gather_heads_brisc_named_compile_time_args = [
+            # X coordinates for each source row's target (4 unique values in 4×2 grid)
+            ("target_noc_x_row0", sdpa_input_noc_coords[0][0]),
+            ("target_noc_x_row1", sdpa_input_noc_coords[1][0]),
+            ("target_noc_x_row2", sdpa_input_noc_coords[2][0]),
+            ("target_noc_x_row3", sdpa_input_noc_coords[3][0]),
+            ("target_noc_x_row4", sdpa_input_noc_coords[4][0]),
+            ("target_noc_x_row5", sdpa_input_noc_coords[5][0]),
+            ("target_noc_x_row6", sdpa_input_noc_coords[6][0]),
+            ("target_noc_x_row7", sdpa_input_noc_coords[7][0]),
+            # Y coordinates for each source row's target
+            ("target_noc_y_row0", sdpa_input_noc_coords[0][1]),
+            ("target_noc_y_row1", sdpa_input_noc_coords[1][1]),
+            ("target_noc_y_row2", sdpa_input_noc_coords[2][1]),
+            ("target_noc_y_row3", sdpa_input_noc_coords[3][1]),
+            ("target_noc_y_row4", sdpa_input_noc_coords[4][1]),
+            ("target_noc_y_row5", sdpa_input_noc_coords[5][1]),
+            ("target_noc_y_row6", sdpa_input_noc_coords[6][1]),
+            ("target_noc_y_row7", sdpa_input_noc_coords[7][1]),
+            ("head_stride_bytes", head_stride_bytes),
+            ("qnope_data_size_bytes", qnope_data_size_bytes),
+            ("qrope_data_size_bytes", qrope_data_size_bytes),
+            ("receiver_semaphore_id", gather_heads_receiver_semaphore_id),
+            ("qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
+            ("qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
+            ("qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
+            ("qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
+            ("qnope_grid_cols", QNOPE_GRID_COLS),
+            ("receive_cb", sdpa_input_receive_cb),  # Staging CB (allocated on sender+receiver grids)
         ]
 
-        # NCRISC receiver compile-time args (SDPA cores)
-        unicast_ncrisc_named_compile_time_args = [
-            ("unicast_num_senders", UNICAST_NUM_SENDERS_PER_SDPA),  # 16 (8 QNOPE + 8 QROPE heads)
-            ("unicast_receiver_semaphore_id", unicast_receiver_semaphore_id),
-            ("unicast_receive_cb", sdpa_receive_cb),  # Receive CB (dynamic)
-            ("unicast_output_cb", sdpa_output_cb),  # Output CB (linked to tensor)
-            ("unicast_dst_num_pages", unicast_sdpa_output_pages),  # 144 tiles of 1x32
+        # NCRISC receiver compile-time args (SDPA Input cores)
+        gather_heads_ncrisc_named_compile_time_args = [
+            ("num_senders", UNICAST_NUM_SENDERS_PER_SDPA_INPUT),  # 16 (8 QNOPE + 8 QROPE heads)
+            ("receiver_semaphore_id", gather_heads_receiver_semaphore_id),
+            ("receive_cb", sdpa_input_receive_cb),  # Staging CB
+            ("out_cb", sdpa_input_output_cb),  # Output CB (linked to tensor)
+            ("dst_num_pages", sdpa_input_output_pages),  # 144 tiles of 1x32
         ]
 
         # RMSNorm compute compile-time args (named args for TRISC)
@@ -833,27 +860,34 @@ class PreSDPA:
         # CB 19: Qrope output buffer (matmul2 output for Qrope cores, sharded on Qrope grid)
         qrope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_output_cb, qrope_output_tensor)
 
-        # CB 20: SDPA receive buffer (for unicast destination)
-        # Must be allocated on union of sender (QNOPE/QROPE) and receiver (SDPA) grids
-        # so that senders can use get_write_ptr to get the destination address
-        sdpa_receive_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_grid)
-        sdpa_receive_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        sdpa_receive_page_size = TILE_1x32.get_tile_size(data_format)
-        sdpa_receive_total_size = unicast_sdpa_output_pages * sdpa_receive_page_size  # 144 * 64 bytes
-        sdpa_receive_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=sdpa_receive_cb,
+        # CB 20: SDPA Input receive buffer (staging buffer for gather heads)
+        # Must be allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
+        # so that senders can use get_write_ptr to compute destination address.
+        # Note: We need this staging buffer because:
+        # 1. Senders need get_write_ptr(cb) to compute destination address
+        # 2. cb_descriptor_from_sharded_tensor only allocates CB on tensor's shard cores
+        # 3. We can't have two CB descriptors with the same index on different core sets
+        # 4. So we use a staging buffer (CB 20) and copy to output buffer (CB 21)
+        sdpa_input_receive_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
+        sdpa_input_receive_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+        sdpa_input_receive_page_size = TILE_1x32.get_tile_size(data_format)
+        sdpa_input_receive_total_size = sdpa_input_output_pages * sdpa_input_receive_page_size
+        sdpa_input_receive_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=sdpa_input_receive_cb,
             data_format=data_format,
-            page_size=sdpa_receive_page_size,
-            tile=sdpa_receive_tile_descriptor,
+            page_size=sdpa_input_receive_page_size,
+            tile=sdpa_input_receive_tile_descriptor,
         )
-        sdpa_receive_cb_descriptor = ttnn.CBDescriptor(
-            total_size=sdpa_receive_total_size,
-            core_ranges=sdpa_receive_cb_core_ranges,
-            format_descriptors=[sdpa_receive_cb_format],
+        sdpa_input_receive_cb_descriptor = ttnn.CBDescriptor(
+            total_size=sdpa_input_receive_total_size,
+            core_ranges=sdpa_input_receive_cb_core_ranges,
+            format_descriptors=[sdpa_input_receive_cb_format],
         )
 
-        # CB 21: SDPA output buffer (linked to output tensor, SDPA grid only)
-        sdpa_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sdpa_output_cb, sdpa_output_tensor)
+        # CB 21: SDPA Input output buffer (linked to tensor)
+        sdpa_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            sdpa_input_output_cb, sdpa_output_tensor
+        )
 
         # ========================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
@@ -899,9 +933,9 @@ class PreSDPA:
             initial_value=0,
         )
 
-        # Unicast semaphore (ID 4 - for QNOPE/QROPE -> SDPA synchronization)
-        unicast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=unicast_receiver_semaphore_id,
+        # GatherHeads semaphore (ID 4 - for QNOPE/QROPE -> SDPA synchronization)
+        gather_heads_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=gather_heads_receiver_semaphore_id,
             core_ranges=full_device_grid,
             initial_value=0,
         )
@@ -922,7 +956,7 @@ class PreSDPA:
             + matmul2_ncrisc_named_compile_time_args
             + mcast2_ncrisc_named_compile_time_args
             + matmul3_ncrisc_named_compile_time_args
-            + unicast_ncrisc_named_compile_time_args,
+            + gather_heads_ncrisc_named_compile_time_args,
             # NCRISC common runtime args: scalar + scalar2
             ncrisc_common_runtime_args=[
                 scalar_packed,
@@ -935,7 +969,7 @@ class PreSDPA:
             + matmul2_brisc_named_compile_time_args
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
-            + unicast_brisc_named_compile_time_args,
+            + gather_heads_brisc_named_compile_time_args,
             # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2 + matmul2 + matmul3
             trisc_named_compile_time_args=rmsnorm_compute_named_compile_time_args
             + matmul_trisc_named_compile_time_args
@@ -987,10 +1021,10 @@ class PreSDPA:
                     value=1,
                     other_value=0,
                 ),
-                # SDPA cores: 8 cores (1x8 grid at col 12), receive interleaved QNOPE/QROPE data
+                # SDPA Input cores: 8 cores (4×2 grid), receive interleaved QNOPE/QROPE data
                 UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_sdpa_core",
-                    core_range=sdpa_grid,
+                    named_compile_time_arg="is_sdpa_input_core",
+                    core_range=sdpa_input_grid,
                     value=1,
                     other_value=0,
                 ),
@@ -1019,15 +1053,15 @@ class PreSDPA:
                 matmul3_weights_cb_descriptor,  # CB 17: Matmul3 weights
                 matmul3_output_cb_descriptor,  # CB 18: Matmul3 output (Qnope final)
                 qrope_output_cb_descriptor,  # CB 19: Qrope output
-                sdpa_receive_cb_descriptor,  # CB 20: SDPA receive (unicast destination)
-                sdpa_output_cb_descriptor,  # CB 21: SDPA output (linked to tensor)
+                sdpa_input_receive_cb_descriptor,  # CB 20: SDPA Input staging buffer
+                sdpa_input_output_cb_descriptor,  # CB 21: SDPA Input output (linked to tensor)
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,  # ID 0
                 mcast_receiver_semaphore_descriptor,  # ID 1
                 gather_noc0_receiver_semaphore_descriptor,  # ID 2
                 gather_noc1_receiver_semaphore_descriptor,  # ID 3
-                unicast_receiver_semaphore_descriptor,  # ID 4
+                gather_heads_receiver_semaphore_descriptor,  # ID 4
             ],
         )
 

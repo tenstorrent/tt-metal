@@ -26,6 +26,7 @@
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
+#include "../../../unified_kernels/gather_heads.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -38,8 +39,8 @@ struct Core {
     // Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
     static constexpr bool is_qnope_core = get_named_compile_time_arg_val("is_qnope_core") == 1;
     static constexpr bool is_qrope_core = get_named_compile_time_arg_val("is_qrope_core") == 1;
-    // SDPA core: receives interleaved QNOPE/QROPE unicasts (1 per row = 8 cores)
-    static constexpr bool is_sdpa_core = get_named_compile_time_arg_val("is_sdpa_core") == 1;
+    // SDPA Input core: receives interleaved QNOPE/QROPE gather heads (4×2 grid = 8 cores)
+    static constexpr bool is_sdpa_input_core = get_named_compile_time_arg_val("is_sdpa_input_core") == 1;
 };
 
 KERNEL_ENTRY {
@@ -195,7 +196,73 @@ KERNEL_ENTRY {
         get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
     };
 
-    // Matmul3 is implemented inline in TRISC
+    // NOTE: Temporary copy of matmul2 output to qrope_output_cb, change/remove this after fusing RoPE
+    if constexpr (Core::is_qrope_core) {
+        DeviceZoneScopedN("QROPE_COPY");
+        // Copy matmul2 output to qrope_output_cb
+        constexpr uint32_t matmul2_out_cb = get_named_compile_time_arg_val("matmul2_out");  // matmul2_output_cb
+        constexpr uint32_t qrope_out_cb = get_named_compile_time_arg_val("qrope_output_cb");
+        constexpr uint32_t matmul2_out_w = get_named_compile_time_arg_val("matmul2_out_w_per_core");
+
+        // Wait for matmul2 output to be ready
+        cb_wait_front(matmul2_out_cb, matmul2_out_w);
+
+        // Reserve space in qrope output
+        cb_reserve_back(qrope_out_cb, matmul2_out_w);
+
+        // Copy data locally within L1 (same core)
+        uint32_t src_addr = get_read_ptr(matmul2_out_cb);
+        uint32_t dst_addr = get_write_ptr(qrope_out_cb);
+        uint32_t tile_size = get_tile_size(matmul2_out_cb);
+        uint32_t copy_size = matmul2_out_w * tile_size;
+
+        // Use local NOC write (my_x, my_y) for same-core L1 copy
+        uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
+        noc_async_write(src_addr, noc_dst_addr, copy_size);
+        noc_async_write_barrier();
+
+        // Pop matmul2 output, push qrope output
+        cb_pop_front(matmul2_out_cb, matmul2_out_w);
+        cb_push_back(qrope_out_cb, matmul2_out_w);
+    }
+
+    // BRISC: Sender args for QNOPE/QROPE cores
+    // Senders write to staging CB (allocated on sender+receiver cores)
+    constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
+    deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
+        0,  // sender_grid_start_x (logical 0)
+        0,  // sender_grid_start_y (logical 0)
+        get_named_compile_time_arg_val("qnope_data_size_bytes"),
+        get_named_compile_time_arg_val("qrope_data_size_bytes"),
+        get_named_compile_time_arg_val("head_stride_bytes"),
+        get_named_compile_time_arg_val("qnope_grid_cols"),
+        get_named_compile_time_arg_val("qnope_src_cb"),
+        get_named_compile_time_arg_val("qrope_src_cb"),
+        Core::is_qnope_core ? get_named_compile_time_arg_val("qnope_src_num_pages")
+                            : get_named_compile_time_arg_val("qrope_src_num_pages"),
+        get_named_compile_time_arg_val("receiver_semaphore_id"),
+        {
+            get_named_compile_time_arg_val("target_noc_x_row0"),
+            get_named_compile_time_arg_val("target_noc_x_row1"),
+            get_named_compile_time_arg_val("target_noc_x_row2"),
+            get_named_compile_time_arg_val("target_noc_x_row3"),
+            get_named_compile_time_arg_val("target_noc_x_row4"),
+            get_named_compile_time_arg_val("target_noc_x_row5"),
+            get_named_compile_time_arg_val("target_noc_x_row6"),
+            get_named_compile_time_arg_val("target_noc_x_row7"),
+        },
+        {
+            get_named_compile_time_arg_val("target_noc_y_row0"),
+            get_named_compile_time_arg_val("target_noc_y_row1"),
+            get_named_compile_time_arg_val("target_noc_y_row2"),
+            get_named_compile_time_arg_val("target_noc_y_row3"),
+            get_named_compile_time_arg_val("target_noc_y_row4"),
+            get_named_compile_time_arg_val("target_noc_y_row5"),
+            get_named_compile_time_arg_val("target_noc_y_row6"),
+            get_named_compile_time_arg_val("target_noc_y_row7"),
+        },
+        get_write_ptr(receive_cb),  // Write to staging CB
+    };
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -277,6 +344,9 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("matmul3_out"),
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
     };
+
+    // Gather heads compute args (no-op for TRISC)
+    deepseek_b1_ops::GatherHeads::ComputeArgs gather_heads_args{};
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
@@ -319,6 +389,14 @@ KERNEL_ENTRY {
         // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
         unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
     }
+
+    // NCRISC: Receiver args for SDPA input cores
+    deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
+        get_named_compile_time_arg_val("receiver_semaphore_id"),
+        get_named_compile_time_arg_val("num_senders"),
+        get_named_compile_time_arg_val("receive_cb"),  // Staging CB
+        get_named_compile_time_arg_val("dst_num_pages"),
+    };
 #endif
 
     // ========================================================================
@@ -399,9 +477,6 @@ KERNEL_ENTRY {
     // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
     // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
     // Each core computes 1x4 output tiles (4 1x32 tiles)
-    // Output is interleaved Qnope/Qrope with shuffled weights:
-    //   - Qnope cores (cols 0-7): 1 head × 128 elements -> matmul3 input
-    //   - Qrope cores (cols 8-11): 2 heads × 64 elements -> qrope output
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL2");
@@ -412,238 +487,66 @@ KERNEL_ENTRY {
         matmul2(matmul2_args);
     }
 
+    // ========================================================================
+    // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]
+    // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
+    // ========================================================================
     {
         DeviceZoneScopedN("MATMUL3");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
-        // On Qrope cores: output will be copied to qrope_output_cb
         deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
         matmul3(matmul3_args);
     }
 
     // ========================================================================
-    // Qrope output: Copy matmul2 output to qrope_output_cb on Qrope cores
-    // Qrope cores have [2, 1, 64] data (2 heads per core, 128 elements total)
-    // This output will later be used for RoPE (not implemented in this kernel)
-    // ========================================================================
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_qrope_core) {
-        DeviceZoneScopedN("QROPE_COPY");
-        // Copy matmul2 output to qrope_output_cb
-        constexpr uint32_t matmul2_out_cb = get_named_compile_time_arg_val("matmul2_out");  // matmul2_output_cb
-        constexpr uint32_t qrope_out_cb = get_named_compile_time_arg_val("qrope_output_cb");
-        constexpr uint32_t matmul2_out_w = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Wait for matmul2 output to be ready
-        cb_wait_front(matmul2_out_cb, matmul2_out_w);
-
-        // Reserve space in qrope output
-        cb_reserve_back(qrope_out_cb, matmul2_out_w);
-
-        // Copy data locally within L1 (same core)
-        uint32_t src_addr = get_read_ptr(matmul2_out_cb);
-        uint32_t dst_addr = get_write_ptr(qrope_out_cb);
-        uint32_t tile_size = get_tile_size(matmul2_out_cb);
-        uint32_t copy_size = matmul2_out_w * tile_size;
-
-        // Use local NOC write (my_x, my_y) for same-core L1 copy
-        uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
-        noc_async_write(src_addr, noc_dst_addr, copy_size);
-        noc_async_write_barrier();
-
-        // Pop matmul2 output, push qrope output
-        cb_pop_front(matmul2_out_cb, matmul2_out_w);
-        cb_push_back(qrope_out_cb, matmul2_out_w);
-    }
-#endif
-
-    // ========================================================================
-    // TODO: RoPE for Qrope heads
-    // Qrope cores have [2, 1, 64] data (2 heads per core)
-    // Apply rotary position embedding (not implemented in this kernel)
-    // ========================================================================
-
-    // ========================================================================
-    // Unicast: QNOPE/QROPE -> SDPA interleaved transfer
-    // QNOPE cores (cols 0-7): unicast [1, 512] to SDPA at offset = head_idx * 576
-    // QROPE cores (cols 8-11): unicast 2x [1, 64] to SDPA at offsets:
+    // GatherHeads: QNOPE/QROPE -> SDPA interleaved transfer
+    // QNOPE cores (cols 0-7): send [1, 512] to SDPA at offset = head_idx * 576
+    // QROPE cores (cols 8-11): send 2x [1, 64] to SDPA at offsets:
     //   - head_idx * 576 + 512
     //   - (head_idx + 1) * 576 + 512
     // ========================================================================
-#if defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_qnope_core) {
-        DeviceZoneScopedN("UNICAST_QNOPE");
-
-        // Get compile-time args
-        constexpr uint32_t unicast_sdpa_noc_x = get_named_compile_time_arg_val("unicast_sdpa_noc_x");
-        constexpr uint32_t unicast_head_stride_bytes = get_named_compile_time_arg_val("unicast_head_stride_bytes");
-        constexpr uint32_t unicast_receiver_semaphore_id =
-            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
-        constexpr uint32_t unicast_qnope_src_cb = get_named_compile_time_arg_val("unicast_qnope_src_cb");
-        constexpr uint32_t unicast_qnope_src_num_pages = get_named_compile_time_arg_val("unicast_qnope_src_num_pages");
-
-        // NOC y-coordinates for each row's SDPA core (lookup table)
-        constexpr uint32_t sdpa_noc_y_table[] = {
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row0"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row1"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row2"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row3"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row4"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row5"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row6"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row7"),
-        };
-
-        // Compute head index based on logical x coordinate
-        uint32_t head_idx = my_logical_x_;  // 0-7 for QNOPE cores
-
-        // Wait for matmul3 output to be ready
-        cb_wait_front(unicast_qnope_src_cb, unicast_qnope_src_num_pages);
-
-        // Get source and destination addresses
-        uint32_t src_addr = get_read_ptr(unicast_qnope_src_cb);
-        uint32_t tile_size = get_tile_size(unicast_qnope_src_cb);
-        uint32_t data_size = unicast_qnope_src_num_pages * tile_size;
-
-        // Get SDPA destination NOC coordinates based on row
-        uint32_t sdpa_noc_y = sdpa_noc_y_table[my_logical_y_];
-        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
-        uint32_t sdpa_dst_addr = get_write_ptr(unicast_receive_cb);
-
-        // Compute destination offset: QNOPE at offset = head_idx * stride
-        uint32_t dst_offset = head_idx * unicast_head_stride_bytes;
-
-        // NOC write to SDPA core
-        uint64_t dst_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset);
-        noc_async_write(src_addr, dst_noc_addr, data_size);
-        noc_async_write_barrier();
-
-        // Increment receiver semaphore (1 head sent)
-        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
-        uint64_t dst_semaphore_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, receiver_semaphore_addr);
-        noc_semaphore_inc(dst_semaphore_noc_addr, 1);
-        noc_async_posted_writes_flushed();
-
-        // Pop source CB
-        cb_pop_front(unicast_qnope_src_cb, unicast_qnope_src_num_pages);
+    {
+        DeviceZoneScopedN("GATHER_HEADS");
+        // GatherHeads Op configuration:
+        // - IsSenderCore: is_qnope_core || is_qrope_core
+        // - IsReceiverCore: is_sdpa_input_core
+        // - setup_sharded_input: false (data already in CB from previous compute)
+        // - pop_src: true (pop source CB after sending)
+        // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back)
+        // - count_heads: true (QNOPE sends 1, QROPE sends 2)
+        constexpr bool is_gather_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+        deepseek_b1_ops::GatherHeads::Op<is_gather_heads_sender, Core::is_sdpa_input_core, false, true, true, true>
+            gather_heads;
+        gather_heads(gather_heads_args);
     }
 
-    if constexpr (Core::is_qrope_core) {
-        DeviceZoneScopedN("UNICAST_QROPE");
-
-        // Get compile-time args
-        constexpr uint32_t unicast_sdpa_noc_x = get_named_compile_time_arg_val("unicast_sdpa_noc_x");
-        constexpr uint32_t unicast_head_stride_bytes = get_named_compile_time_arg_val("unicast_head_stride_bytes");
-        constexpr uint32_t unicast_qnope_data_size_bytes =
-            get_named_compile_time_arg_val("unicast_qnope_data_size_bytes");
-        constexpr uint32_t unicast_qrope_data_size_bytes =
-            get_named_compile_time_arg_val("unicast_qrope_data_size_bytes");
-        constexpr uint32_t unicast_receiver_semaphore_id =
-            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
-        constexpr uint32_t unicast_qrope_src_cb = get_named_compile_time_arg_val("unicast_qrope_src_cb");
-        constexpr uint32_t unicast_qrope_src_num_pages = get_named_compile_time_arg_val("unicast_qrope_src_num_pages");
-        constexpr uint32_t unicast_qnope_grid_cols = get_named_compile_time_arg_val("unicast_qnope_grid_cols");
-
-        // NOC y-coordinates for each row's SDPA core (lookup table)
-        constexpr uint32_t sdpa_noc_y_table[] = {
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row0"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row1"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row2"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row3"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row4"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row5"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row6"),
-            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row7"),
-        };
-
-        // Compute head indices: QROPE core at col X has heads 2*(X-8) and 2*(X-8)+1
-        uint32_t qrope_col_idx = my_logical_x_ - unicast_qnope_grid_cols;  // 0-3
-        uint32_t head_idx0 = 2 * qrope_col_idx;                            // 0, 2, 4, 6
-        uint32_t head_idx1 = 2 * qrope_col_idx + 1;                        // 1, 3, 5, 7
-
-        // Wait for qrope output to be ready
-        cb_wait_front(unicast_qrope_src_cb, unicast_qrope_src_num_pages);
-
-        // Get source and destination addresses
-        uint32_t src_addr = get_read_ptr(unicast_qrope_src_cb);
-
-        // Get SDPA destination NOC coordinates based on row
-        uint32_t sdpa_noc_y = sdpa_noc_y_table[my_logical_y_];
-        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
-        uint32_t sdpa_dst_addr = get_write_ptr(unicast_receive_cb);
-
-        // QROPE unicast: each QROPE core sends 2 heads interleaved
-        // Head 0: offset = head_idx0 * stride + qnope_data_size
-        // Head 1: offset = head_idx1 * stride + qnope_data_size
-        uint32_t dst_offset0 = head_idx0 * unicast_head_stride_bytes + unicast_qnope_data_size_bytes;
-        uint32_t dst_offset1 = head_idx1 * unicast_head_stride_bytes + unicast_qnope_data_size_bytes;
-
-        // Single head size (64 elements * 2 bytes = 128 bytes)
-        uint32_t single_head_size = unicast_qrope_data_size_bytes;
-
-        // NOC write head 0
-        uint64_t dst_noc_addr0 = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset0);
-        noc_async_write(src_addr, dst_noc_addr0, single_head_size);
-
-        // NOC write head 1 (offset by single_head_size in source)
-        uint64_t dst_noc_addr1 = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset1);
-        noc_async_write(src_addr + single_head_size, dst_noc_addr1, single_head_size);
-
-        noc_async_write_barrier();
-
-        // Increment receiver semaphore (2 heads sent)
-        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
-        uint64_t dst_semaphore_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, receiver_semaphore_addr);
-        noc_semaphore_inc(dst_semaphore_noc_addr, 2);
-        noc_async_posted_writes_flushed();
-
-        // Pop source CB
-        cb_pop_front(unicast_qrope_src_cb, unicast_qrope_src_num_pages);
-    }
-#endif
-
+// NOTE: Copy to output CB for testing, change once SDPA is fused
 #if defined(COMPILE_FOR_NCRISC)
     // ========================================================================
-    // SDPA Receiver: Wait for all unicasts to complete, then copy to output CB
+    // SDPA Input: Copy from staging CB to output CB (linked to tensor)
     // ========================================================================
-    if constexpr (Core::is_sdpa_core) {
-        DeviceZoneScopedN("UNICAST_SDPA_RECEIVER");
+    if constexpr (Core::is_sdpa_input_core) {
+        DeviceZoneScopedN("GATHER_HEADS_COPY_TO_OUTPUT");
 
-        constexpr uint32_t unicast_num_senders = get_named_compile_time_arg_val("unicast_num_senders");
-        constexpr uint32_t unicast_receiver_semaphore_id =
-            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
-        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
-        constexpr uint32_t unicast_output_cb = get_named_compile_time_arg_val("unicast_output_cb");
-        constexpr uint32_t unicast_dst_num_pages = get_named_compile_time_arg_val("unicast_dst_num_pages");
+        constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
+        constexpr uint32_t out_cb = get_named_compile_time_arg_val("out_cb");
+        constexpr uint32_t dst_num_pages = get_named_compile_time_arg_val("dst_num_pages");
 
-        // Reserve space in receive CB (senders write directly here)
-        cb_reserve_back(unicast_receive_cb, unicast_dst_num_pages);
+        // Copy from staging CB to output CB (local L1 copy)
+        cb_wait_front(receive_cb, dst_num_pages);
+        cb_reserve_back(out_cb, dst_num_pages);
 
-        // Wait for all senders (8 QNOPE + 8 QROPE = 16)
-        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
-        volatile tt_l1_ptr uint32_t* receiver_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)receiver_semaphore_addr;
-        noc_semaphore_wait(receiver_semaphore_ptr, unicast_num_senders);
-        noc_semaphore_set(receiver_semaphore_ptr, 0);
+        uint32_t src_addr = get_read_ptr(receive_cb);
+        uint32_t dst_addr = get_write_ptr(out_cb);
+        uint32_t tile_size = get_tile_size(receive_cb);
+        uint32_t copy_size = dst_num_pages * tile_size;
 
-        // Push to receive CB (data arrived)
-        cb_push_back(unicast_receive_cb, unicast_dst_num_pages);
-
-        // Now copy from receive CB to output CB (which is linked to tensor)
-        cb_wait_front(unicast_receive_cb, unicast_dst_num_pages);
-        cb_reserve_back(unicast_output_cb, unicast_dst_num_pages);
-
-        uint32_t src_addr = get_read_ptr(unicast_receive_cb);
-        uint32_t dst_addr = get_write_ptr(unicast_output_cb);
-        uint32_t tile_size = get_tile_size(unicast_receive_cb);
-        uint32_t copy_size = unicast_dst_num_pages * tile_size;
-
-        // Local copy within same core's L1
         uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
         noc_async_write(src_addr, noc_dst_addr, copy_size);
         noc_async_write_barrier();
 
-        cb_pop_front(unicast_receive_cb, unicast_dst_num_pages);
-        cb_push_back(unicast_output_cb, unicast_dst_num_pages);
+        cb_pop_front(receive_cb, dst_num_pages);
+        cb_push_back(out_cb, dst_num_pages);
     }
 #endif
 }
