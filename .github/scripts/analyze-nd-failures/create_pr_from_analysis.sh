@@ -234,6 +234,9 @@ run_claude_implementation() {
     temp_output=$(mktemp)
     chmod 666 "$temp_output"
 
+    # Make prompt file readable by claude user
+    chmod 644 "$prompt_file" 2>/dev/null || true
+
     # Run Claude with permission to edit files
     if [[ $(id -u) -eq 0 ]]; then
         if command -v timeout &> /dev/null; then
