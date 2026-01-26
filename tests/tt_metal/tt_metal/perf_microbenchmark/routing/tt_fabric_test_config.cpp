@@ -1086,6 +1086,78 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
     p_config.parametrization_params.reset();  // Clear now-used params before final expansion
 
     uint32_t max_iterations = 1;
+
+    // Pre-compute worker grid cores and index into when we iterate over max_iterations
+    tt::tt_metal::CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
+    std::vector<CoreCoord> all_cores;
+    all_cores.reserve(worker_grid.x * worker_grid.y);
+    for (uint32_t x = 0; x < worker_grid.x; ++x) {
+        for (uint32_t y = 0; y < worker_grid.y; ++y) {
+            all_cores.emplace_back(x, y);
+        }
+    }
+    uint32_t total_cores = static_cast<uint32_t>(all_cores.size());
+
+    // Check for sender core sweep
+    uint32_t sender_core_sweep_iterations = 0;
+    for (const auto& sender : p_config.senders) {
+        if (sender.core.has_value() && std::holds_alternative<std::string>(sender.core.value()) &&
+            std::get<std::string>(sender.core.value()) == "all") {
+            sender_core_sweep_iterations = total_cores;
+            break;
+        }
+    }
+
+    // Check for destination core sweep
+    uint32_t dest_core_sweep_iterations = 0;
+    for (const auto& sender : p_config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.destination.has_value() && pattern.destination->core.has_value() &&
+                std::holds_alternative<std::string>(pattern.destination->core.value()) &&
+                std::get<std::string>(pattern.destination->core.value()) == "all") {
+                dest_core_sweep_iterations = total_cores;
+                break;
+            }
+        }
+        if (dest_core_sweep_iterations > 0) {
+            break;
+        }
+    }
+
+    // Calculate total iterations from core sweeps
+    // If both are present: sender_iterations × dest_iterations different pairs
+    // If only one: all to one/one to all cfg
+    // If neither: 1 (point to point)
+    uint32_t core_sweep_iterations = 1;
+    if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
+        core_sweep_iterations = sender_core_sweep_iterations * dest_core_sweep_iterations;
+        log_info(
+            LogTest,
+            "Test '{}': Both sender and destination core sweeps detected. Creating {} iterations ({} senders × {} "
+            "destinations).",
+            p_config.name,
+            core_sweep_iterations,
+            sender_core_sweep_iterations,
+            dest_core_sweep_iterations);
+    } else if (sender_core_sweep_iterations > 0) {
+        core_sweep_iterations = sender_core_sweep_iterations;
+        log_info(
+            LogTest,
+            "Test '{}': Sender core sweep detected ({} cores). Creating {} iterations (one per core).",
+            p_config.name,
+            sender_core_sweep_iterations,
+            sender_core_sweep_iterations);
+    } else if (dest_core_sweep_iterations > 0) {
+        core_sweep_iterations = dest_core_sweep_iterations;
+        log_info(
+            LogTest,
+            "Test '{}': Destination core sweep detected ({} cores). Creating {} iterations (one per core).",
+            p_config.name,
+            dest_core_sweep_iterations,
+            dest_core_sweep_iterations);
+    }
+    max_iterations = std::max(max_iterations, core_sweep_iterations);
+
     if (p_config.patterns) {
         for (const auto& p : p_config.patterns.value()) {
             if (p.iterations.has_value()) {
@@ -1145,16 +1217,99 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         ParsedTestConfig iteration_test = p_config;
         iteration_test.patterns.reset();  // Will be expanded into concrete senders.
 
+        // Calculate core indices for this iteration
+        // If both sweeps: sender_idx = i / dest_iterations, dest_idx = i % dest_iterations
+        // If only sender sweep: sender_idx = i
+        // If only dest sweep: dest_idx = i
+        uint32_t sender_core_idx = 0;
+        uint32_t dest_core_idx = 0;
+        if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
+            // Both sweeps: outer loop is sender, inner loop is destination
+            sender_core_idx = i / dest_core_sweep_iterations;
+            dest_core_idx = i % dest_core_sweep_iterations;
+        } else if (sender_core_sweep_iterations > 0) {
+            sender_core_idx = i;
+        } else if (dest_core_sweep_iterations > 0) {
+            dest_core_idx = i;
+        }
+
+        // If sender core sweep is active, expand sender to one specific core for this iteration based on calculated idx
+        if (sender_core_sweep_iterations > 0 && sender_core_idx < all_cores.size()) {
+            std::vector<ParsedSenderConfig> expanded_senders;
+            for (const auto& sender : p_config.senders) {
+                if (sender.core.has_value() && std::holds_alternative<std::string>(sender.core.value()) &&
+                    std::get<std::string>(sender.core.value()) == "all") {
+                    ParsedSenderConfig expanded_sender = sender;
+                    expanded_sender.core = all_cores[sender_core_idx];
+                    expanded_senders.push_back(std::move(expanded_sender));
+                } else {
+                    expanded_senders.push_back(sender);
+                }
+            }
+            iteration_test.senders = std::move(expanded_senders);
+        }
+
+        // If destination core sweep is active, expand destination to one specific core for this iteration
+        if (dest_core_sweep_iterations > 0 && dest_core_idx < all_cores.size()) {
+            std::vector<ParsedSenderConfig> expanded_senders;
+            // Use the already-expanded senders if sender sweep was active, else use original
+            const auto& source_senders = sender_core_sweep_iterations > 0 ? iteration_test.senders : p_config.senders;
+            for (const auto& sender : source_senders) {
+                ParsedSenderConfig expanded_sender = sender;
+                std::vector<ParsedTrafficPatternConfig> expanded_patterns;
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.destination.has_value() && pattern.destination->core.has_value() &&
+                        std::holds_alternative<std::string>(pattern.destination->core.value()) &&
+                        std::get<std::string>(pattern.destination->core.value()) == "all") {
+                        ParsedTrafficPatternConfig expanded_pattern = pattern;
+                        ParsedDestinationConfig expanded_dest = *pattern.destination;
+                        expanded_dest.core = all_cores[dest_core_idx];
+                        expanded_pattern.destination = std::move(expanded_dest);
+                        expanded_patterns.push_back(std::move(expanded_pattern));
+                    } else {
+                        expanded_patterns.push_back(pattern);
+                    }
+                }
+                expanded_sender.patterns = std::move(expanded_patterns);
+                expanded_senders.push_back(std::move(expanded_sender));
+            }
+            iteration_test.senders = std::move(expanded_senders);
+        }
+
         // Initialize parametrized_name with original name if empty
         if (iteration_test.parametrized_name.empty()) {
             iteration_test.parametrized_name = iteration_test.name;
         }
         if (max_iterations > 1) {
-            // Use optimized string concatenation utility for parametrized name
-            detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", i);
+            // Build descriptive name with core coordinates for core sweep iteration logging
+            if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
+                if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
+                    const auto& src = all_cores[sender_core_idx];
+                    const auto& dst = all_cores[dest_core_idx];
+                    iteration_test.parametrized_name += "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) +
+                                                        "]_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) +
+                                                        "]";
+                } else if (sender_core_sweep_iterations > 0) {
+                    const auto& src = all_cores[sender_core_idx];
+                    iteration_test.parametrized_name +=
+                        "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) + "]";
+                } else {
+                    const auto& dst = all_cores[dest_core_idx];
+                    iteration_test.parametrized_name +=
+                        "_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) + "]";
+                }
+            } else {
+                detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", i);
+            }
         }
 
         iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
+
+        // Mark core sweep iterations as sequential-like for latency test support
+        // This allows latency tests to not err out for too many iterations.
+        if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
+            iteration_test.from_sequential_pattern = true;
+        }
 
         // Add line sync pattern expansion if enabled
         if (iteration_test.global_sync) {
