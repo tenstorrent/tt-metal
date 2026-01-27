@@ -361,7 +361,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         t_core_range_set,
         max_tilizer_subtoken_size,
-        operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
+        tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
         input_data_format);
 
     tt::tt_metal::create_cb(
@@ -375,8 +375,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::create_cb(
         per_expert_total_tokens_cb_id,
         program,
-        t_core_range_set,
-        sizeof(uint32_t),  // at most 512 for decode
+        t_mm_core_range_set,  // allocated on T and MM cores
+        sizeof(uint32_t),     // at most the value "512" for decode
         experts_per_device,
         tt::DataFormat::UInt32);
 
@@ -528,7 +528,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
         // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
         {"max_tiles_per_chunk", max_tiles_per_chunk},
-        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
+        {"tokens_per_chunk", tokens_per_chunk},
         {"tokens_per_tilizer_core", tokens / t_num_cores},
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
@@ -586,7 +586,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tilizer_input_cb_id", tilizer_input_cb_id},
         {"tilizer_output_cb_id", tilizer_output_cb_id},
         {"max_tiles_per_chunk", max_tiles_per_chunk},
-        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
+        {"tokens_per_chunk", tokens_per_chunk},
         {"total_chunks_cb_id", total_chunks_cb_id},
         {"experts_per_device", experts_per_device},
         {"aligned_input_page_size", aligned_input_page_size},
