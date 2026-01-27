@@ -129,6 +129,8 @@ pip install /path/to/tt-train/
 
 **Editable installation (for development):**
 
+> **Note:** `--no-build-isolation` Disables isolation when building a modern source distribution, saves time when re-building often
+
 ```bash
 pip install --no-build-isolation -e /path/to/tt-train/
 ```
