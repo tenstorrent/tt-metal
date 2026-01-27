@@ -81,7 +81,7 @@ needed to perform matrix multiplication on multiple cores.
 In the Tenstorrent architecture, the cores are organized into a 2D grid with each core uniquely identified
 by an index ``(x, y)`` in this grid.
 
-.. figure:: images/tensix_core_grid.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/tensix_core_grid.png
    :width: 700
    :alt: Tensix Core Grid
    :align: center
@@ -129,7 +129,7 @@ As a result, ``10`` cores are assigned ``8`` output tiles each, and the last cor
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
-.. figure:: images/work_distribution_11_cores.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/work_distribution_11_cores.png
    :alt: Output Tile Distribution on Multiple Cores (Each color represents a different core)
    :width: 700
    :align: center
@@ -365,7 +365,7 @@ can use a row of ``A`` to produce output of three tiles in the same row of the o
 can use a column of ``B`` to produce output of three tiles in the same column of the output.
 This is shown in Figure 3.
 
-.. figure:: images/work_distribution_9_cores.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/work_distribution_9_cores.png
    :alt: Output Tile Distribution on Multiple Cores Using Blocking (Each color represents a different core)
    :width: 700
    :align: center
@@ -408,13 +408,9 @@ We will assume that all the matrix dimensions are divisible by the tile size, an
 
 * ``Mt = M / TILE_HEIGHT``
 * ``Nt = N / TILE_WIDTH``
-
-to denote the number of tiles in the ``M`` and ``N`` dimensions, respectively.
-Similarly, let
-
 * ``Kt = K / TILE_WIDTH``
 
-be the number of tiles in the ``K`` dimension.
+to denote the number of tiles in the ``M``, ``N``, and ``K`` dimensions, respectively.
 
 In blocked matrix multiplication, each core is responsible for computing a rectangular block of
 output tiles ``C_block`` consisting of
@@ -448,7 +444,7 @@ For each K-block index ``b`` in range ``0 .. num_k_blocks - 1`` we define:
 If we choose ``K_block_tiles`` carefully, then both ``A_slab(b)`` and ``B_slab(b)``, and
 the partial results for ``C_block`` can all fit into the on-chip SRAM at the same time.
 
-.. figure:: images/split_k_dimension.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/split_k_dimension.png
    :alt: Splitting the Kt dimension into K-blocks
    :width: 1100
    :align: center
@@ -472,7 +468,7 @@ Each "slab" is indicated by a different shade of purple in Figure 4.
 To see what computation needs to be performed such that each slab is read
 only once, consider the computation for a single output tile ``C[i][j]`` within ``C_block``:
 
-.. figure:: images/sum_standard.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/sum_standard.png
    :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
    :width: 170
    :align: center
@@ -483,14 +479,14 @@ Given this, we can decompose the computation of ``C[i][j]`` as follows:
 
 Decomposing the original equation across K-blocks, we get:
 
-.. figure:: images/sum_composite.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
    :width: 300
    :align: center
 
 Define the partial result for block ``b`` as:
 
-.. figure:: images/sum_block_b.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/sum_block_b.png
    :alt: ``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``
    :width: 200
    :align: center
@@ -503,7 +499,7 @@ involves multiplying elements with matching ``K`` indices.
 
 To get the final result, we need to add partial results for all K-blocks:
 
-.. figure:: images/sum_across_blocks.png
+.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab2/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
    :width: 210
    :align: center
@@ -514,7 +510,7 @@ This computation needs to be done for all tiles in ``C_block``, i.e. for all ``i
 in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
 If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
 compute the partial result for each tile, which would not be conducive to data reuse.
-Instead, we iterate over K-blocks in the outer loop, bring ``A_slab(b)`` and ``B_slab(b)``
+Instead, we need to iterate over K-blocks in the outer loop, bring ``A_slab(b)`` and ``B_slab(b)``
 into on-chip SRAM, and then compute the contribution of this K-block to all ``C[i][j]`` tiles
 in ``C_block``.
 Given that matrix multiplication is a linear transformation, such loop interchange does not
