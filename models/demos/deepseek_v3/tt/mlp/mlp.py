@@ -401,32 +401,11 @@ class MLP(AbstractModule):
         )
 
     @classmethod
-    def _silu_workaround(cls, x: ttnn.Tensor) -> ttnn.Tensor:  # TODO: remove once ttnn.silu PCC is fixed
-        """Workaround for the silu PCC issue in ttnn."""
-        # -x
-        x1 = ttnn.neg(x)
-
-        # 1
-        x2 = ttnn.ones_like(x)
-
-        # exp(-x)
-        x3 = ttnn.exp(x1)
-        ttnn.deallocate(x1)
-
-        # 1 + exp(-x)
-        x4 = ttnn.add(x3, 1)
-        ttnn.deallocate(x3)
-
-        # 1 / (1 + exp(-x))
-        x5 = ttnn.div(x2, x4)
-        ttnn.deallocate(x2)
-        ttnn.deallocate(x4)
-
-        # x * (1 / (1 + exp(-x)))
-        x6 = ttnn.mul(x, x5)
-        ttnn.deallocate(x5)
-
-        return x6
+    def _silu_workaround(cls, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Workaround for the silu PCC issue in ttnn.
+        NOTE: native ttnn.mul activations are preferred if PCC allows.
+        """
+        return ttnn.mul(x, ttnn.sigmoid(x))
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
@@ -494,13 +473,9 @@ class MLP(AbstractModule):
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
 
-        # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
+        # Apply activation and multiply (native ttnn.mul with activation preferred)
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
-
-        # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
         ttnn.deallocate(w3_out)
 
         # Down projection

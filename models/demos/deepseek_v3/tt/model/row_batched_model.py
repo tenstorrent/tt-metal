@@ -189,23 +189,38 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             else [None] * (hf_config.num_hidden_layers - hf_config.first_k_dense_replace)
         )
 
+        import concurrent.futures
+
+        all_caches = mlp_caches + moe_caches
+        # Track block types to call the correct create_state method
+        block_classes = [DecoderBlock2D] * len(mlp_caches) + [MoEDecoderBlock2D] * len(moe_caches)
+
+        def create_block_state(block_info):
+            block_idx, (mla_cache, BlockClass) = block_info
+            return block_idx, BlockClass.create_state(
+                hf_config,
+                paged_config,
+                mesh_device,
+                ccl,
+                mla_cache,
+                kv_cache_override,
+            )
+
+        # Parallelize state creation across layers (mostly KV-cache allocation)
+        all_block_states = [None] * len(all_caches)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+            indexed_tasks = enumerate(zip(all_caches, block_classes))
+            futures = [executor.submit(create_block_state, task) for task in indexed_tasks]
+            for future in tqdm(
+                concurrent.futures.as_completed(futures), total=len(futures), desc="Creating layer states"
+            ):
+                block_idx, state = future.result()
+                all_block_states[block_idx] = state
+
         return {
             "embedding": Embedding2D.create_state(hf_config, mesh_device, ccl),
-            "mlp_decoder_block": [
-                DecoderBlock2D.create_state(
-                    hf_config,
-                    paged_config,
-                    mesh_device,
-                    ccl,
-                    mla_cache,
-                    kv_cache_override,
-                )
-                for mla_cache in tqdm(mlp_caches, desc="Creating MLP layer states")
-            ],
-            "moe_decoder_block": [
-                MoEDecoderBlock2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override)
-                for mla_cache in tqdm(moe_caches, desc="Creating MoE layer states")
-            ],
+            "mlp_decoder_block": all_block_states[: hf_config.first_k_dense_replace],
+            "moe_decoder_block": all_block_states[hf_config.first_k_dense_replace :],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "lm_head": LMHead1D.create_state(mesh_device, ccl),
         }

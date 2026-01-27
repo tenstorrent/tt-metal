@@ -30,7 +30,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     torch_cache_from_transformers,
 )
 
-
 def generate_reference_io(
     use_real_weights: bool,
     mode: str,

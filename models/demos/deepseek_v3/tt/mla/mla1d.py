@@ -86,7 +86,7 @@ class MLA1D(AbstractModule):
         }
 
         # Regular non-split weights
-        linear_weight_configs = {  # TODO: add dequant
+        linear_weight_configs = {
             ttnn_name: {
                 "input_tensor_b": cls._convert_weight(
                     output_path / f"{ttnn_name}.input_tensor_b",
@@ -248,8 +248,9 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
-        q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        # TODO: Make chunk sizes dynamic based on hardware grid and sequence length
+        q_chunk_size = hf_config.q_chunk_size if hasattr(hf_config, "q_chunk_size") else 128
+        k_chunk_size = hf_config.k_chunk_size if hasattr(hf_config, "k_chunk_size") else 128
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -315,10 +316,31 @@ class MLA1D(AbstractModule):
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
-            dim=2,  # Changed from dim=1 to dim=2 to gather after permute in prefill
+            dim=3,  # Gathers output slices along hidden_dim for TP
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
+        wo_r_config = None  # wo is output-sharded, no reduction needed after AllGather
+
+        # WQ_B
+        wq_b_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_device.shape),
+            cluster_axis=1,
+            dim=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        wq_b_r_config = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
 
         wkv_b2_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -348,7 +370,10 @@ class MLA1D(AbstractModule):
             "wq_kv_a_ag_prefill": wq_kv_a_ag_config,
             "wq_kv_a_r_prefill": wq_kv_a_r_config,
             "wkv_b2_ag_prefill": wkv_b2_ag_config,
+            "wq_b_ag_prefill": wq_b_ag_config,
+            "wq_b_r_prefill": wq_b_r_config,
             "wo_ag_prefill": wo_ag_config,
+            "wo_r_prefill": wo_r_config,
             "mesh_device": mesh_device,
         }
 
@@ -495,7 +520,8 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        # TODO: Make chunk sizes dynamic
+        k_chunk_size = hf_config.k_chunk_size if hasattr(hf_config, "k_chunk_size") else 128
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -639,6 +665,37 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
+        wo_r_config = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
+        }
+
+        # WQ_B
+        wq_b_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_shape),
+            cluster_axis=1,
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        wq_b_r_config = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
+        }
 
         return {
             "num_heads": num_heads,
@@ -654,6 +711,10 @@ class MLA1D(AbstractModule):
             "wkv_b1": wkv_b1_config,
             "wkv_b2": wkv_b2_config,
             "wo": wo_config,
+            "wq_b_ag_decode": wq_b_ag_config,
+            "wq_b_r_decode": wq_b_r_config,
+            "wo_ag_decode": wo_ag_config,
+            "wo_r_decode": wo_r_config,
             "q_rope_permute": q_rope_permute_config,
             "q_rope_slice": q_rope_slice_config,
             "q_rope_out_reshard": q_rope_out_reshard_config,
@@ -734,8 +795,9 @@ class MLA1D(AbstractModule):
             mesh_device: TTNN mesh device
 
         Returns:
-            Device-allocated version of the page table representing the page table
-        """  # TODO: update docs
+            Device-allocated version of the page table representing the page table.
+            The page table is replicated across all devices in the mesh.
+        """
         if page_table is None:
             max_num_blocks = paged_config.max_num_blocks
             _, dp_factor = mesh_device.shape
@@ -782,13 +844,24 @@ class MLA1D(AbstractModule):
             and all(cache.shape == cache_shape for cache in caches)
         )
         if caches is None:
-            caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
+            # Generate KV cache
+            total_cache_shape = (cache_shape[0] * mesh_device.shape[0], *cache_shape[1:])
+            kvpe_cache = ttnn.as_tensor(
+                torch.zeros(total_cache_shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+            )
+        else:
+            kvpe_cache = cls._convert_cache(tuple(caches), mesh_device)
 
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
+            "kvpe_cache": kvpe_cache,
             "ccl": ccl,
         }
 
@@ -957,6 +1030,15 @@ class MLA1D(AbstractModule):
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
+        # AR using AG + local reduce
+        tt_q = ttnn.experimental.all_gather_async(
+            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_b_ag_prefill"])
+        )  # [1, num_devices, seq_len, q_head_dim * num_heads_local]
+        tt_q = ttnn.experimental.fast_reduce_nc(
+            tt_q,
+            **cfg["wq_b_r_prefill"],
+        )  # [1, 1, seq_len, q_head_dim * num_heads_local]
+
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
 
@@ -1054,12 +1136,15 @@ class MLA1D(AbstractModule):
             for chunk_idx in range(num_chunks):
                 start = chunk_idx * SEQ_LEN_CHUNK_SIZE
                 end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
-                v_chunk = ttnn.experimental.all_gather_async(
-                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
                 v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
                 out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
+
+                # Gathers output slices from other devices to complete the TP hidden_dim
+                out_chunk = ttnn.experimental.all_gather_async(
+                    out_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+                )  # [1, 1, chunk_size, dim]
+
                 output_chunks.append(out_chunk)
                 ttnn.deallocate(v_chunk)
 
@@ -1077,6 +1162,12 @@ class MLA1D(AbstractModule):
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+
+            # Gathers output slices from other devices
+            out = ttnn.experimental.all_gather_async(
+                out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [1, 1, seq_len, dim]
+
             ttnn.deallocate(v_out)
 
         return out
@@ -1216,6 +1307,17 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+
+        # AR using AG + local reduce
+        ccl = cfg["ccl"]
+        tt_q = ttnn.experimental.all_gather_async(
+            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_b_ag_decode"])
+        )  # [1, num_devices, bsz, q_head_dim * num_heads_local]
+        tt_q = ttnn.experimental.fast_reduce_nc(
+            tt_q,
+            **cfg["wq_b_r_decode"],
+        )  # [1, 1, bsz, q_head_dim * num_heads_local]
+
         # 1,1,32,3072, L1 interleaved
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
         # 1,32,16,128 L1 interleaved
@@ -1325,6 +1427,17 @@ class MLA1D(AbstractModule):
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,1,32,16384 L1 interleaved
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+
+        # AR using AG + local reduce
+        ccl = cfg["ccl"]
+        out = ttnn.experimental.all_gather_async(
+            out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
+        )  # [1, num_devices, bsz, dim]
+        out = ttnn.experimental.fast_reduce_nc(
+            out,
+            **cfg["wo_r_decode"],
+        )  # [1, 1, bsz, dim]
+
         # 1,1,32,896 width sharded 7x4 [32,32]
         return out
 
