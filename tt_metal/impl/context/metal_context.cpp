@@ -433,8 +433,15 @@ MetalContext* g_instance;
 // Use a recursive mutex because the instance destructor calls into MetalContext::instance.
 std::recursive_mutex g_instance_mutex;
 bool registered_atexit = false;
+std::atomic_bool is_tearing_down = false;
 
 MetalContext& MetalContext::instance() {
+    if (is_tearing_down) {
+        TT_ASSERT(g_instance, "MetalContext is tearing down but no instance exists.");
+        // During teardown multiple threads may call instance() to access the same instance, so return the existing
+        // instance in that case instead of deadlocking.
+        return *g_instance;
+    }
     std::lock_guard lock(g_instance_mutex);
     if (!g_instance) {
         g_instance = new MetalContext();
@@ -459,7 +466,9 @@ void MetalContext::destroy_instance(bool check_device_count) {
         !g_instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
+    is_tearing_down = true;
     delete g_instance;
+    is_tearing_down = false;
     g_instance = nullptr;
 }
 
