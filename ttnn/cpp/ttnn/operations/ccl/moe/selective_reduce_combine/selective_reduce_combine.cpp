@@ -17,6 +17,7 @@ namespace ttnn::operations::ccl::moe {
 ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     const ttnn::Tensor& dense_input_tensor,
     const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     const uint32_t hidden_size,
     const uint32_t batch_size,
@@ -37,6 +38,7 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     return ttnn::prim::selective_reduce_combine(
         dense_input_tensor,
         dense_metadata_tensor,
+        dense_token_maps_tensor,
         dense_token_counts_tensor,
         hidden_size,
         batch_size,
