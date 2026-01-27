@@ -39,14 +39,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
-    // Halley's Method
+    // Second Newton-Raphson iteration (interleaved with abs(a) computation)
     sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
-
-    // Compute abs(a) - interleaved with Halley's method to reduce register pressure
     sfpi::vUInt a = sfpi::abs(a_signed);
-
-    // Continue Halley's Method
-    e = e * e + e;
     inv_b_f = e * inv_b_f + inv_b_f;
 
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
@@ -86,6 +81,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     a = sfpi::abs(a_signed);
     sfpi::vInt r = a - qb;
 
+    // Use abs(r) for correction computation
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
 
     // Compute correction: r / b in float32
@@ -108,12 +104,18 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     tmp += sfpi::exman9(mid) << 11;
     tmp += sfpi::exman9(top) << 22;
 
-    // Adjust remainder based on its sign
-    v_if(r < 0) { r += tmp; }
-    v_else { r -= tmp; }
-    v_endif;
+    // Extract sign mask of r
+    // r_sign = 0 if r >= 0, -1 if r < 0
+    sfpi::vInt r_sign = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(r) >> 31);
+    r_sign = -r_sign;
 
-    // Final adjustment - recompute b to avoid keeping it alive
+    // Apply correction with sign of r
+    // If r < 0  -> r += tmp
+    // Else      -> r -= tmp
+    sfpi::vInt signed_tmp = (tmp ^ r_sign) - r_sign;
+    r -= signed_tmp;
+
+    // Final adjustment - recompute b to reduce register pressure
     b = sfpi::abs(b_signed);
     v_if(r < 0 && (r - 1) < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
@@ -129,15 +131,17 @@ sfpi_inline void calculate_remainder_int32_body(
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Load signed inputs
+    // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
     sfpi::vInt a_signed = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+    // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
     sfpi::vInt b_signed = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
-    // Remainder sign handling (uses both a_signed and b_signed for sign)
+    // Remainder sign handling
     sfpi::vInt sign = a_signed ^ b_signed;
     v_if(r != 0) {
         v_if(sign < 0) {
@@ -158,7 +162,7 @@ sfpi_inline void calculate_remainder_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;

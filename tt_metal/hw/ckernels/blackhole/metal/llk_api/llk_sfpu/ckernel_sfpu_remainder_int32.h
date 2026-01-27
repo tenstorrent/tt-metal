@@ -31,10 +31,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
     v_endif;
 
-    // Compute reciprocal of b with Newton-Raphson refinement
+    // Compute reciprocal of b using a single Newton–Raphson refinement
+    // Accuracy is sufficient because we apply an integer correction later.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
+    // One NR step: inv_b = inv_b * (2 - b * inv_b)
     sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
-    e = e * e + e;
     inv_b_f = e * inv_b_f + inv_b_f;
 
     // Initial quotient approximation: q = a * (1/b)
@@ -61,10 +62,15 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     b_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b_hi.get(), 0);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    // Adjust remainder based on sign
-    v_if(r < 0) { r += tmp; }
-    v_else { r -= tmp; }
-    v_endif;
+    // Extract sign mask of r
+    // r_sign = 0 if r >= 0, -1 if r < 0
+    sfpi::vInt r_sign = r >> 31;
+
+    // Apply correction with sign of r
+    // If r < 0  -> r += tmp
+    // Else      -> r -= tmp
+    sfpi::vInt signed_tmp = (tmp ^ r_sign) - r_sign;
+    r -= signed_tmp;
 
     // Final adjustment to ensure r is in [0, b)
     v_if(r < 0 && (r - 1) < 0) { r += b; }
@@ -87,7 +93,7 @@ sfpi_inline void calculate_remainder_int32_body(
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
-    // Remainder sign handling (uses both a_signed and b_signed for sign)
+    // Remainder sign handling
     sfpi::vInt sign = a_signed ^ b_signed;
     v_if(r != 0) {
         v_if(sign < 0) {
@@ -106,7 +112,7 @@ sfpi_inline void calculate_remainder_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;

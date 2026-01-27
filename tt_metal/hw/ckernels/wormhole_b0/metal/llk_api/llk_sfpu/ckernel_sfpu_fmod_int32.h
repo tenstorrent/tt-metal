@@ -19,8 +19,10 @@ sfpi_inline void calculate_fmod_int32_body(
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Load signed inputs
+    // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
     sfpi::vInt a_signed = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+    // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
     sfpi::vInt b_signed = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
@@ -38,7 +40,7 @@ sfpi_inline void calculate_fmod_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;

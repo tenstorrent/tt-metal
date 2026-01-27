@@ -22,7 +22,7 @@ sfpi_inline void calculate_fmod_int32_body(
     sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-    // Compute unsigned remainder (b_signed only used for computation, not sign)
+    // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
     // FMOD sign handling (result has the same sign as a)
@@ -34,7 +34,7 @@ sfpi_inline void calculate_fmod_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
