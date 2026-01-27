@@ -253,6 +253,9 @@ void kernel_main() {
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);  // multicast destinations
     constexpr uint32_t mcast_semaphore_id = get_compile_time_arg_val(20);
     constexpr uint32_t brisc_ncrisc_sync_semaphore_id = get_compile_time_arg_val(21);
+    constexpr uint32_t k_page_size = get_compile_time_arg_val(22);     // page size for pipelining
+    constexpr uint32_t k_num_pages = get_compile_time_arg_val(23);     // pages per K chunk
+    constexpr bool kv_is_sharded = get_compile_time_arg_val(24) == 1;  // page-level vs chunk-level
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -343,8 +346,9 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // =========================================================================
-    // KV Cache Multicast (NCRISC - overlapped with BRISC DRAM reads)
-    // Sender only: wait for BRISC to complete DRAM read, then multicast to receivers
+    // KV Cache Multicast (NCRISC - page-level pipelining with BRISC DRAM reads)
+    // For sharded: BRISC signals after each page, NCRISC multicasts each page immediately
+    // For interleaved: BRISC signals once per chunk, NCRISC multicasts entire chunk
     // =========================================================================
     if (is_mcast_sender) {
         constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -365,38 +369,55 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_addr + 4);
 
         // Set up multicast addresses
+        // Must use NOC_0 for multicast due to grid wrapping requirements
+        constexpr uint8_t MCAST_NOC = 0;  // NOC_0
         const uint64_t mcast_noc_addr =
             get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+        const uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
 
-        // Set local mcast semaphore to valid (will be multicast each iteration)
+        // Set local mcast semaphore to valid (will be multicast per chunk)
         noc_semaphore_set(mcast_semaphore_ptr, 1);  // MCAST_VALID = 1
 
-        // Multicast loop for each K chunk
+        // Multicast loop
         uint32_t sync_count = 0;
         for (uint32_t cur_head = cur_head_group * num_heads_per_core;
              cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
              ++cur_head) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-                DeviceZoneScopedN("ncrisc-mcast-sender");
+                DeviceZoneScopedN("mcast-sender-multicast");
 
-                // Wait for BRISC to signal DRAM read is complete and address is ready
-                ++sync_count;
-                noc_semaphore_wait(brisc_ncrisc_sync_ptr, sync_count);
+                if constexpr (kv_is_sharded) {
+                    // Sharded: page-level pipelining - multicast each page as it arrives
+                    for (uint32_t page = 0; page < k_num_pages; ++page) {
+                        // Wait for BRISC to signal this page is ready
+                        ++sync_count;
+                        noc_semaphore_wait(brisc_ncrisc_sync_ptr, sync_count);
 
-                // Read K buffer address from shared L1 (written by BRISC before signaling)
-                uint32_t k_read_ptr = *k_addr_from_brisc_ptr;
+                        // Read page address from shared L1 (written by BRISC before signaling)
+                        uint32_t page_addr = *k_addr_from_brisc_ptr;
 
-                // Multicast K data to other cores in the S block
-                // Must use NOC_0 for multicast due to grid wrapping requirements
-                constexpr uint8_t MCAST_NOC = 0;  // NOC_0
-                uint64_t mcast_dest_addr = mcast_noc_addr | k_read_ptr;
-                noc_async_write_multicast(
-                    k_read_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, false, MCAST_NOC);
+                        // Multicast this page immediately to other cores in S block
+                        uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                        noc_async_write_multicast(
+                            page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
+                    }
+                } else {
+                    // Interleaved: chunk-level - wait for entire chunk, then multicast
+                    ++sync_count;
+                    noc_semaphore_wait(brisc_ncrisc_sync_ptr, sync_count);
 
-                // Signal receivers that data is ready via multicast semaphore
-                uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
-                noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests, false, MCAST_NOC);
+                    // Read chunk base address from shared L1
+                    uint32_t k_read_ptr = *k_addr_from_brisc_ptr;
+
+                    // Multicast entire chunk
+                    uint64_t mcast_dest_addr = mcast_noc_addr | k_read_ptr;
+                    noc_async_write_multicast(
+                        k_read_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, false, MCAST_NOC);
+                }
+
+                // After all data for this chunk: barrier and signal receivers
                 noc_async_write_barrier();
+                noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests, false, MCAST_NOC);
             }
         }
     }

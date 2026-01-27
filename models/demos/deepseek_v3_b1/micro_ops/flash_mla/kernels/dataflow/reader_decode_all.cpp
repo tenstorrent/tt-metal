@@ -231,16 +231,22 @@ void kernel_main() {
                             k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
                         }
 
-                        // Page-based reads using pre-configured NOC state (set at kernel init)
-                        // Extract low 32 bits of NOC address as base local address
+                        // Page-based reads with per-page multicast pipelining
+                        // Each page is read, barriered, then NCRISC multicasts it immediately
                         uint32_t src_addr_lo = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
                         uint32_t dst_addr = k_write_ptr;
                         for (uint32_t page = 0; page < k_num_pages; ++page) {
                             noc_async_read_one_packet_with_state(src_addr_lo, dst_addr, vc);
+                            noc_async_read_barrier();  // Wait for this page to be ready
+
+                            // Store page address for NCRISC and signal it's ready
+                            *k_addr_for_ncrisc_ptr = dst_addr;
+                            noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
+
                             src_addr_lo += k_page_size;
                             dst_addr += k_page_size;
                         }
-                        noc_async_read_barrier();
+                        // No barrier here - already done per-page above
                     } else {
                         DeviceZoneScopedN("mcast-sender-interleaved-read");
                         const uint32_t k_batch_offset = kv_batch * num_kv_heads * St * DHt;
@@ -254,17 +260,14 @@ void kernel_main() {
                             write_ptr += k_tile_bytes;
                         }
                         noc_async_read_barrier();
+
+                        // For interleaved: signal once after all tiles (not page-pipelined)
+                        *k_addr_for_ncrisc_ptr = k_write_ptr;
+                        noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
                     }
 
-                    // Store K buffer address for NCRISC before pushing
-                    // (after push, the write_ptr advances, so we save it first)
-                    *k_addr_for_ncrisc_ptr = k_write_ptr;
-
-                    // Push K to CB
+                    // Push K to CB (for both sharded and interleaved)
                     cb_push_back(cb_k_in, k_chunk_tiles);
-
-                    // Signal NCRISC that DRAM read is complete and address is ready
-                    noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
                 } else {
                     // Receiver: wait for multicast data from sender (sent by NCRISC writer)
                     DeviceZoneScopedN("mcast-receiver-wait");

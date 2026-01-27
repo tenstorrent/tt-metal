@@ -525,6 +525,10 @@ class FlashMLADecode:
         noc_max_page_size = get_noc_max_page_size()
         k_page_size, k_num_pages = get_max_page_size_and_num_pages(noc_max_page_size, k_chunk_tiles, k_tile_size)
 
+        # Detect if KV cache is sharded (for page-level pipelining in writer)
+        kv_mem_config = kv_cache_tensor.memory_config()
+        kv_is_sharded = kv_mem_config.is_sharded()
+
         # Index stick size for position tensor (C++ lines 429-445)
         index_stick_size = B * 4  # int32 = 4 bytes per element
         index_stick_size = ((index_stick_size + 31) // 32) * 32  # Align to 32 bytes
@@ -631,6 +635,9 @@ class FlashMLADecode:
             num_mcast_dests,  # 19: multicast destinations (7 = 8 cores per S block - 1 sender)
             2,  # 20: mcast_semaphore_id (semaphore for KV cache multicast to receivers)
             3,  # 21: brisc_ncrisc_sync_semaphore_id (semaphore for BRISC->NCRISC sync)
+            k_page_size,  # 22: page size for page-level pipelining
+            k_num_pages,  # 23: number of pages per K chunk
+            1 if kv_is_sharded else 0,  # 24: kv_is_sharded (enables page-level pipelining)
         ]
 
         # Compute compile time args (simplified)
