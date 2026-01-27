@@ -339,6 +339,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     }
 }
 
+[[deprecated("unused function, use async write instead")]]
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, uint32_t num_times_to_write) {
