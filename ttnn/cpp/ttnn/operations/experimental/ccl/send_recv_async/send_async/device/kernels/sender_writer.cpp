@@ -96,10 +96,7 @@ void kernel_main() {
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
         receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, receiver_socket.upstream_bytes_acked_addr);
-    DPRINT << "Upstream Fabric Node Id: " << receiver_socket.upstream_mesh_id << ":" << receiver_socket.upstream_chip_id
-           << ENDL();
-    DPRINT << "Downstream Fabric Node Id: " << downstream_enc.downstream_mesh_id << ":"
-           << downstream_enc.downstream_chip_id << ENDL();
+
     // Initial read of data into CB. This is not profiled, since the expectation is that
     // in a real workload,
     auto noc_read_addr = input_addr_gen.get_noc_addr(0);
@@ -114,7 +111,6 @@ void kernel_main() {
     // This allows us to accurately measure loopback latency
 
     // 1. Send credit downstream
-    DPRINT << "Sender start handshake" << ENDL();
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
@@ -126,16 +122,12 @@ void kernel_main() {
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }
-    DPRINT << "Sender done handshake" << ENDL();
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
     for (uint32_t i = 0; i < 100; ++i) {
-        DPRINT << "Reserve Pages " << i << ENDL();
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Reserved Pages " << i << ENDL();
         auto l1_read_addr = get_read_ptr(data_cb_id);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
 
-        DPRINT << "Write Data to Downstream " << i << ENDL();
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 fabric_connection,
@@ -159,7 +151,6 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
-        DPRINT << "Done writing data to downstream " << i << ENDL();
         if constexpr (aligned_partial_packet_size) {
             write_data_to_remote_core_with_ack(
                 fabric_connection_2,
@@ -169,13 +160,9 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 aligned_partial_packet_size);
         }
-        DPRINT << "Push Pages " << i << ENDL();
         socket_push_pages(sender_socket, 1);
-        DPRINT << "Done pushing pages " << i << ENDL();
 
-        DPRINT << "Wait for Pages " << i << ENDL();
         socket_wait_for_pages(receiver_socket, 1);
-        DPRINT << "Done waiting for pages " << i << ENDL();
         uint32_t socket_read_addr = receiver_socket.read_ptr;
         uint32_t val = 0;
         for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
@@ -184,17 +171,13 @@ void kernel_main() {
             }
             val++;
         }
-        DPRINT << "Pop Pages " << i << ENDL();
         socket_pop_pages(receiver_socket, 1);
-        DPRINT << "Done popping pages " << i << ENDL();
         if ((i & 1) == 0) {
-            DPRINT << "Notify Sender " << i << ENDL();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "Done notifying sender " << i << ENDL();
         }
     }
     update_socket_config(sender_socket);

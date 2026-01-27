@@ -108,15 +108,58 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 1, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 4, .entry_node_asic_location = 2, .exit_node_asic_location = 5},
+        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
+        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
+        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
+
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
         {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
         {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
         {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
         {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
         {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
         {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-        {.tray_id = 2, .entry_node_asic_location = 4, .exit_node_asic_location = 3}};
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
+
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
+        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 1},
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 4},
+        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 5},
+        {.tray_id = 3, .entry_node_asic_location = 5, .exit_node_asic_location = 2},
+        {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 1},
+
+        {.tray_id = 3, .entry_node_asic_location = 1, .exit_node_asic_location = 7}};
 
     const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
@@ -238,7 +281,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     // Write 0 to barrier buffer
     std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
     distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), barrier_buffer, barrier_data, true);
-    std::cout << "Barrier buffer address: " << barrier_buffer->address() << std::endl;
 
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
@@ -259,17 +301,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         auto pipeline_end_stage = *(distributed_context->size());
         auto [my_recv, upstream_send] =
             get_connecting_coords(pipeline_stages, pipeline_end_stage, pipeline_end_stage - 1);
-        std::cout << "Start: " << start_coord << " My Sender: " << my_sender << " Downstream Recv: " << downstream_recv
-                  << " Receiver: " << my_recv << " Upstream Send: " << upstream_send << std::endl;
-        std::cout << "Receiver Device: " << mesh_device_->get_device(my_recv)->id()
-                  << " Receiver Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_recv)
-                  << " Start Device: " << mesh_device_->get_device(start_coord)->id()
-                  << " Start Coord Fabric Node Id: " << mesh_device_->get_fabric_node_id(start_coord) << std::endl;
-        // std::cout << "Start Device: " << mesh_device_->get_device(start_coord)->id() << " Sender Device: " <<
-        // mesh_device_->get_device(my_sender)->id() << std::endl; std::cout << "Mesh 0 receiver: " <<
-        // mesh_device_->get_device(my_recv)->id() << std::endl; std::cout << "My sender: " << my_sender << " Downstream
-        // Recv: " << downstream_recv << std::endl; std::cout << "My recv: " << my_recv << " Upstream Send: " <<
-        // upstream_send << std::endl; std::cout << "Start Coord: " << start_coord << std::endl;
 
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_send, logical_coord),
@@ -288,7 +319,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
                                 std::nullopt)
                                 .to_device(mesh_device_.get(), tensor_spec.memory_config());
 
-        // std::cout << "Sockets Created" << std::endl;
         // Warmup iteration
         // Forward data to sender over intermed_send. Recv data over intermed_recv_2
         ttnn::experimental::send_async(input_tensor, intermed_send, intermed_recv_2);
@@ -314,21 +344,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         distributed::MeshSocket intermed_recv;
 
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
-        std::cout << "My Recv: " << my_recv << " Upstream Send: " << upstream_send << " My Sender: " << my_sender
-                  << " Downstream Recv: " << downstream_recv << std::endl;
-        std::cout << "My Recv Device: " << mesh_device_->get_device(my_recv)->id()
-                  << " My Recv Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_recv)
-                  << " My Sender Device: " << mesh_device_->get_device(my_sender)->id()
-                  << " My Sender Fabric Node Id: " << mesh_device_->get_fabric_node_id(my_sender)
-                  << " Downstream Recv Device: " << mesh_device_->get_device(downstream_recv)->id()
-                  << " Downstream Recv Fabric Node Id: " << mesh_device_->get_fabric_node_id(downstream_recv)
-                  << std::endl;
-        // std::cout << ""
-        // std::cout << "Recv Device: " << mesh_device_->get_device(my_recv)->id() << " Sender Device: " <<
-        // mesh_device_->get_device(my_sender)->id() << std::endl; std::cout << "Second Recv: " << my_recv << " Upstream
-        // Send: " << upstream_send << std::endl; std::cout << "Second Sender: " << my_sender << " Downstream Recv: " <<
-        // downstream_recv << std::endl;
-
         auto downstream_socket_rank = (distributed_context->rank() == pipeline_end_rank) ? 0 : downstream_mesh_id;
         auto fwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(my_sender, logical_coord),
@@ -342,7 +357,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 
         std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
         Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
-        std::cout << "Sockets Created" << std::endl;
         // Warmup iteration
         ttnn::experimental::socket_forward(output_tensor, recv_socket, intermed_send, XFER_SIZE);
         ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
