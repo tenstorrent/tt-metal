@@ -373,11 +373,19 @@ jobs:
 
                           print(f"  Extracted - Device: '{device}', Model: '{model}'")
 
-                          # Get test result
-                          failures = int(root.get('failures', '0'))
-                          errors = int(root.get('errors', '0'))
-                          tests = int(root.get('tests', '0'))
-                          skipped = int(root.get('skipped', '0'))
+                          # Get test result from <testsuite> element (not root <testsuites>)
+                          testsuite = root.find('testsuite')
+                          if testsuite is not None:
+                              failures = int(testsuite.get('failures', '0'))
+                              errors = int(testsuite.get('errors', '0'))
+                              tests = int(testsuite.get('tests', '0'))
+                              skipped = int(testsuite.get('skipped', '0'))
+                          else:
+                              # Fallback: try root element for backwards compatibility
+                              failures = int(root.get('failures', '0'))
+                              errors = int(root.get('errors', '0'))
+                              tests = int(root.get('tests', '0'))
+                              skipped = int(root.get('skipped', '0'))
 
                           # A test passes if there are tests run, no failures, and no errors
                           passed = tests > 0 and failures == 0 and errors == 0

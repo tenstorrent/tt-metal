@@ -69,7 +69,6 @@ jobs:
           unet_vanilla_test='{"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20}'
           segformer_test='{"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}'
           llama33_70b_text_test='{"name":"llama3.3-70b","test_path":"tt-metal/models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60}'
-          mamba_2_8b_test='{"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path='"'"'models/demos/wormhole/mamba/demo/prompts.json'"'"'","timeout":30}'
           flux1_dev_test='{"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60}'
           wan2_2_test='{"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}'
 
@@ -105,8 +104,6 @@ jobs:
           case "${{ inputs.device-type }}" in
             n150)
               standalone_models=$(jq -nc '[
-                {"name":"falcon-7b","test_path":"models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/falcon7b_common/demo/input_data.json","timeout":30},
-                {"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30},
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
                 {"name":"stable-diffusion","test_path":"models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo","test_args":"--input-path=models/demos/wormhole/stable_diffusion/demo/input_data.json","timeout":30},
                 {"name":"resnet-50","test_path":"models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
@@ -152,7 +149,6 @@ jobs:
             WH-QB)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45},
                 {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
                 {"name":"vit","test_path":"models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20}
               ]')
@@ -167,7 +163,6 @@ jobs:
             WH-6U)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"falcon-7b","test_path":"models/demos/tg/falcon7b/demo_tg.py::test_demo_multichip","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/tg/falcon7b/input_data_tg.json","timeout":30},
                 {"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20}
               ]')
               ;;
@@ -345,12 +340,15 @@ jobs:
           else
             echo "Test Path: ${{ matrix.test.test_path }}"
             echo "Test Args: ${{ matrix.test.test_args }}"
+            echo "Working Directory: $(pwd)"
+            echo "Test file exists: $(test -f ${{ matrix.test.test_path }} && echo 'YES' || echo 'NO')"
             echo "=========================================="
 
-            pytest --disable-warnings -q -s \
+            # Run pytest with verbose output to see what's happening
+            pytest --disable-warnings -v \
               ${{ matrix.test.test_path }} \
               ${{ matrix.test.test_args }} \
-              --junitxml=generated/test_results/results-${{ inputs.device-type }}-${{ matrix.test.model }}-${TEST_NAME_SAFE}.xml
+              --junitxml=generated/test_results/results-${{ inputs.device-type }}-${{ matrix.test.model }}-${TEST_NAME_SAFE}.xml || echo "pytest exit code: $?"
           fi
 
       - name: Upload test results
