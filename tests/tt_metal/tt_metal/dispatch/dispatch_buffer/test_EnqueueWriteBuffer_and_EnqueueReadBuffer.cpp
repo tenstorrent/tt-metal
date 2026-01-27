@@ -1486,8 +1486,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
-    // Test failing with watcher enabled, github issue #29555
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled, github issue #29555");
 
     auto mesh_device = this->device_;
     auto* device = mesh_device->get_devices()[0];

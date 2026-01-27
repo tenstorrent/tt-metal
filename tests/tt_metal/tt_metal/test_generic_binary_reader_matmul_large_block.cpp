@@ -101,7 +101,7 @@ std::vector<std::uint32_t> transpose_tiles(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #36546");
     IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
 

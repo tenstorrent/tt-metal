@@ -734,8 +734,7 @@ TEST_P(DispatchPagedWriteTestFixture, PagedWrite) {
 // TODO: Add multicast support
 TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     if (get_transfer_size_bytes() == 819200) {
-        // Test fails with watcher enabled github issue #36459
-        SKIP_FOR_WATCHER();
+        SKIP_FOR_WATCHER("Test fails with watcher enabled github issue #36459");
     }
     log_info(tt::LogTest, "DispatchPackedWriteTestFixture - WritePackedUnicast (Fast Dispatch) - Test Start");
 

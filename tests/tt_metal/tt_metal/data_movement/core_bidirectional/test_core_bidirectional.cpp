@@ -301,8 +301,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
-    // Test failing with watcher enabled, github issue #29229
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #29229");
 
     // Test ID (Arbitrary)
     uint32_t test_id = 141;
@@ -329,8 +328,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKe
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
-    // Test failing with watcher enabled, github issue #29229
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #29229");
 
     // Test ID (Arbitrary)
     uint32_t test_id = 143;
@@ -361,8 +359,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
-    // Test failing with watcher enabled, github issue #29229
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #29229");
 
     // Test ID base
     uint32_t test_id_base = 145;
@@ -393,8 +390,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
-    // Test failing with watcher enabled, github issue #29229
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #29229");
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = false;
