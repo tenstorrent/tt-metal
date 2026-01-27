@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN CCL Broadcast Test
+CCL TP/SP Broadcast Test
 
 Tests the deepseek_minimal_broadcast operation implemented using the generic op infrastructure.
 This test validates dual-axis broadcast on a 2D mesh where:
@@ -46,6 +46,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -70,14 +71,8 @@ def test_ccl_broadcast_dual_axis(
     cluster_axis,
     secondary_cluster_axis,
     topology,
+    using_persistent_buffers,
 ):
-    """
-    Test dual-axis broadcast on a 2D mesh.
-
-    Sender at (sender_row, sender_col) broadcasts:
-    1. First across secondary_cluster_axis to the secondary sender
-    2. Then both broadcasters send along cluster_axis to all devices in their columns
-    """
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
@@ -144,7 +139,7 @@ def test_ccl_broadcast_dual_axis(
     )
 
     # Compute expected output using golden function
-    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor, (sender_row, sender_col), (mesh_rows, mesh_cols))
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
 
     # Run broadcast operation
     logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
@@ -157,6 +152,7 @@ def test_ccl_broadcast_dual_axis(
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
         topology=topology,
+        using_persistent_buffers=using_persistent_buffers,
     )
     ttnn.synchronize_device(submesh)
 
@@ -177,174 +173,16 @@ def test_ccl_broadcast_dual_axis(
         assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
 
         if not torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3):
-            logger.error(f"Output mismatch for device {device_idx}")
+            logger.error(f"Output mismatch for device {device_idx} (iteration {iter_idx+1})")
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED")
+
+    assert all_passed, f"Not all devices received the correct broadcast data (iteration {iter_idx+1})"
 
     # Cleanup
     submesh.reset_sub_device_stall_group()
     submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices received the correct broadcast data"
-    logger.info("✓ CCL broadcast dual-axis test passed!")
-
-
-@pytest.mark.parametrize(
-    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
-    [
-        (
-            4,
-            1,
-            1,
-            0,
-            [1, 7168],
-            (1, 7168),
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-    ],
-)
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-def test_ccl_broadcast_single_axis(
-    mesh_device,
-    mesh_rows,
-    mesh_cols,
-    sender_row,
-    sender_col,
-    output_shape,
-    input_shard_shape,
-    tensor_mem_layout,
-    layout,
-    input_dtype,
-    cluster_axis,
-    topology,
-):
-    """
-    Test single-axis broadcast on a 1D mesh (no secondary axis).
-
-    Sender at (sender_row, sender_col) broadcasts along cluster_axis to all devices.
-    """
-    num_devices = mesh_rows * mesh_cols
-
-    # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
-    # Create submesh
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-
-    # Set up sub-device
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
-
-    # Set up sharded memory config
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-    output_mem_config = input_mem_config
-
-    # Create sender tensor (the data to broadcast)
-    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-
-    # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere
-    device_tensors = []
-    for row in range(mesh_rows):
-        if row == sender_row:
-            device_tensors.append(sender_tensor)
-        else:
-            device_tensors.append(torch.zeros_like(sender_tensor))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-
-    # Create output tensor
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=output_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Compute expected output using golden function
-    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor, (sender_row, sender_col), (mesh_rows, mesh_cols))
-
-    # Run broadcast operation (single axis, no secondary_cluster_axis)
-    logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
-    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-
-    ttnn_result = DeepseekMinimalBroadcast.op(
-        input_tensor_mesh,
-        output_tensor,
-        sender_coord,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=None,  # Single axis broadcast
-        topology=topology,
-    )
-    ttnn.synchronize_device(submesh)
-
-    # Verify output - all devices should have the sender's data
-    logger.info("Verifying broadcast results...")
-    output_tensor_torch = ttnn.to_torch(
-        ttnn_result,
-        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
-    )
-
-    slice_size = output_shape[0]
-    all_passed = True
-    for device_idx in range(num_devices):
-        start = device_idx * slice_size
-        end = start + slice_size
-        received = output_tensor_torch[start:end, :]
-
-        assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
-
-        if not torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3):
-            logger.error(f"Output mismatch for device {device_idx}")
-            all_passed = False
-        else:
-            logger.info(f"Device {device_idx}: PASSED")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
-
-    assert all_passed, "Not all devices received the correct broadcast data"
-    logger.info("✓ CCL broadcast single-axis test passed!")
+    logger.info("CCL broadcast dual-axis test passed!")

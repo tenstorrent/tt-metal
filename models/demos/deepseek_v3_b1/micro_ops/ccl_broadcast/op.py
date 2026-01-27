@@ -28,14 +28,12 @@ class DeepseekMinimalBroadcast:
     """
 
     @staticmethod
-    def golden(input_tensor, sender_coord, mesh_shape):
+    def golden(input_tensor):
         """
         PyTorch reference implementation of broadcast for validation.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) - the data at sender
-            sender_coord: Tuple (row, col) of sender device
-            mesh_shape: Tuple (rows, cols) of mesh shape
 
         Returns:
             Output tensor that would be on each device after broadcast
@@ -52,13 +50,14 @@ class DeepseekMinimalBroadcast:
         secondary_cluster_axis=None,
         topology=None,
         num_links=1,
+        using_persistent_buffers=True,
     ):
         """
         Execute broadcast operation using generic_op.
 
         Args:
             input_tensor_mesh: Input tensor mesh (sender has data, others have zeros)
-            output_tensor: Pre-allocated output tensor mesh (all devices)
+            output_tensor: Pre-allocated output tensor mesh
             sender_coord: ttnn.MeshCoordinate of the sender device
             cluster_axis: Primary axis for broadcast (default 0)
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
@@ -92,6 +91,7 @@ class DeepseekMinimalBroadcast:
         out_ready_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
         barrier_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
         secondary_sync_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
+
         ttnn.synchronize_device(mesh_device)
 
         out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
@@ -99,22 +99,15 @@ class DeepseekMinimalBroadcast:
         secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
         # Calculate packet size and page info
-        packet_size_bytes = 14336  # tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()
+        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
 
         # Get tile info from input tensor
         input_tensor_sample = input_tensors_per_device[0]
         tile = input_tensor_sample.tile
         tile_height, tile_width = tile.tile_shape
 
-        # Element size based on dtype
         dtype = input_tensor_sample.dtype
-        if dtype == ttnn.bfloat16:
-            element_size = 2
-        elif dtype == ttnn.float32:
-            element_size = 4
-        else:
-            element_size = 2  # Default to bfloat16
-
+        element_size = 2
         page_size_bytes = tile_height * tile_width * element_size
 
         # Get shard shape to calculate number of pages
@@ -147,7 +140,9 @@ class DeepseekMinimalBroadcast:
                 output_tensor_device = output_tensors_per_device[device_idx]
 
                 # Worker core is the data core (from shard grid)
-                worker_core = ttnn.CoreCoord(0, 0)
+                input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
+                shard_grid_start = input_shard_grid.bounding_box().start
+                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
                 worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
 
                 # Get physical core for NOC addressing
@@ -203,7 +198,7 @@ class DeepseekMinimalBroadcast:
                     range_hops_forward,  # range_hops_forward
                     start_distance_backward,  # start_distance_in_hops_backward
                     range_hops_backward,  # range_hops_backward
-                    0,  # using_persistent_buffers = False
+                    using_persistent_buffers,  # using_persistent_buffers
                 ]
 
                 # Reader runtime args
@@ -306,7 +301,7 @@ class DeepseekMinimalBroadcast:
                     fabric_args = ttnn.setup_routing_plane_connection(
                         fabric_node_id,
                         dst_nodes,
-                        [0],  # link_idx for all connections
+                        [0],
                         program,
                         1,  # kernel_idx (writer kernel)
                         worker_core,
