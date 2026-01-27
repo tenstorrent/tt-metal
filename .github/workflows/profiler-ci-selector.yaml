@@ -36,19 +36,21 @@ on:
         required: false
         type: boolean
         default: false
-      enable-lto:
-        default: false
-        required: false
-        type: boolean
-        description: "Enable Link Time Optimization (LTO)"
       platform:
         required: false
-        type: choice
+        type: string
         default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       run_t3k_profiler:
@@ -81,16 +83,21 @@ on:
         required: false
         type: boolean
         default: false
-      enable-lto:
-        description: "Enable Link Time Optimization (LTO)"
-        required: false
-        type: boolean
-        default: false
       platform:
         required: false
         type: string
         default: "Ubuntu 22.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact-profiler:

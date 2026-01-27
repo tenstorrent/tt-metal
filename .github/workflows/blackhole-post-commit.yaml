@@ -43,6 +43,7 @@ on:
           - ASan
           - TSan
       enable-lto:
+        required: false
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"

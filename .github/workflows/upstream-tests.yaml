@@ -58,7 +58,8 @@ jobs:
     secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: false
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto != false }}
       build-wheel: true
       build-umd-tests: true
       tracy: true

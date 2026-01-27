@@ -103,11 +103,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type }}
-      enable-lto: ${{ inputs.enable-lto }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto != false }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
