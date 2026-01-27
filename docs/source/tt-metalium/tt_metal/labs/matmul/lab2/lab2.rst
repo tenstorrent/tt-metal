@@ -127,7 +127,7 @@ because other cores are needed for other tasks. Since ``81 / 11 = 7.36``, and th
 an integer, we choose ``8`` as the maximum number of output tiles per core.
 One way to divide the tiles is to assign the first four cores ``8`` output tiles each, and assign the remaining
 seven cores ``7`` output tiles each.
- 
+
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
