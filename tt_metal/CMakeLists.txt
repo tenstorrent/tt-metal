@@ -111,6 +111,17 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/host_tensor.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/sharding_types.hpp
+    api/tt-metalium/experimental/tensor/spec/shape/shape.hpp
+    api/tt-metalium/experimental/tensor/spec/spec_fwd.hpp
+    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/experimental/tensor/tensor_apis.hpp
+    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
 )
 target_sources(
     tt_metal

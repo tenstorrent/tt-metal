@@ -23,6 +23,7 @@ target_sources(
         core_coord/test_CoreRangeSet_intersects.cpp
         core_coord/test_CoreRangeSet_merge.cpp
         distribution_spec/test_buffer_distribution_spec.cpp
+        tensor/test_experimental_tensor.cpp
         test_banked.cpp
         test_bit_utils.cpp
         test_buffer_region.cpp
