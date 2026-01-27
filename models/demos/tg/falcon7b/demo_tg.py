@@ -48,7 +48,6 @@ def test_demo_multichip(
     user_input,
     mesh_device,
     is_ci_env,
-    ensure_devices_tg,
     galaxy_type,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
