@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-enum class RouterStateCommon : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, DRAINING = 3, RETRAINING = 4 };
+enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, DRAINING = 3, RETRAINING = 4 };
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
 
@@ -50,7 +50,7 @@ struct BandwidthTelemetry {
 };
 
 struct EriscDynamicEntry {
-    RouterStateCommon router_state;
+    RouterState router_state;
     // TX heartbeat: incremented when all sender queues are empty, or a packet was sent over Ethernet.
     RiscTimestampV2 tx_heartbeat;
     // RX heartbeat: incremented when receiver queues are empty, or a packet was forwarded from receiver to NoC/local.

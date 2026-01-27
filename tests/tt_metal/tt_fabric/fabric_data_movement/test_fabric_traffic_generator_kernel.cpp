@@ -122,7 +122,7 @@ protected:
         mesh_device_ = devices[0];
 
         // Allocate memory
-        memory_layout_ = allocate_worker_memory(mesh_device_);
+        memory_layout_ = allocate_worker_memory();
 
         // Create destination node (second device)
         FabricNodeId dest_node(MeshId{0}, 1);  // mesh_id=0, device_id=1
@@ -158,22 +158,22 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
     launch_traffic_generator(worker_core);
     FabricCommandInterface cmd_interface(control_plane);
 
-    ASSERT_TRUE(cmd_interface.wait_for_state(control_plane, RouterStateCommon::RUNNING, std::chrono::milliseconds(5000)))
+    ASSERT_TRUE(cmd_interface.wait_for_state(RouterState::RUNNING, std::chrono::milliseconds(5000)))
         << "Routers did start in running state";
     // Validate traffic is flowing
     ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal pause via control plane
-    cmd_interface.pause_routers(control_plane);
-    ASSERT_TRUE(cmd_interface.wait_for_pause(control_plane, std::chrono::milliseconds(5000)))
+    cmd_interface.pause_routers();
+    ASSERT_TRUE(cmd_interface.wait_for_pause(std::chrono::milliseconds(5000)))
         << "Routers did not pause within timeout";
 
     // Validate there is no traffic flowing after pause
     ASSERT_TRUE(!check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal resume via control plane
-    cmd_interface.resume_routers(control_plane);
-    ASSERT_TRUE(cmd_interface.wait_for_state(control_plane, RouterStateCommon::RUNNING, std::chrono::milliseconds(5000)))
+    cmd_interface.resume_routers();
+    ASSERT_TRUE(cmd_interface.wait_for_state(RouterState::RUNNING, std::chrono::milliseconds(5000)))
         << "Routers did not resume within timeout";
 
     // Validate traffic is flowing again

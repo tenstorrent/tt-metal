@@ -1651,7 +1651,7 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
 
     routing_l1_info_t routing_info = {};
     routing_info.state_manager.command = RouterCommand::RUN;
-    routing_info.state_manager.state = RouterStateCommon::INITIALIZING;
+    routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
 

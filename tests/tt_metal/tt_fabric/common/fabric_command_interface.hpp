@@ -38,7 +38,7 @@ public:
     void resume_routers() const;
 
     // Check if all routers are in specified state
-    bool all_routers_in_state(RouterStateCommon expected_state) const;
+    bool all_routers_in_state(RouterState expected_state) const;
 
     // Wait for all routers to enter pause state with timeout
     bool wait_for_pause(
@@ -46,12 +46,12 @@ public:
 
     // Generic wait for any state
     bool wait_for_state(
-        RouterStateCommon target_state,
+        RouterState target_state,
         std::chrono::milliseconds timeout = DEFAULT_PAUSE_TIMEOUT,
         std::chrono::milliseconds poll_interval = DEFAULT_POLL_INTERVAL) const;
 
     // Get state of specific router
-    RouterStateCommon read_router_state(const FabricNodeId& fabric_node_id, chan_id_t channel_id) const;
+    RouterState read_router_state(const FabricNodeId& fabric_node_id, chan_id_t channel_id) const;
 
 private:
     // Helper for sending commands to all routers

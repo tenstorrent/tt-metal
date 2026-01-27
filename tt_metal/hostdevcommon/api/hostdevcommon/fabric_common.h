@@ -509,7 +509,7 @@ enum class RouterCommand : std::uint32_t {
 };
 
 struct RouterStateManager {
-    RouterStateCommon state;  // 4B, written by device, read by host
+    RouterState state;  // 4B, written by device, read by host
     uint8_t padding0[12];     //
     RouterCommand command;    // 4B, written by host, read by device
     uint8_t padding1[12];     //
