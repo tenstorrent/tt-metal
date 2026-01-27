@@ -269,35 +269,41 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_TERNARY
+            // Split ternary reading across two NoCs for load balancing:
+            // - Non-output-writer (in0 when M>N, in1 when M<N) reads ternary_a
+            // - Output-writer (in1 when M>N, in0 when M<N) reads ternary_b
             if constexpr (!is_output_writer) {
-                // Read ternary tensors for the current M x N output block
-                cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
-                cb_reserve_back(cb_id_ternary_b, out_block_num_tiles);
+                // Read ternary_a on this NoC
+                // cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
+                // uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
 
-                uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
-                uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
-
-                read_ternary_block_sync<M_block_tiles, N_block_tiles>(
+                read_ternary_block_sync_v1<M_block_tiles, N_block_tiles>(
                     ternary_a_reader,
                     out_shape,
-                    l1_write_addr_ternary_a,
+                    cb_id_ternary_a,
                     ternary_a_tile_size,
                     m_tile,
                     m_tile_end,
                     n_tile,
                     n_tile_end);
-                read_ternary_block_sync<M_block_tiles, N_block_tiles>(
+
+                // cb_push_back(cb_id_ternary_a, out_block_num_tiles);
+            } else {
+                // Read ternary_b on this NoC (output writer handles ternary_b)
+                // cb_reserve_back(cb_id_ternary_b, out_block_num_tiles);
+                // uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
+
+                read_ternary_block_sync_v1<M_block_tiles, N_block_tiles>(
                     ternary_b_reader,
                     out_shape,
-                    l1_write_addr_ternary_b,
+                    cb_id_ternary_b,
                     ternary_b_tile_size,
                     m_tile,
                     m_tile_end,
                     n_tile,
                     n_tile_end);
 
-                cb_push_back(cb_id_ternary_a, out_block_num_tiles);
-                cb_push_back(cb_id_ternary_b, out_block_num_tiles);
+                // cb_push_back(cb_id_ternary_b, out_block_num_tiles);
             }
 #endif  // FUSE_TERNARY
 
