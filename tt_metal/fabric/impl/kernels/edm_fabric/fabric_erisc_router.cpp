@@ -2442,7 +2442,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     } else {
         // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we
         // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
-        // is paused, draining, retraining, etc.), we will wait enter a busy wait loop in the main run loop
+        // is paused, draining, retraining, etc.), we will enter a busy wait loop in the main run loop
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             execute_main_loop();
         }
