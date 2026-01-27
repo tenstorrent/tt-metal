@@ -303,7 +303,7 @@ class MLA1D(AbstractModule):
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
-            dim=2,  # Changed from dim=1 to dim=2 to gather after permute in prefill
+            dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -969,8 +969,15 @@ class MLA1D(AbstractModule):
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
-        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
+        # tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
+        # tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
+        tt_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            tt_q,
+            num_heads=num_heads_local,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
@@ -1089,12 +1096,21 @@ class MLA1D(AbstractModule):
                 out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
         else:
             # Non-chunked path for shorter sequences
+            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads_local * v_head_dim))
+            # v_out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            #     v_out,
+            #     num_heads=num_heads_local,
+            #     num_kv_heads=0,
+            #     transpose_k_heads=False,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # )
+
             v_out = ttnn.experimental.all_gather_async(
                 v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
             )  # [1, seq_len, num_heads, v_head_dim]
 
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
-            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
 
         return out
