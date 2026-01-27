@@ -127,10 +127,13 @@ def dump_lightweight_asserts(
         previous_instruction = None
         current_instruction = None
 
-        # Check if PC is in code private memory (this only can be true for NCRISC on Wormhole)
+        # Check if PC is in code private memory (this only can be true for NCRISC and ERISC on Wormhole)
+        # Code private memory starts at 0xFFC00000 for those but PC read from debug bus gets masked via 0x7FFFFFFF
+        # as last bit is reserved, so we need to restore that bit via ORing with 0x80000000
+        # On all other cores, PC is in L1 so when ORd, it cannot start with 0xFFC.....
         pc = risc_debug.get_pc()
         code_private_memory = risc_debug.get_code_private_memory()
-        if code_private_memory is not None and code_private_memory.contains_private_address(pc):
+        if code_private_memory is not None and code_private_memory.contains_private_address(0x80000000 | pc):
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
             text_section = elf.get_section_by_name(".text")
