@@ -3,8 +3,6 @@
 
 import ttnn
 
-# import torch
-
 
 class CCLManager:
     def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring):
