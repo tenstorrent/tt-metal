@@ -62,3 +62,5 @@ def assert_quality(
     if relative_rmse is not None and (math.isnan(relative_rmse_found) or relative_rmse_found > relative_rmse):
         msg = f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} % <= {relative_rmse * 100:.1f} %"
         raise Exception(msg)  # noqa: TRY002
+
+    return pcc_found, ccc_found, relative_rmse_found

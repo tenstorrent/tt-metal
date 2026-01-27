@@ -201,5 +201,16 @@ def test_clip_encoder(
     assert pooled_output.shape == tt_projected_output_torch.shape
 
     # For some reason, this has pcc 10 both here and in sd3.5 large when max_length padding is used
-    assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)
+    import csv
+
+    pcc, ccc, rmse = assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+    with open("encoder_pcc_results.csv", "a", newline="") as f:
+        csv.writer(f).writerow(
+            [test_text, clip_path, "sequence_output", f"{pcc*100:.4f}", f"{ccc*100:.4f}", f"{rmse*100:.4f}"]
+        )
+
+    pcc, ccc, rmse = assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)
+    with open("encoder_pcc_results.csv", "a", newline="") as f:
+        csv.writer(f).writerow(
+            [test_text, clip_path, "projected_output", f"{pcc*100:.4f}", f"{ccc*100:.4f}", f"{rmse*100:.4f}"]
+        )
