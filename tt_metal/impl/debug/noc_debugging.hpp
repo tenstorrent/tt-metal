@@ -12,6 +12,7 @@
 #include <array>
 #include <tools/profiler/event_metadata.hpp>
 #include <unordered_set>
+#include <string_view>
 
 namespace tt::tt_metal {
 
@@ -26,6 +27,10 @@ struct NocWriteEvent {
     int8_t dst_y;
     bool posted;
     uint8_t noc;
+    bool is_semaphore;
+    bool is_mcast;
+    int8_t mcast_end_dst_x;
+    int8_t mcast_end_dst_y;
 };
 
 struct NocReadEvent {
@@ -71,10 +76,18 @@ using NOCDebugEvent = std::variant<
     UnknownNocEvent>;
 
 enum class NOCDebugIssueType : uint8_t {
-    // Write with missing flush or barrier at the source core.
+    // Write with missing flush or barrier at the source core (by write type)
     WRITE_FLUSH_BARRIER,
+    WRITE_FLUSH_BARRIER_MCAST,
+    WRITE_FLUSH_BARRIER_SEMAPHORE,
+    WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST,
     // Read with missing barrier at the destination core.
     READ_BARRIER,
+    // Unflushed writes at end of kernel execution (by write type)
+    UNFLUSHED_WRITE_AT_END,
+    UNFLUSHED_WRITE_MCAST_AT_END,
+    UNFLUSHED_SEMAPHORE_AT_END,
+    UNFLUSHED_SEMAPHORE_MCAST_AT_END,
     // Number of issue types
     COUNT,
 };
@@ -102,6 +115,20 @@ public:
     // Reset the debug state for all cores and clear all issues
     void reset_state();
 
+    // Print aggregated errors summary (grouped by error type with affected cores)
+    void print_aggregated_errors() const;
+
+    // This should be called after kernels are done (Finish()). It will check for unflushed reads/writes at the end of
+    // the kernel.
+    void finish_cores();
+
+    // Tracks info about a pending write for end-of-kernel checking
+    struct PendingWriteInfo {
+        int processor_id = 0;
+        bool is_semaphore = false;
+        bool is_mcast = false;
+    };
+
 private:
     struct CoreDebugState {
         static constexpr size_t MAX_PROCESSORS = 5;
@@ -112,12 +139,14 @@ private:
         std::array<uint32_t, MAX_NOCS> nonposted_write_counter_snapshot{};
         std::array<uint32_t, MAX_NOCS> posted_write_counter_snapshot{};
 
-        // Pending addresses not flushed yet for each NOC
+        // Pending reads not flushed yet for each NOC (dst_addr set)
         std::array<std::unordered_set<uint32_t>, MAX_NOCS> reads_not_flushed{};
-        std::array<std::unordered_set<uint32_t>, MAX_NOCS> posted_writes_not_flushed{};
-        std::array<std::unordered_set<uint32_t>, MAX_NOCS> nonposted_writes_not_flushed{};
 
-        // Captures if any read or write has occured yet for each NOC
+        // Pending writes not flushed yet for each NOC (src_addr -> write type info)
+        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
+        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
+
+        // Captures if any read or write has occurred yet for each NOC
         std::array<bool, MAX_NOCS> any_reads{};
         std::array<bool, MAX_NOCS> any_posted_writes{};
         std::array<bool, MAX_NOCS> any_nonposted_writes{};
@@ -140,6 +169,8 @@ private:
     CoreDebugState& get_state(tt_cxy_pair core);
 
     const CoreDebugState& get_state(tt_cxy_pair core) const;
+
+    static std::string_view get_issue_description(NOCDebugIssueType issue_type);
 
     mutable std::unordered_map<tt_cxy_pair, CoreDebugState> cores;
     mutable std::mutex cores_mutex;
