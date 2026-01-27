@@ -998,10 +998,14 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])  # head parallel
         print("cfg['wq_b'] shape: ", cfg["wq_b"]["input_tensor_b"].shape)
         print("tt_q shape after second linear: ", tt_q.shape)
-        # print("tt_q after second linear: ", tt_q)
 
-        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
+        tt_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            tt_q,
+            num_heads=num_heads_local,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
