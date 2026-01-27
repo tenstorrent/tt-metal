@@ -80,7 +80,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source /opt/venv/bin/activate
           source tests/scripts/run_python_model_tests.sh
           run_python_model_tests_${{ inputs.arch }}
           run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
