@@ -232,9 +232,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto compute_tile = tt::tt_metal::Tile({compute_tile_height, compute_tile_width});
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    constexpr auto local_cb = tt::CBIndex::c_0;
-    constexpr auto received_cb = tt::CBIndex::c_1;
-    constexpr auto output_cb = tt::CBIndex::c_2;
+    constexpr auto local_cb = tt::CBIndex::c_0;     // Input tensor (reader pushes)
+    constexpr auto received_cb = tt::CBIndex::c_1;  // Data from fabric
+    constexpr auto output_cb = tt::CBIndex::c_2;    // Compute output (writer waits on this)
+    constexpr auto scratch_cb = tt::CBIndex::c_4;   // Scratch for intermediate compute
     constexpr auto packet_cb = tt::CBIndex::c_3;
 
     // === Create CBs backed by tensor buffers ===
@@ -269,6 +270,12 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                                 .set_tile_dims(output_cb, compute_tile)
                                 .set_globally_allocated_address(*output_tensor.buffer());
     CreateCircularBuffer(program, all_cores, cb_output_config);
+
+    // scratch_cb: scratch space for intermediate compute results
+    auto cb_scratch_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{scratch_cb, input_dataformat}})
+                                 .set_page_size(scratch_cb, payload_size_bytes)
+                                 .set_tile_dims(scratch_cb, compute_tile);
+    CreateCircularBuffer(program, all_cores, cb_scratch_config);
 
     // packet_cb: staging buffer for workers to assemble packets before bottom core forwards them
     // Workers write [header][payload] here, bottom core reads and sends via fabric
@@ -305,10 +312,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     // Worker writer kernel: non-bottom cores assemble and send packets to bottom core
-    // Final result CB depends on number of reduction stages:
-    //   LEAF: local_cb (no compute), ROOT3: output_cb (1 stage), ROOT2: local_cb (2 stages)
-    // Kernel early exits for ROOT1 (output is in-place, no sending needed)
-    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : (is_mesh_root2 ? local_cb : output_cb);
+    // LEAF: reads from local_cb (no compute), others: reads from output_cb (compute output)
+    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : output_cb;
     std::vector<uint32_t> worker_writer_ct_args = {
         role, worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb};
     auto worker_writer_kernel = tt::tt_metal::CreateKernel(
@@ -318,17 +323,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::WriterDataMovementConfig(worker_writer_ct_args));
 
     // Fabric writer kernel: bottom cores handle fabric communication
-    // Final result CB: LEAF→local_cb, ROOT3→output_cb, ROOT2→local_cb, ROOT1→output_cb
-    uint32_t fabric_local_cb = is_mesh_leaf ? local_cb : (is_mesh_root2 ? local_cb : output_cb);
+    // LEAF: reads from local_cb (no compute), others: reads from output_cb (compute output)
+    uint32_t fabric_source_cb = is_mesh_leaf ? local_cb : output_cb;
     std::vector<uint32_t> fabric_writer_ct_args = {
-        role,
-        fabric_local_cb,
-        output_cb,
-        compute_num_tiles,
-        payload_size_bytes,
-        payload_size_bytes,
-        num_worker_slots,
-        packet_cb};
+        role, fabric_source_cb, compute_num_tiles, payload_size_bytes, payload_size_bytes, num_worker_slots, packet_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
@@ -336,7 +334,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::WriterDataMovementConfig(fabric_writer_ct_args));
 
     // Compute kernel: reduction for ROOT devices, early exits for LEAF
-    std::vector<uint32_t> compute_ct_args = {local_cb, received_cb, output_cb, compute_num_tiles, role};
+    std::vector<uint32_t> compute_ct_args = {local_cb, received_cb, output_cb, scratch_cb, compute_num_tiles, role};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",

@@ -14,6 +14,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
 // Device roles
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
 
@@ -43,7 +46,25 @@ void kernel_main() {
 
     // === Round 1: Wait for shard from sender ===
     volatile tt_l1_ptr uint32_t* recv_sem1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round1);
+
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_chip_id = routing_table->my_device_id;
+
+    // if constexpr (device_role == MESH_ROOT3) {
+    //     DPRINT << "reader waiting sem1 done " << my_chip_id << " device_role " << device_role << " recv_sem_round1 "
+    //     << recv_sem_round1 << " recv_sem1_ptr " << recv_sem1_ptr[0] << " x " <<(uint)my_x[0] << " y " <<
+    //     (uint)my_y[0] <<ENDL();
+    // }
+
     noc_semaphore_wait_min(recv_sem1_ptr, 1);
+
+    if constexpr (device_role == MESH_ROOT3) {
+        DPRINT << "reader waiting sem1 done " << my_chip_id << " device_role " << device_role << " recv_sem_round1 "
+               << recv_sem_round1 << " recv_sem1_ptr " << recv_sem1_ptr[0] << ENDL();
+    }
+
+    // DPRINT << "reader got sem1!" << ENDL();
 
     // Push received data to compute
     cb_push_back(received_cb, num_tiles);
@@ -54,6 +75,13 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* recv_sem2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round2);
         noc_semaphore_wait_min(recv_sem2_ptr, 1);
 
+        // DPRINT << "reader wait done 2" <<ENDL();
+
+        // tt_l1_ptr routing_l1_info_t* routing_table =
+        // reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        // uint16_t my_chip_id = routing_table->my_device_id;
+        // DPRINT << "reader wait done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
+
         cb_push_back(received_cb, num_tiles);
         noc_semaphore_set(recv_sem2_ptr, 0);
     }
@@ -63,7 +91,17 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* recv_sem3_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round3);
         noc_semaphore_wait_min(recv_sem3_ptr, 1);
 
+        // if constexpr (device_role == MESH_ROOT1) {
+        //     DPRINT << "reader waiting sem3 done " << my_chip_id << " device_role " << device_role << "
+        //     recv_sem_round3 " << recv_sem_round3 << " recv_sem3_ptr " << recv_sem3_ptr[0] <<ENDL();
+        // }
+
         cb_push_back(received_cb, num_tiles);
         noc_semaphore_set(recv_sem3_ptr, 0);
     }
+
+    // tt_l1_ptr routing_l1_info_t* routing_table =
+    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    // uint16_t my_chip_id = routing_table->my_device_id;
+    // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
 }
