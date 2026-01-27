@@ -520,7 +520,9 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [2 * 16])
-@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize(
+    "select_experts_k", [8, 7, 6, 5, 4, 3, 2, 1], ids=["k8", "k7", "k6", "k5", "k4", "k3", "k2", "k1"]
+)
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
@@ -534,6 +536,9 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "congestion_scheme", ["random_sequential_experts", "worst_congestion_descending", "best_congestion"]
+)
 def test_decode_perf(
     mesh_device,
     mesh_shape,
@@ -548,6 +553,7 @@ def test_decode_perf(
     num_links,
     topology,
     dtype,
+    congestion_scheme,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -574,7 +580,7 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="worst_congestion_descending",
+        scheme=congestion_scheme,
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
