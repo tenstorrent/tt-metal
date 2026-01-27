@@ -81,7 +81,7 @@ In Tenstorrent architecture, the cores are organized into a 2D grid with each co
 by an index ``(x, y)`` in this grid.
 
 .. figure:: images/tensix_core_grid.png
-   :width: 800
+   :width: 700
    :alt: Tensix Core Grid
    :align: center
 
@@ -154,7 +154,7 @@ strategy being used. For example, for matrix multiplication, ``work_units`` coul
 
 * Number of elements in the output matrix. Since each output element can be computed in parallel,
   we could choose to assign individual elements to cores. While possible, this would be a poor choice
-  when targetting Tenstorrent devices, since they can efficiently multiply whole tiles.
+  when targeting Tenstorrent devices, since they can efficiently multiply whole tiles.
 * Number of tiles in the output matrix. Similar to the above, we could choose to assign individual
   tiles to cores.
 * Number of larger blocks in the output matrix. We could increase tile size, or use blocks
@@ -270,7 +270,7 @@ in the range and set the runtime arguments for each core. Similarly, you should 
 
 
 Inspecting and Choosing Cores
-*****************************
+=============================
 
 As shown earlier, the number of available compute cores on the device can be obtained using the
 ``compute_with_storage_grid_size()`` TT-Metalium C++ API. To call this API, you need to get the ``device`` object,
@@ -315,8 +315,8 @@ Perform the following steps:
 If you are working on a device with fewer than 100 Tensix cores, adjust the core grid sizes accordingly.
 
 
-Background: Data Reuse in Multi Core Matrix Multiplication
-**********************************************************
+Data Reuse in Multi Core Matrix Multiplication
+**********************************************
 
 Motivation
 ==========
@@ -328,7 +328,7 @@ This approach is inefficient because tiles from input matrices are re-fetched
 from DRAM multiple times.
 
 Consider a concrete example with matrices ``A`` and ``B`` of shape ``4x4`` tiles, producing
-resulting matrix ``C`` of shape ``4x4`` tiles. To compute output tiles ``C[0,0]`` and ``C[0,1]``:
+the resulting matrix ``C`` of shape ``4x4`` tiles. To compute output tiles ``C[0,0]`` and ``C[0,1]``:
 
 +----------------+------------------------------------------------+------------------------------------------------+
 | Output Tile    | Tiles Read from ``A``                          | Tiles Read from ``B``                          |
@@ -373,7 +373,7 @@ This is shown in Figure 3.
 
 Observe that there is no data reuse across cores; each core still needs to read input data for its own
 block of output tiles, some of which is the same as the data read by other cores.
-Also observe that this approach requires number of tiles to be a multiple of the number of cores in each
+Also observe that this approach requires the number of tiles to be a multiple of the number of cores in each
 dimension of the core grid to ensure that blocks of tiles are rectangular, thus maximizing data reuse.
 
 Comparing Figure 3 to Figure 2, we went from using ``11`` cores to using ``9`` cores.
@@ -393,7 +393,7 @@ Limiting On-Chip Memory Usage
 =============================
 
 Assigning rectangular blocks to output tiles doesn't address the problem that bringing, for example,
-entire row of ``A`` into on-chip SRAM may not be possible due to limited on-chip memory.
+an entire row of ``A`` into on-chip SRAM may not be possible due to limited on-chip memory.
 In fact, for data reuse to be fully effective with blocking, we need multiple rows of input tiles
 in on-chip memory at the same time. The solution is to break down the ``K`` dimension into smaller chunks
 of tiles and compute **partial results** for each chunk, which require only a subset of the input
@@ -473,7 +473,7 @@ only once, consider the computation for a single output tile ``C[i][j]`` within 
 
 .. figure:: images/sum_standard.png
    :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
-   :width: 120
+   :width: 170
    :align: center
 
 We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
@@ -494,19 +494,21 @@ Define the partial result for block ``b`` as:
    :width: 200
    :align: center
 
-Key observation is that the partial result equation needs only tiles from the current K-block ``b``
+A key observation is that the partial result equation needs only tiles from the current K-block ``b``
 to compute the partial result for ``C[i][j](b)``, which is exactly what ``A_slab(b)`` and ``B_slab(b)``
-contain.
+contain. Considering the example in Figure 4, this means that only the slabs with the same shade of
+purple need to be in on-chip SRAM at the same time. This makes intuitive sense, since matrix multiplication
+involves multiplying only those elements whose ``K`` indices match.
 
 To get the final result, we need to add partial results for all K-blocks:
 
 .. figure:: images/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
-   :width: 300
+   :width: 200
    :align: center
 
 
-Observe that the above equations concerns only a single tile of the output ``C[i][j]``.
+Observe that the above equations concern only a single tile of the output ``C[i][j]``.
 This computation needs to be done for all tiles in ``C_block``, i.e. for all ``i`` and ``j``
 in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
 If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
@@ -517,7 +519,7 @@ in ``C_block``.
 Given that matrix multiplication is a linear transformation, such loop interchange does not
 change the result (ignoring floating-point considerations), as discussed in Lab 1.
 
-Note that if understanding above equations with respect to tiles is confusing,
+Note that if understanding the above equations with respect to tiles is confusing,
 try thinking of them as individual elements rather than tiles.
 The underlying math is the same, but it becomes easier to verify your understanding.
 
@@ -651,12 +653,12 @@ Steps
 #. Set fixed value for the ``K_block_tiles`` parameter.
    This parameter needs to be chosen so it divides ``Kt`` evenly.
    Given that tile size is fixed to ``32x32`` on all Tenstorrent architectures,
-   as of the time of this writing, then ``Kt = 320 / 32 = 10`` for this lab.
+   as of the time of this writing, and given the matrix sizes, ``Kt = 320 / 32 = 10`` for this lab.
    Given this, the only meaningful values for ``K_block_tiles`` are ``2`` or ``5``.
-   Start by setting this parameter to ``2``.
-   Starting with a lower value increases likelihood of data fitting into the on-chip SRAM,
-   since lower ``K_block_tiles`` means fewer tiles in each slab.
-   Should the tile size change in the future, the value of ``K_block_tiles`` should
+   A lower value of ``K_block_tiles`` allows for larger matrix sizes to fit into the
+   available on-chip SRAM, since lower ``K_block_tiles`` means fewer tiles in each slab.
+   Therefore, start by setting this parameter to ``2``.
+   Should the tile size change in the future, the value of ``K_block_tiles`` may need to
    be adjusted accordingly.
 
 #. Assume core grid is parameterizable, then determine appropriate values for other
@@ -684,7 +686,7 @@ Steps
 
    * When you call ``mm_init``, one of the arguments is the output circular buffer index.
      Given that matrix multiplication results will be written into either the output or intermediate
-     buffers, you can use either of the two circular buffer indices in call to ``mm_init``.
+     buffers, you can use either of the two circular buffer indices in a call to ``mm_init``.
      This is because ``mm_init`` uses the output circular buffer index only to determine output data
      format related parameters, which are the same for both the output and intermediate CBs.
    * An efficient way to accumulate partial results is to use the destination register array.
@@ -760,7 +762,7 @@ accordingly to ensure that the number of tiles divides evenly into the number of
 
 
 Potential Additional Optimizations
-==================================
+**********************************
 
 In this lab you explored basic optimizations to implement data reuse in a multi-core matrix multiplication program.
 There are many other ways in which the code could be further optimized. Here we list some examples:
@@ -771,7 +773,7 @@ There are many other ways in which the code could be further optimized. Here we 
    programming model exposes the array holding up to 8 tiles of data.
    We could leverage this extra storage to keep multiple output tiles active at once.
    By doing this, we could amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
-   data is packed into CBs. Conceptually,  instead of computing a single output tile, packing it, and then moving on
+   data is packed into CBs. Conceptually, instead of computing a single output tile, packing it, and then moving on
    to the next, we compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
    corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
    we pack all of its tiles out together in a batch.
