@@ -157,6 +157,11 @@ def test_untilize_single_core_interleaved_to_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ],
+        [
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+        ],
     ],
 )
 def test_untilize_single_core_interleaved_to_sharded_writer_kernel_tensor_addrgen_test(
@@ -176,7 +181,10 @@ def test_untilize_single_core_interleaved_to_sharded_writer_kernel_tensor_addrge
 
     """
     if output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        pytest.skip("Width sharded case crashes with division by 0. TODO: Fix this.")
+        pytest.skip(
+            "Width sharded case results in shard with width < tile width, which is not supported in single core implementation."
+        )
+
     num_tensor_dims = len(tensor_shape)
     tensor_height = 1
     for i in range(num_tensor_dims - 1):
@@ -232,8 +240,9 @@ def test_untilize_single_core_interleaved_to_sharded_writer_kernel_tensor_addrge
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
-
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert torch.equal(
+        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
+    ), "torch and ttnn output tensors are not equal"
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

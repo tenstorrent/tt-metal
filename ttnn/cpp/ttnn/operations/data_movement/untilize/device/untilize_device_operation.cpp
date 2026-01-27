@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -151,6 +151,24 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
 
     // We don't support input or output uneven sharding for the single core implementation
     if (!operation_attributes.use_multicore) {
+        // Check if output shard has width less than a tile width
+        if (output_is_sharded) {
+            uint32_t output_shard_width;
+            TT_FATAL(
+                operation_attributes.output_mem_config.shard_spec().has_value() ||
+                    operation_attributes.output_mem_config.nd_shard_spec().has_value(),
+                "Output memory config is sharded but no shard spec or nd shard spec is provided");
+            if (operation_attributes.output_mem_config.shard_spec().has_value()) {
+                output_shard_width = operation_attributes.output_mem_config.shard_spec().value().shape[1];
+            } else {
+                output_shard_width = operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
+            }
+            TT_FATAL(
+                output_shard_width % TILE_WIDTH == 0,
+                "Output shard width {} must be a multiple of tile width {} for single core implementation",
+                output_shard_width,
+                TILE_WIDTH);
+        }
         // Check for input uneven sharding
         if (input_is_sharded) {
             uint32_t input_shard_width;

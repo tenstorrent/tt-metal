@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,7 +106,7 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -116,8 +116,7 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Compute compile-time args
-    std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+    std::vector<uint32_t> compute_compile_time_args = {num_tiles_per_block, src0_cb_index, output_cb_index};
 
     // Compute kernel
     std::map<std::string, std::string> compute_kernel_defines;
