@@ -357,13 +357,21 @@ jobs:
 
                   # Extract device and model from filename
                   filename = os.path.basename(xml_file)
-                  print(f"Processing: {filename}")
+                  print(f"Processing XML: {filename}")
 
                   if filename.startswith('results-'):
                       parts = filename[8:].replace('.xml', '').split('-')
+                      print(f"  After removing 'results-' and .xml: {filename[8:].replace('.xml', '')}")
+                      print(f"  Split parts: {parts}")
+
                       if len(parts) >= 2:
                           device = parts[0]
-                          model = parts[1]
+                          # Find where 'Demo' starts (marks end of model name)
+                          demo_index = parts.index('Demo') if 'Demo' in parts else len(parts)
+                          # Join all parts between device and 'Demo' to get full model name
+                          model = '-'.join(parts[1:demo_index])
+
+                          print(f"  Extracted - Device: '{device}', Model: '{model}'")
 
                           # Get test result
                           failures = int(root.get('failures', '0'))
@@ -374,14 +382,27 @@ jobs:
                           # A test passes if there are tests run, no failures, and no errors
                           passed = tests > 0 and failures == 0 and errors == 0
 
-                          print(f"  Device: {device}, Model: {model}")
                           print(f"  Tests: {tests}, Failures: {failures}, Errors: {errors}, Skipped: {skipped}")
                           print(f"  Result: {'PASSED' if passed else 'FAILED'}")
+                          print(f"  Storing in test_results['{device}']['{model}']")
 
                           test_results[device][model].append(passed)
                           parsed_files += 1
+                      else:
+                          print(f"  ERROR: Not enough parts in filename (expected at least 2, got {len(parts)})")
+                  else:
+                      print(f"  Skipping - doesn't start with 'results-'")
               except Exception as e:
                   print(f"Error parsing {xml_file}: {e}")
+                  import traceback
+                  traceback.print_exc()
+
+          print(f"=== Parsed {parsed_files} test result files ===")
+          print(f"=== Test results dictionary: ===")
+          for device in test_results:
+              print(f"Device: {device}")
+              for model in test_results[device]:
+                  print(f"  Model: {model} -> {test_results[device][model]}")
 
           print(f"=== Parsed {parsed_files} test result files ===")
 
