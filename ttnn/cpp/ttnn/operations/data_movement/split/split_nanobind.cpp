@@ -40,10 +40,8 @@ void bind_split(nb::module_& mod) {
         )doc";
 
     // Bind the free functions directly - no struct!
-    ttnn::bind_function(
+    ttnn::bind_function<"split">(
         mod,
-        "split",
-        "ttnn.split",
         doc,
 
         // Overload 1: single split_size (int64_t)

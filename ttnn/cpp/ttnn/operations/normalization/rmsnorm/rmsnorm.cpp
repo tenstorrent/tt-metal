@@ -11,16 +11,18 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
-ttnn::Tensor ExecuteRMSNorm::invoke(
-    const ttnn::Tensor& input_tensor,
+namespace ttnn {
+
+Tensor rms_norm(
+    const Tensor& input_tensor,
     float epsilon,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& bias,
-    const std::optional<const ttnn::Tensor>& residual_input_tensor,
+    const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& bias,
+    const std::optional<const Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
+    const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
@@ -58,7 +60,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         program_config.value_or(ttnn::prim::create_program_config(input_tensor.shard_spec())),
         kernel_config_val,
         std::nullopt,  // dtype
-        ttnn::prim::LayerNormType::RMSNORM);
+        prim::LayerNormType::RMSNORM);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn
