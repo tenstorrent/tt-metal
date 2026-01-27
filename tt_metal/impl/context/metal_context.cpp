@@ -19,6 +19,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -351,6 +352,13 @@ void MetalContext::initialize(
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
+void MetalContext::reinitialize_dispatch_managers() {
+    // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
+    // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -427,6 +435,16 @@ void MetalContext::teardown() {
     control_plane_.reset();
 
     noc_debug_state_.reset();
+
+    // Clear bank-to-NOC and worker coordinate maps so they are regenerated on next
+    // initialize() with correct num_hw_cqs / dispatch config (avoids stale tables
+    // when context is re-initialized).
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {
@@ -1134,7 +1152,7 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
-    // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
+    // Create a dummy allocator to generate the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
         num_hw_cqs_,
@@ -1241,6 +1259,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
+
         cluster_->noc_multicast_write(
             dram_bank_to_noc_xy_[device_id].data(),
             dram_to_noc_sz_in_bytes,
