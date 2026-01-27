@@ -44,7 +44,7 @@ using ParametrizationOptionsMap = std::unordered_map<std::string, Parametrizatio
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
-    std::optional<std::variant<CoreCoord, std::string>> core;
+    std::optional<std::variant<tt::tt_metal::CoreCoord, std::string>> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;

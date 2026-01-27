@@ -423,6 +423,19 @@ private:
     DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest);
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
+
+    std::vector<ParsedSenderConfig> expand_sender_core_sweep(const std::vector<ParsedSenderConfig>& input_senders, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t sender_core_idx);
+
+    std::vector<ParsedSenderConfig> expand_dest_core_sweep(const std::vector<ParsedSenderConfig>& input_senders, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t dest_core_idx);
+
+    std::pair<uint32_t, uint32_t> calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration);
+
+    uint32_t calculate_sender_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
+
+    uint32_t calculate_dest_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
+
+    uint32_t calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
+
     std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config);
 
     void validate_pattern(const TrafficPatternConfig& pattern, const TestConfig& test) const;
@@ -481,6 +494,7 @@ private:
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);
+
 
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
