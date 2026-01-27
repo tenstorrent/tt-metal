@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-artifact-1:
-    name: Build Artifact 1 (Original Commit)
+    name: Build Artifact 1
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -18,7 +18,7 @@ jobs:
       name-suffix: "run1"
 
   build-artifact-2:
-    name: Build Artifact 2 (Modified Commit)
+    name: Build Artifact 2
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -296,10 +296,19 @@ jobs:
           env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run2_env.txt
           echo ""
           echo "=== Comparing Run 1 vs Run 2 ===="
-          echo "--- Build artifacts (using different builds) ---"
-          echo "Run 1 build: build-artifact-1"
-          echo "Run 2 build: build-artifact-2"
-          echo "Testing if different build artifacts affect ccache keys..."
+          echo "--- Build artifacts (same commit, different builds) ---"
+          echo "Run 1 build: build-artifact-1 (with suffix 'run1')"
+          echo "Run 2 build: build-artifact-2 (with suffix 'run2')"
+          echo "Testing if different build artifacts of same commit affect ccache keys..."
+          echo ""
+          echo "--- Git commits (should be identical) ---"
+          echo "Run 1 commit: $(cat /tmp/ttnn_run1_git_commit.txt | cut -c1-10)"
+          echo "Run 2 commit: $(cat /tmp/ttnn_run2_git_commit.txt | cut -c1-10)"
+          if diff -u /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt; then
+            echo "✅ Git commits are identical (same source, testing build artifact differences)"
+          else
+            echo "⚠️  WARNING: Git commits differ unexpectedly!"
+          fi
           echo ""
           echo "--- Build environment ---"
           if diff -u /tmp/ttnn_run1_env.txt /tmp/ttnn_run2_env.txt; then
@@ -311,9 +320,9 @@ jobs:
           echo "--- Ccache keys (first 30) ---"
           if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run2_ccache_keys.txt ]; then
             if diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt; then
-              echo "🟡 Ccache keys are identical despite different commits - git commit hash NOT part of cache key"
+              echo "✅ Ccache keys are identical - different build artifacts of same commit produce same cache keys"
             else
-              echo "✅ Ccache keys differ with different commits - git commit hash IS part of cache key"
+              echo "⚠️  Ccache keys differ - different build artifacts may affect kernel cache keys"
             fi
           else
             echo "⚠️  Cannot compare ccache keys - files not found"
@@ -442,22 +451,22 @@ jobs:
           echo "=== Build environment that affects cache keys ==="
           env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run3_env.txt
           echo ""
-          echo "=== Final Comparison: Cross-Commit Cache Test Results ===="
-          echo "--- Git commits (Run1==Run3, Run2 different) ---"
+          echo "=== Final Comparison: Same Commit, Different Build Artifacts Test Results ===="
+          echo "--- Git commits (all should be identical) ---"
           echo "Run 1 commit: $(cat /tmp/ttnn_run1_git_commit.txt)"
           echo "Run 2 commit: $(cat /tmp/ttnn_run2_git_commit.txt)"
           echo "Run 3 commit: $(cat /tmp/ttnn_run3_git_commit.txt)"
           echo ""
           if diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run3_git_commit.txt >/dev/null 2>&1; then
-            echo "✅ Run 1 and Run 3 commits match (same commit should enable cache hits)"
+            echo "✅ Run 1 and Run 3 commits match (expected: same commit and build)"
           else
             echo "❌ ERROR: Run 1 and Run 3 should have same commit!"
           fi
           echo ""
-          if ! diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt >/dev/null 2>&1; then
-            echo "✅ Run 2 commit differs as expected (testing cross-commit behavior)"
+          if diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt >/dev/null 2>&1; then
+            echo "✅ All runs use same commit (testing build artifact differences, not commit differences)"
           else
-            echo "❌ ERROR: Run 2 should have different commit!"
+            echo "⚠️  WARNING: Commits differ unexpectedly!"
           fi
           echo ""
           echo "--- Build environment consistency ---"
@@ -471,25 +480,24 @@ jobs:
             diff -u /tmp/ttnn_run2_env.txt /tmp/ttnn_run3_env.txt || true
           fi
           echo ""
-          echo "--- Ccache key analysis for cross-commit testing ---"
-          echo "Comparing Run 1 (original) vs Run 3 (back to original):"
+          echo "--- Ccache key analysis for same-commit, different-build testing ---"
+          echo "Comparing Run 1 (build-artifact-1) vs Run 3 (build-artifact-1 again):"
           if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run3_ccache_keys.txt ]; then
             if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt >/dev/null 2>&1; then
-              echo "✅ Run 1 and Run 3 ccache keys are identical - cross-commit cache works!"
+              echo "✅ Run 1 and Run 3 ccache keys are identical - same build produces same cache keys!"
             else
-              echo "🔴 Run 1 and Run 3 ccache keys differ - cross-commit cache may have issues!"
+              echo "🔴 Run 1 and Run 3 ccache keys differ - same build should produce identical keys!"
               diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt || true
             fi
           fi
           echo ""
-          echo "Comparing Run 1 vs Run 2 (different commits):"
+          echo "Comparing Run 1 (build-artifact-1) vs Run 2 (build-artifact-2):"
           if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run2_ccache_keys.txt ]; then
             if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt >/dev/null 2>&1; then
-              echo "🟡 Run 1 and Run 2 ccache keys are identical despite different commits"
-              echo "This suggests git commit hash is NOT part of cache key calculation"
+              echo "✅ Run 1 and Run 2 ccache keys are identical - different builds of same commit have same cache keys!"
+              echo "This means build artifacts differences (e.g., name suffixes) don't affect kernel cache keys."
             else
-              echo "✅ Run 1 and Run 2 ccache keys differ - different commits have different cache keys"
-              echo "This suggests git commit hash IS part of cache key calculation"
+              echo "⚠️  Run 1 and Run 2 ccache keys differ - different build artifacts may affect cache keys"
               echo "First 10 differing lines:"
               diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt | head -20 || true
             fi
@@ -507,7 +515,7 @@ jobs:
         run: |
           echo '## CCache TTNN Unit Tests Results' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks ccache behavior for TTNN unit tests across different git commits using Redis as the remote storage backend. Tests if cache keys include git commit hash and whether cross-commit cache hits are possible.' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks ccache behavior for TTNN unit tests using the same commit with different build artifacts. Tests whether kernel cache keys are affected by build artifact differences (name suffixes) when source code is identical.' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
 
           STATS=$(ccache -s)
