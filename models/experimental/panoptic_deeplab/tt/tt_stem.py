@@ -32,6 +32,8 @@ class TtStem(LightweightModule):
         super().__init__()
         self.device = device
         self.model_configs = model_configs
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         logger.debug(f"Initializing TtStem with TT CNN Builder API")
 
@@ -112,7 +114,8 @@ class TtStem(LightweightModule):
 
         assert x.storage_type() == ttnn.StorageType.DEVICE, "Input tensor must be on device"
         x = self.conv1(x)  # self._conv_relu_block(self.conv1, x, "Conv1", self.conv1_out_shape)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced
+        if self.is_20_core:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced, in case of 20 cores
         x = self.conv2(x)  # self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
         x = self.conv3(x)
         x = self.maxpool(x)
