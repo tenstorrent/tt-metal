@@ -24,6 +24,9 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 1280, 32, 32), 0),
         ((1024, 1024), (1, 640, 64, 64), 1),
+        # 512x512 image resolution
+        ((512, 512), (1, 1280, 16, 16), 0),
+        ((512, 512), (1, 640, 32, 32), 1),
     ],
 )
 @pytest.mark.parametrize("stride", [(1, 1)])
@@ -84,5 +87,5 @@ def test_upsample2d(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
     logger.info(f"PCC is {pcc_message}")

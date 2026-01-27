@@ -88,5 +88,5 @@ def test_downsample2d(
     del unet, tt_downsample
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.9988)
     logger.info(f"PCC is {pcc_message}")

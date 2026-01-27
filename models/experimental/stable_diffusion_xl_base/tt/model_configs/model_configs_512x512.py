@@ -306,7 +306,7 @@ class ModelOptimisations512x512:
             shard_layout=None,
             deallocate_activation=True,
             enable_act_double_buffer=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=False,
             act_block_w_div=1,
             act_block_h_override=0,
         )
