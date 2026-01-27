@@ -78,7 +78,6 @@ void MAIN {
         }
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
-
     tile_regs_commit();
 
     tile_regs_wait();
