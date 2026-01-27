@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 
@@ -181,12 +180,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Writer kernel
-    std::string writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-        "writer_unary_stick_layout_split_rows_multi_core.cpp";
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        writer_kernel_file,
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_multi_core.cpp",
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -268,9 +265,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Handle uneven input sharding width wise (writer run-time arg)
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
         if (input_is_sharded) {
-            uint32_t input_shard_width = a.shard_spec().value().shape[1];
             bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
             if (is_last_input_shard_in_row) {
+                uint32_t input_shard_width = a.shard_spec().value().shape[1];
                 num_unpadded_cols_per_input_block =
                     num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
             }
