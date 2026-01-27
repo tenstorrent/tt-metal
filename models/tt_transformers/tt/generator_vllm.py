@@ -605,7 +605,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+        from models.demos.multimodal.gemma3.demo.vision_demo import create_multimodal_model
 
         optimizations = (
             DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
