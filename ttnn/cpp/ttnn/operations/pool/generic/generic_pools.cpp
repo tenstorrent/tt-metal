@@ -363,6 +363,7 @@ class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     std::optional<int32_t> divisor_override;
     bool return_indices;
     Pool2DType pool_type;
+    DataType input_dtype;
     DataType dtype;
     TensorMemoryLayout shard_layout;
     Layout input_layout;
@@ -386,6 +387,7 @@ public:
         std::optional<const TensorMemoryLayout> applied_shard_scheme,
         bool return_indices,
         Pool2DType pool_type,
+        DataType input_dtype,
         DataType dtype,
         Layout input_layout,
         Layout output_layout,
@@ -404,6 +406,7 @@ public:
         divisor_override(divisor_override),
         return_indices(return_indices),
         pool_type(pool_type),
+        input_dtype(input_dtype),
         dtype(dtype),
         input_layout(input_layout),
         output_layout(output_layout),
@@ -556,6 +559,7 @@ public:
             pool_type,
             count_include_pad,
             divisor_override,
+            input_dtype,
             dtype,
             output_layout,
             sliced_input_memory_config,
@@ -719,6 +723,7 @@ static std::vector<Tensor> pool2d_DRAM(
         applied_shard_scheme,
         return_indices,
         pool_type,
+        input_tensor.dtype(),
         dtype,
         input_tensor.layout(),
         output_layout,

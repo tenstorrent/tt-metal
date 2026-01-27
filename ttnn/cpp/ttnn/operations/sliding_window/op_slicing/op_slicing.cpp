@@ -24,15 +24,19 @@ static uint32_t compute_L1_usage_for_slice_config(
     auto [batch_size, output_height, output_width, output_channels] = output_shape.to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_shape.to_array_4D();
 
+    // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     uint32_t slice_rounding_value = 1;
 
-    if (output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-        // Slice Write requires that the slice boundaries and shard boundaries are aligned to the tile boundaries.
-        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        // Slice Write requires that the slice boundaries are aligned to tile boundaries.
+        // For height slicing, align to TILE_HEIGHT; for width slicing, align to TILE_WIDTH.
+        // (Note: Both are 32, so using either works, but semantically we should match the slice dimension)
+        slice_rounding_value = (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT)
+                                   ? tt::constants::TILE_HEIGHT
+                                   : tt::constants::TILE_WIDTH;
     }
 
     const uint32_t min_output_slice_size =
@@ -165,6 +169,7 @@ Op2DSliceConfig determine_slice_config(
     }
 
     log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
     const uint32_t output_sliced_dim =
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
@@ -244,12 +249,16 @@ void run_sliced_op(
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for DRAM Slicing");
 
     uint32_t slice_rounding_value = 1;
-    if (output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-        // In DRAM Slicing with Tile Layout, the width must be a multiple of TILE_HEIGHT.
-        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        // In DRAM Slicing with Tile Layout, slices must be aligned to tile boundaries.
+        // For height slicing, align to TILE_HEIGHT; for width slicing, align to TILE_WIDTH.
+        // (Note: Both are 32, so using either works, but semantically we should match the slice dimension)
+        slice_rounding_value = (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT)
+                                   ? tt::constants::TILE_HEIGHT
+                                   : tt::constants::TILE_WIDTH;
     }
 
+    // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 

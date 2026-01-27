@@ -533,17 +533,33 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
+    DataType input_dtype,
     DataType dtype,
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     bool config_tensor_in_dram) {
-    // Calculate halo input size (input shard size)
+    // The input_memory_config passed in is already computed for the SLICED input dimensions
+    // (see get_input_memory_config in generic_pools.cpp which calls get_pool_input_memory_config
+    // with the sliced shape). So we can use its shard_spec directly.
     auto input_shard_shape = input_memory_config.shard_spec().value().shape;
+
+    // Halo input uses the actual input dtype
+    uint32_t halo_input_datum_size = 1;  // Default for BFLOAT8_B
+    if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        halo_input_datum_size = 4;
+    } else if (input_dtype == tt::tt_metal::DataType::BFLOAT16) {
+        halo_input_datum_size = 2;
+    } else if (input_dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+        halo_input_datum_size = 1;
+    }
+    uint32_t halo_input_size = input_shard_shape[0] * input_shard_shape[1] * halo_input_datum_size;
+
+    // Halo output and pool operations use BFLOAT16 (or FLOAT32)
+    // Halo converts BFLOAT8_B -> BFLOAT16, so pool always works with BFLOAT16/FLOAT32
     const tt::tt_metal::DataType pool_input_dtype =
         (dtype == tt::tt_metal::DataType::FLOAT32) ? tt::tt_metal::DataType::FLOAT32 : tt::tt_metal::DataType::BFLOAT16;
-    const uint32_t input_datum_size = pool_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
-    uint32_t halo_input_size = input_shard_shape[0] * input_shard_shape[1] * input_datum_size;
+    const uint32_t pool_datum_size = pool_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
     // Calculate halo output size using sliding window calculation
     // Create a sliding window config with proper core distribution for halo calculation
@@ -553,8 +569,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
     halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
 
-    // Get num_cores from the input memory config (for the sliced input)
-    // The sliding_window_config.num_cores_nhw is for the FULL output, not the slice
+    // Get num_cores from the input memory config
     uint32_t num_cores_nhw = 1;
     if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_nhw = input_memory_config.shard_spec().value().grid.num_cores();
@@ -570,7 +585,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         num_cores_nhw = 1;
     }
 
-    // Calculate num_cores_c from input_memory_config to be consistent
+    // Calculate num_cores_c from input_memory_config
     uint32_t num_cores_c = 1;  // Default for HEIGHT_SHARDED
     if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         num_cores_c = input_memory_config.shard_spec().value().grid.num_cores();
@@ -589,11 +604,9 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     uint32_t precise_halo_output_size =
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
-    uint32_t halo_output_size = precise_halo_output_size * input_datum_size;
+    uint32_t halo_output_size = precise_halo_output_size * pool_datum_size;
 
     // Create output memory config with correct output shard shape
-    // Output shard shape should be based on the ACTUAL pooled output dimensions, not the halo output
-    // The halo output is the padded INPUT to the pool operation (with overlap), which is much larger
     auto input_shard_spec = input_memory_config.shard_spec().value();
 
     // Calculate the actual pooled output size per core
@@ -605,7 +618,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     tt::tt_metal::ShardSpec output_shard_spec(
         input_shard_spec.grid,
         {pool_output_nhw_per_core,  // height = actual pooled output NHW per core
-         input_shard_shape[1]},     // width = C per core (unchanged)
+         input_shard_shape[1]},     // width = C per core (unchanged from input)
         input_shard_spec.orientation);
     auto output_memory_config = tt::tt_metal::MemoryConfig(
         input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
@@ -633,7 +646,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         config_tensor_in_dram);
 
     // Calculate actual pool output tensor size for memory tracking
-    uint32_t output_datum_size = input_datum_size;  // Pool output has same dtype as input
+    // Pool output has same dtype as pool input (halo output), which is BFLOAT16/FLOAT32
+    uint32_t output_datum_size = pool_datum_size;
     uint32_t output_tensor_size = pool_output_nhw_per_core * input_shard_shape[1] * output_datum_size;
 
     // Total size calculation with memory reuse:

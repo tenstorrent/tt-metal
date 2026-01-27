@@ -50,6 +50,11 @@ parameters = {
             [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, BS, None],
             [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, None],
             [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 0, BS, None],
+            # Non-tile multiples
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceHeight],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth],
         ],
     },
     "height_shard_tests": {

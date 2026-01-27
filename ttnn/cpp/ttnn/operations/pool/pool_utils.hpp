@@ -155,6 +155,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
+    DataType input_dtype,
     DataType dtype,
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
