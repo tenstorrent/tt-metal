@@ -5,7 +5,6 @@
 """Attention mechanism implementations for TTNN."""
 
 from dataclasses import dataclass
-import math
 from typing import Optional, Union
 
 import torch
@@ -19,6 +18,7 @@ import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 
 
 class TorchSDPAAttention(torch.nn.Module):
@@ -85,8 +85,11 @@ class TTNNSDPAAttention(TTNNModule):
         assert dropout == 0.0, "TTNNSDPAAttention does not support dropout"
         is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
         is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
-        if attention_mask is not None and attention_mask.layout != ttnn.TILE_LAYOUT:
-            attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if attention_mask is not None:
+            if attention_mask.layout != ttnn.TILE_LAYOUT:
+                attention_mask = ttnn.to_layout(attention_mask, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if attention_mask.dtype != query.dtype:
+                attention_mask = ttnn.typecast(attention_mask, query.dtype)
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -203,11 +206,20 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
             ],
             dim=0,
         )
+        bias1 = (
+            fused_qkv.query.bias if fused_qkv.query.bias is not None else torch.zeros_like(fused_qkv.query.weight[:, 0])
+        )
+        bias2 = fused_qkv.key.bias if fused_qkv.key.bias is not None else torch.zeros_like(fused_qkv.key.weight[:, 0])
+        bias3 = (
+            fused_qkv.value.bias if fused_qkv.value.bias is not None else torch.zeros_like(fused_qkv.value.weight[:, 0])
+        )
+
+        qkv_bias = torch.cat([bias1, bias2, bias3])
         qkv_bias = torch.cat(
             [
-                fused_qkv.query.bias,
-                fused_qkv.key.bias,
-                fused_qkv.value.bias,
+                bias1,
+                bias2,
+                bias3,
             ],
             dim=0,
         )
@@ -580,6 +592,7 @@ class LlamaAttention(TTNNModule):
     ):
         super().__init__()
         self.sdpa = TTNNSDPAAttention()
+        self.rope = TTNNRotaryPositionEmbedding()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
         self.sdpa.program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
@@ -593,21 +606,40 @@ class LlamaAttention(TTNNModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.qkv_same_shape = True
+
+    def init_fused_parameters(self, num_attention_heads, hidden_size: int):
+        self.qkv_proj = TTNNFusedQKVSelfAttention.from_torch(
+            PytorchFusedQKVSelfAttention(
+                self.torch_layer.q_proj,
+                self.torch_layer.k_proj,
+                self.torch_layer.v_proj,
+                num_attention_heads,
+                hidden_size,
+            ),
+        )
+        self.o_proj = TTNNLinear.from_torch(self.torch_layer.o_proj)
+
+    def init_parameters(self):
+        self.q_proj = TTNNLinear.from_torch(self.torch_layer.q_proj)
+        self.k_proj = TTNNLinear.from_torch(self.torch_layer.k_proj)
+        self.v_proj = TTNNLinear.from_torch(self.torch_layer.v_proj)
+        self.o_proj = TTNNLinear.from_torch(self.torch_layer.o_proj)
 
     @classmethod
     def from_torch(cls, llama_attn: "LlamaAttention"):
         new_attn = cls()
         new_attn._fallback_torch_layer = llama_attn
-
+        new_attn.num_key_value_groups = getattr(llama_attn, "num_key_value_groups", 1)
         # Fuse Q/K/V for self-attention (zero-pad K bias)
-        qkv_weight = torch.cat([llama_attn.q_proj.weight, llama_attn.k_proj.weight, llama_attn.v_proj.weight])
-        assert not llama_attn.k_proj.bias, "LlamaAttention k_proj bias is expected to be None"
-        assert not llama_attn.v_proj.bias, "LlamaAttention v_proj bias is expected to be None"
-        assert not llama_attn.q_proj.bias, "LlamaAttention q_proj bias is expected to be None"
-        fused_qkv = torch.nn.Linear(llama_attn.hidden_size, llama_attn.hidden_size * 3, bias=False)
-        fused_qkv.weight = torch.nn.Parameter(qkv_weight)
-        new_attn.qkv_proj = TTNNLinear.from_torch(fused_qkv)
-        new_attn.o_proj = TTNNLinear.from_torch(llama_attn.o_proj)
+        new_attn.qkv_same_shape = (
+            llama_attn.q_proj.weight.shape == llama_attn.k_proj.weight.shape
+            and llama_attn.q_proj.weight.shape == llama_attn.v_proj.weight.shape
+        )
+        if new_attn.qkv_same_shape:
+            new_attn.init_fused_parameters(llama_attn.config.num_attention_heads, llama_attn.config.hidden_size)
+        else:
+            new_attn.init_parameters()
         return new_attn
 
     def forward(
@@ -615,47 +647,42 @@ class LlamaAttention(TTNNModule):
         hidden_states,
         attention_mask=None,
         position_ids=None,
-        past_key_value=None,
+        past_key_values=None,
         output_attentions=False,
         use_cache=False,
         cache_position=None,
         position_embeddings=None,  # will become mandatory in v4.46
         **kwargs,
     ):
-        bsz, q_len, _ = hidden_states.shape
-
-        # Self-attention: fused QKV
-        hidden_states = ttnn.unsqueeze(hidden_states, 1)
-        query_key_value = self.qkv_proj(hidden_states).ttnn_tensor
-        query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
-        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
-            query_key_value,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_heads=self.torch_layer.num_heads,
-            num_kv_heads=self.torch_layer.num_key_value_heads,
-            transpose_k_heads=False,
-        )
-        value_states = TorchTTNNTensor(value_states)
+        if attention_mask is not None:
+            print(
+                "Warning: attention_mask is not None, but TTNN LlamaAttention does not support it yet."
+            )  # --- IGNORE ---
+        past_key_values = kwargs.get("past_key_value", past_key_values) if past_key_values is None else past_key_values
+        if self.qkv_same_shape:
+            query_states, key_states, value_states = self.qkv_proj(hidden_states)
+        else:
+            input_shape = list(hidden_states.shape)[:-1]
+            hidden_shape = (*input_shape, -1, self.torch_layer.head_dim)
+            query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         if position_embeddings is None:
+            print("Warning: position_embeddings is None, computing from position_ids.")  # --- IGNORE ---
             cos, sin = self.torch_layer.rotary_emb(value_states.to_torch, TorchTTNNTensor(position_ids).to_torch)
         else:
             cos, sin = position_embeddings
 
-        query_states, key_states = apply_rotary_pos_emb(
-            TorchTTNNTensor(query_states), TorchTTNNTensor(key_states), cos, sin
-        )
+        query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
-        if past_key_value is not None:
+        if past_key_values is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(
+            key_states, value_states = past_key_values.update(
                 key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
             )
 
-        query_states = ttnn.to_device(query_states.to_ttnn, device=hidden_states.device())
-        query_states = ttnn.to_layout(query_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        query_states = ttnn.multiply(query_states, math.sqrt(1 / self.torch_layer.head_dim))
         original_q_len = query_states.shape[2]
         kv_len = key_states.shape[2]
 
@@ -666,12 +693,12 @@ class LlamaAttention(TTNNModule):
             pad_shape = (query_states.shape[0], query_states.shape[1], pad_len, query_states.shape[3])
             zero_pad = ttnn.zeros(
                 pad_shape,
-                device=query_states.device(),
+                device=hidden_states.device(),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=query_states.dtype,
+                dtype=hidden_states.dtype,
             )
-            query_states = ttnn.concat([zero_pad, query_states], dim=2)
+            query_states = ttnn.concat([zero_pad, query_states.to_ttnn], dim=2)
 
         attn_out = self.sdpa(
             self,
@@ -680,15 +707,15 @@ class LlamaAttention(TTNNModule):
             value_states,
             None,
             dropout=0.0,
-            scaling=1.0,
+            scaling=self.torch_layer.scaling,
             is_causal=self.torch_layer.is_causal,
-            transpose_output=True,
+            transpose_output=False,
         )
-
+        attn_out = ttnn.experimental.nlp_concat_heads(attn_out.to_ttnn)
+        attn_out = ttnn.squeeze(attn_out, 1)
         # Slice output if query was padded
         if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Slice: [B, kv_len, H, D] -> [B, q_len, H, D]
-            attn_out = attn_out[:, -original_q_len:, :, :]
+            # Slice: [B, kv_len, D] -> [B, q_len, D]
+            attn_out = attn_out[:, -original_q_len:, :]
 
-        attn_out = ttnn.reshape(attn_out.to_ttnn, (bsz, q_len, -1))
-        return self.o_proj(attn_out), None, past_key_value
+        return self.o_proj(attn_out), None
