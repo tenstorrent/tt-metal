@@ -574,6 +574,19 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
     uint32_t halo_output_size = precise_halo_output_size * input_datum_size;
 
+    // Create output memory config with correct output shard shape
+    // Output has same C dimension (width) but different NHW dimension (height) due to pooling
+    auto input_shard_spec = input_memory_config.shard_spec().value();
+    // The output shard height (NHW dimension) is the number of output elements calculated by halo
+    // divided by the width (C dimension). precise_halo_output_size is already per-core output elements.
+    tt::tt_metal::ShardSpec output_shard_spec(
+        input_shard_spec.grid,
+        {precise_halo_output_size / input_shard_shape[1],  // height = NHW per core
+         input_shard_shape[1]},                            // width = C per core (unchanged)
+        input_shard_spec.orientation);
+    auto output_memory_config = tt::tt_metal::MemoryConfig(
+        input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
+
     uint32_t pool_cb_usage = calculate_L1_usage(
         dtype,
         sliding_window_config.channels,
@@ -588,7 +601,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         slice_output_height,
         slice_output_width,
         input_memory_config,
-        input_memory_config,
+        output_memory_config,
         pool_type,
         count_include_pad,
         divisor_override,
@@ -596,20 +609,35 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         dtype,
         config_tensor_in_dram);
 
-    // Calculate output tensor allocation size
-    // Output is allocated per core, similar to input
-    auto output_shard_shape = input_memory_config.shard_spec().value().shape;
+    // Calculate actual pool output tensor size (not halo output which is the padded pool input)
+    // Pool output shape is based on slice_output_height/width and channels
+    uint32_t pool_output_nhw_per_core = slice_output_height * slice_output_width / num_cores_nhw;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        pool_output_nhw_per_core = tt::round_up(pool_output_nhw_per_core, tt::constants::TILE_HEIGHT);
+    }
     uint32_t output_datum_size = input_datum_size;  // Pool output has same dtype as input
-    uint32_t output_tensor_size = output_shard_shape[0] * output_shard_shape[1] * output_datum_size;
+    uint32_t output_tensor_size = pool_output_nhw_per_core * input_shard_shape[1] * output_datum_size;
 
-    // Total size calculation:
-    // During halo phase: halo_input + halo_output
-    // During pool phase: halo_output (becomes input to pool) + CB + output_tensor
-    // We need max of these two phases
+    // Total size calculation with memory reuse:
+    // During halo phase: halo_input is allocated, halo_output is allocated
+    // After halo: halo_input is deallocated, halo_output remains (and will be reused for pool input)
+    // During pool phase: halo_output (reused as pool input) + pool_cb_usage (includes all CBs and output buffer)
+    // Since halo_input is deallocated before pool phase and halo_output is reallocated in its place,
+    // we only need to consider: max(halo_input + halo_output, halo_output + pool_cb_usage)
     uint32_t halo_phase_size = halo_input_size + halo_output_size;
-    uint32_t pool_phase_size = halo_output_size + pool_cb_usage;  // Note: output_tensor is part of CB usage calculation
-
+    uint32_t pool_phase_size = halo_output_size + pool_cb_usage;
     uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
+
+    printf(
+        "Pool2D L1 Usage Calculation: halo_input=%u, halo_output=%u, pool_cb=%u, output_tensor=%u, "
+        "halo_phase=%u, pool_phase=%u, total=%u\n",
+        halo_input_size,
+        halo_output_size,
+        pool_cb_usage,
+        output_tensor_size,
+        halo_phase_size,
+        pool_phase_size,
+        total_size);
 
     log_trace(
         tt::LogOp,
