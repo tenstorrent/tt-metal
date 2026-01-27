@@ -293,14 +293,6 @@ def main():
     # - TP devices per group (tensor parallelism) along mesh dimension 1
     logical_mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
     num_devices = mesh_rows * mesh_cols
-    # In these examples, I assume dp is always the first mesh axis and tp is the second one, which will be
-    # preserved later on when adding tp+dp llm training support. A user will set if they want to use data
-    # parallel or not and which mesh device shape they want to use, the axis will be
-    # decided automatically: data parallel will always be the first one if
-    # present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
-    # tp and ep.
-    dp_size = mesh_rows
-    tp_size = mesh_cols
 
     # Training hyperparameters
     training_samples_count = 100000
@@ -310,6 +302,24 @@ def main():
     has_bias = True
     batch_size = args.batch_size
     use_row_parallel = args.row
+
+    # Enable fabric BEFORE opening the device
+    ttml.core.distributed.enable_fabric(num_devices)
+
+    # Open device with mesh shape
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    autograd_ctx.open_device([mesh_rows, mesh_cols])
+    device = autograd_ctx.get_device()
+
+    # Initialize parallelism context for TP+DP
+    autograd_ctx.initialize_parallelism_context(enable_ddp=True, enable_tp=True)
+
+    # Get parallelism parameters from context
+    pctx = autograd_ctx.get_parallelism_context()
+    dp_axis = pctx.get_ddp_axis()
+    tp_axis = pctx.get_tp_axis()
+    dp_size = pctx.get_ddp_size()
+    tp_size = pctx.get_tp_size()
 
     # Validate dimensions
     if num_features % tp_size != 0:
@@ -331,14 +341,6 @@ def main():
         )
         return 1
 
-    # Enable fabric BEFORE opening the device
-    ttml.core.distributed.enable_fabric(num_devices)
-
-    # Open device with mesh shape
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.open_device([mesh_rows, mesh_cols])
-    device = autograd_ctx.get_device()
-
     # Generate training dataset
     print(f"Generating {training_samples_count} training samples...")
     X_train, Y_train = make_regression(
@@ -350,7 +352,7 @@ def main():
     )
 
     # Create model based on parallelism type
-    # shard_dim=1 specifies weights should be sharded along mesh dimension 1 (TP dimension)
+    # shard_dim=tp_axis specifies weights should be sharded along TP dimension
     # Use fixed weight_seed so Row and Column parallel have identical initial weights
     weight_seed = 12345
     if use_row_parallel:
@@ -360,7 +362,7 @@ def main():
             num_targets,
             has_bias=has_bias,
             input_is_parallel=True,  # Input already sharded from data distribution
-            shard_dim=1,
+            shard_dim=tp_axis,
             weight_seed=weight_seed,
         )
     else:
@@ -370,7 +372,7 @@ def main():
             num_targets,
             has_bias=has_bias,
             gather_output=False,  # Keep output sharded
-            shard_dim=1,
+            shard_dim=tp_axis,
             weight_seed=weight_seed,
         )
 
@@ -511,8 +513,8 @@ def main():
             # Backward pass (retain_graph=False to free graph after backward)
             loss.backward(False)
 
-            # Synchronize gradients across DP groups (dimension 0)
-            ttml.core.distributed.synchronize_gradients(model.parameters(), 0)
+            # Synchronize gradients across DP groups
+            ttml.core.distributed.synchronize_gradients(model.parameters(), dp_axis)
 
             # Optimizer step
             optimizer.step()

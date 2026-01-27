@@ -65,8 +65,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 0;
-    uint32_t mesh_cols = 0;
+    uint32_t mesh_rows = 1;
+    uint32_t mesh_cols = 1;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 32x1\n", mesh_shape_str);
         return 1;
