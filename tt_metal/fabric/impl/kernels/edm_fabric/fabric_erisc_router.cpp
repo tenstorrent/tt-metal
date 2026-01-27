@@ -1483,7 +1483,7 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
     if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
         if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() ==
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
-            // DPRINT << "CTX_SLAVE_START: erisc1 detected RETRAIN_INTENT, acking" << ENDL();
+            DPRINT << "CTX_SLAVE_START: erisc1 detected RETRAIN_INTENT, acking" << ENDL();
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
@@ -1513,6 +1513,7 @@ void run_coordinated_context_switch_to_base_firmware(
         run_routing_without_noc_sync();
     } else {
         if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+            DPRINT << "CTX_SWITCH!!!\n";
             run_routing_without_noc_sync_coordinated_as_master(termination_signal_ptr);
         }
     }
@@ -1720,6 +1721,7 @@ FORCE_INLINE
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        DPRINT << "SEND NEXT DATA FREE SLOTS: " << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
     }
 
     // Process COMPLETIONs from receiver
@@ -1730,10 +1732,10 @@ FORCE_INLINE
         sender_completions_received += completions_since_last_check;
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-        DPRINT << "SEND_PROC_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
-               << " completions=" << HEX() << completions_since_last_check << DEC()
-            //    << " old_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots
-               << " new_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
+        // DPRINT << "SEND_PROC_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
+        //        << " completions=" << HEX() << completions_since_last_check << DEC()
+        //     //    << " old_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots
+        //        << " new_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
@@ -1752,8 +1754,8 @@ FORCE_INLINE
         auto packed_acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
         if (packed_acks != 0) {
 
-            DPRINT << "SEND_ACK_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
-                << " acks=" << HEX() << packed_acks << ENDL();
+            // DPRINT << "SEND_ACK_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
+            //     << " acks=" << HEX() << packed_acks << ENDL();
             auto acks_since_last_check = extract_sender_channel_acks<sender_channel_index>(packed_acks);
             if (acks_since_last_check > 0) {
                 sender_acks_sent_to_worker += acks_since_last_check;
@@ -1767,11 +1769,11 @@ FORCE_INLINE
                     // to decrement instead
                     acks_to_change_by = -acks_to_change_by;
                 }
-                DPRINT << "SEND_PROC_ACK_LOOP: ch=" << (uint32_t)sender_channel_index
-                       << " packed_acks=" << HEX() << packed_acks
-                       << " extracted=" << DEC() << acks_since_last_check
-                       << " acks_to_dec=" << HEX() << acks_to_change_by
-                       << " cumulative=" << DEC() << sender_acks_received << ENDL();
+                // DPRINT << "SEND_PROC_ACK_LOOP: ch=" << (uint32_t)sender_channel_index
+                //        << " packed_acks=" << HEX() << packed_acks
+                //        << " extracted=" << DEC() << acks_since_last_check
+                //        << " acks_to_dec=" << HEX() << acks_to_change_by
+                //        << " cumulative=" << DEC() << sender_acks_received << ENDL();
                 sender_channel_from_receiver_credits.increment_num_processed_acks<sender_channel_index>(acks_to_change_by);
                 send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                     local_sender_channel_worker_interface,
@@ -1887,6 +1889,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     LocalTelemetryT& local_fabric_telemetry,
     ReceiverPacketCreditsViewT& credits_view,
     ReceiverPacketCreditsUpdaterT& credits_updater) {
+
+        // for (size_t i = 0; i < 10000; i++) {
+        //     asm volatile ("nop");
+        // }
+
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
     uint32_t pkts_received_since_last_check;
@@ -2525,7 +2532,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if (did_something) {
                     did_nothing_count = 0;
                 } else {
-                    if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    if (did_nothing_count++ > 10000) {//SWITCH_INTERVAL) {
                         // DPRINT << "CTX_SWITCH_IDLE: did_nothing=" << did_nothing_count
                         //        << " interval=" << SWITCH_INTERVAL
                         //        << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
