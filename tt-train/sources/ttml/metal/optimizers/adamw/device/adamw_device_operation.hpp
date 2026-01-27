@@ -45,8 +45,7 @@ struct AdamWDeviceOperation {
         float epsilon,
         float weight_decay,
         bool amsgrad,
-        bool stochastic_rounding,
-        uint32_t step);
+        bool stochastic_rounding);
 };
 
 }  // namespace ttml::metal::optimizers::adamw::device
