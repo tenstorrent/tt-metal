@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "api/debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
+#include "ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 #include "api/tensor/tensor_accessor.h"
 
 #if defined(WATCHER_OVERHEAD_OK)
@@ -381,7 +381,7 @@ void kernel_main() {
                             // least a window partially --> fill the tile with inf
                             // no windows to fill anymore; fill all tiles with inf
                             if (inf_tile_idx == -1) {
-                                fill_neginf_tile_bfp4<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
+                                fill_neginf_tile<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
                             } else {
                                 copy_tile<mask_tile_bytes>(
                                     noc_write_addr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);

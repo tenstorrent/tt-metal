@@ -203,7 +203,7 @@ class DispatcherData:
         if self.use_rpc_kernel_find:
             try:
                 return self.inspector_data.getKernel(watcher_kernel_id).kernel
-            except:
+            except Exception:
                 pass
         if watcher_kernel_id in self.kernels:
             self.use_rpc_kernel_find = False
@@ -296,44 +296,44 @@ class DispatcherData:
             kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
                 programmable_core_type
             ]
-        except:
+        except Exception:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
-        except:
+        except Exception:
             pass
         try:
             # enum dispatch_core_processor_classes
             watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
-        except:
+        except Exception:
             pass
         try:
             watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
                 proc_type
             ]
-        except:
+        except Exception:
             pass
         try:
             kernel = self.find_kernel(watcher_kernel_id)
-        except:
+        except Exception:
             pass
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
-        except:
+        except Exception:
             pass
         try:
             go_message_index = mailboxes.go_message_index
             go_data = mailboxes.go_messages[go_message_index].signal
-        except:
+        except Exception:
             pass
         try:
             preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
-        except:
+        except Exception:
             pass
         try:
             host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
-        except:
+        except Exception:
             pass
         try:
             previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
@@ -342,7 +342,7 @@ class DispatcherData:
         try:
             waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
             waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
-        except:
+        except Exception:
             pass
 
         # Construct the firmware path from the build_env instead of relative paths
