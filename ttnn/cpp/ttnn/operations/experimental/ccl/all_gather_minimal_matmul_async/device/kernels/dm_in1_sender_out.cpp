@@ -132,15 +132,27 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-                    uint32_t k_block = compute_actual_k_block(
-                        k_block_iter, K_num_blocks, my_rank, K_num_blocks / num_devices, num_devices, k_forward);
+                    uint32_t k_block_left_tile = 0;
+                    uint32_t k_block_right_tile = 0;
+                    compute_actual_k_block(
+                        k_block_iter,
+                        K_num_blocks,
+                        my_rank,
+                        K_num_blocks / num_devices,
+                        K_block_tiles,
+                        num_devices,
+                        k_forward,
+                        k_block_left_tile,
+                        k_block_right_tile);
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
                         in1_start_address,
                         in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
+                        k_block_left_tile,
+                        k_block_left_tile + K_block_tiles / 2,
+                        k_block_right_tile,
+                        k_block_right_tile + K_block_tiles / 2,
                         n_tile,
                         n_tile_end);
                 } else {
