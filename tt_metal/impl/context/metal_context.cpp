@@ -439,19 +439,23 @@ MetalContext& MetalContext::instance() {
     if (!g_instance) {
         g_instance = new MetalContext();
         if (!registered_atexit) {
-            std::atexit([]() { MetalContext::destroy_instance(); });
+            std::atexit([]() {
+                // Don't check device count because the destruction order is complicated and we can't guarantee that the
+                // client isn't holding onto devices on process exit.
+                MetalContext::destroy_instance(false);
+            });
             registered_atexit = true;
         }
     }
     return *g_instance;
 }
 
-void MetalContext::destroy_instance() {
+void MetalContext::destroy_instance(bool check_device_count) {
     std::lock_guard lock(g_instance_mutex);
     if (!g_instance) {
         return;
     }
-    if (g_instance->device_manager() && g_instance->device_manager()->is_initialized() &&
+    if (check_device_count && g_instance->device_manager() && g_instance->device_manager()->is_initialized() &&
         !g_instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
