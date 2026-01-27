@@ -431,4 +431,116 @@ ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1, uint32
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ *
+ * L1 → DEST: Block-level broadcast addition.
+ * For-loop wrapper around add_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ *
+ * | Argument       | Description                                              | Type          | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|---------------|------------------------------------------------|----------|
+ * | tBcastDim      | Broadcast dimension                                      | BroadcastType | ROW, COL, SCALAR                               | True     |
+ * | Ht             | Block height in tiles (compile-time)                     | uint32_t      | 1 to 16                                        | True     |
+ * | Wt             | Block width in tiles (compile-time)                      | uint32_t      | 1 to 16                                        | True     |
+ * | icb0           | The identifier of the circular buffer (CB) containing A  | uint32_t      | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B  | uint32_t      | 0 to 31                                        | True     |
+ * | itile0_start   | Starting tile index for A in CB                          | uint32_t      | Must be less than the size of the CB           | True     |
+ * | itile1_start   | Starting tile index for B in CB                          | uint32_t      | Must be less than the size of the CB           | True     |
+ * | idst_start     | Starting tile index in DST REG for the result            | uint32_t      | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <BroadcastType tBcastDim, uint32_t Ht, uint32_t Wt>
+ALWI void add_tiles_bcast_block(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t itile0_start,
+    uint32_t itile1_start,
+    uint32_t idst_start,
+    uint32_t bcast_row_idx = 0) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            add_tiles_bcast<tBcastDim>(
+                icb0,
+                icb1,
+                itile0_start + tile_offset,
+                itile1_start + tile_offset,
+                idst_start + tile_offset,
+                bcast_row_idx);
+        }
+    }
+}
+
+/**
+ * WORK IN PROGRESS - Use with caution
+ *
+ * L1 → DEST: Block-level broadcast subtraction.
+ * For-loop wrapper around sub_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ */
+template <BroadcastType tBcastDim, uint32_t Ht, uint32_t Wt>
+ALWI void sub_tiles_bcast_block(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t itile0_start,
+    uint32_t itile1_start,
+    uint32_t idst_start,
+    uint32_t bcast_row_idx = 0) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            sub_tiles_bcast<tBcastDim>(
+                icb0,
+                icb1,
+                itile0_start + tile_offset,
+                itile1_start + tile_offset,
+                idst_start + tile_offset,
+                bcast_row_idx);
+        }
+    }
+}
+
+/**
+ * WORK IN PROGRESS - Use with caution
+ *
+ * L1 → DEST: Block-level broadcast multiplication.
+ * For-loop wrapper around mul_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ */
+template <BroadcastType tBcastDim, uint32_t Ht, uint32_t Wt>
+ALWI void mul_tiles_bcast_block(
+    uint32_t icb0,
+    uint32_t icb1,
+    uint32_t itile0_start,
+    uint32_t itile1_start,
+    uint32_t idst_start,
+    uint32_t bcast_row_idx = 0) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            mul_tiles_bcast<tBcastDim>(
+                icb0,
+                icb1,
+                itile0_start + tile_offset,
+                itile1_start + tile_offset,
+                idst_start + tile_offset,
+                bcast_row_idx);
+        }
+    }
+}
+
 }  // namespace ckernel

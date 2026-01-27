@@ -113,4 +113,35 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #endif
 }
 
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ *
+ * L1 → DEST: Block-level 32x32 transpose operation.
+ * For-loop wrapper around transpose_wh_tile(). Use transpose_wh_init() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ *
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | Ht             | Block height in tiles (compile-time)                     | uint32_t | 1 to 16                                        | True     |
+ * | Wt             | Block width in tiles (compile-time)                      | uint32_t | 1 to 16                                        | True     |
+ * | icb            | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | itile_start    | Starting tile index for input in CB                      | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst_start     | Starting tile index in DST REG for the result            | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <uint32_t Ht, uint32_t Wt>
+ALWI void transpose_wh_block(uint32_t icb, uint32_t itile_start, uint32_t idst_start) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            transpose_wh_tile(icb, itile_start + tile_offset, idst_start + tile_offset);
+        }
+    }
+}
+
 }  // namespace ckernel

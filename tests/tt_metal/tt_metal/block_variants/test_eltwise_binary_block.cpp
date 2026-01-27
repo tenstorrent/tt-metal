@@ -1,0 +1,425 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Block Variant Tests: eltwise_binary
+ *
+ * Validates that block operations produce identical results to tile-by-tile processing.
+ * Each test runs both a reference (tile-by-tile) and test (block) kernel with identical
+ * input data and compares outputs using PCC (Pearson Correlation Coefficient).
+ */
+
+#include <gtest/gtest.h>
+#include "common/command_queue_fixture.hpp"
+#include "test_gold_impls.hpp"
+#include "block_variants/block_variants_test_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <fstream>
+
+using namespace tt;
+using namespace tt::tt_metal;
+
+namespace {
+
+/**
+ * Run eltwise_binary block test
+ *
+ * @param device Device to run on
+ * @param Ht Block height in tiles
+ * @param Wt Block width in tiles
+ * @param num_blocks Number of blocks to process
+ * @param data_format Data format for tiles
+ */
+void run_eltwise_binary_block_test(
+    IDevice* device,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t num_blocks = 10,
+    tt::DataFormat data_format = tt::DataFormat::Float16_b) {
+    // Validate block size
+    ASSERT_LE(Ht * Wt, 16) << "Block size exceeds DEST capacity (max 16 tiles)";
+    ASSERT_GT(Ht, 0) << "Block height must be > 0";
+    ASSERT_GT(Wt, 0) << "Block width must be > 0";
+
+    log_info(LogTest, "Testing eltwise_binary with Ht={}, Wt={}, blocks={}", Ht, Wt, num_blocks);
+
+    // Setup
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t total_tiles = num_blocks * Ht * Wt;
+    uint32_t dram_buffer_size = single_tile_size * total_tiles;
+
+    // Create programs
+    Program program_ref = CreateProgram();
+    Program program_test = CreateProgram();
+
+    CoreCoord core = {0, 0};
+
+    // Create buffers
+    auto src0_dram_buffer_ref = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    auto src1_dram_buffer_ref = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    auto dst_dram_buffer_ref = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    auto src0_dram_buffer_test = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    auto src1_dram_buffer_test = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    auto dst_dram_buffer_test = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM});
+
+    // Create circular buffers for reference program
+    CircularBufferConfig cb0_config = CircularBufferConfig(Ht * Wt * single_tile_size, {{CB::c_in0, data_format}})
+                                          .set_page_size(CB::c_in0, single_tile_size);
+    auto cb0_ref = CreateCircularBuffer(program_ref, core, cb0_config);
+
+    CircularBufferConfig cb1_config = CircularBufferConfig(Ht * Wt * single_tile_size, {{CB::c_in1, data_format}})
+                                          .set_page_size(CB::c_in1, single_tile_size);
+    auto cb1_ref = CreateCircularBuffer(program_ref, core, cb1_config);
+
+    CircularBufferConfig cb2_config = CircularBufferConfig(Ht * Wt * single_tile_size, {{CB::c_out0, data_format}})
+                                          .set_page_size(CB::c_out0, single_tile_size);
+    auto cb2_ref = CreateCircularBuffer(program_ref, core, cb2_config);
+
+    // Create circular buffers for test program
+    auto cb0_test = CreateCircularBuffer(program_test, core, cb0_config);
+    auto cb1_test = CreateCircularBuffer(program_test, core, cb1_config);
+    auto cb2_test = CreateCircularBuffer(program_test, core, cb2_config);
+
+    (void)cb0_ref;
+    (void)cb1_ref;
+    (void)cb2_ref;
+    (void)cb0_test;
+    (void)cb1_test;
+    (void)cb2_test;
+
+    // Create reference kernel (tile-by-tile)
+    std::string ref_kernel_source = R"(
+        #include "compute_kernel_api/eltwise_binary.h"
+        #include "compute_kernel_api/tile_move_copy.h"
+
+        namespace NAMESPACE {
+        void MAIN {
+            constexpr uint32_t Ht = get_compile_time_arg_val(0);
+            constexpr uint32_t Wt = get_compile_time_arg_val(1);
+            constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
+
+            binary_op_init_common(CB::c_in0, CB::c_in1);
+
+            for (uint32_t block = 0; block < num_blocks; ++block) {
+                cb_wait_front(CB::c_in0, Ht * Wt);
+                cb_wait_front(CB::c_in1, Ht * Wt);
+                cb_reserve_back(CB::c_out0, Ht * Wt);
+
+                for (uint32_t h = 0; h < Ht; ++h) {
+                    for (uint32_t w = 0; w < Wt; ++w) {
+                        uint32_t tile_idx = h * Wt + w;
+                        acquire_dst(tt::DstMode::Half);
+                        add_tiles(CB::c_in0, CB::c_in1, tile_idx, tile_idx, tile_idx);
+                        pack_tile(tile_idx, CB::c_out0);
+                        release_dst(tt::DstMode::Half);
+                    }
+                }
+
+                cb_push_back(CB::c_out0, Ht * Wt);
+                cb_pop_front(CB::c_in0, Ht * Wt);
+                cb_pop_front(CB::c_in1, Ht * Wt);
+            }
+        }
+        }
+    )";
+
+    // Create test kernel (block operations)
+    std::string test_kernel_source = R"(
+        #include "compute_kernel_api/eltwise_binary.h"
+        #include "compute_kernel_api/tile_move_copy.h"
+
+        namespace NAMESPACE {
+        void MAIN {
+            constexpr uint32_t Ht = get_compile_time_arg_val(0);
+            constexpr uint32_t Wt = get_compile_time_arg_val(1);
+            constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
+
+            binary_op_init_common(CB::c_in0, CB::c_in1);
+
+            for (uint32_t block = 0; block < num_blocks; ++block) {
+                cb_wait_front(CB::c_in0, Ht * Wt);
+                cb_wait_front(CB::c_in1, Ht * Wt);
+                cb_reserve_back(CB::c_out0, Ht * Wt);
+
+                acquire_dst(tt::DstMode::Half);
+                add_tiles_block(CB::c_in0, CB::c_in1, 0, 0, 0, Ht, Wt);
+                pack_tiles_block(0, CB::c_out0, Ht, Wt);
+                release_dst(tt::DstMode::Half);
+
+                cb_push_back(CB::c_out0, Ht * Wt);
+                cb_pop_front(CB::c_in0, Ht * Wt);
+                cb_pop_front(CB::c_in1, Ht * Wt);
+            }
+        }
+        }
+    )";
+
+    // Write kernel files
+    std::string ref_kernel_file = "eltwise_binary_ref_kernel.cpp";
+    std::string test_kernel_file = "eltwise_binary_test_kernel.cpp";
+
+    std::ofstream ref_file(ref_kernel_file);
+    ref_file << ref_kernel_source;
+    ref_file.close();
+
+    std::ofstream test_file(test_kernel_file);
+    test_file << test_kernel_source;
+    test_file.close();
+
+    // Create kernels
+    auto ref_compute_kernel =
+        CreateKernel(program_ref, ref_kernel_file, core, ComputeConfig{.compile_args = {Ht, Wt, num_blocks}});
+    (void)ref_compute_kernel;
+
+    auto test_compute_kernel =
+        CreateKernel(program_test, test_kernel_file, core, ComputeConfig{.compile_args = {Ht, Wt, num_blocks}});
+    (void)test_compute_kernel;
+
+    // Create reader/writer kernels for reference
+    auto ref_unary_reader_kernel = CreateKernel(
+        program_ref,
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {(uint32_t)CB::c_in0}});
+
+    auto ref_unary_reader_kernel2 = CreateKernel(
+        program_ref,
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {(uint32_t)CB::c_in1}});
+
+    auto ref_unary_writer_kernel = CreateKernel(
+        program_ref,
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {(uint32_t)CB::c_out0}});
+
+    // Create reader/writer kernels for test
+    auto test_unary_reader_kernel = CreateKernel(
+        program_test,
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {(uint32_t)CB::c_in0}});
+
+    auto test_unary_reader_kernel2 = CreateKernel(
+        program_test,
+        "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {(uint32_t)CB::c_in1}});
+
+    auto test_unary_writer_kernel = CreateKernel(
+        program_test,
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = {(uint32_t)CB::c_out0}});
+
+    // Generate random input data
+    std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+        dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
+        dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count() + 1);
+
+    // Write input data to device
+    detail::WriteToBuffer(src0_dram_buffer_ref, src0_vec);
+    detail::WriteToBuffer(src1_dram_buffer_ref, src1_vec);
+    detail::WriteToBuffer(src0_dram_buffer_test, src0_vec);
+    detail::WriteToBuffer(src1_dram_buffer_test, src1_vec);
+
+    // Set runtime args for reference program
+    SetRuntimeArgs(program_ref, ref_unary_reader_kernel, core, {src0_dram_buffer_ref->address(), total_tiles, 0});
+
+    SetRuntimeArgs(program_ref, ref_unary_reader_kernel2, core, {src1_dram_buffer_ref->address(), total_tiles, 0});
+
+    SetRuntimeArgs(program_ref, ref_unary_writer_kernel, core, {dst_dram_buffer_ref->address(), total_tiles, 0});
+
+    // Set runtime args for test program
+    SetRuntimeArgs(program_test, test_unary_reader_kernel, core, {src0_dram_buffer_test->address(), total_tiles, 0});
+
+    SetRuntimeArgs(program_test, test_unary_reader_kernel2, core, {src1_dram_buffer_test->address(), total_tiles, 0});
+
+    SetRuntimeArgs(program_test, test_unary_writer_kernel, core, {dst_dram_buffer_test->address(), total_tiles, 0});
+
+    // Execute programs
+    detail::LaunchProgram(device, program_ref);
+    detail::LaunchProgram(device, program_test);
+
+    // Read results
+    std::vector<uint32_t> result_ref_vec;
+    detail::ReadFromBuffer(dst_dram_buffer_ref, result_ref_vec);
+
+    std::vector<uint32_t> result_test_vec;
+    detail::ReadFromBuffer(dst_dram_buffer_test, result_test_vec);
+
+    // Compare results
+    auto result_ref_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_ref_vec);
+    auto result_test_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_test_vec);
+    float pcc_value = block_variants::compute_pcc(result_ref_bfp16, result_test_bfp16);
+    log_info(LogTest, "PCC value: {}", pcc_value);
+
+    EXPECT_GE(pcc_value, 0.9999f) << "PCC comparison failed. PCC value: " << pcc_value << " (required: >= 0.9999)";
+
+    // Additional validation against golden reference
+    auto src0_bfp16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec);
+    auto src1_bfp16 = unpack_uint32_vec_into_bfloat16_vec(src1_vec);
+    std::vector<bfloat16> golden_vec(total_tiles * 512);
+    for (uint32_t i = 0; i < total_tiles * 512; ++i) {
+        golden_vec[i] = src0_bfp16[i] + src1_bfp16[i];
+    }
+
+    float golden_pcc_value = block_variants::compute_pcc(golden_vec, result_test_bfp16);
+    log_info(LogTest, "Golden PCC value: {}", golden_pcc_value);
+
+    EXPECT_GE(golden_pcc_value, 0.9999f) << "Golden PCC comparison failed. PCC value: " << golden_pcc_value
+                                         << " (required: >= 0.9999)";
+
+    // Cleanup
+    std::remove(ref_kernel_file.c_str());
+    std::remove(test_kernel_file.c_str());
+}
+
+}  // namespace
+
+// =============================================================================
+// Test Cases
+// =============================================================================
+
+class BlockVariantsFixture : public tt::tt_metal::UnitMeshCQFixture {};
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_1x1) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 1, 1);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_1x2) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 1, 2);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_1x4) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 1, 4);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_1x8) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 1, 8);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_1x16) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 1, 16);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_2x1) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 2, 1);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_2x2) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 2, 2);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_2x4) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 2, 4);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_2x8) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 2, 8);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_4x1) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 4, 1);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_4x2) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 4, 2);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_4x4) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 4, 4);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_8x1) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 8, 1);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_8x2) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 8, 2);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_16x1) {
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 16, 1);
+    }
+}
+
+// =============================================================================
+// Stress Tests
+// =============================================================================
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_Stress_ManyBlocks) {
+    // Process many blocks to test stability
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 4, 4, 1000);
+    }
+}
+
+TEST_F(BlockVariantsFixture, EltwiseBinaryBlock_Stress_MaxCapacity) {
+    // Use maximum DEST capacity
+    for (const auto& mesh_device : devices_) {
+        run_eltwise_binary_block_test(mesh_device->get_devices().at(0), 16, 1, 100);
+    }
+}
