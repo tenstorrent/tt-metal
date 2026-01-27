@@ -11,9 +11,9 @@ on:
         options:
           - all
 #          - cnn
-#          - llama_unit_tests
+#          - llama70b
 #          - llama70b_prefill
-          - llama70b
+          - llama_unit_tests
           - sd35
           - flux1-dev
           - motif
