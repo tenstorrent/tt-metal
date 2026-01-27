@@ -15,6 +15,25 @@ from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLI
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.tt_dit.utils.check import assert_quality
 
+TEST_PROMPTS = [
+    "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays",
+    "An astronaut riding a green horse",
+    "normal quality, low quality, worst quality, low res, blurry, nsfw, nude",
+    "A city at night with people walking around.",
+    "The large clock was prominently displaying the time.",
+    "A person in winter gear riding a snowboard.",
+    "A small bird is perched on an empty bird feeder.",
+    "Baseballs players sliding to base and jumping during the game.",
+    "A woman playing tennis in a white outfit",
+    "A woman looking at her phone next to a car being towed.",
+    "A man in a wheelchair and another sitting on a bench that is overlooking the water.",
+    "Rows of motor bikes and helmets in a city",
+    "A random plane in the sky flying alone",
+    "A large clock tower rises up above the surrounding buildings.",
+    "A boy and two females standing in a circle playing tennis.",
+    "A bedroom that looks like a hotel room includes a television and bed.",
+]
+
 
 @pytest.mark.parametrize(
     "clip_path, tokenizer_path, expected_pcc",
@@ -32,7 +51,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
 )
 @pytest.mark.parametrize(
     "test_text",
-    (("A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"),),
+    TEST_PROMPTS,
 )
 def test_clip_encoder(
     *,
