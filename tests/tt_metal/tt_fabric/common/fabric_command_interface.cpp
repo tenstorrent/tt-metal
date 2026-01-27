@@ -16,18 +16,17 @@ FabricCommandInterface::FabricCommandInterface(const ControlPlane& control_plane
 }
 
 void FabricCommandInterface::issue_command_to_routers(RouterCommand router_command) const {
-    
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     const auto router_cmd_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
-        
+
         const auto& router_cores = get_all_router_cores();
         for (const auto& [fabric_node_id, channel_id] : router_cores) {
             ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
             CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-            
+
             cluster.write_core(
             &router_command,
             sizeof(RouterCommand),

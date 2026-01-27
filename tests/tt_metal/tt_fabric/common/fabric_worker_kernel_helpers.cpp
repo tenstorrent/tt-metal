@@ -35,10 +35,9 @@ WorkerMemoryLayout allocate_worker_memory() {
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     WorkerMemoryLayout layout = {
-        .source_buffer_address = tt::align(l1_unreserved_base, l1_alignment), 
+        .source_buffer_address = tt::align(l1_unreserved_base, l1_alignment),
         .teardown_signal_address = tt::align(layout.source_buffer_address + SOURCE_BUFFER_SIZE, l1_alignment),
         .packet_payload_size_bytes = PACKET_PAYLOAD_SIZE_DEFAULT};
-
 
     return layout;
 }
