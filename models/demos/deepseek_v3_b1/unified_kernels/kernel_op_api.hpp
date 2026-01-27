@@ -25,19 +25,6 @@ inline constexpr bool is_trisc = true;
 #endif
 
 // ============================================================================
-// Unified kernel entry point macro
-// ============================================================================
-#if defined(COMPILE_FOR_TRISC)
-#define KERNEL_ENTRY      \
-    namespace NAMESPACE { \
-    void MAIN
-#define KERNEL_END }
-#else
-#define KERNEL_ENTRY void kernel_main()
-#define KERNEL_END
-#endif
-
-// ============================================================================
 // Type helper: Select type based on current core
 // Usage: using RTArgs = SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 // Note: ReaderConfigDescriptor -> NCRISC, WriterConfigDescriptor -> BRISC

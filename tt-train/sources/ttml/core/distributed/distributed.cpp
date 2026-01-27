@@ -19,13 +19,11 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
     TT_FATAL(!dp_dim.has_value() || dp_dim.value() < device->shape().dims(), "Cluster axis must be within mesh shape");
     const auto dp_size = dp_dim.has_value() ? device->shape()[dp_dim.value()] : device->get_devices().size();
     assert(dp_size >= 1U);
-    // no need to synchronize if there is only one device
     if (dp_size == 1U) {
         return tensor;
     }
 
-    // all_reduce Mean is not supported, use sum and divide by #devices
-    auto result = ttnn_fixed::distributed::all_reduce(tensor, dp_dim);
+    auto result = ttnn::all_reduce(tensor, dp_dim);
     result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
     return result;
 }

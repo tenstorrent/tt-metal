@@ -132,7 +132,7 @@ void py_module(nb::module_& m) {
                 ttnn::distributed::MeshDevice&, int, std::optional<int>)>(
                 &ttnn::distributed::shard_tensor_to_mesh_mapper),
             nb::arg("device"),
-            nb::arg("rank"),
+            nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
