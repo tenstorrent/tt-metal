@@ -19,6 +19,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
     TT_FATAL(!dp_dim.has_value() || dp_dim.value() < device->shape().dims(), "Cluster axis must be within mesh shape");
     const auto dp_size = dp_dim.has_value() ? device->shape()[dp_dim.value()] : device->get_devices().size();
     assert(dp_size >= 1U);
+    // no need to synchronize if there is only one device
     if (dp_size == 1U) {
         return tensor;
     }
@@ -34,7 +35,7 @@ void synchronize_gradients(const serialization::NamedParameters& parameters, std
 
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_axis));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad()));
         }
     }
 }
