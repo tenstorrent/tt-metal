@@ -1067,6 +1067,7 @@ void kernel_main() {
     if (is_drain_tilizer_core) {
         constexpr uint32_t one_page = 1;
         for (uint32_t e = 0; e < experts_per_device; e++) {
+            cb_push_back(e_t_buffer_id, one_page);  // data is already there from previous work
             cb_wait_front(e_t_buffer_id, one_page);
             uint32_t l1_read_addr = get_read_ptr(e_t_buffer_id);
             noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);

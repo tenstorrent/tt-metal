@@ -489,7 +489,7 @@ def test_selective_tilize_no_trace(
     logger.info(f"  tt_expert_mapping: {tt_expert_mapping.shape}")
 
     # Run the operation
-    output_tensor, expert_activation_tensor = ttnn.experimental.all_to_all_dispatch_selective_tilize(
+    output_tensor, expert_activation_tensor, e_t_output_tensor = ttnn.experimental.all_to_all_dispatch_selective_tilize(
         tt_sparse_buffer,
         tt_expert_indices,
         tt_expert_scores,
