@@ -897,33 +897,23 @@ Pool2dExecutionPath determine_pool2d_execution_path(
     bool is_l1 = input_tensor.memory_config().is_l1();
     bool is_dram = input_tensor.memory_config().is_dram();
 
-    printf(
-        "[Pool2D] Execution path determination: tensor is_l1=%d, is_dram=%d, slice_config=%s\n",
-        is_l1,
-        is_dram,
-        slice_config.has_value() ? "provided" : "none");
-
     // If slice config explicitly specifies L1_FULL, use L1 path
     if (slice_config.has_value() && slice_config->slice_type == Op2DSliceConfig::SliceType::L1_FULL) {
-        printf("[Pool2D] Taking L1 path (L1_FULL explicitly requested)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // If slice config explicitly sets num_slices==1, use L1 path (user knows it fits)
     if (slice_config.has_value() && slice_config->num_slices == 1) {
-        printf("[Pool2D] Taking L1 path (num_slices==1 explicitly set)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // If input is in L1 (not DRAM), use L1 path - tensor already fits in L1
     // We should never move an L1 tensor to DRAM just to slice it
     if (is_l1) {
-        printf("[Pool2D] Taking L1 path (tensor already in L1)\n");
         return Pool2dExecutionPath::L1;
     }
 
     // Otherwise, tensor is in DRAM, use DRAM slicing path
-    printf("[Pool2D] Taking DRAM slicing path (tensor in DRAM)\n");
     return Pool2dExecutionPath::DRAM;
 }
 
@@ -1000,7 +990,6 @@ static std::vector<Tensor> pool2d(
 
     auto exec_path = determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);
     if (exec_path == Pool2dExecutionPath::L1) {
-        printf("[Pool2D] Calling pool2d_L1\n");
         auto result = pool2d_L1(
             input_tensor_4d,
             pool_type,
@@ -1025,10 +1014,8 @@ static std::vector<Tensor> pool2d(
             output_layout,
             std::nullopt,
             config_tensor_in_dram);
-        printf("[Pool2D] Completed pool2d_L1, returning\n");
         return result;
     }
-    printf("[Pool2D] Calling pool2d_DRAM\n");
     auto result = pool2d_DRAM(
         input_tensor_4d,
         pool_type,
@@ -1053,7 +1040,6 @@ static std::vector<Tensor> pool2d(
         dtype,
         output_layout,
         config_tensor_in_dram);
-    printf("[Pool2D] Completed pool2d_DRAM, returning\n");
     return result;
 }
 
@@ -1077,7 +1063,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout,
     bool config_tensor_in_dram) {
-    printf("[MaxPool2DOp] Calling pool2d\n");
     auto result = pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
@@ -1102,7 +1087,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         dtype,
         output_layout,
         config_tensor_in_dram);
-    printf("[MaxPool2DOp] Completed pool2d, returning %zu tensors\n", result.size());
     return result;
 }
 
