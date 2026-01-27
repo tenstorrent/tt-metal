@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #ifndef NOC_ADDRESS_TRANSLATION_TABLES_HPP
 #define NOC_ADDRESS_TRANSLATION_TABLES_HPP
