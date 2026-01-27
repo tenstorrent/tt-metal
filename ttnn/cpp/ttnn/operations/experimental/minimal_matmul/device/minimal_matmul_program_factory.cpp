@@ -257,11 +257,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    const uint32_t double_buffer_factor = 2;
+    const uint32_t double_buffer_factor = 3;  // Triple buffering for better DM/compute overlap
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    // Single buffer output to free L1 for other optimizations
+    uint32_t out_cb_num_tiles = out_block_num_tiles;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -534,15 +534,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    /**
-     * The receiver writer cores defer their writes in order to reduce NOC congestion.
-     * Further, the amount of K_blocks they defer by depends on their core coordinate.
-     * If we have core_grid.x cores, we'd want to evenly stride the K_blocks they defer by.
-     * For first pass, it's easy enough to use core_grid.x
-     */
-    uint32_t k_blocks_per_core =
-        tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
-
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
@@ -598,9 +589,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // log_info(tt::LogOp, "core_id: {}, M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
         // core_id, M_start_tile, M_end_tile, N_start_tile, N_end_tile);
 
-        // Defer write to K block with same coordinate as core
-        // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
+        // Distribute deferred writes evenly across K blocks using both X and Y coordinates
+        // This spreads DRAM write traffic more evenly than using only Y coordinate
+        uint32_t core_linear_id = core.x + core.y * grid_size.x;
+        uint32_t defer_write_k_block = (core_linear_id * K_blocks) / num_cores;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
         bool is_in0_sink = core == in0_core_order.back();
