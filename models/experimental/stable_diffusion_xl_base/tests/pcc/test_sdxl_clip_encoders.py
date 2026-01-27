@@ -30,6 +30,10 @@ from models.experimental.tt_dit.utils.check import assert_quality
     [{"l1_small_size": SDXL_L1_SMALL_SIZE}],
     indirect=["device_params"],
 )
+@pytest.mark.parametrize(
+    "test_text",
+    (("A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"),),
+)
 def test_clip_encoder(
     *,
     mesh_device: ttnn.Device,
@@ -40,6 +44,7 @@ def test_clip_encoder(
     is_ci_v2_env,
     model_location_generator,
     reset_seeds,
+    test_text: str,
 ) -> None:
     model_name_checkpoint = "stabilityai/stable-diffusion-xl-base-1.0"
 
@@ -122,9 +127,6 @@ def test_clip_encoder(
     tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
     tt_clip.load_state_dict(hf_model.state_dict())
     logger.info(f"text encoder creation time: {time.time() - start_time}")
-
-    # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
-    test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
     tt_tokens = ttnn.from_torch(
