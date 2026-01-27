@@ -285,7 +285,7 @@ void kernel_main() {
     size_t worker_connection_handshake_address = connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
-    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+    for (uint32_t i = 0UL; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER, 0U>(
             &worker_channels[i],
             &worker_channel_interfaces[i],
@@ -294,7 +294,7 @@ void kernel_main() {
             BUFFER_SIZE_WORKER,
             worker_channel_base_address,
             worker_connection_info_address,
-            get_stream_scratch_register_address(i), //worker_connection_handshake_address,
+            worker_connection_handshake_address,
             worker_flow_control_address,
             StreamId{worker_stream_ids[i]},
             worker_is_persistent[i] == 1);
@@ -315,7 +315,7 @@ void kernel_main() {
             BUFFER_SIZE_ROUTER,
             router_channel_base_address,
             router_connection_info_address,
-            get_stream_scratch_register_address(i), //router_connection_handshake_address,
+            router_connection_handshake_address,
             router_flow_control_address,
             StreamId{router_stream_ids[i]},
             router_is_persistent[i] == 1);

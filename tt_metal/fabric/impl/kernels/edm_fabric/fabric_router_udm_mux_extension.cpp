@@ -403,7 +403,7 @@ void kernel_main() {
             BUFFER_SIZE_WORKER,
             worker_channel_base_address,
             worker_connection_info_address,
-            get_stream_scratch_register_address(i), //worker_connection_handshake_address,
+            worker_connection_handshake_address,
             worker_flow_control_address,
             StreamId{worker_stream_ids[i]},
             worker_is_persistent[i] == 1);
@@ -424,7 +424,7 @@ void kernel_main() {
             BUFFER_SIZE_RELAY_TO_MUX,
             relay_to_mux_channel_base_address,
             relay_to_mux_connection_info_address,
-            get_stream_scratch_register_address(i), //relay_to_mux_connection_handshake_address,
+            relay_to_mux_connection_handshake_address,
             relay_to_mux_flow_control_address,
             StreamId{relay_to_mux_stream_ids[i]},
             relay_to_mux_is_persistent[i] == 1);
@@ -445,7 +445,7 @@ void kernel_main() {
             BUFFER_SIZE_MUX_TO_MUX,
             mux_to_mux_channel_base_address,
             mux_to_mux_connection_info_address,
-            get_stream_scratch_register_address(i), //mux_to_mux_connection_handshake_address,
+            mux_to_mux_connection_handshake_address,
             mux_to_mux_flow_control_address,
             StreamId{mux_to_mux_stream_ids[i]},
             mux_to_mux_is_persistent[i] == 1);

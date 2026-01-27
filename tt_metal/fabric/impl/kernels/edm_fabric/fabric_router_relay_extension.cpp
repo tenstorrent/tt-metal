@@ -523,7 +523,7 @@ void kernel_main() {
         BUFFER_SIZE_BYTES,
         channel_base_address,
         connection_info_address,
-        get_stream_scratch_register_address(0UL), //connection_handshake_address,
+        connection_handshake_address,
         sender_flow_control_address,
         StreamId{channel_stream_id});
 

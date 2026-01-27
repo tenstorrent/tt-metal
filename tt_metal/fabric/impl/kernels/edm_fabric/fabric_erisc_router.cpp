@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+
 #include "internal/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -2345,18 +2346,36 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
-    auto connection_live_semaphore_ptr =
-        reinterpret_cast<volatile uint32_t*>(local_sender_connection_live_semaphore_addresses[I]);
-    auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-        local_sender_connection_info_addresses[I]);
-    new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
-        StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
-            connection_worker_info_ptr,
-            0,  // Not used for credits.
-            connection_live_semaphore_ptr,
-            sender_channel_ack_cmd_buf_ids[I],
-            get_credits_init_val<I>(),
-            notify_worker_of_read_counter_update_src_address);
+    if constexpr (I == 0UL) {
+        using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
+        ConnectionLiveSemaphorePtrType connection_live_semaphore_ptr =
+            reinterpret_cast<ConnectionLiveSemaphorePtrType>(local_sender_connection_live_semaphore_addresses[I]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[I]);
+        new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I], ConnectionLiveSemaphorePtrType>(
+                connection_worker_info_ptr,
+                0,  // Not used for credits.
+                connection_live_semaphore_ptr,
+                sender_channel_ack_cmd_buf_ids[I],
+                get_credits_init_val<I>(),
+                notify_worker_of_read_counter_update_src_address);
+    }
+    else {
+        using ConnectionLiveSemaphorePtrType = volatile tt_reg_ptr uint32_t*;
+        ConnectionLiveSemaphorePtrType connection_live_semaphore_ptr =
+            reinterpret_cast<ConnectionLiveSemaphorePtrType>(local_sender_connection_live_semaphore_addresses[I]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[I]);
+        new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
+                connection_worker_info_ptr,
+                0,  // Not used for credits.
+                connection_live_semaphore_ptr,
+                sender_channel_ack_cmd_buf_ids[I],
+                get_credits_init_val<I>(),
+                notify_worker_of_read_counter_update_src_address);
+    }
 }
 
 // SFINAE overload - no-op when I >= NUM_SENDER_CHANNELS
@@ -2649,14 +2668,15 @@ void kernel_main() {
     ///////////////////////
     // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
 
+    #define OVERLAY_REGISTER_ZERO 0UL
+
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
-    //local_sender_channel_connection_semaphore_addrs[0] = get_stream_scratch_register_address<0U>();
-    //arg_idx++;
-    for (size_t i = 0UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_connection_semaphore_addrs[i] = get_stream_scratch_register_address(i);
-        //local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
+    local_sender_channel_connection_semaphore_addrs[0] = get_stream_scratch_register_address<OVERLAY_REGISTER_ZERO>();
+    arg_idx++;
+    for (size_t i = 1UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    arg_idx += MAX_NUM_SENDER_CHANNELS;
+    //arg_idx += MAX_NUM_SENDER_CHANNELS;
 
     // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
@@ -2878,8 +2898,8 @@ void kernel_main() {
                         // connections we must always use semaphore lookup
                         // For 2D, downstream_edm_vc0_semaphore_id is an address.
                         is_persistent_fabric,
-                        (downstream_edm_vc0_noc_x >> (dense_index * 8)) & 0xFF,
-                        (downstream_edm_vc0_noc_y >> (dense_index * 8)) & 0xFF,
+                        (downstream_edm_vc0_noc_x >> (dense_index << 3U)) & 0xFF, // dense_index * 8
+                        (downstream_edm_vc0_noc_y >> (dense_index << 3U)) & 0xFF, // dense_index * 8
 #if defined(FABRIC_2D)
                         downstream_edm_vc0_buffer_base_addresses[dense_index],
 #else
@@ -3033,7 +3053,6 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
 #endif
-
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
         channel_buffer_size,
@@ -3266,11 +3285,9 @@ void kernel_main() {
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids);
     WAYPOINT("FSCD");
-
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 #endif

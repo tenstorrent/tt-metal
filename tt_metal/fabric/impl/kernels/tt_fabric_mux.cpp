@@ -189,7 +189,21 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
+    #define OVERLAY_REGISTER_ZERO 0UL
+    
+    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, 0U>(
+        &full_size_channels[i],
+        &full_size_channel_worker_interfaces[0UL],
+        full_size_channel_connection_established[0UL],
+        i,
+        BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
+        channel_base_address,
+        connection_info_address,
+        get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO),
+        sender_flow_control_address,
+        StreamId{channel_stream_ids[0UL]});
+
+    for (uint8_t i = 1UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, 0U>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
@@ -198,12 +212,24 @@ void kernel_main() {
             BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
             channel_base_address,
             connection_info_address,
-            get_stream_scratch_register_address(i), //connection_handshake_address,
+            connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]});
     }
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
+    setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, 0U>(
+        &header_only_channels[0UL],
+        &header_only_channel_worker_interfaces[0UL],
+        header_only_channel_connection_established[0UL],
+        0UL,
+        sizeof(PACKET_HEADER_TYPE),
+        channel_base_address,
+        connection_info_address,
+        get_stream_scratch_register_address(0UL), //connection_handshake_address,
+        sender_flow_control_address,
+        StreamId{channel_stream_ids[0UL + NUM_FULL_SIZE_CHANNELS]});
+
+    for (uint8_t i = 1UL; i < NUM_HEADER_ONLY_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, 0U>(
             &header_only_channels[i],
             &header_only_channel_worker_interfaces[i],
@@ -212,7 +238,7 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             channel_base_address,
             connection_info_address,
-            get_stream_scratch_register_address(i), //connection_handshake_address,
+            connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]});
     }
