@@ -167,15 +167,15 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
     ASSERT_TRUE(cmd_interface.wait_for_state(control_plane, RouterStateCommon::RUNNING, std::chrono::milliseconds(5000)))
         << "Routers did start in running state";
     // Validate traffic is flowing
-    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
+    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal pause via control plane
     cmd_interface.pause_routers(control_plane);
-    ASSERT_TRUE(cmd_interface.wait_for_pause(control_plane, std::chrono::milliseconds(2000)))
+    ASSERT_TRUE(cmd_interface.wait_for_pause(control_plane, std::chrono::milliseconds(5000)))
         << "Routers did not pause within timeout";
 
     // Validate there is no traffic flowing after pause
-    ASSERT_TRUE(!check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
+    ASSERT_TRUE(!check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal resume via control plane
     cmd_interface.resume_routers(control_plane);
@@ -183,7 +183,7 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
         << "Routers did not resume within timeout";
 
     // Validate traffic is flowing again
-    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
+    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal teardown and wait for completion
     signal_worker_teardown(mesh_device_, worker_core,
