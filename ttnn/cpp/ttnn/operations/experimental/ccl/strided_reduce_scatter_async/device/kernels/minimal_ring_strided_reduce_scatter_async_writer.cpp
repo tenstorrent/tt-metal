@@ -275,7 +275,7 @@ void kernel_main() {
                             for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
                                  chunk_piece_idx++) {
                                 uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                                uint32_t direction_offset = direction ? 0 : chunk_width / 2;
+                                uint32_t direction_offset = direction ? chunk_width / 2 : 0;
 
                                 cb_wait_front(cb_output_id, tile_granularity);
                                 DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
@@ -315,7 +315,7 @@ void kernel_main() {
                         } else {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
                             uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
+                            uint32_t direction_offset = direction ? chunk_width / 2 : 0;
                             cb_wait_front(cb_output_id, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
                             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
