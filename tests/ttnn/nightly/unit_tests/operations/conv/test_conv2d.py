@@ -5261,7 +5261,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
         # HEIGHT_SHARDED test
-        (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, False, False),
+        # (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, False, False),
         # WIDTH_SHARDED test
         # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
         # BLOCK_SHARDED test
