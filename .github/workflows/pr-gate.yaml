@@ -194,7 +194,7 @@ jobs:
 
           # Diagnostic: Check network connectivity
           echo "🔍 Checking network connectivity..."
-          if ! timeout 5 bash -c 'cat < /dev/null > /dev/tcp/8.8.8.8/53' 2>/dev/null; then
+          if ! ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
             echo "⚠️  Warning: Network connectivity check failed"
           else
             echo "✅ Network connectivity OK"
