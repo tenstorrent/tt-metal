@@ -64,18 +64,7 @@ def generate_reference_io(
     if mode == "prefill":
         position_ids_or_seq_lens = torch.tensor([seq_len])
     else:
-        if decode_position_id is None:
-            position_ids = position_ids_or_seq_lens = torch.randint(
-                0, hf_config.max_seq_len - 1, (batch_size,), dtype=torch.long
-            )
-        else:
-            if not isinstance(decode_position_id, int):
-                raise ValueError(f"decode_position_id must be int or None, got {type(decode_position_id)}")
-            if not (0 <= decode_position_id < hf_config.max_seq_len):
-                raise ValueError(
-                    f"decode_position_id must be in [0, {hf_config.max_seq_len - 1}], got {decode_position_id}"
-                )
-            position_ids = position_ids_or_seq_lens = torch.ones(batch_size, dtype=torch.long) * decode_position_id
+        position_ids = position_ids_or_seq_lens = torch.randint(0, hf_config.max_seq_len - 1, (batch_size,))
     reference_output, input_cache, output_cache = run_reference_with_attention(
         reference_model, torch_input, position_ids_or_seq_lens, layer_idx, hf_config, mode, False
     )
@@ -205,29 +194,6 @@ def run_test_forward_pass_decoder2d(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
 
 
-# Base test cases - ranges will be expanded into individual test cases
-# see documentation for expand_test_cases_with_position_ids_ranges for more details
-BASE_TEST_CASES = [
-    # mode, seq_len, batch_size_per_row, decode_position_ids
-    ("decode", 1, USERS_PER_ROW, None),
-] + [
-    ("prefill", seq_len, 1, None)
-    if seq_len == 128
-    else pytest.param(
-        "prefill",
-        seq_len,
-        1,
-        None,
-        marks=pytest.mark.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        ),
-    )
-    for seq_len in PREFILL_SEQ_LENS
-]
-EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
-EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
-
-
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -240,7 +206,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     [True, False],
 )
 @pytest.mark.parametrize(
-    "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
+    "mode, seq_len, batch_size_per_row",
     [
         pytest.param(
             DecoderBlock2D,
