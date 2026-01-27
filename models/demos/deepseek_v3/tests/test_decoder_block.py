@@ -8,6 +8,7 @@ from typing import Dict
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -45,6 +46,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def generate_synthetic_decoder_block_weights(
@@ -196,6 +198,85 @@ def generate_reference_io(
     return state_dict, position_ids, torch_input, reference_output, input_cache, output_cache
 
 
+def run_decoder_with_trace(
+    mesh_device,
+    forward_fn,
+    forward_args,
+    num_iters=20,
+    warmup_iters=5,
+    profiler=BenchmarkProfiler(),
+):
+    """Run decoder block with trace mode for on-device performance measurement.
+
+    Args:
+        mesh_device: The mesh device to run on
+        forward_fn: The forward function to call (prefill or decode)
+        forward_args: Arguments to pass to the forward function
+        num_iters: Number of iterations to run
+        warmup_iters: Number of warmup iterations
+        profiler: BenchmarkProfiler instance
+
+    Returns:
+        The output tensor from the forward pass
+    """
+    # Compile Run
+    logger.info("Compiling decoder block")
+    tt_output = forward_fn(*forward_args)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(num_iters):
+        tt_output = forward_fn(*forward_args)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture warmup trace if needed
+    trace_id_warmup = None
+    if warmup_iters > 0:
+        logger.info("Capturing warmup trace")
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for _ in range(warmup_iters):
+            tt_output = forward_fn(*forward_args)
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    # Run the trace
+    logger.info(f"Starting trace performance test (warmup: {warmup_iters}, main: {num_iters} iterations)")
+
+    # Run warmup trace
+    if warmup_iters > 0:
+        profiler.start("decoder-block-trace-warmup")
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
+        profiler.end("decoder-block-trace-warmup")
+
+    # Run main trace with signposts for device-side measurement
+    profiler.start("decoder-block-trace")
+    signpost("start")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    profiler.end("decoder-block-trace")
+
+    # Calculate and report timing
+    warmup_time = profiler.get_duration("decoder-block-trace-warmup") if warmup_iters > 0 else 0
+    total_time = profiler.get_duration("decoder-block-trace")
+    effective_time = total_time - warmup_time
+    effective_iters = num_iters - warmup_iters
+
+    logger.info(f"On-device performance results:")
+    logger.info(f"  Total time: {total_time:.6f} s")
+    logger.info(f"  Effective time (excluding warmup): {effective_time:.6f} s")
+    logger.info(f"  Time per iteration: {effective_time / effective_iters * 1000:.3f} ms")
+    logger.info(f"  Iterations per second: {effective_iters / effective_time:.2f}")
+
+    return tt_output
+
+
 def run_test_forward_pass_decoder1d(
     DecoderBlockClass: type[DecoderBlock1DBase],
     module_path,
@@ -212,6 +293,10 @@ def run_test_forward_pass_decoder1d(
     state_dict,
     decode_position_ids: int | None = None,
     use_synthetic_weights: bool = False,
+    trace_mode: bool = False,
+    num_iters: int = 20,
+    warmup_iters: int = 5,
+    profiler: BenchmarkProfiler = None,
 ):
     # Check params
     if mode == "prefill":
@@ -293,14 +378,37 @@ def run_test_forward_pass_decoder1d(
     logger.info("Running TTNN forward pass")
 
     cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
-    if mode == "prefill":
-        tt_output = DecoderBlockClass.forward_prefill(
-            tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table
+
+    if trace_mode:
+        # Use trace execution for performance measurement
+        if profiler is None:
+            profiler = BenchmarkProfiler()
+
+        if mode == "prefill":
+            forward_fn = lambda *args: DecoderBlockClass.forward_prefill(*args)
+            forward_args = (tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table)
+        else:
+            forward_fn = lambda *args: DecoderBlockClass.forward_decode(*args)
+            forward_args = (tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table)
+
+        tt_output = run_decoder_with_trace(
+            mesh_device,
+            forward_fn,
+            forward_args,
+            num_iters=num_iters,
+            warmup_iters=warmup_iters,
+            profiler=profiler,
         )
     else:
-        tt_output = DecoderBlockClass.forward_decode(
-            tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table
-        )
+        # Regular forward pass without trace
+        if mode == "prefill":
+            tt_output = DecoderBlockClass.forward_prefill(
+                tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table
+            )
+        else:
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table
+            )
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
@@ -326,6 +434,10 @@ def run_test_forward_pass_decoder2d(
     state_dict,
     decode_position_ids: int | None = None,
     use_synthetic_weights: bool = False,
+    trace_mode: bool = False,
+    num_iters: int = 20,
+    warmup_iters: int = 5,
+    profiler: BenchmarkProfiler = None,
 ):
     # Check params
     if mode == "prefill":
@@ -407,12 +519,34 @@ def run_test_forward_pass_decoder2d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
-    if mode == "prefill":
-        tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
-    else:
-        tt_output = DecoderBlockClass.forward_decode(
-            tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+    if trace_mode:
+        # Use trace execution for performance measurement
+        if profiler is None:
+            profiler = BenchmarkProfiler()
+
+        if mode == "prefill":
+            forward_fn = lambda *args: DecoderBlockClass.forward_prefill(*args)
+            forward_args = (tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        else:
+            forward_fn = lambda *args: DecoderBlockClass.forward_decode(*args)
+            forward_args = (tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table)
+
+        tt_output = run_decoder_with_trace(
+            mesh_device,
+            forward_fn,
+            forward_args,
+            num_iters=num_iters,
+            warmup_iters=warmup_iters,
+            profiler=profiler,
         )
+    else:
+        # Regular forward pass without trace
+        if mode == "prefill":
+            tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
+        else:
+            tt_output = DecoderBlockClass.forward_decode(
+                tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
+            )
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
@@ -448,13 +582,17 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 17068032},
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "use_synthetic_weights",
     [True, False],
+)
+@pytest.mark.parametrize(
+    "trace_mode",
+    [False, True],
 )
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
@@ -510,12 +648,19 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     ],
 )
 @pytest.mark.parametrize(
+    "num_iters, warmup_iters",
+    [
+        (20, 5),
+    ],
+)
+@pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
     EXPANDED_TEST_CASES,
     ids=EXPANDED_TEST_IDS,
 )
 def test_forward_pass(
     use_synthetic_weights,
+    trace_mode,
     DecoderBlockClass: type[DecoderBlock1DBase],
     module_path,
     reference_layer_idx,
@@ -523,6 +668,8 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     decode_position_ids,
+    num_iters,
+    warmup_iters,
     hf_config_short,
     cache_path,
     mesh_device,
@@ -535,6 +682,9 @@ def test_forward_pass(
 ):
     if mode != "decode":
         decode_position_ids = None
+
+    # Create profiler for trace mode
+    profiler = BenchmarkProfiler() if trace_mode else None
 
     test_closure(
         DecoderBlockClass,
@@ -552,6 +702,10 @@ def test_forward_pass(
         state_dict,
         decode_position_ids,
         use_synthetic_weights,
+        trace_mode,
+        num_iters,
+        warmup_iters,
+        profiler,
     )
 
 
