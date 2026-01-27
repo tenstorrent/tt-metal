@@ -314,7 +314,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     // Use the full path to ensure uniqueness even for duplicate descriptor filenames
     std::string golden_name = get_golden_name_from_mesh_graph_path(mesh_graph_desc_path);
     // Add test index to make it unique for duplicate descriptors (extracted from parameterized test)
-    auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     if (test_info) {
         // Extract parameter index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
         // This is only used for uniqueness when the same descriptor appears multiple times
