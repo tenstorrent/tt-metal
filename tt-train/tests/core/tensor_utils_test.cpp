@@ -291,3 +291,21 @@ TEST_F(TensorUtilsTest, TestBytesToFromTensor) {
         EXPECT_EQ(vec_back[i], test_data[i]);
     }
 }
+
+TEST_F(TensorUtilsTest, TestFloatToFromTensorFloat32Precision) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    // Should preserve full precision
+    std::vector<float> test_data = {0.1f, 0.2f, 0.3f, 0.123456789f};
+
+    auto shape = ttnn::Shape({1, 1, 1, 4});
+    auto tensor = ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(test_data, shape, device);
+
+    EXPECT_EQ(tensor.dtype(), ttnn::DataType::FLOAT32);
+
+    auto vec_back = ttml::core::to_vector(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}

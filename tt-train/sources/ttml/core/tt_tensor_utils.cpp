@@ -179,8 +179,6 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
     return output;
 }
 
-// Workaround implementation due to issue with tilize for float32
-// it is expected that tilize will be fixed in the after next tt-metal main update
 template <>
 tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
     const std::vector<float>& buffer,
@@ -188,8 +186,30 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
     ttnn::distributed::MeshDevice* device,
     ttnn::Layout layout,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    auto tensor = from_vector<float, ttnn::DataType::BFLOAT16>(buffer, shape, device, layout, mesh_mapper);
-    return ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
+    assert(device != nullptr);
+    const ttnn::DataType data_type = ttnn::DataType::FLOAT32;
+    ttnn::MemoryConfig output_mem_config{};
+    size_t volume = shape.volume();
+    if (buffer.size() != volume) {
+        throw std::logic_error(
+            fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
+    }
+
+    const auto tensor_layout =
+        ttnn::TensorLayout(data_type, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
+    auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
+                                                 ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
+                                           : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
+
+    if (layout == ttnn::Layout::TILE) {
+        // NOTE: Layout conversion is currently performed on host.
+        // ttnn::to_layout does not correctly handle FP32 tensors after device transfer.
+        // Performing tilization before to_device avoids precision issues.
+        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
+    }
+    output = ttnn::to_device(output, device, output_mem_config);
+
+    return output;
 }
 
 /*
