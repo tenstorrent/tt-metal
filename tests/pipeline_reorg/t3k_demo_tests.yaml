@@ -146,6 +146,14 @@
   timeout: 30
   model-name: qwen25_vl
 
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_tests
+  sku: wh_llmbox
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  timeout: 10
+  model-name: qwen3_vl
+
 - name: t3k_gemma3_tests
   cmd: run_t3000_gemma3_tests
   sku: wh_llmbox
