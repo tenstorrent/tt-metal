@@ -138,6 +138,9 @@ void kernel_main() {
     uint32_t slices_received = 0;
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
+    bool enable_split_receiving = false;
+    uint32_t split_slice_source_device = 0;
+
     if constexpr (topology == Topology::Linear) {
         if (direction == 1) {
             slices_expected = num_targets_forward_direction;
@@ -153,6 +156,20 @@ void kernel_main() {
         } else {
             slices_expected = num_targets_forward_direction;
             writes_expected = num_targets_forward_direction - 1;
+        }
+
+        // For 4-device ring, enable split receiving for the destination device
+        if (ring_size == 4) {
+            // Device that's 2 hops away will receive split data
+            // E.g., Device 2 receives Device 0's data split between two sources
+            if (direction == 0) {
+                // Forward reader will receive last slice as split (from device 2 hops back)
+                split_slice_source_device = (my_chip_id - 2 + ring_size) % ring_size;
+            } else {
+                // Backward reader will receive split data from device 2 hops forward
+                split_slice_source_device = (my_chip_id + 2) % ring_size;
+            }
+            enable_split_receiving = true;
         }
     }
 
@@ -192,6 +209,12 @@ void kernel_main() {
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
 
+            // Check if this is a split slice we're receiving
+            bool is_split_slice =
+                enable_split_receiving && ring_size == 4 && (actual_sender_chip_id == split_slice_source_device);
+            bool is_last_slice = (slices_received == slices_expected - 1);
+            bool receiving_split_data = is_split_slice && is_last_slice;
+
             uint32_t output_tile_id_start = 0;
             uint32_t pages_read_in_row = start_pages_read_in_row;
             uint32_t row_offset = start_row_offset;
@@ -206,6 +229,34 @@ void kernel_main() {
             } else {
                 output_tile_id_start =
                     actual_sender_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
+            }
+
+            // Handle split data reception for 4-device ring
+            if (receiving_split_data) {
+                // We're receiving split data - adjust tile count and position
+                uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+                uint32_t first_half_tiles = total_tiles / 2;
+
+                if (direction == 0) {
+                    // Forward reader: receives first half
+                    tiles_to_read = input_tile_id_start + first_half_tiles;
+                } else {
+                    // Backward reader: skip first half, receive second half
+                    uint32_t tiles_to_skip = first_half_tiles;
+                    tiles_read = input_tile_id_start + first_half_tiles;
+
+                    // Adjust output position to skip first half
+                    while (tiles_to_skip > 0) {
+                        if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                            pages_read_in_row += tiles_to_skip;
+                            tiles_to_skip = 0;
+                        } else {
+                            tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                    }
+                }
             }
 
             uint32_t num_channels_processed_in_current_batch = 0;

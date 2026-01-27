@@ -437,6 +437,7 @@ void kernel_main() {
     }
 
     uint32_t writes_expected = 0;
+    bool enable_split_forwarding = false;
     if constexpr (topology == Topology::Linear) {
         if (detail::valid_targets_backward(direction)) {
             writes_expected = num_targets_forward_direction;
@@ -446,8 +447,17 @@ void kernel_main() {
     } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
+            // For 4-device ring, backward worker also participates in forwarding
+            if (ring_size == 4 && num_targets_backward_direction == 1) {
+                writes_expected = 1;  // Backward worker will forward split data
+                enable_split_forwarding = true;
+            }
         } else {
             writes_expected = num_targets_forward_direction - 1;
+            // For 4-device ring, forward worker will use split forwarding
+            if (ring_size == 4) {
+                enable_split_forwarding = true;
+            }
         }
     }
 
@@ -462,11 +472,21 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
         // neighbor to the left
         // In the ring case, I expect to write to the left num_backward_target times
+        // Check if this is the last slice (for split forwarding)
+        bool is_last_slice = (slice_writes == writes_expected - 1);
+        bool do_split_forwarding = enable_split_forwarding && is_last_slice && ring_size == 4;
+
         int slice_chip_id;
         uint32_t actual_slice_chip_id;
         if (direction == 1) {
             slice_chip_id = my_chip_id + slice_writes + 1;
             actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
+            // For split forwarding, backward worker forwards the same source as forward worker
+            if (do_split_forwarding) {
+                // Device 2 hops away in backward direction (same source as forward's last slice)
+                slice_chip_id = my_chip_id - 2;
+                actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
+            }
         } else {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
@@ -489,6 +509,33 @@ void kernel_main() {
             tile_id_start = actual_slice_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
         } else {
             tile_id_start = actual_slice_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
+        }
+
+        // Handle split forwarding for 4-device ring
+        if (do_split_forwarding) {
+            uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+            uint32_t first_half_tiles = total_tiles / 2;
+
+            if (direction == 0) {
+                // Forward worker: only forward first half
+                tiles_to_read = input_tile_id_start + first_half_tiles;
+            } else {
+                // Backward worker: skip first half, forward second half
+                uint32_t tiles_to_skip = first_half_tiles;
+                tiles_read = input_tile_id_start + first_half_tiles;
+
+                // Adjust row offset and pages_read_in_row to skip first half
+                while (tiles_to_skip > 0) {
+                    if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                        pages_read_in_row += tiles_to_skip;
+                        tiles_to_skip = 0;
+                    } else {
+                        tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
+                    }
+                }
+            }
         }
 
         num_channels_processed_in_current_batch = 0;
