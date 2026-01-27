@@ -546,12 +546,7 @@ void kernel_main() {
             cb_wait_front(in2_cb, N_block_tiles);
 #endif
 
-#ifdef FUSE_TERNARY
-            // cb_wait_front(cb_id_ternary_a, out_block_num_tiles);
-            // cb_wait_front(cb_id_ternary_b, out_block_num_tiles);
-#endif  // FUSE_TERNARY
-
-            add_bias_and_addcmul_block_v1(
+            add_bias_and_addcmul_block(
                 intermediate_cb,
                 in2_cb,
                 cb_id_ternary_a,
@@ -564,11 +559,6 @@ void kernel_main() {
 #ifdef FUSE_BIAS
             cb_pop_front(in2_cb, N_block_tiles);
 #endif  // FUSE_BIAS
-
-#ifdef FUSE_TERNARY
-            // cb_pop_front(cb_id_ternary_a, out_block_num_tiles);
-            // cb_pop_front(cb_id_ternary_b, out_block_num_tiles);
-#endif  // FUSE_TERNARY
 
 #endif  // !defined(FUSE_BIAS) && !defined(FUSE_TERNARY)
 
