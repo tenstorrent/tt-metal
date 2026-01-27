@@ -1,0 +1,8 @@
+﻿ttnn.bitcast
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bitcast:
+
+.. autooperation:: ttnn.bitcast

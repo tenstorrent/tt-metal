@@ -1,0 +1,8 @@
+﻿ttnn.point\_to\_point
+=====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.point_to_point:
+
+.. autooperation:: ttnn.point_to_point
