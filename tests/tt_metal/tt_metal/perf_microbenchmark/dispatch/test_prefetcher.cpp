@@ -2003,8 +2003,7 @@ TEST_P(RandomTestFixture, RandomTest) {
 // Reads from DRAM bank 0 on MMIO device, writes to DRAM bank 0 on remote device
 // Note: CQ_PREFETCH_CMD_RELAY_LINEAR_H needs to a standalone entry in fetchQ
 TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
-    // Test failing with watcher gh issue
-    SKIP_FOR_WATCHER();
+    SKIP_FOR_WATCHER("Test failing with watcher enabled github issue #36555");
     log_info(tt::LogTest, "PrefetchRelayLinearHTestFixture - RelayLinearHTest - Test Start");
 
     // Test parameters
