@@ -966,6 +966,12 @@ class MLA1D(AbstractModule):
         qk_head_dim = cfg["qk_head_dim"]
         v_head_dim = cfg["v_head_dim"]
 
+        print("kv_lora_rank: ", kv_lora_rank)
+        print("qk_nope_head_dim: ", qk_nope_head_dim)
+        print("qk_rope_head_dim: ", qk_rope_head_dim)
+        print("qk_head_dim: ", qk_head_dim)
+        print("v_head_dim: ", v_head_dim)
+
         kvpe_cache = cfg["kvpe_cache"]
         ccl = cfg["ccl"]
 
@@ -973,19 +979,26 @@ class MLA1D(AbstractModule):
 
         print("Num heads: ", num_heads)
         print("Num heads local: ", num_heads_local)
+        print("X shape is : ", x.shape)  # [1, seq_len, hidden_dim / num_devices]
 
         # wq_a and wq_b
-        tt_q = ttnn.linear(x, **cfg["wq_a"])
-        print("tt_q shape: ", tt_q.shape)
+        tt_q = ttnn.linear(x, **cfg["wq_a"])  # q to latent space
+        print("cfg['wq_a'] shape: ", cfg["wq_a"]["input_tensor_b"].shape)
         # print("cfg['wq_a']: ", cfg["wq_a"])
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
+        # print("tt_q shape after all gather: ", tt_q.shape) # [replicated]
+        # print("tt_q after all gather: ", tt_q)
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
-        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+
+        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])  # head parallel
+        print("cfg['wq_b'] shape: ", cfg["wq_b"]["input_tensor_b"].shape)
+        print("tt_q shape after second linear: ", tt_q.shape)
+        # print("tt_q after second linear: ", tt_q)
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
@@ -993,8 +1006,16 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
 
+        print("tt_q_nope shape: ", tt_q_nope.shape)
+        print("tt_q_rope after reshape: ", tt_q_rope.shape)
+
         # wkv_b1
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, seq_len, kv_lora_rank]
+        print("tt_q_nope after wkv_b1: ", tt_q_nope.shape)
+
+        print("cfg['wkv_b1'] shape: ", cfg["wkv_b1"]["input_tensor_b"].shape)
+        # print("cfg['wkv_b1']: ", cfg["wkv_b1"]["input_tensor_b"])
+        # print("tt_q_nope after wkv_b1: ", tt_q_nope)
 
         # Q RoPE
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -1005,11 +1026,17 @@ class MLA1D(AbstractModule):
             is_decode_mode=False,
         )
 
+        # print("tt_q_rope after rotary embedding: ", tt_q_rope)
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        print("tt_q shape after concat: ", tt_q.shape)
 
         # KVPE Stuff
+        print("x shape: ", x.shape)
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+        print("cfg['wkv_a'] shape: ", cfg["wkv_a"]["input_tensor_b"].shape)
+
+        print("tt_kv shape after linear: ", tt_kv.shape)
 
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_prefill"])
@@ -1018,8 +1045,12 @@ class MLA1D(AbstractModule):
             tt_kv, **cfg["wkv_a_r_prefill"]
         )  # [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
 
+        print("tt_kv shape after ag: ", tt_kv.shape)
+
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len, kv_lora_rank])
+        print("tt_kv_nope shape: ", tt_kv_nope.shape)
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim])
+        print("tt_kv_rope shape: ", tt_kv_rope.shape)
         ttnn.deallocate(tt_kv)
 
         # KV Norm
@@ -1039,13 +1070,18 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
+        print("tt_kvpe dtype: ", kvpe_cache.dtype)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+        print("KVPE cache shape: ", kvpe_cache.shape)
+        print("Page table shape: ", page_table.shape)
+        print("Page table padded shape: ", page_table.padded_shape)
 
+        print("tt_kvpe shape: ", tt_kvpe.shape)
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1054,19 +1090,26 @@ class MLA1D(AbstractModule):
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
 
+        print("tt_q shape: ", tt_q.shape)
+        print("tt_kvpe shape: ", tt_kvpe.shape)
         # FlashMLA
         attn_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_kvpe,
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        print("attn_out shape: ", attn_out.shape)
+        # print("attn_out: ", attn_out)
         ttnn.deallocate(tt_q)
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        print("v_out shape after linear: ", v_out.shape)
+        print("cfg['wkv_b2'] shape: ", cfg["wkv_b2"]["input_tensor_b"].shape)
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
+        print("v_out shape after permute: ", v_out.shape)
 
         # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
         # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
@@ -1114,5 +1157,6 @@ class MLA1D(AbstractModule):
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            print("out shape after linear: ", out.shape)
 
         return out

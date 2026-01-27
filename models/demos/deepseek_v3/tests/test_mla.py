@@ -319,6 +319,7 @@ def run_test_forward_pass_mla2d(
     # Set up page config
     logger.info("Setting up model configs")
     user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
+    print("hf_config_short.max_seq_len: ", hf_config_short.max_seq_len)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id

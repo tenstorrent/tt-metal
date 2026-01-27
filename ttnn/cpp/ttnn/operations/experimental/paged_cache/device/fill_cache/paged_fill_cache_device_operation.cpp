@@ -50,7 +50,12 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.batch_idx_fallback <= cache_shape[0], "Batch idx must fit in cache batch size");
     TT_FATAL(
-        input_shape[2] <= cache_shape[2] * page_table_shape[1], "Input seq_len must fit in max_num_blocks_per_seq");
+        input_shape[2] <= cache_shape[2] * page_table_shape[1],
+        "Input seq_len must fit in max_num_blocks_per_seq cache_shape[2]: {} page_table_shape[1]: {} input_shape[2]: "
+        "{} ",
+        cache_shape[2],
+        page_table_shape[1],
+        input_shape[2]);
 
     if (tensor_args.batch_idx_tensor_opt.has_value()) {
         const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
