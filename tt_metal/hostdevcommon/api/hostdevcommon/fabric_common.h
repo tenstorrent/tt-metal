@@ -559,7 +559,7 @@ static_assert(
 // Verify total struct size
 static_assert(
     sizeof(routing_l1_info_t) == 2576,
-    "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
+    "routing_l1_info_t must be 2576 bytes: base(516) + union(1024) + exit(1024) + pad(12)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
