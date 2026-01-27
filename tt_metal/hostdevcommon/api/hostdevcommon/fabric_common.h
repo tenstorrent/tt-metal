@@ -517,7 +517,7 @@ struct RouterStateManager {
     // template <bool ENABLE_RISC_CPU_DATA_CACHE>
     bool is_non_run_command_pending() const {
         // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        return command != RUN;
+        return command != RouterCommand::RUN;
     }
 };
 
