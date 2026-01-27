@@ -469,45 +469,18 @@ there are ``num_k_blocks`` = ``3`` K-blocks. Therefore:
 Each "slab" is indicated by a different shade of purple in Figure 4.
 
 To see what computation needs to be performed such that each slab is read
-only once, consider the computation for a single output tile ``C[i][j]``:
+only once, consider the computation for a single output tile ``C[i][j]`` within ``C_block``:
 
 .. figure:: images/sum_standard.png
    :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
    :width: 250
    :align: center
 
-where:
+We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
+Each K-block ``b`` spans some range of ``k`` values: ``(b * K_block_tiles) .. ((b + 1) * K_block_tiles - 1)``.
+Given this, we can decompose the computation of ``C[i][j]`` as follows:
 
-* ``i`` is a tile row index in ``0 .. M_block_tiles - 1``
-* ``j`` is a tile column index in ``0 .. N_block_tiles - 1``
-* ``k`` is a tile index along the K direction in ``0 .. Kt - 1``
-* ``A[i][k] × B[k][j]`` indicates multiplying A's tile at ``(i,k)`` with
-  B's tile at ``(k,j)`` and adding to the tile ``C[i][j]``.
-
-This requires traversing every tile in row ``i`` of ``A_block`` and every tile in column ``j``
-of ``B_block``. However, we know that we don't have the entire row of ``A`` and column of ``B``
-in on-chip SRAM at the same time. Therefore, we need to split the computation such that all
-computation involving a single slab is performed in a single pass.
-We can do this by observing that, for a given K-block ``b``, the computation requires only slabs
-from the ``A_block`` and ``B_block`` that are at matching block indices ``b`` (i.e. the ones with
-the same shade of purple in Figure 4).
-Therefore, we can decompose the computation of ``C[i][j]`` so that for every ``b`` in range
-``(0, 1, ..., num_k_blocks-1)`` we bring into on-chip SRAM slabs ``A_slab(b)`` and ``B_slab(b)``
-and calculate contributions from ``A_slab(b)`` and ``B_slab(b)`` to all output tiles that are part
-of ``C_block`` before proceeding to the next pair of slabs.
-
-
-
-We can split the range of ``k`` into K-blocks of size ``K_block_tiles``.
-For each K-block ``b`` we define the **set of k-indices** that are part of this K-block as:
-
-.. figure:: images/sum_k_indices_set.png
-   :alt: K-indices in K-block
-   :width: 350
-   :align: center
-
-Breaking the original equation across the K-blocks, we get:
-
+Decomposing the original equation across K-blocks, we get:
 
 .. figure:: images/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
@@ -521,24 +494,36 @@ Define the partial result for block ``b`` as:
    :width: 200
    :align: center
 
-Then:
+Key observation is that the partial result equation needs only tiles from the current K-block ``b``
+to compute the partial result for ``C[i][j](b)``, which is exactly what ``A_slab(b)`` and ``B_slab(b)``
+contain.
+
+To get the final result, we need to add partial results for all K-blocks:
 
 .. figure:: images/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
    :width: 200
    :align: center
 
+
+Observe that the above equations concerns only a single tile of the output ``C[i][j]``.
+This cimputation needs to be done for all tiles in ``C_block``, i.e. for all ``i`` and ``j``
+in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
+If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
+compute the partial result for each tile, which would not be conducive to data reuse.
+Instead, we iterate over K-blocks in the outer loop, bring ``A_slab(b)`` and ``B_slab(b)``
+into on-chip SRAM, and then compute contribution of this K-block to all ``C[i][j]`` tiles
+in ``C_block``.
+Given that matrix multiplication is a linear transformation, such loop interchange does not
+change the result (ignoring floating-point considerations), as discussed in Lab 1.
+
 Note that if understanding above equations with respect to tiles is confusing,
 try thinking of them as individual elements rather than tiles.
 The underlying math is the same, but it becomes easier to verify your understanding.
 
 
-
-
-We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
-Each K-block ``b`` spans some range of ``k`` values: ``(b * K_block_tiles) .. ((b + 1) * K_block_tiles - 1)``.
-Given this, we can decompose the computation of ``C[i][j]`` as follows:
-
+Blocked Matrix Multiplication with Data Reuse Pseudocode
+========================================================
 
 The overall approach can be summarized by the following pseudo-code for a compute core:
 
