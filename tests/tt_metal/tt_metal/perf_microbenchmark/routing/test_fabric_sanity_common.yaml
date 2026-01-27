@@ -618,5 +618,3 @@ Tests:
           - destination:
               device: [0, [1, 0]]
               core: [0, 5]
-
-
