@@ -24,7 +24,7 @@ SliceHeight = ttnn.Op2DDRAMSliceHeight
 
 parameters = {
     "dram_slice_tests": {
-        "in_specs": [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
+        "in_specs": ["""[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT]""", [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
         "input_specs": [
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type]

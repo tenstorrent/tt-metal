@@ -561,6 +561,7 @@ public:
             divisor_override,
             input_dtype,
             dtype,
+            input_layout,
             output_layout,
             sliced_input_memory_config,
             sliding_window_config,
