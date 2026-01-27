@@ -541,11 +541,6 @@ def test_matmul_batched_dram_sharded(device, test_case):
     in1 = torch.zeros(in1_shape_padded, dtype=torch.bfloat16)
     in1[:, :batch, :n, :k] = in1_orig
 
-    print(f"\n=== Batch-sharded DRAM matmul test ===")
-    print(f"original: batch={batch}, m={m}, n={n}, k={k}")
-    print(f"padded:   batch={batch_padded}, m={m_padded}, n={n_padded}, k={k_padded}")
-    print(f"in0_shape: {in0_shape_padded}, in1_shape: {in1_shape_padded}, out_shape: {out_shape_padded}")
-
     # in0 L1 shard grid
     in0_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(in0_core_grid_x - 1, in0_core_grid_y - 1))}
@@ -574,8 +569,6 @@ def test_matmul_batched_dram_sharded(device, test_case):
         device=device,
         memory_config=in0_memory_config,
     )
-    print(f"Created in0_t (batch-sharded in L1 on {num_in0_cores} cores)")
-    print(f"in0_shape: {in0_shape_padded}, shard_shape: {in0_shard_shape}")
 
     # in1: DRAM sharded by batch across 12 DRAM banks
     # Each DRAM bank gets batches_per_dram_bank complete [N_padded, K_padded] matrices

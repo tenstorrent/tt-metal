@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 #include <algorithm>
@@ -25,50 +26,12 @@ using ttnn::operations::unary::UnaryWithParam;
 namespace ttnn::prim {
 namespace reuse_batched_hs_dram_sharded_optimized_helpers {
 
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
-    ttnn::distributed::MeshDevice* device = a.device();
-    const ttnn::distributed::MeshDeviceView& view = device->get_view();
-    if (!view.contains(coord) || !view.is_local(coord)) {
-        return device;
-    }
-    return a.device()->get_device(coord);
-}
-
-void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
-    uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
-
-    uint32_t noc_max_page_size;
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-        noc_max_page_size = 8192;
-    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-        noc_max_page_size = 16384;
-    } else {
-        TT_FATAL(false, "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported.");
-    }
-
-    page_size = (noc_max_page_size / tile_size) * tile_size;
-    while (total_size % page_size != 0 && page_size >= tile_size) {
-        page_size -= tile_size;
-    }
-    num_pages = total_size / page_size;
-}
-
-void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
-    tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
-    for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
-    }
-    all_worker_cores = CoreRangeSet(all_cores_set);
-}
+using dram_sharded_helpers::get_device_for_dram_banks;
+using dram_sharded_helpers::get_max_page_size_and_num_pages;
+using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 
 // Batch-sharded DRAM matmul
-// For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+// For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
 std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t>
 create_program_batch_sharded(
@@ -81,11 +44,11 @@ create_program_batch_sharded(
     bool packer_l1_acc,
     uint32_t B,            // Total batch size
     uint32_t M,            // M dimension (rows of A, rows of output)
-    uint32_t N,            // N dimension (cols of A, rows of B - contracted dimension)
-    uint32_t K,            // K dimension (cols of B, cols of output)
-    uint32_t in0_block_w,  // Block width for inner loop over N
+    uint32_t K,            // K dimension (cols of A, rows of B - contracted dimension)
+    uint32_t N,            // N dimension (cols of B, cols of output)
+    uint32_t in0_block_w,  // Block width for inner loop over K
     uint32_t per_core_M,   // M tiles per core (should equal M for batch sharding)
-    uint32_t per_core_K,   // K tiles per core (should equal K for batch sharding)
+    uint32_t per_core_N,   // N tiles per core (should equal N for batch sharding)
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer,
     tt_metal::Buffer* in1_buffer,
@@ -103,8 +66,8 @@ create_program_batch_sharded(
     bool skip_compute,
     bool skip_write_back) {
     log_debug(tt::LogOp, "Batch-sharded DRAM matmul");
-    log_debug(tt::LogOp, "B: {}, M: {}, N: {}, K: {}", B, M, N, K);
-    log_debug(tt::LogOp, "per_core_M: {}, per_core_K: {}, in0_block_w: {}", per_core_M, per_core_K, in0_block_w);
+    log_debug(tt::LogOp, "B: {}, M: {}, K: {}, N: {}", B, M, K, N);
+    log_debug(tt::LogOp, "per_core_M: {}, per_core_N: {}, in0_block_w: {}", per_core_M, per_core_N, in0_block_w);
 
     tt_metal::Program program{};
 
@@ -236,11 +199,11 @@ create_program_batch_sharded(
 
     // Subblock parameters
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
-        per_core_M, per_core_K, false, false, fp32_dest_acc_en);
+        per_core_M, per_core_N, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    uint32_t num_blocks = N / in0_block_w;  // Number of inner loop iterations
+    uint32_t num_blocks = K / in0_block_w;  // Number of inner loop iterations
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -260,13 +223,13 @@ create_program_batch_sharded(
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    // in1: in0_block_w x K tiles per block
-    uint32_t in1_block_tiles = in0_block_w * per_core_K;
+    // in1: in0_block_w x N tiles per block
+    uint32_t in1_block_tiles = in0_block_w * per_core_N;
     uint32_t in1_CB_tiles = in1_block_tiles * 3;  // triple buffer
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
-    // output: M x K tiles
-    uint32_t out_block_tiles = per_core_M * per_core_K;
+    // output: M x N tiles
+    uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
 
     // Sharded input buffer (in0 in L1)
@@ -275,7 +238,7 @@ create_program_batch_sharded(
     uint32_t in2_CB_size = in0_shard_tiles * in0_single_tile_size;
 
     // Bias CB
-    uint32_t in3_block_tiles = per_core_K;
+    uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
 
     // Output reshard buffer
@@ -293,10 +256,10 @@ create_program_batch_sharded(
         device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     // Tensor stride calculations (bytes per batch)
-    // M, N, K are already in tiles, so stride = num_tiles * tile_size
-    uint32_t in0_batch_stride_bytes = per_core_M * N * in0_single_tile_size;
-    uint32_t in1_batch_stride_bytes = N * per_core_K * in1_single_tile_size;
-    uint32_t out_batch_stride_bytes = per_core_M * per_core_K * output_single_tile_size;
+    // M, K, N are already in tiles, so stride = num_tiles * tile_size
+    uint32_t in0_batch_stride_bytes = per_core_M * K * in0_single_tile_size;
+    uint32_t in1_batch_stride_bytes = K * per_core_N * in1_single_tile_size;
+    uint32_t out_batch_stride_bytes = per_core_M * per_core_N * output_single_tile_size;
 
     log_debug(
         tt::LogOp,
@@ -429,7 +392,7 @@ create_program_batch_sharded(
     std::vector<uint32_t> in0_reader_compile_args = {
         (uint32_t)in0_block_tiles,                         // in0_block_num_tiles
         (uint32_t)in0_block_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (uint32_t)num_blocks,                              // num_blocks (N / in0_block_w)
+        (uint32_t)num_blocks,                              // num_blocks (K / in0_block_w)
         (uint32_t)batches_per_core,                        // num_batches_per_core
         (uint32_t)in0_batch_stride_bytes,                  // in0_tensor_stride_batch_bytes
         (uint32_t)in2_CB_size,                             // in0_shard_size_bytes (full shard)
@@ -440,9 +403,9 @@ create_program_batch_sharded(
     std::vector<uint32_t> in1_writer_compile_args = {
         (uint32_t)in1_buffer_page_size,
         (uint32_t)in1_buffer_num_pages,
-        (uint32_t)per_core_K,              // in1_block_w (K tiles)
+        (uint32_t)per_core_N,              // in1_block_w (N tiles)
         (uint32_t)in1_block_tiles,         // in1_block_num_tiles
-        (uint32_t)num_blocks,              // num_blocks (N / in0_block_w)
+        (uint32_t)num_blocks,              // num_blocks (K / in0_block_w)
         (uint32_t)out_block_tiles,         // out_block_num_tiles
         (uint32_t)batches_per_core,        // num_batches_per_core
         (uint32_t)in1_batch_stride_bytes,  // in1_tensor_stride_batch_bytes
@@ -457,7 +420,7 @@ create_program_batch_sharded(
 
     // Compute kernel compile time args
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
-    uint32_t in1_num_subblocks = per_core_K / out_subblock_w;
+    uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
@@ -468,7 +431,7 @@ create_program_batch_sharded(
         in0_subblock_num_tiles,  // in0_subblock_num_tiles
         in1_num_subblocks,       // in1_num_subblocks
         in1_block_tiles,         // in1_block_num_tiles
-        per_core_K,              // in1_per_core_w
+        per_core_N,              // in1_per_core_w
         num_blocks,              // num_blocks
         1,                       // out_num_blocks_x
         1,                       // out_num_blocks_y
@@ -686,7 +649,7 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     // Shape compatibility checks
     TT_FATAL(
         ashape[-1] == bshape[-2],
-        "Dimension N (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
+        "Dimension K (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
         ashape[-1],
         bshape[-2]);
     TT_FATAL(
@@ -723,14 +686,14 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // For batch sharding: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
-    // ashape = [1, B, M, N], bshape = [1, B, N, K]
+    // For batch sharding: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
+    // ashape = [1, B, M, K], bshape = [1, B, K, N]
     uint32_t B = ashape[1];
     uint32_t M = ashape[-2] / in0_tile_shape[0];  // M in tiles
-    uint32_t N = ashape[-1] / in0_tile_shape[1];  // N in tiles (contracted dimension)
-    uint32_t K = bshape[-1] / in1_tile_shape[1];  // K in tiles
+    uint32_t K = ashape[-1] / in0_tile_shape[1];  // K in tiles (contracted dimension)
+    uint32_t N = bshape[-1] / in1_tile_shape[1];  // N in tiles
 
-    // Batch sharding validation: per_core_M and per_core_N should equal M and K respectively
+    // Batch sharding validation: per_core_M and per_core_N should equal M and N respectively
     // because each core handles complete matmuls, not partial tiles
     TT_FATAL(
         per_core_M == M,
@@ -738,12 +701,12 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         per_core_M,
         M);
     TT_FATAL(
-        per_core_N == K,
-        "For batch sharding, per_core_N ({}) must equal K ({}) - each core handles complete matmuls",
+        per_core_N == N,
+        "For batch sharding, per_core_N ({}) must equal N ({}) - each core handles complete matmuls",
         per_core_N,
-        K);
+        N);
 
-    TT_FATAL(N % in0_block_w == 0, "N ({}) must be divisible by in0_block_w ({})", N, in0_block_w);
+    TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
 
     return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded(
         device,
@@ -755,11 +718,11 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         packer_l1_acc,
         B,
         M,
-        N,
         K,
+        N,
         in0_block_w,
         per_core_M,
-        per_core_N,  // This is per_core_K for batch sharding
+        per_core_N,
         fused_activation,
         in0_buffer,
         in1_buffer,

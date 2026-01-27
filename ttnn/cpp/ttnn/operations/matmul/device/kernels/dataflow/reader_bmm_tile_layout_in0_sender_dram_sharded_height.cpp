@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Batch-sharded DRAM matmul - in0 reader kernel
-// For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+// For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Each worker handles B/num_workers batches independently
 // Input A is L1 sharded by batch on INPUT STORAGE CORES
 // Workers are on OPTIMAL DRAM READER CORES (different from storage cores)
@@ -18,7 +18,7 @@ void kernel_main() {
     // COMPILE TIME ARGS
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);   // tiles per block (M * in0_block_w)
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);  // bytes per block
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);            // N / in0_block_w (K blocks in inner loop)
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);            // K / in0_block_w (K blocks in inner loop)
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(3);  // B / num_cores
     constexpr uint32_t in0_tensor_stride_batch_bytes = get_compile_time_arg_val(4);  // bytes per batch in in0
     constexpr uint32_t in0_shard_size_bytes = get_compile_time_arg_val(5);           // full shard size in bytes
