@@ -140,24 +140,23 @@ constexpr bool has_flag(TilizeFlags flags, TilizeFlags flag) {
 }
 
 // =============================================================================
-// Untilize Flags - Represent DEVIATIONS from default behavior
+// Untilize Flags
 // =============================================================================
 //
-// Defaults: init=true, uninit=true, wait_upfront=false
-// Flags are only set when NON-DEFAULT value is needed.
-//
-// | Flag         | Meaning                           | Old param          |
-// |--------------|-----------------------------------|---------------------|
-// | NONE         | All defaults (most common)        | <true,true,false>   |
-// | SKIP_INIT    | Don't call init                   | init=false          |
-// | SKIP_UNINIT  | Don't call uninit                 | uninit=false        |
-// | WAIT_UPFRONT | Wait for all tiles upfront        | wait_upfront=true   |
+// | Flag                          | Meaning                                         |
+// |-------------------------------|-------------------------------------------------|
+// | NONE                          | All defaults                                    |
+// | SKIP_INIT                     | Don't call init (default: do init)              |
+// | SKIP_UNINIT                   | Don't call uninit (default: do uninit)          |
+// | WAIT_UPFRONT                  | Wait for all tiles upfront (default: per-row)   |
+// | FORCE_PACK_UNTILIZE_WIDE_FP32 | Force block-based pack_untilize for wide FP32   |
 
 enum class UntilizeFlags : uint32_t {
-    NONE = 0,               // All defaults (most common)
-    SKIP_INIT = 1 << 0,     // Don't call init (default: do init)
-    SKIP_UNINIT = 1 << 1,   // Don't call uninit (default: do uninit)
-    WAIT_UPFRONT = 1 << 2,  // Wait for all tiles upfront (default: per-row)
+    NONE = 0,                                // All defaults
+    SKIP_INIT = 1 << 0,                      // Don't call init (default: do init)
+    SKIP_UNINIT = 1 << 1,                    // Don't call uninit (default: do uninit)
+    WAIT_UPFRONT = 1 << 2,                   // Wait for all tiles upfront (default: per-row)
+    FORCE_PACK_UNTILIZE_WIDE_FP32 = 1 << 3,  // Force block-based pack_untilize for wide FP32
 };
 
 constexpr UntilizeFlags operator|(UntilizeFlags a, UntilizeFlags b) {
@@ -217,6 +216,10 @@ struct TilizeConfigBase {
  *   // With flags:
  *   untilize<UntilizeConfig<WidthInTiles<4>, InputCB<cb_in>, OutputCB<cb_out>,
  *                           UntilizeFlags::WAIT_UPFRONT>>(num_rows, 1, total);
+ *
+ *   // Force block-based pack_untilize for wide FP32 (recommended for correctness):
+ *   untilize<UntilizeConfig<WidthInTiles<8>, InputCB<cb_in>, OutputCB<cb_out>,
+ *                           UntilizeFlags::FORCE_PACK_UNTILIZE_WIDE_FP32>>(num_rows);
  */
 template <typename WidthInTilesT, typename InputCBT, typename OutputCBT, UntilizeFlags Flags = UntilizeFlags::NONE>
 struct UntilizeConfig : UntilizeConfigBase {
