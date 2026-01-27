@@ -126,7 +126,7 @@ jobs:
           echo "========================================="
           echo "=== TTNN RUN 1: Populate cache from older commit ===="
           echo "=========================================="
-          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_first_run.log
+          pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_matmul.py -k "test_tutorial_matmul or test_matmul_1d or test_matmul_2d" -xv 2>&1 | tee /tmp/ttnn_first_run.log
 
       - name: Capture ccache hash keys after Run 1
         run: |
@@ -324,7 +324,7 @@ jobs:
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run2.log
         run: |
           echo "=== Running TTNN unit tests (RUN 2 - different build artifact, testing if build differences affect cache) ===="
-          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_second_run.log
+          pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_matmul.py -k "test_tutorial_matmul or test_matmul_1d or test_matmul_2d" -xv 2>&1 | tee /tmp/ttnn_second_run.log
 
       - name: Capture kernel hashes after Run 2 and compare
         run: |
@@ -490,7 +490,7 @@ jobs:
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run3.log
         run: |
           echo "=== Running TTNN unit tests (RUN 3 - back to build-artifact-1, should hit cache from Run 1) ===="
-          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_third_run.log
+          pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_matmul.py -k "test_tutorial_matmul or test_matmul_1d or test_matmul_2d" -xv 2>&1 | tee /tmp/ttnn_third_run.log
 
       - name: Capture kernel hashes after Run 3 and final comparison
         run: |
