@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "adamw_full_precision_program_factory.hpp"
+#include "adamw_program_factory.hpp"
 
 #include <common/TracyQueue.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <random>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -71,7 +72,7 @@ namespace ttml::metal::optimizers::adamw::device {
  *   Helper struct to hold references to all kernels we create,
  *        used during runtime argument setup.
  */
-struct AdamWFullPrecisionKernels {
+struct AdamWKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute_group_1;
@@ -82,56 +83,58 @@ struct AdamWFullPrecisionKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-void assign_per_core_runtime_args_full_precision(
+void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
-    const AdamWFullPrecisionKernels& kernels,
+    const AdamWKernels& kernels,
     const tt::tt_metal::Buffer* param_buffer,
     const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* exp_avg_buffer,
     const tt::tt_metal::Buffer* exp_avg_sq_buffer,
     const tt::tt_metal::Buffer* max_exp_avg_sq_buffer,
-    const float lr,
-    const float beta1,
-    const float beta2,
-    const float beta1_pow,
-    const float beta2_pow,
-    const float epsilon,
-    const float weight_decay,
-    [[maybe_unused]] const uint32_t step,
     const tt::tt_metal::Buffer* output_buffer,
+    const operation_attributes_t& attrs,
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_tiles_per_core_group_1,
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    float one_minus_beta1 = 1.0f - beta1;
-    float one_minus_beta2 = 1.0f - beta2;
+    float one_minus_beta1 = 1.0f - attrs.beta1;
+    float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - beta1_pow;
-    float bias_correction2 = 1.0f - beta2_pow;
-    float step_size = lr / bias_correction1;
+    float bias_correction1 = 1.0f - attrs.beta1_pow;
+    float bias_correction2 = 1.0f - attrs.beta2_pow;
+    float step_size = attrs.lr / bias_correction1;
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - lr * weight_decay;
+    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+
+    // Generate seeds for stochastic rounding (0 if disabled)
+    std::vector<uint32_t> seeds(num_cores, 0);
+    if (attrs.stochastic_rounding) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            seeds[i] = dis(gen);
+        }
+    }
+
+    // Compute runtime args (same for all cores)
+    auto make_compute_args = [&](uint32_t seed) {
+        return std::vector<uint32_t>{
+            std::bit_cast<uint32_t>(attrs.beta1),
+            std::bit_cast<uint32_t>(attrs.beta2),
+            std::bit_cast<uint32_t>(attrs.epsilon),
+            std::bit_cast<uint32_t>(step_size),
+            std::bit_cast<uint32_t>(inv_sqrt_bc2),
+            std::bit_cast<uint32_t>(one_minus_beta1),
+            std::bit_cast<uint32_t>(one_minus_beta2),
+            std::bit_cast<uint32_t>(decay_factor),
+            seed};
+    };
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
-
-    // Hyperparameters are common for all cores
-    std::vector<uint32_t> compute_common_args = {
-        std::bit_cast<uint32_t>(beta1),
-        std::bit_cast<uint32_t>(beta2),
-        std::bit_cast<uint32_t>(epsilon),
-        std::bit_cast<uint32_t>(step_size),
-        std::bit_cast<uint32_t>(inv_sqrt_bc2),
-        std::bit_cast<uint32_t>(one_minus_beta1),
-        std::bit_cast<uint32_t>(one_minus_beta2),
-        std::bit_cast<uint32_t>(decay_factor),
-        0U};  // seed=0, stochastic rounding disabled
-    tt::tt_metal::SetCommonRuntimeArgs(program, kernels.compute_group_1, compute_common_args);
-    if (!core_group_2.ranges().empty()) {
-        tt::tt_metal::SetCommonRuntimeArgs(program, kernels.compute_group_2, compute_common_args);
-    }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -159,7 +162,17 @@ void assign_per_core_runtime_args_full_precision(
              num_tiles_per_core,
              num_tiles_written});
 
-        // Writer kernel
+        // Compute kernel
+        if (core_group_1.contains(core)) {
+            SetRuntimeArgs(program, kernels.compute_group_1, core, make_compute_args(seeds[i]));
+        } else if (core_group_2.contains(core)) {
+            SetRuntimeArgs(program, kernels.compute_group_2, core, make_compute_args(seeds[i]));
+        } else {
+            TT_THROW("Core {} not in specified core ranges", core);
+        }
+
+        // Writer kernel: (param_out_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr, number_of_tiles,
+        // offset_in_tiles)
         SetRuntimeArgs(
             program,
             kernels.writer,
@@ -175,7 +188,7 @@ void assign_per_core_runtime_args_full_precision(
     }
 }
 
-AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFactory::create(
+AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -187,25 +200,19 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     const auto& exp_avg = tensor_args.exp_avg;
     const auto& exp_avg_sq = tensor_args.exp_avg_sq;
     const auto& max_exp_avg_sq_opt = tensor_args.max_exp_avg_sq;
-    const auto& lr = operation_attributes.lr;
-    const auto& beta1 = operation_attributes.beta1;
-    const auto& beta2 = operation_attributes.beta2;
-    const auto& beta1_pow = operation_attributes.beta1_pow;
-    const auto& beta2_pow = operation_attributes.beta2_pow;
-    const auto& epsilon = operation_attributes.epsilon;
-    const auto& weight_decay = operation_attributes.weight_decay;
-    const auto& amsgrad = operation_attributes.amsgrad;
-    const auto& step = operation_attributes.step;
 
     auto* device = param.device();
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat fp32_data_format = tt::DataFormat::Float32;
-    tt::DataFormat bf16_data_format = tt::DataFormat::Float16_b;
+    // Determine data formats based on param dtype
+    tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
+    tt::DataFormat grad_data_format = tt::DataFormat::Float16_b;  // Gradient is always bf16
+    tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
 
+    uint32_t param_single_tile_size_bytes = tt::tile_size(param_data_format);
+    uint32_t grad_single_tile_size_bytes = tt::tile_size(grad_data_format);
     uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -233,45 +240,61 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     const uint32_t num_input_tiles = twice_block_size;
     const uint32_t num_output_tiles = twice_block_size;
 
-    // fp32 param (master weights)
+    // param CB - uses param_data_format (bf16 or fp32 depending on mode)
     [[maybe_unused]] auto cb_param = create_circular_buffer(
-        program, all_cores, kParamCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kParamCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
 
-    // bf16 grad
+    // grad CB - always bf16
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
-        program, all_cores, kGradCbIndex, bf16_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kGradCbIndex, grad_data_format, grad_single_tile_size_bytes, num_input_tiles);
 
-    // fp32 momentum buffers
+    // exp_avg and exp_avg_sq CBs - use param_data_format (bf16 or fp32)
     [[maybe_unused]] auto cb_exp_avg = create_circular_buffer(
-        program, all_cores, kExpAvgCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kExpAvgCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_exp_avg_sq = create_circular_buffer(
-        program, all_cores, kExpAvgSqCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kExpAvgSqCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
 
-    // fp32 output (updated master weights)
+    // output CB - uses param_data_format
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kOutputCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
 
     [[maybe_unused]] auto cb_exp_avg_out = create_circular_buffer(
-        program, all_cores, kExpAvgOutCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kExpAvgOutCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
 
     [[maybe_unused]] auto cb_exp_avg_sq_out = create_circular_buffer(
-        program, all_cores, kExpAvgSqOutCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kExpAvgSqOutCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
 
     [[maybe_unused]] auto cb_max_exp_avg_sq_in = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqInCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kMaxExpAvgSqInCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_max_exp_avg_sq_out = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqOutCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kMaxExpAvgSqOutCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
 
+    // Intermediate CBs are always fp32
     [[maybe_unused]] auto cb_max_exp_avg_sq = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program,
+        all_cores,
+        kMaxExpAvgSqCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
+        num_output_tiles);
 
     [[maybe_unused]] auto cb_momentum = create_circular_buffer(
-        program, all_cores, kMomentumCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program,
+        all_cores,
+        kMomentumCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
+        num_output_tiles);
 
     [[maybe_unused]] auto cb_variance = create_circular_buffer(
-        program, all_cores, kVarianceCbIndex, fp32_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program,
+        all_cores,
+        kVarianceCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
+        num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -285,10 +308,10 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     auto* output_buffer = output.buffer();
 
     std::map<std::string, std::string> defines;
-    defines["AMSGRAD"] = amsgrad ? "1" : "0";
-    defines["STOCH_ROUND"] = "0";  // No stochastic rounding for full precision
+    defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
+    defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding ? "1" : "0";
 
-    AdamWFullPrecisionKernels kernels{};
+    AdamWKernels kernels{};
 
     std::vector<uint32_t> reader_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
@@ -306,13 +329,11 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
-    // 4) Create compute kernels for full precision adamw
+    // 4) Create compute kernels for fused adamw
     // -------------------------------------------------------------------------
 
+    // FPU is not used at all in the operation
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::UnpackToDestFp32);
-    unpack_to_dest_mode[kMomentumCbIndex] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[kVarianceCbIndex] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[kMaxExpAvgSqCbIndex] = UnpackToDestMode::UnpackToDestFp32;
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -339,7 +360,7 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
 
-    assign_per_core_runtime_args_full_precision(
+    assign_per_core_runtime_args(
         program,
         kernels,
         param_buffer,
@@ -347,15 +368,8 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
         exp_avg_buffer,
         exp_avg_sq_buffer,
         max_exp_avg_sq_buffer,
-        lr,
-        beta1,
-        beta2,
-        beta1_pow,
-        beta2_pow,
-        epsilon,
-        weight_decay,
-        step,
         output_buffer,
+        operation_attributes,
         num_cores,
         num_cores_y,
         num_tiles_per_core_group_1,
@@ -379,7 +393,7 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
          /* num_cores_y               = */ num_cores_y}};
 }
 
-void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
+void AdamWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -390,10 +404,13 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = shared_variables.writer_kernel_id;
     auto& compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
+    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;
+
+    const auto& attrs = operation_attributes;
 
     auto* param_buffer = tensor_args.param.buffer();
     auto* grad_buffer = tensor_args.grad.buffer();
@@ -401,60 +418,53 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     auto* exp_avg_sq_buffer = tensor_args.exp_avg_sq.buffer();
     auto* max_exp_avg_sq_buffer =
         tensor_args.max_exp_avg_sq.has_value() ? tensor_args.max_exp_avg_sq.value().buffer() : nullptr;
-
-    auto lr = operation_attributes.lr;
-    auto beta1 = operation_attributes.beta1;
-    auto beta2 = operation_attributes.beta2;
-    auto beta1_pow = operation_attributes.beta1_pow;
-    auto beta2_pow = operation_attributes.beta2_pow;
-    auto epsilon = operation_attributes.epsilon;
-    auto weight_decay = operation_attributes.weight_decay;
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, compute_kernel_group_1_id);
+    auto& compute_group_2_runtime_args = core_group_2.ranges().empty()
+                                             ? compute_group_1_runtime_args
+                                             : GetRuntimeArgs(program, compute_kernel_group_2_id);
 
-    float one_minus_beta1 = 1.0f - beta1;
-    float one_minus_beta2 = 1.0f - beta2;
+    float one_minus_beta1 = 1.0f - attrs.beta1;
+    float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - beta1_pow;
-    float bias_correction2 = 1.0f - beta2_pow;
-    float step_size = lr / bias_correction1;
+    float bias_correction1 = 1.0f - attrs.beta1_pow;
+    float bias_correction2 = 1.0f - attrs.beta2_pow;
+    float step_size = attrs.lr / bias_correction1;
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - lr * weight_decay;
+    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+
+    // Generate seeds for stochastic rounding (0 if disabled)
+    std::vector<uint32_t> seeds(num_cores, 0);
+    if (attrs.stochastic_rounding) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            seeds[i] = dis(gen);
+        }
+    }
+
+    // Helper to select correct compute runtime args with error handling
+    auto get_compute_runtime_args = [&](const tt::tt_metal::CoreCoord& core) -> auto& {
+        if (core_group_1.contains(core)) {
+            return compute_group_1_runtime_args[core.x][core.y];
+        }
+        if (core_group_2.contains(core)) {
+            return compute_group_2_runtime_args[core.x][core.y];
+        }
+        TT_THROW("Core {} not in specified core ranges", core);
+    };
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
-
-    auto& compute_group_1_common_args = GetCommonRuntimeArgs(program, compute_kernel_group_1_id);
-    compute_group_1_common_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
-    compute_group_1_common_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
-    compute_group_1_common_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-    compute_group_1_common_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
-    compute_group_1_common_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
-    compute_group_1_common_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
-    compute_group_1_common_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
-    compute_group_1_common_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-    compute_group_1_common_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
-
-    if (!core_group_2.ranges().empty()) {
-        auto& compute_group_2_common_args = GetCommonRuntimeArgs(program, compute_kernel_group_2_id);
-        compute_group_2_common_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
-        compute_group_2_common_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
-        compute_group_2_common_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-        compute_group_2_common_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
-        compute_group_2_common_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
-        compute_group_2_common_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
-        compute_group_2_common_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
-        compute_group_2_common_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-        compute_group_2_common_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
-    }
-
     for (uint32_t i = 0; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        // Update input buffers for the reader kernel
+        // Update reader kernel args
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kParamAddrIdx] = param_buffer->address();
@@ -464,7 +474,20 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
             runtime_args[kMaxExpAvgSqAddrIdx] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
         }
-        // Update output buffer for the writer kernel
+        // Update compute kernel args
+        {
+            auto& runtime_args = get_compute_runtime_args(core);
+            runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(attrs.beta1);
+            runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(attrs.beta2);
+            runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(attrs.epsilon);
+            runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
+            runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
+            runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
+            runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
+            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            runtime_args[kComputeSeedIdx] = seeds[i];
+        }
+        // Update writer kernel args
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputAddrIdx] = output_buffer->address();
