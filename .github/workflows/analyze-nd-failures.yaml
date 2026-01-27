@@ -1,9 +1,9 @@
 name: Analyze ND Failures
 
 on:
-  # schedule:
-  #   # Run every hour at minute 0
-  #   - cron: '0 * * * *'
+  schedule:
+    # Run every hour at minute 0
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       update_mode:
@@ -64,6 +64,7 @@ jobs:
           update_mode: ${{ inputs.update_mode || 'update' }}
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
+          workflow_file: '.github/workflows/analyze-nd-failures.yaml'
 
       - name: Install infra dependencies
         if: ${{ !cancelled() }}
