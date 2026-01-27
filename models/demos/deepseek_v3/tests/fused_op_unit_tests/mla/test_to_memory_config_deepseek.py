@@ -78,12 +78,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         (
             "q_rope_out_reshard",
-            [32, 1, 16, 64],
+            [1, 32, 16, 64],
             {
                 "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 "buffer_type": ttnn.BufferType.L1,
                 "shard_spec": {
-                    "grid": (4, 8),  # 32 cores
+                    "grid": (8, 4),  # 32 cores
                     "shape": [32, 64],
                     "orientation": ttnn.ShardOrientation.ROW_MAJOR,
                 },

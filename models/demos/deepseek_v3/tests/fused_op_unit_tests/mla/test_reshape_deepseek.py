@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (
             "q_reshape_decode",
             [1, 1, 32, 3072],  # After wq_b linear
-            [1, 32, 16, 192],  # Reshape to [bsz, 1, num_heads_local, qk_head_dim]
+            [32, 1, 16, 192],  # Reshape to [bsz, 1, num_heads_local, qk_head_dim]
             ttnn.L1_MEMORY_CONFIG,
             ttnn.L1_MEMORY_CONFIG,
         ),
