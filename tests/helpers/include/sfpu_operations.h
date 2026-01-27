@@ -69,8 +69,21 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0, float fil
             break;
         case SfpuType::exponential:
             _init_exponential_<APPROX_MODE, FAST_MODE, 0x3F800000 /* exp_base_scale_factor */>();
-            _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */>(
-                p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+            if (FAST_MODE && APPROX_MODE)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */>(
+                        p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                }
+            }
+            else
+            {
+                _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */>(
+                    p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
+            }
             break;
         case SfpuType::fill:
             if (math_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Int32))

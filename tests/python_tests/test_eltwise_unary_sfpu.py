@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from itertools import chain, product
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
@@ -10,6 +12,7 @@ from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    FastMode,
     MathOperation,
     format_dict,
 )
@@ -19,56 +22,92 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FAST_MODE,
     INPUT_DIMENSIONS,
     MATH_OP,
     TILE_COUNT,
 )
 from helpers.utils import passed_test
 
+SUPPORTED_FAST_MODE_OPS = [
+    MathOperation.Log1p,
+    MathOperation.Exp,
+    MathOperation.Rsqrt,
+    MathOperation.Sqrt,
+]
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ]
-    ),
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
-        MathOperation.Abs,
-        MathOperation.Atanh,
-        MathOperation.Asinh,
-        MathOperation.Acosh,
-        MathOperation.Cos,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Tanh,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Gelu,
-        MathOperation.Neg,
-        MathOperation.Fill,
-        MathOperation.Elu,
-        MathOperation.Exp,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+ALL_MATHOPS = [
+    MathOperation.Abs,
+    MathOperation.Atanh,
+    MathOperation.Asinh,
+    MathOperation.Acosh,
+    MathOperation.Cos,
+    MathOperation.Log,
+    MathOperation.Log1p,
+    MathOperation.Reciprocal,
+    MathOperation.Sin,
+    MathOperation.Sqrt,
+    MathOperation.Rsqrt,
+    MathOperation.Square,
+    MathOperation.Tanh,
+    MathOperation.Celu,
+    MathOperation.Silu,
+    MathOperation.Gelu,
+    MathOperation.Neg,
+    MathOperation.Fill,
+    MathOperation.Elu,
+    MathOperation.Exp,
+    MathOperation.Exp2,
+    MathOperation.Hardsigmoid,
+    MathOperation.Threshold,
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+]
+
+FORMATS = input_output_formats(
+    [
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+    ]
+)
+
+FLOAT_TEST_PARAMS = list(
+    chain(
+        (
+            (fmt, approx, mathop, fast, dest)
+            for fmt, approx, mathop, fast, dest in product(
+                FORMATS,
+                [ApproximationMode.No, ApproximationMode.Yes],
+                SUPPORTED_FAST_MODE_OPS,
+                [FastMode.No, FastMode.Yes],
+                [DestAccumulation.No, DestAccumulation.Yes],
+            )
+        ),
+        (
+            (fmt, approx, mathop, FastMode.No, dest)
+            for fmt, approx, mathop, dest in product(
+                FORMATS,
+                [ApproximationMode.No, ApproximationMode.Yes],
+                [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
+                [DestAccumulation.No, DestAccumulation.Yes],
+            )
+        ),
+    )
+)
+
+
+@pytest.mark.nightly
+@pytest.mark.parametrize(
+    "formats,approx_mode,mathop,fast_mode,dest_acc",
+    FLOAT_TEST_PARAMS,
 )
 def test_eltwise_unary_sfpu_float(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
+    fast_mode: FastMode,
     dest_acc: DestAccumulation,
     workers_tensix_coordinates: str,
 ):
@@ -133,6 +172,7 @@ def test_eltwise_unary_sfpu_float(
         dest_acc,
         approx_mode,
         mathop,
+        fast_mode,
         workers_tensix_coordinates,
     )
 
@@ -144,12 +184,14 @@ def test_eltwise_unary_sfpu_float(
         MathOperation.Neg,
         MathOperation.Fill,
     ],
+    fast_mode=[FastMode.No, FastMode.Yes],
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_unary_sfpu_int(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
+    fast_mode: FastMode,
     dest_acc: DestAccumulation,
     workers_tensix_coordinates: str,
 ):
@@ -162,6 +204,7 @@ def test_eltwise_unary_sfpu_int(
         dest_acc,
         approx_mode,
         mathop,
+        fast_mode,
         workers_tensix_coordinates,
     )
 
@@ -172,6 +215,7 @@ def eltwise_unary_sfpu(
     dest_acc,
     approx_mode,
     mathop,
+    fast_mode: FastMode,
     workers_tensix_coordinates,
 ):
     torch.manual_seed(0)
@@ -201,6 +245,7 @@ def eltwise_unary_sfpu(
         templates=[
             INPUT_DIMENSIONS(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
+            FAST_MODE(fast_mode),
             MATH_OP(mathop=mathop),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A)],
