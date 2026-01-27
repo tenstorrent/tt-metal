@@ -182,6 +182,13 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         is_mesh_root3,
         is_mesh_root2,
         is_mesh_root1);
+    log_debug(
+        tt::LogOp,
+        "Device {} root_coord={}, forward_coord={}, backward_coord={}",
+        device_coordinate,
+        root_coord,
+        forward_coord.has_value() ? fmt::format("{}", forward_coord.value()) : "none",
+        backward_coord.has_value() ? fmt::format("{}", backward_coord.value()) : "none");
 
     auto semaphore_round1 = semaphores[0];
     auto semaphore_round2 = semaphores[1];
@@ -190,6 +197,15 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Get destination semaphore address for fused atomic inc
     uint32_t dst_sem_addr =
         get_destination_semaphore_address(role, semaphore_round1, semaphore_round2, semaphore_round3);
+
+    log_debug(
+        tt::LogOp,
+        "Device {} semaphores: round1=0x{:x} round2=0x{:x} round3=0x{:x} dst_sem_addr=0x{:x}",
+        device_coordinate,
+        semaphore_round1.address(),
+        semaphore_round2.address(),
+        semaphore_round3.address(),
+        dst_sem_addr);
 
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
     const auto& shard_spec = input_tensor.shard_spec().value();
@@ -215,6 +231,18 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto& bottom_core_to_link = bottom_cores_info.bottom_core_to_link;
     CoreRangeSet bottom_cores_set = CoreRangeSet(bottom_cores_vec);
     CoreRangeSet non_bottom_cores_set = CoreRangeSet(non_bottom_cores_vec);
+
+    // Debug: log bottom core assignments
+    for (const auto& [col, bc] : column_to_bottom_core) {
+        log_debug(
+            tt::LogOp,
+            "Device {} column {} bottom_core=({},{}) link_idx={}",
+            device_coordinate,
+            col,
+            bc.x,
+            bc.y,
+            bottom_core_to_link.count(bc) ? bottom_core_to_link.at(bc) : 999);
+    }
 
     uint32_t input_total_num_pages = data_movement::get_num_pages(input_tensor);
     const uint32_t input_num_pages = input_total_num_pages / num_shard_cores;
@@ -244,26 +272,49 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     constexpr auto output_cb = tt::CBIndex::c_2;
     constexpr auto packet_cb = tt::CBIndex::c_3;
 
-    // === Create CBs on all cores for simplicity ===
+    // === Create CBs backed by tensor buffers ===
     // num_worker_slots = non-bottom cores per column (cores that send to bottom core)
     const uint32_t num_columns = bottom_cores_vec.size();
     const uint32_t num_worker_slots = non_bottom_cores_vec.size() / num_columns;
 
+    // Get tensors for CB backing:
+    // - output_tensors[0][0] = intermediate tensor (for receiving fabric data)
+    // - output_tensors[0][1] = output tensor (for compute output)
+    const auto& intermediate_tensor = output_tensors[0][0];
+    const auto& output_tensor = output_tensors[0][1];
+
+    log_info(
+        tt::LogOp,
+        "Device {} tensor buffers: input=0x{:x} intermediate=0x{:x} output=0x{:x}",
+        device_coordinate,
+        input_tensor.buffer()->address(),
+        intermediate_tensor.buffer()->address(),
+        output_tensor.buffer()->address());
+
+    // local_cb: backed by input tensor buffer (sharded input data)
     auto cb_local_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{local_cb, input_dataformat}})
                                .set_page_size(local_cb, payload_size_bytes)
-                               .set_tile_dims(local_cb, compute_tile);
+                               .set_tile_dims(local_cb, compute_tile)
+                               .set_globally_allocated_address(*input_tensor.buffer());
     CreateCircularBuffer(program, all_cores, cb_local_config);
 
+    // received_cb: backed by intermediate tensor (where fabric writes received data)
+    // This MUST match dst_l1_addr that senders use for fabric writes
     auto cb_received_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{received_cb, input_dataformat}})
                                   .set_page_size(received_cb, payload_size_bytes)
-                                  .set_tile_dims(received_cb, compute_tile);
+                                  .set_tile_dims(received_cb, compute_tile)
+                                  .set_globally_allocated_address(*intermediate_tensor.buffer());
     CreateCircularBuffer(program, all_cores, cb_received_config);
 
+    // output_cb: backed by output tensor (compute output destination)
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{output_cb, input_dataformat}})
                                 .set_page_size(output_cb, payload_size_bytes)
-                                .set_tile_dims(output_cb, compute_tile);
+                                .set_tile_dims(output_cb, compute_tile)
+                                .set_globally_allocated_address(*output_tensor.buffer());
     CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    // packet_cb: staging buffer for workers to assemble packets before bottom core forwards them
+    // Workers write [header][payload] here, bottom core reads and sends via fabric
     auto cb_packet_config =
         tt::tt_metal::CircularBufferConfig(num_worker_slots * slot_size_bytes, {{packet_cb, input_dataformat}})
             .set_page_size(packet_cb, slot_size_bytes)
@@ -273,18 +324,37 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     MeshCoordinate dest_coord =
         get_fabric_destination(role, device_coordinate, root_coord, forward_coord, backward_coord);
 
-    log_debug(tt::LogOp, "Device {} sending to {}", device_coordinate, dest_coord);
-
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(dest_coord);
+
+    log_debug(
+        tt::LogOp,
+        "Device {} sending to {} | src_fabric_node_id={} dst_fabric_node_id={} | role={}",
+        device_coordinate,
+        dest_coord,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        role == MESH_LEAF    ? "LEAF"
+        : role == MESH_ROOT3 ? "ROOT3"
+        : role == MESH_ROOT2 ? "ROOT2"
+                             : "ROOT1");
 
     // Calculate num_hops as Manhattan distance between source and destination mesh coordinates
     auto abs_diff = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a - b : b - a; };
     const uint32_t num_hops =
         abs_diff(device_coordinate[0], dest_coord[0]) + abs_diff(device_coordinate[1], dest_coord[1]);
 
+    log_debug(
+        tt::LogOp,
+        "Device {} num_hops={} (from [{},{}] to [{},{}])",
+        device_coordinate,
+        num_hops,
+        device_coordinate[0],
+        device_coordinate[1],
+        dest_coord[0],
+        dest_coord[1]);
+
     // Destination L1 address is the intermediate tensor buffer address on the destination device
-    const auto& intermediate_tensor = output_tensors[0][0];
     const uint32_t dst_l1_addr = intermediate_tensor.buffer()->address();
 
     // === Create Kernels ===
@@ -304,7 +374,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     tt::tt_metal::KernelHandle worker_writer_kernel = 0;
     if (!is_mesh_root1) {
         uint32_t worker_source_cb = is_mesh_leaf ? local_cb : (is_mesh_root2 ? local_cb : output_cb);
-        std::vector<uint32_t> worker_writer_ct_args = {worker_source_cb, compute_num_tiles, payload_size_bytes};
+        std::vector<uint32_t> worker_writer_ct_args = {
+            worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb};
         worker_writer_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
@@ -316,7 +387,14 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Final result CB: LEAF→local_cb, ROOT3→output_cb, ROOT2→local_cb, ROOT1→output_cb
     uint32_t fabric_local_cb = is_mesh_leaf ? local_cb : (is_mesh_root2 ? local_cb : output_cb);
     std::vector<uint32_t> fabric_writer_ct_args = {
-        role, fabric_local_cb, output_cb, compute_num_tiles, payload_size_bytes, payload_size_bytes, num_worker_slots};
+        role,
+        fabric_local_cb,
+        output_cb,
+        compute_num_tiles,
+        payload_size_bytes,
+        payload_size_bytes,
+        num_worker_slots,
+        packet_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
@@ -364,6 +442,12 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         if (is_mesh_leaf) {
             // Senders: no runtime args needed
             reader_rt_args = {};
+            log_debug(
+                tt::LogOp,
+                "Device {} core ({},{}) READER: LEAF - no semaphores (sends only)",
+                device_coordinate,
+                c.x,
+                c.y);
         } else {
             // ROOT devices: need semaphore addresses (each round receives 1 shard)
             reader_rt_args = {semaphore_round1.address()};
@@ -373,6 +457,16 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             if (is_mesh_root1) {
                 reader_rt_args.push_back(semaphore_round3.address());
             }
+            log_debug(
+                tt::LogOp,
+                "Device {} core ({},{}) READER: waiting on {} semaphores [round1=0x{:x}{}{}]",
+                device_coordinate,
+                c.x,
+                c.y,
+                reader_rt_args.size(),
+                semaphore_round1.address(),
+                (is_mesh_root2 || is_mesh_root1) ? fmt::format(" round2=0x{:x}", semaphore_round2.address()) : "",
+                is_mesh_root1 ? fmt::format(" round3=0x{:x}", semaphore_round3.address()) : "");
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_rt_args);
 
@@ -394,6 +488,31 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                 uint32_t link_idx = bottom_core_to_link.at(c);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     src_fabric_node_id, dst_fabric_node_id, link_idx, program, c, fabric_rt_args);
+
+                log_debug(
+                    tt::LogOp,
+                    "Device {} core ({},{}) [phys ({},{})] FABRIC_WRITER: dst_l1=0x{:x} dst_noc=({},{}) "
+                    "dst_sem=0x{:x} link_idx={} dest_coord={}",
+                    device_coordinate,
+                    c.x,
+                    c.y,
+                    core_noc_x,
+                    core_noc_y,
+                    dst_l1_addr,
+                    core_noc_x,
+                    core_noc_y,
+                    dst_sem_addr,
+                    link_idx,
+                    dest_coord);
+            } else {
+                log_debug(
+                    tt::LogOp,
+                    "Device {} core ({},{}) [phys ({},{})] ROOT1_FABRIC_WRITER: no send (is root)",
+                    device_coordinate,
+                    c.x,
+                    c.y,
+                    core_noc_x,
+                    core_noc_y);
             }
 
             tt::tt_metal::SetRuntimeArgs(program, fabric_writer_kernel, c, fabric_rt_args);
@@ -418,12 +537,48 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                     dst_sem_addr  // Destination semaphore for fused atomic inc
                 };
 
+                log_debug(
+                    tt::LogOp,
+                    "Device {} core ({},{}) [phys ({},{})] WORKER_WRITER: bottom_core=({},{}) [phys ({},{})] "
+                    "slot_idx={} dst_l1=0x{:x} dst_sem=0x{:x} dest_coord={}",
+                    device_coordinate,
+                    c.x,
+                    c.y,
+                    core_noc_x,
+                    core_noc_y,
+                    my_bottom_core.x,
+                    my_bottom_core.y,
+                    bottom_phys.x,
+                    bottom_phys.y,
+                    my_slot_idx,
+                    dst_l1_addr,
+                    dst_sem_addr,
+                    dest_coord);
+
                 tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel, c, worker_rt_args);
             }
         }
 
         cores.push_back(c);
     }
+
+    // Summary log for data flow verification
+    std::string expected_receives;
+    std::string expected_sends;
+    if (is_mesh_leaf) {
+        expected_receives = "none";
+        expected_sends = fmt::format("sends to {} (row {})", dest_coord, dest_coord[0]);
+    } else if (is_mesh_root3) {
+        expected_receives = "receives from 1 LEAF (row 3)";
+        expected_sends = fmt::format("sends to {} (ROOT2/ROOT1 row)", dest_coord);
+    } else if (is_mesh_root2) {
+        expected_receives = "receives from 1 LEAF (row 0) + 1 ROOT3";
+        expected_sends = fmt::format("sends to {} (ROOT1)", dest_coord);
+    } else {  // ROOT1
+        expected_receives = "receives from 1 LEAF (row 0) + 1 ROOT3 + 1 ROOT2";
+        expected_sends = "none (final destination)";
+    }
+    log_debug(tt::LogOp, "Device {} DATA FLOW SUMMARY: {} | {}", device_coordinate, expected_receives, expected_sends);
 
     return {
         std::move(program),

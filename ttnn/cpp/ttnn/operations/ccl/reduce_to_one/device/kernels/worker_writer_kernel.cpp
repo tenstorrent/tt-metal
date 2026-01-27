@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -23,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t source_cb = get_compile_time_arg_val(0);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t packet_cb = get_compile_time_arg_val(3);  // CB index for worker packets
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     // Runtime args
@@ -30,7 +32,7 @@ void kernel_main() {
     const uint32_t bottom_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t bottom_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_slot_idx = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t packet_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx++;  // Skip placeholder packet_buffer_addr - we use CB address directly
     const uint32_t arrival_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slot_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     // Routing info for packet header
@@ -41,8 +43,18 @@ void kernel_main() {
     const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // Destination semaphore for fused atomic inc
 
+    // Get packet buffer address from CB - same address on all cores
+    // Workers write to bottom core's packet_cb at this address
+    const uint32_t packet_buffer_addr = get_write_ptr(packet_cb);
+
     // Payload size
     const uint32_t payload_size = page_bytes * num_tiles;
+
+    DPRINT << "WORKER_WRITER: slot=" << my_slot_idx << " bottom_core=(" << bottom_core_noc_x << "," << bottom_core_noc_y
+           << ")"
+           << " packet_buf=0x" << HEX() << packet_buffer_addr << " arrival_sem=0x" << arrival_sem_addr << " my_noc=("
+           << DEC() << my_noc_x << "," << my_noc_y << ")"
+           << " dst_l1=0x" << HEX() << dst_l1_addr << " dst_sem=0x" << dst_sem_addr << ENDL();
 
     // Allocate and set up packet header
     auto route_id = PacketHeaderPool::allocate_header_n(1);
@@ -64,24 +76,33 @@ void kernel_main() {
     uint32_t header_dest_addr = packet_buffer_addr + slot_offset;
     uint32_t payload_dest_addr = header_dest_addr + packet_header_size_bytes;
 
+    DPRINT << "WORKER_WRITER: slot_offset=0x" << HEX() << slot_offset << " header_dest=0x" << header_dest_addr
+           << " payload_dest=0x" << payload_dest_addr << ENDL();
+
     uint64_t header_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, header_dest_addr);
     uint64_t payload_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, payload_dest_addr);
 
     // Wait for data in source CB
+    DPRINT << "WORKER_WRITER: Waiting for source_cb" << ENDL();
     cb_wait_front(source_cb, num_tiles);
     uint32_t data_addr = get_read_ptr(source_cb);
+    DPRINT << "WORKER_WRITER: Got data at 0x" << HEX() << data_addr << ENDL();
 
     // Send header to bottom core
+    DPRINT << "WORKER_WRITER: Writing header to bottom core" << ENDL();
     noc_async_write(reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
 
     // Send payload to bottom core (right after header)
+    DPRINT << "WORKER_WRITER: Writing payload to bottom core" << ENDL();
     noc_async_write(data_addr, payload_noc_addr, payload_size);
 
     // Signal bottom core that packet arrived
     uint64_t arrival_sem_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, arrival_sem_addr);
+    DPRINT << "WORKER_WRITER: Incrementing arrival semaphore" << ENDL();
     noc_semaphore_inc(arrival_sem_noc_addr, 1);
 
     noc_async_writes_flushed();
+    DPRINT << "WORKER_WRITER: Done" << ENDL();
 
     cb_pop_front(source_cb, num_tiles);
 }
