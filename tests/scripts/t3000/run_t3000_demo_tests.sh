@@ -133,6 +133,19 @@ run_t3000_qwen25_vl_tests() {
   fi
 }
 
+run_t3000_qwen3_vl_tests() {
+  # install qwen3_vl requirements
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen3-VL-32B
+  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
+}
+
 run_t3000_qwen3_tests() {
   # Record the start time
   fail=0
