@@ -572,12 +572,13 @@ def test_gpt_oss_demo(
             # Standard batch prefill (matching tt_transformers)
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt[:1],
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -590,6 +591,7 @@ def test_gpt_oss_demo(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
+                warmup_prefill=False,  # we can warmup prefill ourselves above if we want to
             )
             prefilled_token = torch.argmax(logits, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)

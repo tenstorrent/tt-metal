@@ -46,7 +46,15 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    shape = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 32)
+    # Handle both sample suite (tuple) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape:
+        # This is model_traced suite - dict with 'self' key (unary op, but config loader may return dict)
+        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
+    elif isinstance(input_shape, (tuple, list)):
+        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+    else:
+        shape = (1, 1, 32, 32)
+
     eps = 1e-5
 
     # Tensor creation

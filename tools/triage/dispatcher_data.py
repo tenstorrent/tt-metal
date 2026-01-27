@@ -65,6 +65,9 @@ class DispatcherCoreData:
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
+    # Host-assigned id from the previous launch message entry (best-effort).
+    # Not serialized by default; used by scripts that need accurate previous-op tracking.
+    previous_host_assigned_id: int | None = None
 
 
 class DispatcherData:
@@ -287,6 +290,7 @@ class DispatcherData:
         preload = False
         waypoint = ""
         host_assigned_id = None
+        previous_host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
@@ -330,6 +334,10 @@ class DispatcherData:
         try:
             host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
         except Exception:
+            pass
+        try:
+            previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
+        except:
             pass
         try:
             waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
@@ -418,6 +426,7 @@ class DispatcherData:
             preload=preload,
             waypoint=waypoint,
             mailboxes=mailboxes,
+            previous_host_assigned_id=previous_host_assigned_id,
         )
 
 
