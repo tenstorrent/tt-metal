@@ -39,30 +39,20 @@ def run_wq_kv_a_sequence_with_trace(
         memory_config=output_mem_config,
     )
 
-    # All-gather
-    tt_q_kv = ttnn.experimental.all_gather_async(
+    # All-reduce (replaces all_gather_async + fast_reduce_nc)
+    tt_q_kv = ttnn.experimental.all_reduce_async(
         tt_q_kv,
-        dim=1,
-        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
-        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        barrier_semaphores=[ccl_semaphore_handles[4], ccl_semaphore_handles[5]],
+        rs_global_semaphores=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        ag_global_semaphores=[ccl_semaphore_handles[2], ccl_semaphore_handles[3]],
+        math_op=ttnn.ReduceType.Sum,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
+        num_links=4,
         subdevice_id=subdevice_id,
     )
-    reduce_config = {
-        "dims": [1],
-        "output": None,
-        "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        ),
-        "memory_config": ttnn.L1_MEMORY_CONFIG,
-    }
-
-    # Fast reduce
-    tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
     # Slice operations
     tt_q = ttnn.slice(
@@ -98,19 +88,20 @@ def run_wq_kv_a_sequence_with_trace(
             memory_config=output_mem_config,
         )
 
-        # All-gather
-        tt_q_kv = ttnn.experimental.all_gather_async(
+        # All-reduce (replaces all_gather_async + fast_reduce_nc)
+        tt_q_kv = ttnn.experimental.all_reduce_async(
             tt_q_kv,
-            dim=1,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
-            num_links=1,
+            cluster_axis=1,
+            mesh_device=mesh_device,
+            barrier_semaphores=[ccl_semaphore_handles[6 * i + 4], ccl_semaphore_handles[6 * i + 5]],
+            rs_global_semaphores=[ccl_semaphore_handles[6 * i + 0], ccl_semaphore_handles[6 * i + 1]],
+            ag_global_semaphores=[ccl_semaphore_handles[6 * i + 2], ccl_semaphore_handles[6 * i + 3]],
+            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
             subdevice_id=subdevice_id,
         )
-
-        # Fast reduce
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
         # Slice operations
         tt_q = ttnn.slice(
@@ -151,19 +142,20 @@ def run_wq_kv_a_sequence_with_trace(
             memory_config=output_mem_config,
         )
 
-        # All-gather
-        tt_q_kv = ttnn.experimental.all_gather_async(
+        # All-reduce (replaces all_gather_async + fast_reduce_nc)
+        tt_q_kv = ttnn.experimental.all_reduce_async(
             tt_q_kv,
-            dim=1,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
-            num_links=1,
+            cluster_axis=0,
+            mesh_device=mesh_device,
+            barrier_semaphores=[ccl_semaphore_handles[6 * i + 4], ccl_semaphore_handles[6 * i + 5]],
+            rs_global_semaphores=[ccl_semaphore_handles[6 * i + 0], ccl_semaphore_handles[6 * i + 1]],
+            ag_global_semaphores=[ccl_semaphore_handles[6 * i + 2], ccl_semaphore_handles[6 * i + 3]],
+            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
             subdevice_id=subdevice_id,
         )
-
-        # Fast reduce
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
         # Slice operations
         tt_q = ttnn.slice(
@@ -240,7 +232,7 @@ def run_wq_kv_a_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 2129920,
+            "trace_region_size": 3137536,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -266,11 +258,10 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
 
     This test captures the entire operation sequence:
     1. Linear projection: [1, 1, 32, 896] x [896, 2112] -> [1, 1, 32, 2112]
-    2. All-gather: [1, 1, 32, 2112] -> [1, 8, 32, 2112]
-    3. Fast reduce: [1, 8, 32, 2112] -> [1, 1, 32, 2112]
-    4. Slice q: [1, 1, 32, 2112] -> [1, 1, 32, 1536]
-    5. Slice kv_nope: [1, 1, 32, 2112] -> [1, 1, 32, 512]
-    6. Slice kv_rope: [1, 1, 32, 2112] -> [1, 1, 32, 64]
+    2. All-reduce async: [1, 1, 32, 2112] -> [1, 1, 32, 2112] (replaces all-gather + fast reduce)
+    3. Slice q: [1, 1, 32, 2112] -> [1, 1, 32, 1536]
+    4. Slice kv_nope: [1, 1, 32, 2112] -> [1, 1, 32, 512]
+    5. Slice kv_rope: [1, 1, 32, 2112] -> [1, 1, 32, 64]
 
     Configuration:
     - Warmup iterations: 10
@@ -279,6 +270,7 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
     - Input memory: WIDTH_SHARDED 7x4 grid, shard [32, 32]
     - Output memory: WIDTH_SHARDED (linear output)
     - CCL topology: Linear
+    - Uses all_reduce_async instead of all_gather_async + fast_reduce_nc
     """
     torch.manual_seed(0)
 
@@ -297,9 +289,9 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # Create global semaphore handles (need 2 per iteration)
+    # Create global semaphore handles (need 6 per iteration for all_reduce_async: 2 barrier + 2 RS + 2 AG)
     ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 2)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 6)
     ]
 
     # Create input and weight tensors
@@ -330,6 +322,14 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
                 ttnn.CoreCoord(6, 3),  # 7x4 grid
+            )
+        }
+    )
+    matmul_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(6, 0),  # 7x1 grid
             )
         }
     )
@@ -373,7 +373,13 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
     )
 
     # Output memory config - WIDTH_SHARDED (matching linear output)
-    output_mem_config = ttnn.L1_MEMORY_CONFIG
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(32, 128),
+        core_grid=matmul_core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
     profiler = BenchmarkProfiler()
 
