@@ -17,8 +17,11 @@
  *
  * Provides ONE function that handles all untilize operations:
  * - Small widths (<= DEST limit): Uses pack_untilize (hardware-accelerated, preferred)
- * - Large widths (> DEST limit) with integer types: Uses block-based pack_untilize (hardware-accelerated)
- * - Large widths (> DEST limit) with non-integer types: Uses standard untilize (fallback)
+ * - Large widths (> DEST limit) with Float32/integer types: Uses block-based pack_untilize (hardware-accelerated)
+ * - Large widths (> DEST limit) with other formats (bfloat16, etc.): Uses standard untilize (fallback)
+ *
+ * Float32 and integer types require block-based pack_untilize because standard untilize
+ * has correctness issues with these formats (see TODO #30400, #33795).
  *
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
@@ -52,15 +55,29 @@ namespace compute_kernel_lib {
 // unpack_dst_format is defined in JIT-generated chlkc_unpack_data_format.h
 // It's an array where unpack_dst_format[cb_id] contains the DataFormat enum value
 
-// Integer data formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
+// Data formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
+// - Float32 = 0
 // - Int8 = 14
 // - UInt8 = 30
 // - UInt16 = 9
 // - Int32 = 8
 // - UInt32 = 24
 
-template <uint32_t cb_id>
-constexpr bool is_integer_format() {
+/**
+ * @brief Check if format requires block-based pack_untilize for wide tensors
+ *
+ * Some data formats cannot use standard untilize when width exceeds DEST limit:
+ * - Integer types: standard untilize doesn't support them
+ * - Float32: standard untilize has precision/correctness issues (see TODO #30400, #33795)
+ *
+ * These formats must use block-based pack_untilize which chunks the row into
+ * DEST-sized blocks.
+ *
+ * @tparam cb_id The circular buffer ID
+ * @tparam force_pack_fp32 If true, Float32 will use block-based pack_untilize (default: true)
+ */
+template <uint32_t cb_id, bool force_pack_fp32 = true>
+constexpr bool requires_block_pack_untilize_for_wide() {
 // Check if unpack_dst_format array is available (from JIT-generated chlkc_unpack_data_format.h)
 // This header is included via chlkc_list.h in the firmware build
 #if __has_include("chlkc_unpack_data_format.h")
@@ -70,17 +87,20 @@ constexpr bool is_integer_format() {
     // Access the format at compile time
     constexpr uint32_t format = unpack_dst_format[cb_id];
 
-    // Check if format is one of the integer types
-    // Integer formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
-    return format == 8 ||   // Int32
-           format == 24 ||  // UInt32
-           format == 14 ||  // Int8
-           format == 30 ||  // UInt8
-           format == 9;     // UInt16
+    // Formats that require block-based pack_untilize when width exceeds DEST limit:
+    // Integer types always require it, Float32 is controlled by force_pack_fp32 parameter
+    constexpr bool is_integer = format == 8 ||   // Int32
+                                format == 24 ||  // UInt32
+                                format == 14 ||  // Int8
+                                format == 30 ||  // UInt8
+                                format == 9;     // UInt16
+    constexpr bool is_fp32 = (format == 0);      // Float32
+
+    return is_integer || (is_fp32 && force_pack_fp32);
 #else
-    // If header not available, assume NOT integer (conservative for correctness)
-    // This ensures non-integer formats like bfloat8_b use the standard untilize path
-    // for wide tensors, which is required for correct results.
+    // If header not available, assume NOT requiring block pack (conservative)
+    // This ensures formats like bfloat16/bfloat8_b use the standard untilize path
+    // for wide tensors, which works correctly for those formats.
     return false;
 #endif
 }
@@ -125,10 +145,12 @@ ALWI void untilize_init() {
     constexpr uint32_t width_in_tiles = Config::width_in_tiles;
     constexpr uint32_t input_cb = Config::input_cb;
     constexpr uint32_t output_cb = Config::output_cb;
+    constexpr UntilizeFlags flags = Config::flags;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<input_cb>();
+    constexpr bool force_pack_fp32 = has_flag(flags, UntilizeFlags::FORCE_PACK_UNTILIZE_WIDE_FP32);
+    constexpr bool use_block_pack = requires_block_pack_untilize_for_wide<input_cb, force_pack_fp32>();
 
-    if constexpr (width_in_tiles > dest_limit && is_integer) {
+    if constexpr (width_in_tiles > dest_limit && use_block_pack) {
         constexpr uint32_t num_blocks = compute_num_blocks(width_in_tiles, dest_limit);
         constexpr uint32_t block_w = width_in_tiles / num_blocks;
         pack_untilize_init<block_w, width_in_tiles>(input_cb, output_cb);
@@ -152,10 +174,12 @@ ALWI void untilize_uninit() {
     constexpr uint32_t width_in_tiles = Config::width_in_tiles;
     constexpr uint32_t input_cb = Config::input_cb;
     constexpr uint32_t output_cb = Config::output_cb;
+    constexpr UntilizeFlags flags = Config::flags;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<input_cb>();
+    constexpr bool force_pack_fp32 = has_flag(flags, UntilizeFlags::FORCE_PACK_UNTILIZE_WIDE_FP32);
+    constexpr bool use_block_pack = requires_block_pack_untilize_for_wide<input_cb, force_pack_fp32>();
 
-    if constexpr (width_in_tiles > dest_limit && !is_integer) {
+    if constexpr (width_in_tiles > dest_limit && !use_block_pack) {
         ::untilize_uninit(input_cb);
     } else {
         pack_untilize_uninit(output_cb);
@@ -200,10 +224,11 @@ ALWI void untilize(uint32_t num_rows, uint32_t row_height_tiles = 1, uint32_t up
     constexpr bool wait_upfront = has_flag(flags, UntilizeFlags::WAIT_UPFRONT);
 
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<input_cb>();
+    constexpr bool force_pack_fp32 = has_flag(flags, UntilizeFlags::FORCE_PACK_UNTILIZE_WIDE_FP32);
+    constexpr bool use_block_pack = requires_block_pack_untilize_for_wide<input_cb, force_pack_fp32>();
 
-    if constexpr (wait_upfront || (width_in_tiles > dest_limit && !is_integer)) {
-        // Standard untilize path (WAIT_UPFRONT or wide non-integer)
+    if constexpr (wait_upfront || (width_in_tiles > dest_limit && !use_block_pack)) {
+        // Standard untilize path (WAIT_UPFRONT or wide formats that support standard untilize)
         if constexpr (do_init) {
             ::untilize_init(input_cb);
         }
@@ -227,8 +252,8 @@ ALWI void untilize(uint32_t num_rows, uint32_t row_height_tiles = 1, uint32_t up
             ::untilize_uninit(input_cb);
         }
 
-    } else if constexpr (width_in_tiles > dest_limit && is_integer) {
-        // Block-based pack untilize (wide integer types)
+    } else if constexpr (width_in_tiles > dest_limit && use_block_pack) {
+        // Block-based pack untilize (wide Float32/integer types that require pack_untilize)
         constexpr uint32_t num_blocks = compute_num_blocks(width_in_tiles, dest_limit);
         constexpr uint32_t block_w = width_in_tiles / num_blocks;
 
