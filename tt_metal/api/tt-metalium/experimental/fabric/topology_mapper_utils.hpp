@@ -287,14 +287,16 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  * @param fabric_node_id_to_mesh_rank Optional mapping of mesh IDs to fabric node IDs to mesh host ranks.
  *                                    Required if config.disable_rank_bindings is false.
  *
- * @return std::map<MeshId, TopologyMappingResult> Mapping result for each logical mesh
+ * @return TopologyMappingResult containing the overall mapping result with bidirectional mappings
+ *         for all successfully mapped meshes
  *
- * @note If inter-mesh mapping fails, all mesh results will have success=false
- * @note If intra-mesh mapping fails for a specific mesh, only that mesh's result will have success=false
+ * @note If inter-mesh mapping fails, result.success will be false and error_message will contain details
+ * @note If intra-mesh mapping fails for a specific mesh, the mapping will be retried with different
+ *       inter-mesh pairings. If all attempts fail, result.success will be false
  * @note If config.disable_rank_bindings is true, rank constraints are ignored and any valid connectivity
  *       mapping is allowed
  */
-std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
+TopologyMappingResult map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,
     const PhysicalMultiMeshGraph& adjacency_map_physical,
     const TopologyMappingConfig& config,
