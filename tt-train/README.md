@@ -20,7 +20,7 @@ source ./init_repo.sh
 You have two options for building the project:
 
 ## Compiler Selection
-By default, the project uses clang-20 via CMake presets. You can override the compiler using standard CMake environment variables:
+By default, the project uses `clang-20` (via `CC`/`CXX` environment variables). You can override the compiler using standard CMake environment variables:
 
 ```bash
 # Use standard CC/CXX environment variables
