@@ -134,26 +134,46 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
-    // Broadcast ack credit to ALL channels (for WH accumulated ack sending)
-    // Use when src_id is not meaningful and all channels should be incremented
-    FORCE_INLINE void send_ack_credit_broadcast_all_channels(int packed_count = 1) {
+    // Send packed ACK credits - add packed value directly (formats must match!)
+    // Used for batch ACK sending when first-level ACK is enabled
+    // ASSUMES: Sender->receiver and receiver->sender use SAME packing format (8-bit on BH)
+    template<bool wait_for_txq, typename PackedValueType>
+    FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
         if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-            // Increment all channels by directly manipulating the packed words
+            // Both formats use 8-bit byte-aligned packing on BH, so we can add directly
             constexpr size_t CREDITS_PER_WORD = 4;
-            for (size_t word_idx = 0; word_idx < ACK_PACKED_WORDS; word_idx++) {
-                size_t channels_in_word = (word_idx == ACK_PACKED_WORDS - 1) ?
-                    (NUM_SENDER_CHANNELS - word_idx * CREDITS_PER_WORD) : CREDITS_PER_WORD;
-                uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[word_idx]);
-                for (size_t byte_idx = 0; byte_idx < channels_in_word; byte_idx++) {
-                    bytes[byte_idx] += static_cast<uint8_t>(packed_count);
-                }
-                ack_counters_base_l1_ptr[word_idx] = ack_counters[word_idx];
+
+            if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
+                // ≤4 channels: single word
+                uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
+                uint32_t old_counter = ack_counters[0];
+                ack_counters[0] += packed_val;
+                ack_counters_base_l1_ptr[0] = ack_counters[0];
+                // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
+                //        << " old=" << old_counter
+                //        << " new=" << ack_counters[0]
+                //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
+            } else {
+                // 5-8 channels: two words
+                uint64_t packed_val = packed_value.get();
+                uint32_t lower_word = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
+                uint32_t old_lower = ack_counters[0];
+                ack_counters[0] += lower_word;
+                ack_counters_base_l1_ptr[0] = ack_counters[0];
+
+                uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
+                uint32_t old_upper = ack_counters[1];
+                ack_counters[1] += upper_word;
+                ack_counters_base_l1_ptr[1] = ack_counters[1];
+                // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
+                //        << " lower: old=" << old_lower << " new=" << ack_counters[0]
+                //        << " upper: old=" << old_upper << " new=" << ack_counters[1]
+                //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
             }
-            update_sender_side_credits();
-        } else {
-            for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ch++) {
-                ack_counters[ch] += packed_count;
-                ack_counters_base_l1_ptr[ch] = ack_counters[ch];
+
+            // Wait for eth queue if requested (safer but slower)
+            if constexpr (wait_for_txq) {
+                while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
             }
             update_sender_side_credits();
         }
@@ -169,25 +189,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     // 1 word for ≤4 channels, 2 words for 5-8 channels
     static constexpr size_t ACK_PACKED_WORDS = (NUM_SENDER_CHANNELS + 3) / 4;
     std::array<uint32_t, ACK_PACKED_WORDS> ack_counters;
-
-    // Public method to try flushing credits if eth queue is available
-    // Should be called periodically in main loop to retry sending if queue was previously busy
-    FORCE_INLINE void try_flush_credits() const {
-        // if (!internal_::eth_txq_is_busy(receiver_txq_id)) {
-        //     uint32_t ack_base = (uint32_t)ack_counters_base_l1_ptr;
-        //     uint32_t compl_base = (uint32_t)completion_counters_base_l1_ptr;
-        //     DPRINT << "RECV_FLUSH_CREDITS: txq=" << (uint32_t)receiver_txq_id
-        //            << " ack_base=" << HEX() << ack_base
-        //            << " compl_base=" << HEX() << compl_base
-        //            << " remote=" << HEX() << to_senders_credits_base_address
-        //            << " bytes=" << total_number_of_receiver_to_sender_credit_num_bytes << ENDL();
-        //     internal_::eth_send_packet_bytes_unsafe(
-        //         receiver_txq_id,
-        //         local_receiver_credits_base_address,
-        //         to_senders_credits_base_address,
-        //         total_number_of_receiver_to_sender_credit_num_bytes);
-        // }
-    }
 
 private:
     FORCE_INLINE void update_sender_side_credits() const {
@@ -233,6 +234,29 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         //        << " stream_id=" << stream_id
         //        << " remote_update +" << count << ENDL();
         remote_update_ptr_val<receiver_txq_id>(stream_id, count);
+    }
+
+    // Send packed ACK credits directly to the shared stream register
+    // Used for batch ACK sending when first-level ACK is enabled
+    template<typename PackedValueType>
+    FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
+        if constexpr (enable_first_level_ack) {
+            // All channels use register 0 when enable_first_level_ack is true
+            uint32_t stream_id = sender_channel_packets_ack_stream_ids[0];
+            // packed_value format already matches what sender expects - just write it
+            // For ≤32 bits (≤4 channels), write as uint32_t
+            // For >32 bits (5 channels), this needs multi-register handling (TODO if needed)
+            static_assert(sizeof(typename PackedValueType::storage_type) <= 8,
+                         "Packed value storage too large");
+            if constexpr (sizeof(typename PackedValueType::storage_type) <= 4) {
+                remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
+            } else {
+                // Multi-register case - need to write to both stream_ids[0] and stream_ids[1]
+                // For now, assume this is handled elsewhere or not needed
+                static_assert(sizeof(typename PackedValueType::storage_type) <= 4,
+                             "Multi-register packed ACK credits not yet implemented for stream registers");
+            }
+        }
     }
 
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
@@ -288,10 +312,9 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
         acks_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),// + sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),  // Packed: all channels read same address
         completions_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)),// +
-            // sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) + sender_channel_index),  // Unpacked: each channel has own offset
         acks_received_and_processed(0),
         completions_received_and_processed(0) {
 
@@ -314,15 +337,15 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         uint8_t processed = static_cast<uint8_t>(acks_received_and_processed >> byte_shift);
         uint8_t diff = received - processed;  // uint8_t subtraction wraps correctly
         uint32_t result = static_cast<uint32_t>(diff) << byte_shift;
-        if (diff > 0) {
-            // DPRINT << "SEND_GET_ACK: ch=" << (uint32_t)sender_channel_index
-            //        << " L1_addr=" << HEX() << (uint32_t)acks_received_counter_ptr
-            //        << " raw_packed=" << HEX() << raw_value
-            //        << " byte[" << (uint32_t)sender_channel_index << "]=" << (uint32_t)received
-            //        << " local_proc=" << (uint32_t)processed
-            //        << " new_acks=" << (uint32_t)diff
-            //        << " packed_result=" << HEX() << result << ENDL();
-        }
+        // if (diff > 0) {
+        //     DPRINT << "SEND_GET_ACK: ch=" << (uint32_t)sender_channel_index
+        //            << " L1_addr=" << HEX() << (uint32_t)acks_received_counter_ptr
+        //            << " raw_packed=" << HEX() << raw_value
+        //            << " byte[" << (uint32_t)sender_channel_index << "]=" << DEC() << (uint32_t)received
+        //            << " local_proc=" << (uint32_t)processed
+        //            << " new_acks=" << (uint32_t)diff
+        //            << " packed_result=" << HEX() << result << ENDL();
+        // }
         return result;  // Return in packed position
     }
 
@@ -342,7 +365,7 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 
             // DPRINT << "SEND_PROC_ACK: ch=" << (uint32_t)sender_channel_index
             //        << " old_packed=" << HEX() << acks_received_and_processed
-            //        << " byte[" << (uint32_t)sender_channel_index << "]=" << (uint32_t)old_unpacked << "->" << (uint32_t)new_unpacked
+            //        << " byte[" << (uint32_t)sender_channel_index << "]=" << DEC() << (uint32_t)old_unpacked << "->" << (uint32_t)new_unpacked
             //        << " delta=" << (uint32_t)delta_unpacked
             //        << " new_packed=" << HEX() << ((acks_received_and_processed & ~byte_mask) | new_byte) << ENDL();
 
@@ -589,8 +612,16 @@ FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
  * Determine credit width for receiver packet credits (matching legacy PackedCredits behavior)
  */
 namespace receiver_credits_config {
-    constexpr bool credits_are_byte_aligned = NUM_SENDER_CHANNELS <= 3;
     constexpr uint32_t MIN_BITS = tt::tt_fabric::log2_ceil(tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS + 1);
+
+    // Prefer 8-bit (byte-aligned) when it fits in available registers
+    // Check if 8-bit packing fits in single 24-bit register
+    constexpr bool byte_aligned_fits_in_single_reg = (NUM_SENDER_CHANNELS * 8) <= 24;
+    // Check if 8-bit packing fits in two registers (max 6 channels × 8 = 48 bits < 64 bits)
+    constexpr bool byte_aligned_fits_in_two_regs = (NUM_SENDER_CHANNELS * 8) <= 64;
+
+    // Always prefer 8-bit for consistency when possible
+    constexpr bool credits_are_byte_aligned = byte_aligned_fits_in_two_regs;
     constexpr uint8_t CREDIT_WIDTH = credits_are_byte_aligned ? 8 : MIN_BITS;
     constexpr uint32_t TOTAL_BITS = NUM_SENDER_CHANNELS * CREDIT_WIDTH;
     constexpr bool NEEDS_MULTI_REGISTER = TOTAL_BITS > 24;
