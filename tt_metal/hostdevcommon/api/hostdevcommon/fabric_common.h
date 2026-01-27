@@ -494,20 +494,19 @@ struct tensix_fabric_connections_l1_info_t {
 
 enum class RouterCommand : std::uint32_t {
     // The main state where messages and credits are forwarded
-    RUN = 0, 
+    RUN = 0,
 
     // The router enters the pause state, which is the "hub" transitionary state to other states.
     // When paused, no messages/credits are processed by the router
     PAUSE = 1,
 
-    // The router accepts messages but drops them instead of forwarding them. 
+    // The router accepts messages but drops them instead of forwarding them.
     // The pipe to /dev/null of TT-Fabric
     DRAIN = 3,
 
     // Commands the router to make one link retrain attempt
     RETRAIN = 4
 };
-
 
 struct RouterStateManager {
     RouterStateCommon state;  // 4B, written by device, read by host
