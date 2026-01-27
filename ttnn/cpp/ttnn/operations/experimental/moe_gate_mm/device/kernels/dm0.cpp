@@ -26,6 +26,9 @@ void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t reduce_core_id = get_named_compile_time_arg_val("reduce_core_id");
+    constexpr uint32_t reduce_core_physical_x = get_named_compile_time_arg_val("reduce_core_physical_x");
+    constexpr uint32_t reduce_core_physical_y = get_named_compile_time_arg_val("reduce_core_physical_y");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -42,7 +45,9 @@ void kernel_main() {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_2;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -52,9 +57,9 @@ void kernel_main() {
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
 
-    // Constants for MoE
-    constexpr uint32_t num_w_tiles_h = 224;
-    constexpr uint32_t num_out_tiles_h = 1;
+    // Constants for MoE Gate MM
+    constexpr uint32_t num_w_tiles_h = 20;
+    constexpr uint32_t num_w_tiles_w = 8;
 
     //-------------------------------------------------------------------------
     // W reading constants
@@ -62,7 +67,7 @@ void kernel_main() {
     constexpr uint32_t w_txns_per_block = 8;
     constexpr uint32_t w_tiles_per_txn = noc_packet_size / w_tile_size;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    constexpr uint32_t w_num_blocks = num_w_tiles_h / w_tiles_per_block;
+    constexpr uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
