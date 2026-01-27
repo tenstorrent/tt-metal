@@ -468,16 +468,16 @@ class MasterConfigLoader:
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
 
-    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
+    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
         """
-        Normalize configurations to always return list of (argument list, source) tuples.
+        Normalize configurations to always return list of (argument list, source, machine_info, config_hash) tuples.
         Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
             configs: List of configurations (either list of args or dict with 'arguments' and 'source'/'contexts')
 
         Returns:
-            List of (arguments, source, machine_info) tuples for traceability
+            List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
         # Uses class-level setting instead of environment variable for cleaner control
@@ -486,6 +486,9 @@ class MasterConfigLoader:
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
+                # Extract config_hash if present (from database-generated JSON)
+                config_hash = config.get("config_hash", None)
+
                 # Check if this config has the new contexts format
                 if "contexts" in config:
                     # New contexts format: expand each context into separate tuples
@@ -503,7 +506,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
-                        normalized.append((arguments, source, machine_info))
+                        normalized.append((arguments, source, machine_info, config_hash))
                 else:
                     # Old single source/machine_info format
                     source = config.get("source", "unknown")
@@ -514,15 +517,15 @@ class MasterConfigLoader:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((config["arguments"], source, machine_info))
+                    normalized.append((config["arguments"], source, machine_info, config_hash))
             elif isinstance(config, list):
                 # Old format: use as-is with unknown source and no machine_info
                 # Skip if lead_models_only since we can't determine source
                 if not lead_models_only:
-                    normalized.append((config, "unknown", None))
+                    normalized.append((config, "unknown", None, None))
             else:
                 # Fallback: wrap in list with unknown source and no machine_info
-                normalized.append((config if isinstance(config, list) else [config], "unknown", None))
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None, None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -1060,7 +1063,7 @@ class MasterConfigLoader:
         failed_configs = 0
         seen_input_signatures = set() if deduplicate_inputs else None
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract first tensor from each config
                 # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
@@ -1207,6 +1210,7 @@ class MasterConfigLoader:
                             "storage_type": storage_type_str,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Extract operation-specific parameters using registry extractors
@@ -2049,7 +2053,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract BOTH tensors from each config
                 tensor_configs = []
@@ -2125,6 +2129,7 @@ class MasterConfigLoader:
                             "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Add scalar value if present
@@ -2330,7 +2335,7 @@ class MasterConfigLoader:
         is_paged_update_cache = "paged_update_cache" in operation_name.lower()
         min_tensor_count = tensor_count - 1 if is_paged_update_cache else tensor_count
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract ALL tensors from each config
                 tensor_configs = []
@@ -2563,7 +2568,7 @@ class MasterConfigLoader:
             traced_source_list = []
             traced_machine_info_list = []
 
-            for config, source, machine_info in configs:
+            for config, source, machine_info, config_hash in configs:
                 params = self._extract_conv2d_parameters(config)
                 if params:
                     # Build input_specs list:
@@ -2637,7 +2642,7 @@ class MasterConfigLoader:
         try:
             paired_configs = []
 
-            for config, source, machine_info in configs:
+            for config, source, machine_info, config_hash in configs:
                 # Extract base tensor config for input tensor
                 tensor_config = None
                 for arg in config:
@@ -2676,6 +2681,7 @@ class MasterConfigLoader:
                         "has_bias": linear_params["has_bias"],
                         "traced_source": source,
                         "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
                     }
                     paired_configs.append(config_dict)
 
@@ -2732,7 +2738,7 @@ class MasterConfigLoader:
             extracted_params = []
             extracted_sources = []
             extracted_machine_infos = []
-            for config, source, machine_info in configs:
+            for config, source, machine_info, config_hash in configs:
                 params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
                 if params:
                     extracted_params.append(params)
@@ -3090,7 +3096,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
                     # Extract vector of tensors from arg0 (may be UnparsedElement)
@@ -3196,6 +3202,7 @@ class MasterConfigLoader:
                             "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Add dtype, layout, memory_config for each input (at least 2)
@@ -3403,7 +3410,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3482,6 +3489,7 @@ class MasterConfigLoader:
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(config_dict)
 
@@ -3536,7 +3544,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3596,6 +3604,7 @@ class MasterConfigLoader:
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(config_dict)
 
@@ -3658,7 +3667,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3813,7 +3822,7 @@ class MasterConfigLoader:
             failed_configs = 0
             seen_input_signatures = set() if deduplicate_inputs else None
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract Q, K, V tensor configs (first 3 args)
                     tensor_configs = []
@@ -3880,6 +3889,7 @@ class MasterConfigLoader:
                         "scale": scale,
                         "traced_source": source,
                         "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
                     }
 
                     if deduplicate_inputs:
@@ -4012,7 +4022,7 @@ class MasterConfigLoader:
             failed_configs = 0
             seen_input_signatures = set() if deduplicate_inputs else None
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract 4 tensor configs (cache1, input1, cache2, input2)
                     tensor_configs = []
@@ -4115,6 +4125,7 @@ class MasterConfigLoader:
                         "batch_offset": batch_offset,
                         "traced_source": source,
                         "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
                     }
 
                     # Add optional tensor parameters if present

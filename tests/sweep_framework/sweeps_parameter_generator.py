@@ -134,6 +134,10 @@ def invalidate_vectors(test_module, vectors) -> None:
 def _serialize_vectors(vectors):
     """Serialize vectors and compute their hashes.
 
+    If a vector has a config_hash from the database, use that as the input_hash
+    for direct correlation with ttnn_ops.ttnn_configuration. Otherwise, compute
+    a hash from the serialized vector content.
+
     Args:
         vectors: List of vector dictionaries to serialize
 
@@ -148,7 +152,15 @@ def _serialize_vectors(vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize_structured(vectors[i][elem], warnings)
-        input_hash = _compute_vector_hash(vector)
+
+        # Use config_hash from database if available, otherwise compute from content
+        # This enables direct correlation with ttnn_ops.ttnn_configuration.config_hash
+        config_hash = vectors[i].get("config_hash")
+        if config_hash:
+            input_hash = config_hash
+        else:
+            input_hash = _compute_vector_hash(vector)
+
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
         vector["tag"] = SWEEPS_TAG
