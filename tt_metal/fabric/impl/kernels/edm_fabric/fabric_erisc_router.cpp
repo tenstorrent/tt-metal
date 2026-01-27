@@ -1917,7 +1917,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
             DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
                    << " new_credits=" << new_credits
-                   << " old_unsent=" << (uint32_t)old_unsent
+                //    << " old_unsent=" << (uint32_t)old_unsent
                    << " new_unsent=" << (uint32_t)receiver_channel_pointers.m.unsent_messages
                    << " packed_to_clear=" << HEX() << packed_num_packets.get() << DEC() << ENDL();
 
