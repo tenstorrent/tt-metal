@@ -4,11 +4,12 @@ Lab 2: Multi Core Matrix Multiplication
 Introduction
 ************
 
-In Lab 1, you reviewed the standard matrix multiplication algorithm, implemented a tiled CPU version, and then mapped
-the same computation to a single Tensix core using TT-Metalium.
-In this lab, you will learn how to take advantage of the parallelism of the Tensix core architecture and extend your
-matrix multiplication implementation to multiple Tensix cores.
-Then you will introduce a data reuse optimization that reduces traffic to device memory by keeping partial results in on-chip SRAM.
+In Lab 1, you reviewed the standard matrix multiplication algorithm, implemented a tiled CPU version,
+and then mapped the same computation to a single Tensix core using TT-Metalium.
+In this lab, you will extend your matrix multiplication implementation from a single Tensix core to
+multiple cores by exploiting core-level parallelism.
+Then you will introduce a data reuse optimization that reduces traffic to device memory by keeping
+partial results in on-chip SRAM.
 
 
 
@@ -27,8 +28,8 @@ In this lab, you will keep the same basic structure, but instead of running on a
 Work Distribution for Multi Core Programs
 =========================================
 
-The key idea in multi-core programs is **work distribution**: a large problem is broken up into smaller,
-ideally independent pieces, and those pieces are assigned to different cores so they can run in parallel.
+The key idea in multi core programs is **work distribution**, where we break a large problem into smaller,
+ideally independent pieces and assign them to different cores to run in parallel.
 In a Single Program, Multiple Data (SPMD) computational model, each core executes the same code but operates on
 a different subset of the data. Achieving optimal performance generally requires keeping all cores busy
 (i.e. minimize idle time), and avoiding unnecessary communication.
@@ -41,14 +42,14 @@ in parallel with the others.
 
 At a high level, the host code for multi core matrix multiplication needs to perform the following steps:
 
-#. **Determine number of available (or desired) cores**
+#. **Determine the number of available (or desired) cores**
 
    To distribute work among the cores, we need to know how many cores are available and how many of
    these cores we want to use. If the dataset is large enough and we only have one computational task,
    we may use all available cores. If we have multiple computational steps to perform, we may partition
    the work so that each step is performed on a subset of the cores.
 
-#. **Determine amount of parallelizable work**
+#. **Determine the amount of parallelizable work**
 
    The amount of parallelizable work is specific to a given problem, and there may be multiple ways
    to partition the work. For the case of matrix multiplication, one way to partition the work is
@@ -77,7 +78,7 @@ Work Distribution in TT-Metalium
 In this section, we describe TT-Metalium APIs for work distribution, and how they can be used to distribute work
 needed to perform matrix multiplication on multiple cores.
 
-In Tenstorrent architecture, the cores are organized into a 2D grid with each core uniquely identified
+In the Tenstorrent architecture, the cores are organized into a 2D grid with each core uniquely identified
 by an index ``(x, y)`` in this grid.
 
 .. figure:: images/tensix_core_grid.png
@@ -116,14 +117,14 @@ Split Work Among Tensix Cores
 Tenstorrent devices support multiple parallelization strategies. The grid structure of the Tensix processor
 enables various approaches to distributing work. In this lab, we will use a simple SPMD computational model
 similar to GPU programming to implement matrix multiplication on multiple cores. Each core will be responsible
-for producing ``num_output_tiles/num_cores`` output tiles.
+for producing approximately ``num_output_tiles/num_cores`` output tiles.
 
 We will use a simple strategy of dividing the work evenly among the cores. We will also make a simplifying assumption
-that matrix dimensions are divisible by the tile size.
+that the matrix dimensions are divisible by the tile size.
 For example, if the matrix dimensions are ``288x288`` and the tile size is ``32x32``, then the number of output
-tiles is ``9 * 9 = 81``. If we choose to implement the matrix multiplication on ``11`` cores (assuming other cores are
-needed for other tasks), then each core will be responsible for producing ``81 / 11 = 7.36`` output tiles.
-Since the number of output tiles must be an integer, we will round this up to ``8`` output tiles per core.
+tiles is ``9 * 9 = 81``. Let us assume we choose to implement the matrix multiplication on ``11`` cores
+because other cores are needed for other tasks. Since ``81 / 11 = 7.36``, and the number of output tiles must be
+an integer, we choose ``8`` as the maximum number of output tiles per core.
 As a result, ``10`` cores are assigned ``8`` output tiles each, and the last core processes the remaining one tile.
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
@@ -238,9 +239,9 @@ set on the core.
 Create Circular Buffers and Kernels on Multiple Cores
 -----------------------------------------------------
 
-Circular buffers (CBs) have to be created on each core participating in computation, which can be achieved simply by passing
+Circular buffers (CBs) have to be created on each core participating in the computation, which can be achieved simply by passing
 ``all_cores`` to the function creating circular buffers.
-Each participating core will use its CBs to store required tiles of matrices ``A``, ``B`` and ``C``.
+Each participating core will use its CBs to store required tiles of matrices ``A``, ``B``, and ``C``.
 Note that the ``create_cb`` helper function from Lab 1 needs to be updated to accept a ``CoreRangeSet`` of cores,
 which can then be passed on to the ``CreateCircularBuffer`` function.
 Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function.
@@ -256,13 +257,13 @@ The way to assign **specific instances of work** to specific cores is through ru
 We need to determine what arguments are needed for each kernel instance so that kernels on each core get sufficient
 information to perform only those operations that are needed for the output tiles assigned to that core.
 The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
-needs to loop over the correct number of output tiles and inner-dimension tiles.
+needs to loop over the correct number of output tiles and inner dimension tiles.
 
 All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
 This is because their values will be known only at runtime, when the work distribution is known.
 Arguments that are the same for all cores and are known at compile time can be passed as either compile-time arguments or runtime arguments.
-As discussed in Lab 1, the decision to use compile-time arguments vs. runtime arguments is based on a tradeoff between potential
-performance benefit from using compile-time arguments vs. kernels having to be recompiled for each different set of argument values.
+As discussed in Lab 1, choosing compile-time vs. runtime arguments trades off potential performance gains
+from compile-time constants against the cost of recompiling kernels for each different set of argument values.
 
 To set core-specific runtime arguments, you will need to iterate over all core ranges in ``core_group_1`` and then iterate over all cores
 in the range and set the runtime arguments for each core. Similarly, you should also iterate over all core ranges in
@@ -276,13 +277,13 @@ As shown earlier, the number of available compute cores on the device can be obt
 ``compute_with_storage_grid_size()`` TT-Metalium C++ API. To call this API, you need to get the ``device`` object,
 which can be obtained from the program state object (i.e. ``prog_state.mesh_device.get()``).
 
-In this lab, you will run matrix multiplication with varying number of cores.
+In this lab, you will run matrix multiplication with a varying number of cores.
 The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
 Any cores without kernels created on them will remain idle for that program (in real applications, they would be allocated to other tasks).
 
 To use **all** available compute cores, you can pass the full available compute grid to the work-splitting helper, obtain ``all_cores``, and then
 create CBs and kernels on all cores in ``all_cores``, passing appropriate runtime arguments to the kernels.
-To use fewer cores, you can modify core grid to select only a subset of cores simply by modifying the
+To use fewer cores, you can modify the core grid to select only a subset of cores simply by modifying the
 ``x`` and ``y`` dimensions of the core grid before passing it to the work-splitting helper.
 The rest of the code can usually remain the same, because the work-splitting helper automatically distributes the work evenly among
 the smaller set of cores.
@@ -299,16 +300,16 @@ Perform the following steps:
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
 #. Verify correctness by comparing the results against the reference matrix multiplication
    you created in Exercise 1 of Lab 1.
-#. Run the multi-core implementation using:
+#. Run the multi core implementation using:
 
    * Work distributed over a ``5x5`` core grid
    * Work distributed over a ``10x10`` core grid
    * Work distributed over **all** available compute cores.
 
 #. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
-   Ensure that you build with Release option and that DPRINTs are disabled.
-#. Create a plot showing relationship between speedup and number of cores used.
-   The speedup should be expressed relative to performance of single core implementation from Lab 1.
+   Ensure that you build with the Release option and that DPRINTs are disabled.
+#. Create a plot showing the relationship between speedup and the number of cores used.
+   The speedup should be expressed relative to the performance of the single core implementation from Lab 1.
 
 **Important Note**
 
@@ -321,22 +322,22 @@ Data Reuse in Multi Core Matrix Multiplication
 Motivation
 ==========
 
-In the basic multi-core implementation, each core computes one output tile at a time.
+In the basic multi core implementation, each core computes one output tile at a time.
 For each output tile ``C[i,j]``, the reader kernel fetches **all** tiles along the
 inner dimension ``K`` for both the corresponding row of ``A`` and column of ``B``.
-This approach is inefficient because tiles from input matrices are re-fetched
+This is inefficient because tiles from the input matrices are fetched
 from DRAM multiple times.
 
 Consider a concrete example with matrices ``A`` and ``B`` of shape ``4x4`` tiles, producing
 the resulting matrix ``C`` of shape ``4x4`` tiles. To compute output tiles ``C[0,0]`` and ``C[0,1]``:
 
-+----------------+------------------------------------------------+------------------------------------------------+
-| Output Tile    | Tiles Read from ``A``                          | Tiles Read from ``B``                          |
-+================+================================================+================================================+
-| C[0,0]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,0]``, ``B[1,0]``, ``B[2,0]``, ``B[3,0]`` |
-+----------------+------------------------------------------------+------------------------------------------------+
-| C[0,1]         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,1]``, ``B[1,1]``, ``B[2,1]``, ``B[3,1]`` |
-+----------------+------------------------------------------------+------------------------------------------------+
++--------------------+------------------------------------------------+------------------------------------------------+
+| Output Tile        | Tiles Read from ``A``                          | Tiles Read from ``B``                          |
++====================+================================================+================================================+
+| ``C[0,0]``         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,0]``, ``B[1,0]``, ``B[2,0]``, ``B[3,0]`` |
++--------------------+------------------------------------------------+------------------------------------------------+
+| ``C[0,1]``         | ``A[0,0]``, ``A[0,1]``, ``A[0,2]``, ``A[0,3]`` | ``B[0,1]``, ``B[1,1]``, ``B[2,1]``, ``B[3,1]`` |
++--------------------+------------------------------------------------+------------------------------------------------+
 
 Notice that the entire row ``0`` of ``A`` is read twice; once for ``C[0,0]`` and once for ``C[0,1]``.
 In general, for an ``MxK`` matrix multiplied by a ``KxN`` matrix, producing ``MxN`` output tiles:
@@ -383,21 +384,21 @@ Alternatively, we could pad the matrix dimensions to make them a multiple of the
 
 If the program is compute-bound, we may choose to:
 
-* Not use blocking if lower number of cores causes performance degradation because data reuse
+* Not use blocking if a lower number of cores causes performance degradation because data reuse
   is not beneficial.
-* Add more cores across one or both dimensions of the core grid, if higher number of cores
+* Add more cores across one or both dimensions of the core grid, if a higher number of cores
   is available and will divide the number of tiles evenly.
 
 
 Limiting On-Chip Memory Usage
 =============================
 
-Assigning rectangular blocks to output tiles doesn't address the problem that bringing, for example,
+Assigning rectangular blocks of output tiles to cores doesn't address the problem that bringing, for example,
 an entire row of ``A`` into on-chip SRAM may not be possible due to limited on-chip memory.
 In fact, for data reuse to be fully effective with blocking, we need multiple rows of input tiles
 in on-chip memory at the same time. The solution is to break down the ``K`` dimension into smaller chunks
 of tiles and compute **partial results** for each chunk, which require only a subset of the input
-tiles that is small enough to fit into on-chip SRAM.
+tiles that is small enough to fit in on-chip SRAM.
 Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
 avoid performance degradation due to repeated accesses to off-chip DRAM.
 
@@ -434,7 +435,7 @@ To compute all tiles in ``C_block``, the core needs the matching tiles from ``A`
 
   - ``Kt x N_block_tiles`` block of tiles (call this ``B_block``).
 
-Taken together, ``A_block`` and ``B_block`` are typically too large to fit into on‑chip SRAM.
+Taken together, ``A_block`` and ``B_block`` are typically too large to fit in on-chip SRAM.
 To fix this, we split the ``Kt`` dimension into smaller K-blocks of size ``K_block_tiles``,
 such that ``num_k_blocks = Kt / K_block_tiles``.
 For each K-block index ``b`` in range ``0 .. num_k_blocks - 1`` we define:
@@ -460,7 +461,7 @@ As a result, ``M_block_tiles = 3`` and ``N_block_tiles = 3``, which means ``C_bl
 One of the ``C_block`` tiles is highlighted in purple in the output matrix ``C``.
 The corresponding ``A_block`` and ``B_block`` tiles are highlighted in shades of purple in the
 input matrices ``A`` and ``B``. If we assume that ``A_block`` and ``B_block`` are too large
-to fit into on-chip SRAM, we split the ``Kt`` dimension into ``K_block_tiles`` = ``2``, which means
+to fit in on-chip SRAM, we split the ``Kt`` dimension into ``K_block_tiles`` = ``2``, which means
 there are ``num_k_blocks`` = ``3`` K-blocks. Therefore:
 
 * ``A_slab(b)`` has shape ``3x2`` tiles, and
@@ -498,13 +499,13 @@ A key observation is that the partial result equation needs only tiles from the 
 to compute the partial result for ``C[i][j](b)``, which is exactly what ``A_slab(b)`` and ``B_slab(b)``
 contain. Considering the example in Figure 4, this means that only the slabs with the same shade of
 purple need to be in on-chip SRAM at the same time. This makes intuitive sense, since matrix multiplication
-involves multiplying only those elements whose ``K`` indices match.
+involves multiplying elements with matching ``K`` indices.
 
 To get the final result, we need to add partial results for all K-blocks:
 
 .. figure:: images/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
-   :width: 200
+   :width: 210
    :align: center
 
 
@@ -514,7 +515,7 @@ in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
 If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
 compute the partial result for each tile, which would not be conducive to data reuse.
 Instead, we iterate over K-blocks in the outer loop, bring ``A_slab(b)`` and ``B_slab(b)``
-into on-chip SRAM, and then compute contribution of this K-block to all ``C[i][j]`` tiles
+into on-chip SRAM, and then compute the contribution of this K-block to all ``C[i][j]`` tiles
 in ``C_block``.
 Given that matrix multiplication is a linear transformation, such loop interchange does not
 change the result (ignoring floating-point considerations), as discussed in Lab 1.
@@ -540,10 +541,11 @@ The overall approach can be summarized by the following pseudo-code for a comput
            for (j in 0 .. N_block_tiles - 1) { // For every column in C_block
                // Get the current accumulator tile for C(i,j)
                acc_tile = zero_tile()
-               if (b != 0)
+               if (b != 0) {
                   // Middle or last K-block: partial result for C(i, j) already exists.
                   // Load the partial result built so far
                   acc_tile = partial_C_tile(i, j)
+               }
 
                // Compute partial result for block b and add it to acc_tile
                for (k_local in 0 .. K_block_tiles - 1) { // Iterate over K dimension of the K-block
@@ -556,13 +558,14 @@ The overall approach can be summarized by the following pseudo-code for a comput
                }
 
                // Store updated result for C(i,j)
-               if (b == num_k_blocks - 1)
+               if (b == num_k_blocks - 1) {
                   // Last K-block: acc_tile has the final result for C(i,j)
                   // Store it to the final destination.
                   final_C_tile(i, j) = acc_tile
-               else
+               } else {
                   // Not last K-block: acc_tile is a partial result to be reused later
                   partial_C_tile(i, j) = acc_tile
+               }
            }
        }
    }
@@ -573,22 +576,23 @@ Data Reuse Evaluation
 
 Consider the example in Figure 4, where ``Mt = 9``, ``Nt = 9``, ``Kt = 6``,
 and the core grid is ``3x3``.
-With basic (non-blocked) approach, each core computes one output tile at a time.
+With the basic (non-blocked) approach, each core computes one output tile at a time.
 For each output tile ``C[i][j]``, the core reads the full corresponding row of tiles
 of ``A`` and the full corresponding column of tiles of ``B`` from DRAM.
 
 For each output tile ``C[i][j]`` we need ``Kt = 6`` tiles from ``A`` and ``Kt = 6`` tiles from ``B``.
-Given that basic multi-core approach doesn't involve any reuse, such reads are repeated
+Given that the basic multi core approach doesn't involve any reuse, such reads are repeated
 for every one of the ``Mt * Nt = 81`` output tiles in ``C``, resulting in
 ``Mt * Nt * 2 * Kt = 81 * 2 * 6 = 972`` tile reads.
 
 With the blocking strategy and K-blocking described earlier, the core computes an
 entire ``3x3`` ``C_block`` at a time and splits the inner dimension into K-blocks.
-For any given core, every tile of ``A`` and ``B`` will be read exactly once.
-Since each core computes only a subset of the output tiles in ``C_block``, it needs
+For any given core, every tile of ``A`` and ``B`` that it needs for its own ``C_block``
+will be read exactly once.
+Since each core computes only the output tiles in its own ``C_block``, it needs
 to read only ``M_block_tiles * Kt`` tiles from ``A`` and ``Kt * N_block_tiles`` tiles from ``B``,
-which for this example means 18 tiles from ``A`` and 18 tiles from ``B``.
-Each of the ``num_cores = 9`` cores read this many tiles for a total of
+which for this example means ``18`` tiles from ``A`` and ``18`` tiles from ``B``.
+Each of the ``num_cores = 9`` cores reads this many tiles, for a total of
 ``num_cores * (M_block_tiles * Kt + Kt * N_block_tiles) = 9 * (3 * 6 + 6 * 3) = 324`` tile reads.
 
 Thus the blocking strategy reduces the total number of tile reads by a factor of ``3``
@@ -600,7 +604,7 @@ memory-bound.
 Blocked Matrix Multiplication in TT-Metalium
 ============================================
 
-Most of the code needed for blocked matrix multiplication is similar to the basic multi-core
+Most of the code needed for blocked matrix multiplication is similar to the basic multi core
 implementation from Exercise 1.
 The key new addition is the introduction of an intermediate circular buffer (CB) to hold partial results.
 As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used
@@ -619,9 +623,9 @@ In the context of blocked matrix multiplication, this results in the following p
 * If this is not the last K-block, write the updated partial results back to the intermediate CB
   (again via ``reserve_back`` / ``pack_tile`` / ``push_back``) to be used in the next iteration.
 * If this is the last K-block, write the fully accumulated tiles into a separate output CB
-  (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for writer kernel to consume.
+  (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for the writer kernel to consume.
 
-As can be seen, the CB holding partial results is not treated as raw memory array; it is still a FIFO queue.
+As can be seen, the CB holding partial results is not treated as a raw memory array; it is still a FIFO queue.
 What changes is who consumes and produces that queue over time: the compute kernel both produces
 and later consumes tiles from the same CB, using the standard reserve/push/wait/pop protocol
 to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
@@ -631,17 +635,17 @@ final outputs.
 Exercise 2: Multi Core Matrix Multiplication with Data Reuse
 ============================================================
 
-In this exercise, you will implement a blocked multi-core matrix multiplication that
-implements data reuse on the device, based on the blocking and intermediate CB ideas
+In this exercise, you will implement a blocked multi core matrix multiplication with
+data reuse on the device, based on the blocking and intermediate CB ideas
 described above.
-You will compare performance to the multi-core implementation with equivalent
+You will compare performance to the multi core implementation with equivalent
 core grid sizes from Exercise 1.
 
 Steps
 -----
 
 #. Create a new program for data reuse.
-   Make a copy of your multi-core matrix multiplication program from Exercise 1,
+   Make a copy of your multi core matrix multiplication program from Exercise 1,
    then extend it to add blocking variables and an intermediate CB, as described
    in the following steps.
    Make sure matrix and tile sizes are parameterizable and set to the same values
@@ -650,9 +654,9 @@ Steps
    As before, you can assume that ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``,
    and ``K`` are divisible by ``TILE_HEIGHT``.
 
-#. Set fixed value for the ``K_block_tiles`` parameter.
+#. Add a parameter for ``K_block_tiles``.
    This parameter needs to be chosen so it divides ``Kt`` evenly.
-   Given that tile size is fixed to ``32x32`` on all Tenstorrent architectures,
+   Given that the tile size is fixed to ``32x32`` on all Tenstorrent architectures,
    as of the time of this writing, and given the matrix sizes, ``Kt = 320 / 32 = 10`` for this lab.
    Given this, the only meaningful values for ``K_block_tiles`` are ``2`` or ``5``.
    A lower value of ``K_block_tiles`` allows for larger matrix sizes to fit into the
@@ -661,7 +665,7 @@ Steps
    Should the tile size change in the future, the value of ``K_block_tiles`` may need to
    be adjusted accordingly.
 
-#. Assume core grid is parameterizable, then determine appropriate values for other
+#. Make the core grid parameterizable, then determine appropriate values for the other
    blocking variables, based on the core grid size and the matrix sizes.
    Also assume that the number of tiles divides evenly into the number of cores in the
    corresponding dimension.
@@ -669,9 +673,9 @@ Steps
 #. Size circular buffers based on the blocking variables, keeping in mind the following:
 
    - Input CBs need to store full ``A_slab`` and ``B_slab`` and should use double buffering.
-   - Output CB needs to store full ``C_block``, and should not use double buffering.
+   - Output CB needs to store the full ``C_block``, and should not use double buffering.
      Since each core computes a whole ``C_block``, there is no need to double buffer.
-   - Intermediate CB needs to store the partial results, whose size is the same as full ``C_block``.
+   - Intermediate CB needs to store the partial results, whose size is the same as a full ``C_block``.
      Since the same kernel will both produce and consume the partial results, double buffering
      would not provide any benefit.
 
@@ -702,7 +706,7 @@ Steps
        ``tt_metal/include/compute_kernel_api/tile_move_copy.h`` copies a tile from the intermediate
        CB to the destination register array at the specified index.
      - Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
-       to set up the Tensix engine for copy operation.
+       to set up the Tensix Engine for the copy operation.
      - Since the compute kernel code will alternate between copying data and multiplying tiles,
        after the copy operation completes, we need to call ``mm_init_short(in0_cb_id, in1_cb_id)``
        to set up the Tensix Engine for multiplication again.
@@ -715,16 +719,17 @@ Steps
      - For optimal performance, **make sure to call these initialization functions only when required**.
    * Remember that an efficient way to initialize all the tiles in the destination register array
      to ``0`` is to call ``tile_regs_acquire``.
-   * Remember that ``tile_regs_acquire`` does more than just set destination register array to 0.
+   * Remember that ``tile_regs_acquire`` does more than just set the destination register array to ``0``.
      As such, it must always be called before using the destination register.
      Specifically, it must be called before calling ``copy_tile``, but does **not** need to be called
      between a call to ``copy_tile`` and a call to ``matmul_tiles`` (doing so would be destructive,
      because it would overwrite the data that was just copied into the destination register array).
    * When writing to or reading from the intermediate CBs, you could wait/reserve the
      number of tiles for the whole block of partial results at once. However, a simpler option is
-     to just push and pop one tile at a time. This is possible because the i, j loop goes in
-     the same order for every block.
-     Don't forget to call ``cb_pop_front`` for the intermediate CB at appropriate time to
+     to just push and pop one tile at a time. This is possible because the ``i, j`` loop nest
+     iterates over indices in the same order for every block.
+
+     Don't forget to call ``cb_pop_front`` for the intermediate CB at the appropriate time to
      free up space for the next iteration.
    * Similar reasoning applies to the output circular buffer. However, given that the output CB is written by the
      compute kernel and read by the writer kernel, it is better for the compute kernel to push one tile at a time
@@ -736,7 +741,7 @@ Steps
 #. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels
    on each core.
    Note that in this case it is not required to use the ``split_work_to_cores`` function,
-   because we are making a simplifying assumption that number of tiles divides evenly into the
+   because we are making a simplifying assumption that the number of tiles divides evenly into the
    number of cores in the appropriate dimension. You can simply iterate over the ``x`` and ``y``
    dimensions of the core grid, construct ``CoreCoord`` for each coordinate and set the runtime
    arguments for the corresponding core.
@@ -749,7 +754,7 @@ Steps
    * ``5x5`` core grid
    * ``10x10`` core grid
 
-   Compare the firmware time of the data reuse implementation against the basic multi-core implementation
+   Compare the firmware time of the data reuse implementation against the basic multi core implementation
    with equivalent core grid sizes from Exercise 1.
 
 #. Repeat the previous steps for the other value of ``K_block_tiles`` (``5``).
@@ -764,17 +769,17 @@ accordingly to ensure that the number of tiles divides evenly into the number of
 Potential Additional Optimizations
 **********************************
 
-In this lab you explored basic optimizations to implement data reuse in a multi-core matrix multiplication program.
+In this lab, you explored basic optimizations to implement data reuse in a multi core matrix multiplication program.
 There are many other ways in which the code could be further optimized. Here we list some examples:
 
-#. **Use multiple destination registers in the destination register array.**
-   As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-   While so far we only used a single tile in the destination register array, the TT-Metalium
-   programming model exposes the array holding up to 8 tiles of data.
+#. **Use Multiple Destination Registers in the Destination Register Array**
+   As discussed in Lab 1, the destination register array in the Tensix core can hold multiple tiles of data.
+   So far, we have only used a single tile in the destination register array, but the TT-Metalium
+   programming model exposes the array capable of holding up to eight tiles of data.
    We could leverage this extra storage to keep multiple output tiles active at once.
    By doing this, we could amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
    data is packed into CBs. Conceptually, instead of computing a single output tile, packing it, and then moving on
-   to the next, we compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
+   to the next, we compute a small rectangular patch (up to eight tiles) of the output in one shot while the
    corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
    we pack all of its tiles out together in a batch.
    This better matches the hardware's vectorization and register file structure and typically provides a throughput improvement.
@@ -799,7 +804,7 @@ There are many other ways in which the code could be further optimized. Here we 
 #. **Sharing Memory for Output and Intermediate CBs**
    Given that the amount of on-chip SRAM is limited, TT-Metalium CBs support sharing the same memory region for multiple CBs.
    We can exploit this by observing that partial results and output results are never "live" at the same time;
-   we always finish consuming one before we start writing the other.
+   we always finish consuming one before we start writing to the other.
    Dedicating a separate region for partial results means less room for inputs or larger tiles.
 
    In practice, sharing memory between the output and intermediate CBs can be achieved by configuring
@@ -821,10 +826,10 @@ There are many other ways in which the code could be further optimized. Here we 
 Conclusion
 **********
 
-In this lab you extended your understanding of matrix multiplication on Tenstorrent devices beyond a single core.
+In this lab, you extended your understanding of matrix multiplication on Tenstorrent devices beyond a single core.
 You saw how:
 
-* The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully
+* The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi core** setting by carefully
   distributing output tiles among cores.
 
 * TT-Metalium's static parallelism model requires you to **explicitly choose which cores participate** and how many tiles
@@ -833,5 +838,5 @@ You saw how:
 * Introducing **data reuse** through blocking and intermediate CBs allows partial results to remain on-chip across multiple passes
   over the inner dimension, reducing traffic to device memory and often improving performance.
 
-The concepts introduced here, multi-core work distribution and data reuse, are fundamental when scaling workloads on Tenstorrent devices.
+The concepts introduced here, multi core work distribution and data reuse, are fundamental when scaling workloads on Tenstorrent devices.
 They also provide a foundation for more advanced topics.
