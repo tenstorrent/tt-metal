@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using namespace ttnn::operations::ccl::common;
 
