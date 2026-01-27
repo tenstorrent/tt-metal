@@ -64,7 +64,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     const auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& groups = distribution_spec.core_groups();
     uint32_t num_compute_cores = grid.num_cores();
-    const auto compute_core_range = grid;
+    const auto& compute_core_range = grid;
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
     uint32_t num_blocks_per_shard_plane = input_shard_height / tile_height;
