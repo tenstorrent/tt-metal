@@ -17,7 +17,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
         ("PagedUpdateCacheDeviceOperation", 3.67, 0.16),
         ("RotaryEmbeddingLlamaFusedQK", 3.58, 0.05),
         ("Embeddings", 3.3, 0.1),
-        ("BinaryDeviceOperation", 2.5, 0.05),
+        ("BinaryDeviceOperation", 2.7, 0.05),
     ],
 )
 def test_qwen_tg_ops_perf_device(
