@@ -183,13 +183,14 @@ void kernel_main() {
     [[maybe_unused]] uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);            // 3
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                              // 4
     [[maybe_unused]] uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);  // 5
-    uint32_t matmul_chunk_input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 6
-    [[maybe_unused]] bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);           // 7
-    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                            // 8
-    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                              // 9
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                                   // 10
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                                     // 11
-    [[maybe_unused]] uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                  // 12
+    uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                                 // 6
+    uint32_t matmul_chunk_input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 7
+    [[maybe_unused]] bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);           // 8
+    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                            // 9
+    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                              // 10
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                                   // 11
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                                     // 12
+    [[maybe_unused]] uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                  // 13
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -198,6 +199,7 @@ void kernel_main() {
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     // expert_activation_output_args not needed by writer
+    // e_t_output_args not needed by writer
 
     const auto output_tensor_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
 

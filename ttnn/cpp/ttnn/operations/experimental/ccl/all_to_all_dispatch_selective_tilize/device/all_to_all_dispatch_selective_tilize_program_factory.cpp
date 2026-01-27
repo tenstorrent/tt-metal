@@ -38,13 +38,13 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 
 // T, MM, T + MM
 std::tuple<
-    std::vector<CoreCoord>,
-    std::vector<CoreCoord>,
-    CoreRangeSet,
-    CoreRangeSet,
-    CoreRangeSet,
-    CoreRange,
-    CoreRange>
+    std::vector<CoreCoord>,  // T cores
+    std::vector<CoreCoord>,  // MM cores
+    CoreRangeSet,            // T CoreRangeSet
+    CoreRangeSet,            // MM CoreRangeSet
+    CoreRangeSet,            // T + MM CoreRangeSet
+    CoreRange,               // T bounding box
+    CoreRange>               // MM bounding box
 get_cores(MeshDevice* mesh_device) {
     const std::vector<CoreCoord> t_cores = {CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3)};
     const std::vector<CoreCoord> mm_cores =
@@ -109,6 +109,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     const auto& output_tensor = tensor_return_value[0];
     const auto& expert_activation_output_tensor = tensor_return_value[1];
+    const auto& e_t_output_tensor = tensor_return_value[2];
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -146,6 +147,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto mapping_page_size = detail::get_page_size_st(mapping_tensor);
     // auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
     auto output_page_size = detail::get_page_size_st(output_tensor);
+    auto expert_activation_output_page_size = detail::get_page_size_st(expert_activation_output_tensor);
+    auto e_t_output_page_size = detail::get_page_size_st(e_t_output_tensor);
 
     auto input_pages = detail::get_num_pages_st(input_tensor);
     auto indices_pages = detail::get_num_pages_st(indices_tensor);
@@ -325,8 +328,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_t_buffer_id,
         program,
         t_core_range_set,
-        (tokens + 1) * e_t_entry_size,  // (total tokens + -1 terminator) * 16B per entry
-        experts_per_device,             // number of experts on the device
+        e_t_output_page_size,  // (tokens + 1) * e_t_entry_size,  // (total tokens + -1 terminator) * 16B per entry
+        experts_per_device,    // number of experts on the device
         tt::DataFormat::UInt32);
 
     // Assume indices tensor is sharded in L1
@@ -502,6 +505,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"indices_page_size", indices_page_size},
         {"mapping_page_size", mapping_page_size},
         {"output_page_size", output_page_size},
+        {"expert_activation_output_page_size", expert_activation_output_page_size},
+        {"e_t_output_page_size", e_t_output_page_size},
 
         {"num_devices", num_devices},
         {"hidden_size", hidden_size},
@@ -532,7 +537,6 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tokens_per_tilizer_core", tokens / t_num_cores},
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
-        {"expert_activation_output_page_size", detail::get_page_size_st(expert_activation_output_tensor)},
 
         // T multicast coordinates
         {"tilizer_mcast_start_x", (uint32_t)t_mcast_start_physical.x},
@@ -564,6 +568,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_activation_output_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(e_t_output_tensor.buffer()).append_to(compile_time_args);
 
     tt::tt_metal::KernelHandle selective_tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -606,29 +611,30 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         mapping_tensor.buffer()->address(),                   // 3
         output_tensor.buffer()->address(),                    // 4
         expert_activation_output_tensor.buffer()->address(),  // 5
+        e_t_output_tensor.buffer()->address(),                // 6
         expert_activation_output_tensor.buffer()
-            ->address(),  // 6  // TODO: (GR) placeholder for matmul_chunk_input_tensor
+            ->address(),  // 7  // TODO: (GR) placeholder for matmul_chunk_input_tensor
     };
 
     [[maybe_unused]] uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 7: is_drain_tilizer_core
+    selective_tilize_runtime_args.push_back(0);  // 8: is_drain_tilizer_core
 
     // Add work split runtime args for tilizer cores
     uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 8: tilizer_subtoken_offset
+    selective_tilize_runtime_args.push_back(0);  // 9: tilizer_subtoken_offset
     uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 9: tilizer_subtoken_size
+    selective_tilize_runtime_args.push_back(0);  // 10: tilizer_subtoken_size
 
     // Token range for parallel metadata processing across tilizer cores
     uint32_t core_token_start_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 10: core_token_start
+    selective_tilize_runtime_args.push_back(0);  // 11: core_token_start
     uint32_t core_token_end_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 11: core_token_end
+    selective_tilize_runtime_args.push_back(0);  // 12: core_token_end
     uint32_t tilizer_core_idx_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 12: tilizer_core_idx (0 = drain, 1-3 = non-drain)
+    selective_tilize_runtime_args.push_back(0);  // 13: tilizer_core_idx (0 = drain, 1-3 = non-drain)
 
     // NOC coordinates for all tilizer cores (for cross-core communication)
-    // Runtime args starting at index 11: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
+    // Runtime args starting at index 14: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
     for (uint32_t i = 0; i < t_num_cores; i++) {
         selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).x);
         selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).y);

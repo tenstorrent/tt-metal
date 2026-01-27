@@ -62,6 +62,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
 
     ttnn::MemoryConfig dram_memory_config =
         ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    ttnn::MemoryConfig l1_memory_config =
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
 
     // Output 0: Tilized output for matmul
     auto tilized_output_spec = TensorSpec(
@@ -87,16 +89,29 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             dram_memory_config));
 
-    return std::array<TensorSpec, 2>{tilized_output_spec, expert_activation_spec};
+    // Token indices, 1 page per expert per device
+    // each index is at a 16B offset due to NoC DMA restrictions, 16B = 4 UINT32 elements
+    // (tokens + 1), 1 extra element per page for -1 terminator
+    uint32_t page_width = (total_tokens + 1) * 4;
+    auto e_t_shape = ttnn::Shape({experts_per_device, page_width});
+    auto e_t_spec = TensorSpec(
+        Shape(e_t_shape),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            l1_memory_config));
+
+    return std::array<TensorSpec, 3>{tilized_output_spec, expert_activation_spec, e_t_spec};
 }
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    return std::array<Tensor, 2>{
+    return std::array<Tensor, 3>{
         create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[1], tensor_args.input_tensor.device())};
+        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),
+        create_device_tensor(output_specs[2], tensor_args.input_tensor.device())};
 }
 
 std::tuple<

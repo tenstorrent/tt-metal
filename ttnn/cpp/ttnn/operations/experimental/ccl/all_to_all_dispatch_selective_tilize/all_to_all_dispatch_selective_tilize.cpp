@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchSelectiveTilize::invoke(
+std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,

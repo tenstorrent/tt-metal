@@ -33,9 +33,9 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const Tensor expert_mapping_tensor;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = std::array<Tensor, 3>;
 
     struct AllToAllDispatchSelectiveTilizeSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

@@ -429,6 +429,9 @@ void kernel_main() {
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t mapping_page_size = get_named_compile_time_arg_val("mapping_page_size");
     constexpr uint32_t output_page_size = get_named_compile_time_arg_val("output_page_size");
+    constexpr uint32_t expert_activation_output_page_size =
+        get_named_compile_time_arg_val("expert_activation_output_page_size");
+    constexpr uint32_t e_t_output_page_size = get_named_compile_time_arg_val("e_t_output_page_size");
 
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
@@ -506,14 +509,15 @@ void kernel_main() {
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 3
     [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4 (unused by reader)
     uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);        // 5
+    uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                      // 6
     [[maybe_unused]] uint32_t matmul_chunk_input_tensor_address =
-        get_arg_val<uint32_t>(rt_args_idx++);                                 // 6 (unused by reader)
-    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 7
-    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 8
-    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);    // 9
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);         // 10
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);           // 11
-    uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 12
+        get_arg_val<uint32_t>(rt_args_idx++);                                 // 7 (unused by reader)
+    bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 8
+    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 9
+    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);    // 10
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);         // 11
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);           // 12
+    uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 13
 
     // NOC coordinates for all tilizer cores (for cross-core communication)
     // Runtime args 11+: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
@@ -531,18 +535,18 @@ void kernel_main() {
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto expert_activation_output_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-
-    constexpr uint32_t expert_activation_output_page_size =
-        get_named_compile_time_arg_val("expert_activation_output_page_size");
+    constexpr auto e_t_output_args =
+        TensorAccessorArgs<expert_activation_output_args.next_compile_time_args_offset()>();
 
     const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
-    const auto expert_activation_output_addr_gen = TensorAccessor(
-        expert_activation_output_args, expert_activation_output_address, expert_activation_output_page_size);
     const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, indices_page_size);
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
     const auto output_tensor_addr_gen =
         TensorAccessor(output_args, 0, output_page_size);  // output address not needed for reader
+    const auto expert_activation_output_addr_gen = TensorAccessor(
+        expert_activation_output_args, expert_activation_output_address, expert_activation_output_page_size);
+    const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address, e_t_output_page_size);
 
     // Read the mapping tensor page for this device (linearized_mesh_coord)
     // This gives us the expert -> device mapping from this device's perspective
@@ -1059,7 +1063,19 @@ void kernel_main() {
         }
     }
 
-    // Explicit write barrier for expert_activation DRAM write (drain core only issued this write)
+    // write out e_t_output_tensor
+    if (is_drain_tilizer_core) {
+        constexpr uint32_t one_page = 1;
+        for (uint32_t e = 0; e < experts_per_device; e++) {
+            cb_wait_front(e_t_buffer_id, one_page);
+            uint32_t l1_read_addr = get_read_ptr(e_t_buffer_id);
+            noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
+            noc_async_writes_flushed();
+            cb_pop_front(e_t_buffer_id, one_page);
+        }
+    }
+
+    // Explicit write barrier for expert_activation DRAM write and e_t L1 write (drain core only issued these writes)
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
