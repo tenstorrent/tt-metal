@@ -522,7 +522,7 @@ struct RouterStateManager {
 };
 
 struct routing_l1_info_t {
-    RouterStateManager state_manager;  // 32 bytes
+    RouterStateManager state_manager{};  // 32 bytes
     uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
     uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
