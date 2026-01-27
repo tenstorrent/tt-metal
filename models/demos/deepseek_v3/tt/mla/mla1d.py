@@ -1055,12 +1055,13 @@ class MLA1D(AbstractModule):
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
+        # v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
 
         # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
         # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
+            assert False, "Chunking not supported for prefill atm, missing NLPConcantHeads"
             num_heads_local = v_out.shape[2]
             v_head_dim = v_out.shape[3]
             # Use ceiling division instead of even_int_div to handle non-multiples of 8192
@@ -1096,14 +1097,8 @@ class MLA1D(AbstractModule):
                 out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
         else:
             # Non-chunked path for shorter sequences
-            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads_local * v_head_dim))
-            # v_out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            #     v_out,
-            #     num_heads=num_heads_local,
-            #     num_kv_heads=0,
-            #     transpose_k_heads=False,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # )
+            # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads_local * v_head_dim))
+            v_out = ttnn.experimental.nlp_concat_heads(v_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             v_out = ttnn.experimental.all_gather_async(
                 v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
