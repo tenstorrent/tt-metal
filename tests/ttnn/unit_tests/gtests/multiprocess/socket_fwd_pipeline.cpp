@@ -218,7 +218,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - During steady state, this represents the average pipeline stage throughput.
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
-    constexpr uint32_t NUM_ITERS = 1000000;
+    // constexpr uint32_t NUM_ITERS = 1000000;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const distributed::multihost::Rank pipeline_start_rank{0};
@@ -226,6 +226,16 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 
     const auto logical_coord = CoreCoord(0, 0);
     const uint32_t socket_fifo_size = XFER_SIZE * 16;
+
+    constexpr uint32_t credit_addr = 1565632;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::vector<uint64_t> zeros = std::vector<uint64_t>(200, 0);
+
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+        auto device_id = mesh_device_->get_device(coord)->id();
+        auto core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        cluster.write_core(zeros.data(), sizeof(uint64_t) * 200, tt_cxy_pair(device_id, core_coord), credit_addr);
+    }
 
     auto physical_system_descriptor = create_physical_system_descriptor();
     auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
@@ -262,13 +272,11 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         distributed_context->barrier();
     };
 
-    uint64_t start_time = 0;
-    uint64_t end_time = 0;
-
     const bool is_pipeline_start = (*distributed_context->rank() == *pipeline_start_rank);
     const bool is_pipeline_end = (*distributed_context->rank() == *pipeline_end_rank);
     const bool is_intermediate = !is_pipeline_start && !is_pipeline_end;
 
+    distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(0, 0);
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
@@ -336,7 +344,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
         } else {
             // Pipeline end
-            distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
+            end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
             std::cout << "Receive on: " << mesh_device_->get_device(my_recv)->id()
                       << " to: " << mesh_device_->get_device(end_coord)->id() << std::endl;
             std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, end_coord);
@@ -354,11 +362,6 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         barrier();
 
         // Timed iteration
-        if (is_pipeline_end) {
-            start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                             std::chrono::high_resolution_clock::now().time_since_epoch())
-                             .count();
-        }
         ttnn::experimental::socket_forward(output_tensor, recv_socket, intermed_send, XFER_SIZE);
         if (is_intermediate) {
             ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
@@ -369,12 +372,15 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     barrier();
 
     if (is_pipeline_end) {
-        end_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::high_resolution_clock::now().time_since_epoch())
-                       .count();
-        std::cout << "Time taken to forward: " << NUM_ITERS << " Packets: " << end_time - start_time << " us"
-                  << std::endl;
-        std::cout << "Time per iteration: " << (end_time - start_time) / NUM_ITERS << " us" << std::endl;
+        auto end_device_id = mesh_device_->get_device(end_coord)->id();
+        auto end_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        std::vector<uint64_t> latencies = std::vector<uint64_t>(200, 0);
+        uint32_t base_addr = 1565632;
+        cluster.read_core(
+            latencies.data(), 200 * sizeof(uint64_t), tt_cxy_pair(end_device_id, end_core_coord), base_addr);
+        for (auto latency : latencies) {
+            std::cout << latency << std::endl;
+        }
     }
 }
 

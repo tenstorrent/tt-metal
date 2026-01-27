@@ -87,7 +87,39 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<false>(
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
-    for (int i = 0; i < 750000000; i++) {
+    constexpr uint32_t fwd_credit_addr = 1565632;
+    constexpr uint32_t bwd_credit_addr = 1565632 + 64;
+
+    uint64_t downstream_credit_addr =
+        get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, fwd_credit_addr);
+    uint64_t upstream_credit_addr =
+        get_noc_addr(recv_socket.upstream_noc_x, recv_socket.upstream_noc_y, bwd_credit_addr);
+    volatile tt_l1_ptr uint32_t* fwd_credit_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_credit_addr);
+    volatile tt_l1_ptr uint32_t* bwd_credit_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bwd_credit_addr);
+
+    // Wait for ack from upstream (initiated from the sender)
+    while (*fwd_credit_ptr == 0) {
+        invalidate_l1_cache();
+    }
+    // Send ack downstream
+    downstream_data_packet_header_addr->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{downstream_credit_addr, 1});
+    downstream_fabric_connection.wait_for_empty_write_slot();
+    downstream_fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+    // Wait from downstream (initiated from the receiver)
+    while (*bwd_credit_ptr == 0) {
+        invalidate_l1_cache();
+    }
+    // Send ack upstream
+    upstream_socket_packet_header_addr->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{upstream_credit_addr, 1});
+    upstream_fabric_connection.wait_for_empty_write_slot();
+    upstream_fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)upstream_socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+    for (int i = 0; i < 200; i++) {
         socket_reserve_pages(send_socket, 1);
         socket_wait_for_pages(recv_socket, 1);
         auto l1_read_addr = recv_socket.read_ptr;

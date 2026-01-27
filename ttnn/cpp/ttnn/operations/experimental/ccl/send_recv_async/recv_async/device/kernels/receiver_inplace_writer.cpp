@@ -27,7 +27,7 @@ FORCE_INLINE void notify_sender(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr,
     uint64_t upstream_bytes_acked_noc_addr) {
-    noc_async_writes_flushed();
+    // noc_async_writes_flushed();
     fabric_socket_notify_sender_stateful(
         receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
 }
@@ -61,29 +61,42 @@ void kernel_main() {
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
         receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, receiver_socket.upstream_bytes_acked_addr);
 
-    for (int i = 0; i < 750000000; i++) {
-        auto noc_write_addr = output_addr_gen.get_noc_addr(0);
+    constexpr uint32_t fwd_credit_addr = 1565632;
+    constexpr uint32_t bwd_credit_addr = 1565632 + 64;
+
+    volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_credit_addr);
+    uint64_t remote_credit_addr =
+        get_noc_addr(receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, bwd_credit_addr);
+
+    while (*credit_addr == 0) {
+        invalidate_l1_cache();
+    }
+
+    socket_packet_header_addr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+    auto noc_write_addr = output_addr_gen.get_noc_addr(0);
+    uint32_t measurement_addr = 1565632;
+    for (int i = 0; i < 200; i++) {
+        uint64_t start_timestamp = get_timestamp();
         socket_wait_for_pages(receiver_socket, 1);
-        // uint32_t l1_read_addr = receiver_socket.read_ptr;
-        // uint32_t val = 0;
-        // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
-        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
-        //         while (true);
-        //     }
-        //     val++;
-        // }
-        noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
+        uint64_t end_timestamp = get_timestamp();
+        // noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
         socket_pop_pages(receiver_socket, 1);
         if (i % num_pages_per_ack == 0) {
             notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
             ack_sent = true;
         }
-    }
 
+        uint64_t latency = end_timestamp - start_timestamp;
+        *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
+        measurement_addr += sizeof(uint64_t);
+    }
     if (!ack_sent) {
         notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
     }
-
     update_socket_config(receiver_socket);
     fabric_connection.close();
 }

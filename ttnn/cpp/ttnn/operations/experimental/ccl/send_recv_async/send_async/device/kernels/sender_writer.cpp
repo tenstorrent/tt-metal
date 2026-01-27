@@ -73,7 +73,23 @@ void kernel_main() {
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
-    for (int i = 0; i < 750000000; i++) {
+
+    constexpr uint32_t fwd_credit_addr = 1565632;
+    constexpr uint32_t bwd_credit_addr = 1565632 + 64;
+
+    uint64_t remote_credit_addr =
+        get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, fwd_credit_addr);
+    volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bwd_credit_addr);
+    data_packet_header_addr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{remote_credit_addr, 1});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+    while (*credit_addr == 0) {
+        invalidate_l1_cache();
+    }
+
+    for (int i = 0; i < 200; i++) {
         socket_reserve_pages(sender_socket, 1);
         cb_wait_front(data_cb_id, 1);
 
