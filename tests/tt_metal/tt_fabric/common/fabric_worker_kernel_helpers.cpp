@@ -60,7 +60,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
     // Get source fabric node ID from the mesh device (use first device at coord 0,0)
     // tt_metal::distributed::MeshCoordinate src_coord(0, 0);
-    FabricNodeId src_fabric_node(MeshId{0}, 0);  // mesh_id=1, device_id=0
+    FabricNodeId src_fabric_node(MeshId{0}, 0);  // mesh_id=0, device_id=0
     // FabricNodeId src_fabric_node = device->get_fabric_node_id(src_coord);
 
     // Target core on remote chip for traffic destination
