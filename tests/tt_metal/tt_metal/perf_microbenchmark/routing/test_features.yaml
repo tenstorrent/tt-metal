@@ -392,9 +392,9 @@ Tests:
 
   # ======================================================================================
   # Test 15: Core Sweep
-  # This test shows the core sweeping feature available. It will generate sequential tests 
-  # which sweep across all worker core pairs from src to destination depending on whether 
-  # a core coordinate or `all` is specified for the field. To be used with caution as 
+  # This test shows the core sweeping feature available. It will generate sequential tests
+  # which sweep across all worker core pairs from src to destination depending on whether
+  # a core coordinate or `all` is specified for the field. To be used with caution as
   # many tests can be generated
   # ======================================================================================
 
@@ -404,9 +404,9 @@ Tests:
 
     benchmark_mode: true
 
-    defaults: 
-      ftype: unicast 
-      ntype: unicast_write 
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
       num_packets: 1000
       size: 1024
       

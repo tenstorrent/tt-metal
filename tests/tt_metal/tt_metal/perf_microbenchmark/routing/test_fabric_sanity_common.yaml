@@ -585,9 +585,9 @@ Tests:
 
     benchmark_mode: true
 
-    defaults: 
-      ftype: unicast 
-      ntype: unicast_write 
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
       num_packets: 1000
       size: 1024
       
@@ -605,9 +605,9 @@ Tests:
 
     benchmark_mode: true
 
-    defaults: 
-      ftype: unicast 
-      ntype: unicast_write 
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
       num_packets: 1000
       size: 1024
       
@@ -626,9 +626,9 @@ Tests:
 
     benchmark_mode: true
 
-    defaults: 
-      ftype: unicast 
-      ntype: unicast_write 
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
       num_packets: 1000
       size: 1024
       
