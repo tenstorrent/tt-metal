@@ -2031,7 +2031,7 @@ void run_drain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt:
     ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
 };
 
-
+__attribute__((noinline))
 void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (MY_ERISC_ID == 0) {
         // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop
@@ -2075,7 +2075,7 @@ FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::Termina
                    !state_manager_l1->is_non_run_command_pending /*<ENABLE_RISC_CPU_DATA_CACHE>*/ ();
         }
     } else {
-        return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/();
+        return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending();
     }
 }
 
@@ -2381,7 +2381,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     } else {
                         if (did_nothing_count++ > SWITCH_INTERVAL) {
                             did_nothing_count = 0;
-                            run_routing_without_noc_sync();
+                            run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                         }
                     }
                 } else {
