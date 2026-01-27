@@ -148,14 +148,11 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox",
-             "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
-            {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox",
-             "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox",
-             "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
-            {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu",
-             "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"}
+            {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
+            {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
+            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
+            {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
+            {"name": "QuietBox 2 (2xP300) tests", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
           ]'
 
           # If schedule, include all systems
@@ -176,16 +173,13 @@ jobs:
 
           # If no systems were selected, fail fast with a clear error message.
           if [ ${#selected_keys[@]} -eq 0 ]; then
-            echo "Error: No systems selected for blackhole-multi-card-tests-matrix." \
-              "At least one of the following inputs must be set to true:" \
-              "run_bh_llmbox, run_bh_deskbox, run_bh_loudbox, run_bh_p300, run_bh_quietbox_2." >&2
+            echo "Error: No systems selected for blackhole-multi-card-tests-matrix. At least one of the following inputs must be set to true: run_bh_llmbox, run_bh_deskbox, run_bh_loudbox, run_bh_p300, run_bh_quietbox_2." >&2
             exit 1
           fi
           # Filter all_systems by selected keys using jq (-c for compact single-line output)
           keys_json=$(printf '%s\n' "${selected_keys[@]}" | jq -R . | jq -sc .)
           echo "Selected keys: $keys_json"
-          filtered=$(echo "$all_systems" | jq -c --argjson keys "$keys_json" \
-            '[.[] | select(.key as $k | $keys | index($k))]')
+          filtered=$(echo "$all_systems" | jq -c --argjson keys "$keys_json" '[.[] | select(.key as $k | $keys | index($k))]')
           matrix_output="{\"test-group\": $filtered}"
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
