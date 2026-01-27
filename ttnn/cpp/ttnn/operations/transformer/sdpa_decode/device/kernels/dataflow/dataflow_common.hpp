@@ -497,6 +497,7 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
+    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
@@ -551,10 +552,11 @@ void read_kv_mask_chunks(
                 }
             }
         } else {
+            // V is an independent tensor with its own layout (width = vDHt)
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = k_start_tile_id;
+            uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -565,7 +567,7 @@ void read_kv_mask_chunks(
                     v_tile_id++;
                     v_write_ptr += v_tile_bytes;
                 }
-                v_tile_id += (DHt - vDHt);  // Skip the padding!
+                // No padding to skip - V is an independent tensor with contiguous layout
             }
         }
         noc_async_read_barrier();
@@ -573,5 +575,8 @@ void read_kv_mask_chunks(
 
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;
+        if constexpr (!reuse_k) {
+            v_start_tile_id += v_chunk_tiles;
+        }
     }
 }
