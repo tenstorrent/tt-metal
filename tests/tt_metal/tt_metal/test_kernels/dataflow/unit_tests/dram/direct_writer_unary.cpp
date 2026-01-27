@@ -17,13 +17,15 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
          uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);
 
-        cb_wait_front(cb_id, ublock_size_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes, 0);
+         DPRINT << "waiting for pages: " << ublock_size_tiles << " operand: " << cb_id << ENDL();
+         cb_wait_front(cb_id, ublock_size_tiles);
+         uintptr_t l1_read_addr = get_read_ptr(cb_id);
+         noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes, 0);
 
-        noc_async_write_barrier(0);
-
-        cb_pop_front(cb_id, ublock_size_tiles);
-        dst_addr += ublock_size_bytes;
+         noc_async_write_barrier(0);
+         DPRINT << "l1_read_addr: " << l1_read_addr << ENDL();
+         DPRINT << "write value: " << *((uint32_t*)l1_read_addr + 508) << ENDL();
+         cb_pop_front(cb_id, ublock_size_tiles);
+         dst_addr += ublock_size_bytes;
     }
 }

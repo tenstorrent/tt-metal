@@ -25,6 +25,7 @@ void kernel_main() {
         noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes, 0);
 
         noc_async_read_barrier(0);
+        DPRINT << "read value: " << *((uint32_t*)l1_write_addr + 508) << ENDL();
 
         cb_push_back(cb_id, ublock_size_tiles);
         src_addr += ublock_size_bytes;

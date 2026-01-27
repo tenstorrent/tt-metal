@@ -382,6 +382,15 @@ bool reader_datacopy_writer(
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= inputs == dest_buffer_data;
+    if (not pass) {
+        for (size_t i = 0; i < inputs.size(); i++) {
+            if (inputs[i] != dest_buffer_data[i]) {
+                log_info(tt::LogTest, "Mismatch at index: {}", i);
+                log_info(tt::LogTest, "Inputs: {}", inputs[i]);
+                log_info(tt::LogTest, "Outputs: {}", dest_buffer_data[i]);
+            }
+        }
+    }
     return pass;
 }
 }  // namespace unit_tests::dram::direct
