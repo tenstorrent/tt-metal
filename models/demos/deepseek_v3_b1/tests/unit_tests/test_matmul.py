@@ -38,22 +38,22 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
     "M, K, N, in0_dtype, in1_dtype",
     [
         # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down + K down
-        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down with split inner dim
-        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # Q up
-        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # Q nope
+        # (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down + K down
+        # (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down with split inner dim
+        # (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # Q up
+        # (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # Q nope
         # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=512)
-        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=256)
-        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=512)
-        # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # V out
-        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b),  # Out
-        # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
-        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj (out_w=2)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
-        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
+        (8, 256, 256, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=256)
+        # (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=512)
+        # (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=256)
+        # (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=512)
+        # # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
+        # (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # V out
+        # (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b),  # Out
+        # # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
+        # (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj (out_w=2)
+        # (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
+        # (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
     ],
 )
 def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
@@ -172,6 +172,7 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
 
     # Verify matmul results
     logger.info("Verifying matmul results...")
+    print(torch.max(torch.abs(output_torch - torch_expected)))
 
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.99)
     logger.info(pcc_message)

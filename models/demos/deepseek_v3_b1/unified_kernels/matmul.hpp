@@ -88,6 +88,12 @@ struct Matmul {
 
     private:
         void impl(const RTArgs& args) {
+#if defined(COMPILE_FOR_BRISC)
+            {
+                DeviceZoneScopedN("wait_front");
+                cb_wait_front(2, 8);
+            }
+#endif
 #if defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
@@ -98,19 +104,24 @@ struct Matmul {
             constexpr bool transpose = false;
             constexpr uint32_t out_w = CTArgs::out_w;
 
+            // Use optimized custom_mm API for single output tile with K-dimension reduction
+            custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
+            // Reserve output tiles
+            cb_reserve_back(args.out, out_w);
             cb_wait_front(args.in0, args.k_num_tiles);
             cb_wait_front(args.in1, args.k_num_tiles * out_w);
 
-            // Reserve output tiles
-            cb_reserve_back(args.out, out_w);
-
             if constexpr (out_w <= 8) {
-                // Use optimized custom_mm API for single output tile with K-dimension reduction
-                custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
-
                 tile_regs_acquire();
+
+                // Dummy stall so that compute waits until unpack is ready when we comment out custom_mm_block
+                UNPACK(TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK));
+                UNPACK(TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC));
+                MATH(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD));
+                MATH(TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD));
 
                 for (uint32_t w = 0; w < out_w; w++) {
                     custom_mm_block(args.in0, args.in1, 0, w, w, transpose, args.k_num_tiles, out_w);
@@ -119,9 +130,7 @@ struct Matmul {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                for (uint32_t w = 0; w < out_w; w++) {
-                    pack_tile(w, args.out, w);
-                }
+                pack_tile_block(0, args.out, out_w);
                 tile_regs_release();
             } else {
                 // Use standard matmul API for multiple output tiles

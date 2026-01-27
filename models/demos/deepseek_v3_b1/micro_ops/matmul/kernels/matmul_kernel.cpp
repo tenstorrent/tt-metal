@@ -33,6 +33,7 @@ void kernel_main() {
 
     // Setup sharded persistent buffers (in0 and in1 are backed by L1 shards)
     if constexpr (Core::is_active_core) {
+        DeviceZoneScopedN("setup_sharded_buffer");
         unified_kernels::setup_sharded_buffer(in0_cb, num_tiles_k);
         // in1 has num_tiles_k * out_w tiles (K tiles for each output column)
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);

@@ -41,21 +41,12 @@ inline void custom_mm_configure_addrmod(
     }
         .set(ADDR_MOD_0);
 
-    if (in0_tile_r_dim == 8) {
-        addr_mod_t{
-            .srca = {.incr = 16, .clr = 0, .cr = 0},
-            .srcb = {.incr = 16, .clr = 0, .cr = 0},
-            .dest = {.incr = 0, .clr = 1, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
-    } else {
-        addr_mod_t{
-            .srca = {.incr = 16, .clr = 0, .cr = 0},
-            .srcb = {.incr = 16, .clr = 0, .cr = 0},
-            .dest = {.incr = 16, .clr = 0, .cr = 0},
-        }
-            .set(ADDR_MOD_1);
+    addr_mod_t{
+        .srca = {.incr = 16, .clr = 0, .cr = 0},
+        .srcb = {.incr = 16, .clr = 0, .cr = 0},
+        .dest = {.incr = 0, .clr = 1, .cr = 0},
     }
+        .set(ADDR_MOD_1);
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 1, .cr = 0},
@@ -80,42 +71,30 @@ inline void custom_mm_configure_mop(
     const std::uint32_t replay_buf_len = (in0_tile_r_dim == 8) ? 8 : 14;
     // Finalization length (starting from offset 4):
     // m=8: 4 instructions (4 MVMULs), m=1/4: 10 instructions (4 MVMULs + 4 MOVs + 2 ELWADDs)
-    custom_mm::finalization_len = (in0_tile_r_dim == 8) ? 4 : 10;
+    // custom_mm::finalization_len = (in0_tile_r_dim == 8) ? 4 : 10;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        replay_buf_len,
+        4,
         // Lambda function to load reply buffer
-        [in0_tile_r_dim] {
-            if (in0_tile_r_dim == 8) {
-                // m=8: 8 MVMULs only, no tail reduction
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
-            } else {
-                // m=1/4: 8 MVMULs + MOVs + ELWADDs
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
-                // m=1/4: MOV_4_ROWS
-                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
-                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
-                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
-                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
-                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-                TTI_ELWADD(3, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
-            }
+        [] {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
         });
+    uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
+
+    // ckernel_template tmp(1, kt_dim, replay_instr);
+
+    // Dummy compute to just clear srcs
+    ckernel_template tmp(
+        1,
+        kt_dim,
+        TT_OP_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD),
+        TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD));
+
+    tmp.program();
 }
 
 template <int MATH_FIDELITY_DESC>
@@ -145,22 +124,5 @@ template <bool partial_acc = false>
 inline void _llk_math_custom_mm_(
     uint dst_index, [[maybe_unused]] const bool transpose = false, [[maybe_unused]] const std::uint32_t kt_dim = 1) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-
-    if constexpr (partial_acc) {
-        // Partial K accumulation: run all kt_dim iterations with first 4 MVMULs
-        // MVMUL accumulates into dest, results persist for next K subblock
-        // NO finalization - skip instructions 4+
-        for (uint32_t i = 0; i < kt_dim; i++) {
-            lltt::replay(ckernel::math::replay_buf_offset, 4);
-        }
-    } else {
-        // Full accumulation with finalization
-        // First kt_dim-1 iterations: 4 MVMULs (instructions 0-3)
-        for (uint32_t i = 0; i < kt_dim - 1; i++) {
-            lltt::replay(ckernel::math::replay_buf_offset, 4);
-        }
-        // Final K tile + finalization (instructions 4 to 4+finalization_len)
-        // m=8: 4 MVMULs, m=1/4: 4 MVMULs + MOVs + ELWADDs
-        lltt::replay(ckernel::math::replay_buf_offset + 4, custom_mm::finalization_len);
-    }
+    ckernel_template::run();
 }
