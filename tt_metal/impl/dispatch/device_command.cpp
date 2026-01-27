@@ -261,7 +261,7 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
     uint32_t noc_xy_addr,
-    uint64_t total_length,
+    uint32_t total_length,
     const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
     uint16_t num_sub_cmds,
     uint32_t offset_idx) {

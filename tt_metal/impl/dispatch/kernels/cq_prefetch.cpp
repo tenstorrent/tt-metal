@@ -1518,24 +1518,24 @@ static uint32_t process_exec_buf_relay_ringbuffer_cmd(
     return stride;
 }
 
-void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint64_t total_length, uint32_t* l1_cache) {
+void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_length, uint32_t* l1_cache) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
-    uint64_t read_length = sub_cmd->length;
+    uint32_t read_length = sub_cmd->length;
     ASSERT(read_length <= scratch_db_half_size);
-    uint64_t amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
-    uint64_t amt_read = 0;
+    uint32_t amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
+    uint32_t amt_read = 0;
     uint32_t scratch_read_addr = scratch_db_top[0];
 
     while (read_length <= amt_to_read) {
         uint64_t addr = sub_cmd->addr;
-        uint64_t length = sub_cmd->length;
+        uint32_t length = sub_cmd->length;
         sub_cmd++;
 
-        uint64_t amt_to_read2 = (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
+        uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
         noc_read_64bit_any_len<true>(noc_xy_addr, addr, scratch_read_addr, amt_to_read2);
         scratch_read_addr += amt_to_read2;
         amt_read += amt_to_read2;
@@ -1567,10 +1567,10 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint64_t total_l
         amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
         while (read_length <= amt_to_read) {
             uint64_t addr = sub_cmd->addr;
-            uint64_t length = sub_cmd->length;
+            uint32_t length = sub_cmd->length;
             sub_cmd++;
 
-            uint64_t amt_to_read2 =
+            uint32_t amt_to_read2 =
                 (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
             noc_read_64bit_any_len<false>(noc_xy_addr, addr, scratch_read_addr, amt_to_read2);
             scratch_read_addr += amt_to_read2;
@@ -1608,7 +1608,7 @@ template <bool cmddat_wrap_enable>
 uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
-    uint64_t total_length = cmd->relay_linear_packed.total_length;
+    uint32_t total_length = cmd->relay_linear_packed.total_length;
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
     ASSERT(total_length > 0);
@@ -1649,7 +1649,7 @@ static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t& cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
-    uint64_t total_length = cmd->relay_linear_packed.total_length;
+    uint32_t total_length = cmd->relay_linear_packed.total_length;
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
 
