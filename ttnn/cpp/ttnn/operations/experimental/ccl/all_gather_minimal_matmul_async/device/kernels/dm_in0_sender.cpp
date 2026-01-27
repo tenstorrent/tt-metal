@@ -372,6 +372,9 @@ void kernel_main() {
     }
 #endif
 
+    uint32_t remote_block_core_order_size = 1;
+    uint32_t local_block_core_order_size = 1;
+
     /**
      * This is a Serpentine (Boustrophedon) output block ordering.
      * It enables reuse of one of the input blocks for the last output block.
@@ -434,6 +437,19 @@ void kernel_main() {
 
                 uint32_t k_block = 0;
 #ifdef USE_MUX
+                uint32_t device_iter = (k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter)) /
+                                       (K_num_blocks / num_devices);  // which device this k_block is coming from
+                bool is_receiving_core_remote =
+                    in0_core_order_index >= (in0_core_order_size - remote_block_core_order_size);
+                bool is_receiving_core_local = false;
+                if (!use_backward) {
+                    is_receiving_core_local =
+                        (in0_core_order_index >= (in0_core_order_size - local_block_core_order_size));
+                } else {
+                    is_receiving_core_local =
+                        ((in0_core_order_index >= (in0_core_order_size - local_block_core_order_size * 2)) &&
+                         (in0_core_order_index < (in0_core_order_size - local_block_core_order_size)));
+                }
                 k_block = compute_actual_k_block(
                     k_block_iter,
                     K_num_blocks,
@@ -447,8 +463,9 @@ void kernel_main() {
                                  : out_ready_sem_injector_noc_addr_forward_in_pkt,
                     use_backward ? sem_target_backward : sem_target_forward,
                     is_injector_core,
+                    (device_iter > 2) ? is_receiving_core_remote : is_receiving_core_local,
                     use_backward ? slices_received_backward : slices_received_forward,
-                    in0_core_order_size);
+                    (device_iter > 2) ? remote_block_core_order_size : local_block_core_order_size);
 #endif
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
@@ -494,54 +511,107 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
-
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / in0_core_order_size;
-                    if (use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
-                        if (slices_received_backward <= writes_expected_backward) {
-                            // If backward, send forward
-                            forward_block_to_fabric_neighbor(
-                                m_tile + per_core_fabric_write_m_tiles * in0_core_order_index,
-                                k_block * K_block_tiles,
-                                per_core_fabric_write_m_tiles,
-                                K_block_tiles,
-                                num_tiles_to_write_per_packet,
-                                in0_start_address + (per_core_fabric_write_m_tiles * in0_core_order_index) *
-                                                        K_block_tiles * in0_tile_size,
-                                padded_K_tiles,
-                                in0_reader,
-                                mux_connection_handle_backward,
-                                pkt_scatter_hdr_forward,
-                                pkt_unicast_hdr_forward,
-                                pkt_hdr_sem_inc_forward,
-                                in0_tile_size,
-                                out_ready_sem_noc_addr_backward_in_pkt);
+                    if (k_block_iter < (K_num_blocks / num_devices)) {
+                        // local k_block
+                        uint32_t real_in0_core_order_size = local_block_core_order_size;
+                        uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / real_in0_core_order_size;
+                        if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size)) {
+                            if (slices_received_forward <= writes_expected_forward) {
+                                uint32_t chunk_index = in0_core_order_size - 1 - in0_core_order_index;
+                                // If forward, send backward
+                                forward_block_to_fabric_neighbor(
+                                    m_tile + per_core_fabric_write_m_tiles * chunk_index,
+                                    k_block * K_block_tiles,
+                                    per_core_fabric_write_m_tiles,
+                                    K_block_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address +
+                                        (per_core_fabric_write_m_tiles * chunk_index) * K_block_tiles * in0_tile_size,
+                                    padded_K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_forward,
+                                    pkt_scatter_hdr_backward,
+                                    pkt_unicast_hdr_backward,
+                                    pkt_hdr_sem_inc_backward,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_forward_in_pkt);
+                            }
+                        } else if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size * 2)) {
+                            if (slices_received_backward <= writes_expected_backward) {
+                                uint32_t chunk_index =
+                                    (in0_core_order_size - real_in0_core_order_size) - 1 - in0_core_order_index;
+                                // If backward, send forward
+                                forward_block_to_fabric_neighbor(
+                                    m_tile + per_core_fabric_write_m_tiles * chunk_index,
+                                    k_block * K_block_tiles,
+                                    per_core_fabric_write_m_tiles,
+                                    K_block_tiles,
+                                    num_tiles_to_write_per_packet,
+                                    in0_start_address +
+                                        (per_core_fabric_write_m_tiles * chunk_index) * K_block_tiles * in0_tile_size,
+                                    padded_K_tiles,
+                                    in0_reader,
+                                    mux_connection_handle_backward,
+                                    pkt_scatter_hdr_forward,
+                                    pkt_unicast_hdr_forward,
+                                    pkt_hdr_sem_inc_forward,
+                                    in0_tile_size,
+                                    out_ready_sem_injector_noc_addr_backward_in_pkt);
+                            }
                         }
-                    }
-                    if (!use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
-                        if (slices_received_forward <= writes_expected_forward) {
-                            // If forward, send backward
-                            forward_block_to_fabric_neighbor(
-                                m_tile + per_core_fabric_write_m_tiles * in0_core_order_index,
-                                k_block * K_block_tiles,
-                                per_core_fabric_write_m_tiles,
-                                K_block_tiles,
-                                num_tiles_to_write_per_packet,
-                                in0_start_address + (per_core_fabric_write_m_tiles * in0_core_order_index) *
-                                                        K_block_tiles * in0_tile_size,
-                                padded_K_tiles,
-                                in0_reader,
-                                mux_connection_handle_forward,
-                                pkt_scatter_hdr_backward,
-                                pkt_unicast_hdr_backward,
-                                pkt_hdr_sem_inc_backward,
-                                in0_tile_size,
-                                out_ready_sem_noc_addr_forward_in_pkt);
+                    } else {
+                        // remote k block
+                        uint32_t real_in0_core_order_size = remote_block_core_order_size;
+                        uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / real_in0_core_order_size;
+                        if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size)) {
+                            uint32_t chunk_index = in0_core_order_size - 1 - in0_core_order_index;
+                            if (use_backward) {
+                                if (slices_received_backward <= writes_expected_backward) {
+                                    // If backward, send forward
+                                    forward_block_to_fabric_neighbor(
+                                        m_tile + per_core_fabric_write_m_tiles * chunk_index,
+                                        k_block * K_block_tiles,
+                                        per_core_fabric_write_m_tiles,
+                                        K_block_tiles,
+                                        num_tiles_to_write_per_packet,
+                                        in0_start_address + (per_core_fabric_write_m_tiles * chunk_index) *
+                                                                K_block_tiles * in0_tile_size,
+                                        padded_K_tiles,
+                                        in0_reader,
+                                        mux_connection_handle_backward,
+                                        pkt_scatter_hdr_forward,
+                                        pkt_unicast_hdr_forward,
+                                        pkt_hdr_sem_inc_forward,
+                                        in0_tile_size,
+                                        out_ready_sem_injector_noc_addr_backward_in_pkt);
+                                }
+                            }
+                            if (!use_backward) {
+                                if (slices_received_forward <= writes_expected_forward) {
+                                    // If forward, send backward
+                                    forward_block_to_fabric_neighbor(
+                                        m_tile + per_core_fabric_write_m_tiles * chunk_index,
+                                        k_block * K_block_tiles,
+                                        per_core_fabric_write_m_tiles,
+                                        K_block_tiles,
+                                        num_tiles_to_write_per_packet,
+                                        in0_start_address + (per_core_fabric_write_m_tiles * chunk_index) *
+                                                                K_block_tiles * in0_tile_size,
+                                        padded_K_tiles,
+                                        in0_reader,
+                                        mux_connection_handle_forward,
+                                        pkt_scatter_hdr_backward,
+                                        pkt_unicast_hdr_backward,
+                                        pkt_hdr_sem_inc_backward,
+                                        in0_tile_size,
+                                        out_ready_sem_injector_noc_addr_forward_in_pkt);
+                                }
+                            }
                         }
                     }
                 }
-
 #endif
             }
 #ifdef FUSE_BIAS
