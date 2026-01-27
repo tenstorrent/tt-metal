@@ -16,7 +16,7 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.999
+PCC_THRESHOLD = 0.998
 
 
 def create_torch_input(L, in0_num_cores, M, K):

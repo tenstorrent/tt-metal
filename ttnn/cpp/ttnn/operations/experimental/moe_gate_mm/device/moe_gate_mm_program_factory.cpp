@@ -41,16 +41,15 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    224   |      458752     |
+        | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    32*3  |      196608   |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
         | cb_s2c_out     | CBIndex::c_2  | Float16_b  | true  |    1     |      2048       |
         ------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in is handled separately as it is sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 224},
+        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
