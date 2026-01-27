@@ -19,7 +19,6 @@ jobs:
 
   build-artifact-2:
     name: Build Artifact 2 (Modified Commit)
-    needs: build-artifact-1
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -347,7 +346,7 @@ jobs:
           fi
 
   ttnn-ccache-test-run3:
-    needs: [build-artifact-1, ttnn-ccache-test-run2]
+    needs: [build-artifact-1, ttnn-ccache-test-run1]
     name: TTNN CCache Test - Run 3 (Back to Build Artifact 1)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
