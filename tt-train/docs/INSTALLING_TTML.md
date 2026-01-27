@@ -6,21 +6,7 @@ TT-Train provides the ttml module (`ttml`), written using nanobind, which provid
 
 - **ttnn** must be installed first. See [INSTALLING.md](../INSTALLING.md) for TT-Metal installation instructions.
 
-### Option A: pip install (standalone build)
-
-```bash
-cd /path/to/tt-train
-pip install .
-```
-
-Or for editable/development install:
-
-```bash
-cd /path/to/tt-train
-pip install --no-build-isolation -e .
-```
-
-### Option B: Using pre-built ttml (recommended for development)
+### Option A: Using pre-built ttml (recommended for development)
 
 If you built tt-metal with `build_metal.sh --build-tt-train` or `--build-all`, ttml is already compiled.
 
@@ -41,6 +27,20 @@ echo "/path/to/tt-metal/build/tt-train/sources/ttml" > python_env/lib/python3.10
 ```
 
 This avoids rebuilding and reflects Python source changes immediately.
+
+### Option B: pip install (standalone build)
+
+```bash
+cd /path/to/tt-train
+pip install .
+```
+
+Or for editable/development install:
+
+```bash
+cd /path/to/tt-train
+pip install --no-build-isolation -e .
+```
 
 ## Verification
 
