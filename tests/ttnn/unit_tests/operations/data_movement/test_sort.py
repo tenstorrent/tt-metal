@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 TILE_WIDTH = 32
 
@@ -50,8 +50,13 @@ def test_sort_standard(shape, dim, descending, device):
 
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
+        assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        # Validate sorted values
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        # Validate that the indices correctly index into the original tensor
+        ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
+        assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
 
 
 @pytest.mark.parametrize(
@@ -93,7 +98,7 @@ def test_sort_prealocated_output(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -127,7 +132,7 @@ def test_sort_long_tensor(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -165,7 +170,7 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -199,7 +204,7 @@ def test_sort_program_cache(shape, dim, descending, device):
         assert list(ttnn_sort_values.shape) == shape
         assert list(ttnn_sort_indices.shape) == shape
 
-        assert_with_pcc(torch_sort_values, ttnn_sort_values_torch)
+        assert_equal(torch_sort_values, ttnn_sort_values_torch)
         ttnn.synchronize_device(device)
     cache_entries = device.num_program_cache_entries()
     device.disable_and_clear_program_cache()
@@ -215,7 +220,7 @@ def test_sort_program_cache(shape, dim, descending, device):
         ([32, 64], -1, False, torch.bfloat16, ttnn.bfloat16, ttnn.uint32),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint32),
-        ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
+        # ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16), # GH issue: #33473
     ],
 )
 def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dtype, ttnn_index_dtype, device):
@@ -242,7 +247,7 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_value_dtype))
 
 
 def create_descending_tensor(shape, dim, dtype=torch.bfloat16):
@@ -289,8 +294,8 @@ def test_sort_indices(shape, dim, descending, device):
 
     torch_converted_indices = ttnn.to_torch(ttnn_sort_indices).to(torch.int64)
 
-    assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
-    assert torch.allclose(torch_sort_indices.to(torch.int64), torch_converted_indices)
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_allclose(torch_sort_indices.to(torch.int64), torch_converted_indices)
 
 
 @pytest.mark.parametrize(
