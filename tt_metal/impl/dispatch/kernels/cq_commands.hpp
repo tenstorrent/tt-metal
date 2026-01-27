@@ -186,18 +186,19 @@ struct CQPrefetchRelayLinearPackedCmd {
     uint16_t count;
     uint16_t pad;
     uint32_t noc_xy_addr;
-    uint64_t total_length;  // aggregate length of all sub-read-cmds
+    uint32_t total_length;  // aggregate length of all sub-read-cmds
     uint32_t stride;        // stride to start of next cmd
+    uint32_t pad2;
 } __attribute__((packed));
 
 struct CQPrefetchRelayLinearPackedSubCmd {
     uint64_t addr;    // linear address
-    uint64_t length;  // read length
+    uint32_t length;  // read length
 } __attribute__((packed));
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
-// 16 bytes per sub_cmd vs 12 bytes for paged_packed, so we can fit fewer
-constexpr uint32_t CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS = 26;
+// 12 bytes per sub_cmd, same as paged_packed
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS = 35;
 
 // 16 byte commands.
 struct CQPrefetchCmd {
