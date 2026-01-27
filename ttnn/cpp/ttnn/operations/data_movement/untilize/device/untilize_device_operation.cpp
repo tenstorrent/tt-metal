@@ -16,6 +16,7 @@
 #include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
+#include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -384,8 +385,13 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     if (pf_option == 1) {
         return UntilizeSingleCoreProgramFactory{};
     }
-    // Default multi core implementation
-    return UntilizeMultiCoreProgramFactory{};
+
+    if (not input_is_sharded or input_tensor_a.shard_spec().has_value()) {
+        // default multi core implementation, non ND-sharded input
+        return UntilizeMultiCoreProgramFactory{};
+    }
+    // Default ND shard multi core implementation
+    return UntilizeMultiCoreNDShardInputProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>

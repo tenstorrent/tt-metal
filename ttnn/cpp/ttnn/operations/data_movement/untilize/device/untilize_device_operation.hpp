@@ -15,6 +15,7 @@
 #include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
+#include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -44,7 +45,8 @@ struct UntilizeDeviceOperation {
         UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory,
         UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory,
         UntilizeMultiCoreParallelizeColumnProgramFactory,
-        UntilizeMultiCoreProgramFactory>;
+        UntilizeMultiCoreProgramFactory,
+        UntilizeMultiCoreNDShardInputProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

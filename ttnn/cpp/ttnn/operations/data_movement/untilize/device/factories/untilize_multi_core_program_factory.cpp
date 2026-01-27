@@ -15,9 +15,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
-#include "untilize_multi_core_block_program_factory.hpp"
-#include "untilize_multi_core_parallelize_column_program_factory.hpp"
-#include "untilize_single_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 
 using namespace tt::constants;
@@ -52,10 +49,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
-    bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
-
-    // For ND sharded input, compute distribution_spec once and reuse it
-    std::optional<BufferDistributionSpec> distribution_spec_opt;
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
@@ -76,67 +69,25 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_tiles_per_input_block = num_tiles_per_row;
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
-    uint32_t num_blocks_per_shard = 0;
     uint32_t num_shards = 0;
     if (input_is_sharded) {
-        CoreRangeSet grid;
-        uint32_t input_shard_height;
-        uint32_t input_shard_width;
-        if (not input_is_nd_sharded) {  // Special case for legacy 2D sharding. Can use optimized writer kernel.
-            const auto& shard_spec = a.shard_spec().value();
-            input_shard_height = shard_spec.shape[0];
-            input_shard_width = shard_spec.shape[1];
-            grid = shard_spec.grid;
-            num_compute_cores = grid.num_cores();
-            compute_core_range = grid;
-            full_compute_core_range = grid;
-            cliff_compute_core_range = CoreRangeSet();
+        ShardSpec input_shard_spec = a.shard_spec().value();
+        uint32_t input_shard_height = input_shard_spec.shape[0];
+        uint32_t input_shard_width = input_shard_spec.shape[1];
 
-            // Note: Accounting for uneven input shards
-            num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
-            num_tiles_per_input_block = input_shard_width / tile_width;
-            num_blocks_per_shard = input_shard_height / tile_height;
-            num_input_blocks_per_full_core =
-                num_blocks_per_shard;  // in legacy 2D sharding, there is only one shard per core.
-            num_input_blocks_per_cliff_core = 0;
+        num_compute_cores = input_shard_spec.grid.num_cores();
+        compute_core_range = input_shard_spec.grid;
+        full_compute_core_range = input_shard_spec.grid;
+        cliff_compute_core_range = CoreRangeSet();
 
-            uint32_t num_shards_height = tt::div_up(tensor_height, input_shard_height);
-            num_shards = num_shards_height * num_input_blocks_across_width;
-        } else {
-            const auto& nd_shard_spec = a.nd_shard_spec().value();
-            input_shard_height = nd_shard_spec.shard_shape[-2];
-            input_shard_width = nd_shard_spec.shard_shape[-1];
-            grid = nd_shard_spec.grid;
-            // Create BufferDistributionSpec from NdShardSpec (computed once and reused later)
-            distribution_spec_opt = BufferDistributionSpec::from_shard_spec(
-                a.padded_shape(),
-                nd_shard_spec.shard_shape,
-                tile_shape,
-                nd_shard_spec.grid,
-                nd_shard_spec.orientation,
-                nd_shard_spec.shard_distribution_strategy);
-            const auto& distribution_spec = distribution_spec_opt.value();
-            num_shards = distribution_spec.num_shards();
-            const auto page_mapping = distribution_spec.compute_page_mapping();
-            const auto& groups = distribution_spec.core_groups();
-            num_compute_cores = grid.num_cores();
-            compute_core_range = grid;
-            full_compute_core_range = grid;
-            cliff_compute_core_range = CoreRangeSet();
+        // Note: Accounting for uneven input shards
+        num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
+        num_tiles_per_input_block = input_shard_width / tile_width;
+        num_input_blocks_per_full_core = input_shard_height / tile_height;
+        num_input_blocks_per_cliff_core = 0;
 
-            num_tiles_per_input_block = input_shard_width / tile_width;
-            uint32_t num_blocks_per_shard_plane = input_shard_height / tile_height;
-            const auto& shard_shape = nd_shard_spec.shard_shape;
-            size_t num_planes_per_shard = 1;
-            if (shard_shape.rank() > 2) {
-                for (int i = 0; i < static_cast<int>(shard_shape.rank()) - 2; ++i) {
-                    num_planes_per_shard *= shard_shape[i];
-                }
-            }
-            num_blocks_per_shard = num_planes_per_shard * num_blocks_per_shard_plane;
-            num_input_blocks_per_full_core = groups.num_shards_per_core_in_group_1 * num_blocks_per_shard;
-            num_input_blocks_per_cliff_core = 0;
-        }
+        uint32_t num_shards_height = tt::div_up(tensor_height, input_shard_height);
+        num_shards = num_shards_height * num_input_blocks_across_width;
     }
 
     // Input CB
@@ -227,33 +178,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
     };
-    if (input_is_nd_sharded) {
-        writer_compile_time_args.push_back(input_single_tile_size);
-        writer_compile_time_args.push_back(num_shards);
-        writer_compile_time_args.push_back(num_compute_cores);
-        writer_compile_time_args.push_back(num_tiles_per_row);
-        writer_compile_time_args.push_back(tile_width);
-    }
-
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    if (input_is_nd_sharded) {
-        TensorAccessorArgs(*src0_buffer)
-            .append_to(
-                writer_compile_time_args);  // For ND sharded input, we need info on the input buffer distribution
-    }
-
     // Writer kernel
-    std::string writer_kernel_file;
-    if (input_is_nd_sharded) {
-        writer_kernel_file =
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-            "writer_unary_stick_layout_split_rows_multi_core_nd_shard.cpp";
-    } else {
-        writer_kernel_file =
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-            "writer_unary_stick_layout_split_rows_multi_core.cpp";
-    }
+    std::string writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_multi_core.cpp";
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         writer_kernel_file,
@@ -325,124 +255,79 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
-    bool is_row_major = true;
-    if (input_is_sharded) {
-        ShardOrientation orientation;
-        if (a.shard_spec().has_value()) {
-            orientation = a.shard_spec().value().orientation;
-        } else {
-            orientation = a.nd_shard_spec().value().orientation;
-        }
-        is_row_major = orientation == ShardOrientation::ROW_MAJOR;
-    }
+    bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
-    if (input_is_nd_sharded) {
-        // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
-        // in the writer kernel.
-        TT_FATAL(distribution_spec_opt.has_value(), "Distribution_spec should have been computed for ND sharded input");
-        const auto& distribution_spec = distribution_spec_opt.value();
-        auto page_mapping = distribution_spec.compute_page_mapping();
-        const auto& mapped_cores = page_mapping.all_cores;
-        uint32_t start_shard_id = 0;
-        for (auto core : full_cores) {
-            auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
-            uint32_t num_blocks_on_core = 0;
-            uint32_t num_tiles_on_core = 0;
-            if (core_it != mapped_cores.end()) {
-                const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
-                const size_t num_shards_on_core = distribution_spec.num_shards_per_core(core_idx);
-                num_blocks_on_core = num_shards_on_core * num_blocks_per_shard;
-                num_tiles_on_core = num_blocks_on_core * num_tiles_per_input_block;
+    uint32_t num_full_cores =
+        input_is_sharded ? std::min(static_cast<uint32_t>(full_cores.size()), num_shards) : full_cores.size();
+    for (uint32_t i = 0; i < num_full_cores; ++i) {
+        CoreCoord core = full_cores[i];
+        uint32_t height_wise_input_block_start_index =
+            (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
+        uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
+
+        // Handle uneven input sharding width wise (writer run-time arg)
+        uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+        if (input_is_sharded) {
+            uint32_t input_shard_width = a.shard_spec().value().shape[1];
+            bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
+            if (is_last_input_shard_in_row) {
+                num_unpadded_cols_per_input_block =
+                    num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
             }
-            // Reader run-time args
-            std::vector<uint32_t> reader_run_time_args = {num_tiles_on_core};
-
-            // Writer run-time args
-            std::vector<uint32_t> writer_run_time_args = {
-                dst_buffer->address(), src0_buffer->address(), start_shard_id};
-            start_shard_id++;
-
-            // Compute run-time args
-            std::vector<uint32_t> compute_run_time_args = {num_blocks_on_core};
-            // Set run-time arg
-            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-            tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
         }
 
-    } else {
-        uint32_t num_full_cores =
-            input_is_sharded ? std::min(static_cast<uint32_t>(full_cores.size()), num_shards) : full_cores.size();
-        for (uint32_t i = 0; i < num_full_cores; ++i) {
-            CoreCoord core = full_cores[i];
-            uint32_t height_wise_input_block_start_index =
-                (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
-            uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
-
-            // Handle uneven input sharding width wise (writer run-time arg)
-            uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-            if (input_is_sharded) {
-                uint32_t input_shard_width = a.shard_spec().value().shape[1];
-                bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
-                if (is_last_input_shard_in_row) {
-                    num_unpadded_cols_per_input_block =
-                        num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
-                }
+        // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
+        uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
+        if (input_is_sharded) {
+            uint32_t input_shard_height = a.shard_spec().value().shape[0];
+            uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
+            uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
+            bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
+            if (is_last_input_shard_in_col) {
+                num_input_blocks_to_process =
+                    num_input_blocks_per_full_core -
+                    (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
             }
-
-            // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
-            uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
-            if (input_is_sharded) {
-                uint32_t input_shard_height = a.shard_spec().value().shape[0];
-                uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
-                uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
-                bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
-                if (is_last_input_shard_in_col) {
-                    num_input_blocks_to_process =
-                        num_input_blocks_per_full_core -
-                        (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
-                }
-            }
-
-            // Reader run-time args
-            uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
-            std::vector<uint32_t> reader_run_time_args;
-            if (input_is_sharded) {
-                // Sharded input
-                reader_run_time_args = {num_tiles_to_read};
-            } else {
-                // Interleaved input
-                reader_run_time_args = {
-                    src0_buffer->address(),
-                    num_tiles_to_read,
-                    tile_start_index,
-                };
-            }
-
-            // Writer run-time args
-            uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
-            uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
-            uint32_t num_cols_already_processed_in_first_output_block =
-                input_block_global_col_index % num_cols_per_output_block;
-            std::vector<uint32_t> writer_run_time_args = {
-                dst_buffer->address(),
-                num_input_blocks_to_process,
-                height_wise_input_block_start_index,
-                num_unpadded_cols_per_input_block,
-                width_wise_output_block_start_index,
-                num_cols_already_processed_in_first_output_block};
-
-            // Compute run-time args
-            std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
-
-            // Set run-time arg
-            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-            tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
-
-            // Update index of first tile to read
-            tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
         }
+
+        // Reader run-time args
+        uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
+        std::vector<uint32_t> reader_run_time_args;
+        if (input_is_sharded) {
+            // Sharded input
+            reader_run_time_args = {num_tiles_to_read};
+        } else {
+            // Interleaved input
+            reader_run_time_args = {
+                src0_buffer->address(),
+                num_tiles_to_read,
+                tile_start_index,
+            };
+        }
+
+        // Writer run-time args
+        uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+        uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+        uint32_t num_cols_already_processed_in_first_output_block =
+            input_block_global_col_index % num_cols_per_output_block;
+        std::vector<uint32_t> writer_run_time_args = {
+            dst_buffer->address(),
+            num_input_blocks_to_process,
+            height_wise_input_block_start_index,
+            num_unpadded_cols_per_input_block,
+            width_wise_output_block_start_index,
+            num_cols_already_processed_in_first_output_block};
+
+        // Compute run-time args
+        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
+
+        // Set run-time arg
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
+
+        // Update index of first tile to read
+        tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
@@ -533,16 +418,11 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
         }
     }
 
-    bool input_is_nd_sharded =
-        tensor_args.input.nd_shard_spec().has_value() && !tensor_args.input.shard_spec().has_value();
     // Writer
     auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (const CoreCoord& core : cores_with_runtime_args) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
         runtime_args[0] = dst_buffer->address();
-        if (input_is_nd_sharded) {
-            runtime_args[1] = src_buffer->address();
-        }
     }
 }
 }  // namespace ttnn::prim
