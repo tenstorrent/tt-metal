@@ -93,8 +93,7 @@ void AdamWFullPrecision::step() {
             m_beta1_pow,
             m_beta2_pow,
             m_config.epsilon,
-            m_config.weight_decay,
-            m_steps);
+            m_config.weight_decay);
 
         // Convert updated fp32 master weights back to bf16 visible weights
         auto updated_bf16_weights = ttnn::typecast(master_weights, tt::tt_metal::DataType::BFLOAT16);

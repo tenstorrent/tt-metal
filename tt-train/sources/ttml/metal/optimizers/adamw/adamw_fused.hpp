@@ -14,14 +14,13 @@ ttnn::Tensor adamw_fused(
     const ttnn::Tensor& exp_avg,
     const ttnn::Tensor& exp_avg_sq,
     const std::optional<ttnn::Tensor>& max_exp_avg_sq,
-    const float lr,
-    const float beta1,
-    const float beta2,
-    const float beta1_pow,
-    const float beta2_pow,
-    const float epsilon,
-    const float weight_decay,
-    const bool stochastic_rounding,
-    const uint32_t step);
+    float lr,
+    float beta1,
+    float beta2,
+    float beta1_pow,
+    float beta2_pow,
+    float epsilon,
+    float weight_decay,
+    bool stochastic_rounding);
 
 }  // namespace ttml::metal

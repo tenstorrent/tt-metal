@@ -19,7 +19,6 @@ struct operation_attributes_t {
     float weight_decay{};
     bool amsgrad{false};
     bool stochastic_rounding{false};
-    uint32_t step{};
 };
 
 struct tensor_args_t {

@@ -141,8 +141,7 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWDeviceOperation::invoke(
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    bool stochastic_rounding,
-    uint32_t step) {
+    bool stochastic_rounding) {
     return {
         operation_attributes_t{
             .lr = lr,
@@ -154,7 +153,6 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWDeviceOperation::invoke(
             .weight_decay = weight_decay,
             .amsgrad = amsgrad,
             .stochastic_rounding = stochastic_rounding,
-            .step = step,
         },
         tensor_args_t{
             .param = param,
