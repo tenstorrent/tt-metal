@@ -293,24 +293,30 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // - MMs signal to Ts that space for new chunk is free
     // MM:
     // - N/A
-    auto chunk_available_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+    auto matmul_chunk_available_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
 
     // T:
-    // - N/A
+    // - Signal from non-drain-sync cores to drain-sync core that partial chunk has been sent to MM cores
     // MM:
-    // - Ts signal to MMs that chunk has arrived
+    // - N/A
     // NOTE:
-    // - Need a semaphore per expert to avoid race conditions without requiring T cores to synchronize with eachother
-    //   and MM cores to synchronize with each other
+    // - Need a semaphore per expert to avoid a race condition where each expert has a single chunk
+    // - Removes requirement that non-drain-sync cores have to wait to signal until drain-sync core
+    //   signals that the previous matmul_chunk_ready_semaphore has been multicasted
     constexpr uint32_t supported_num_experts_per_device = 2;
     TT_FATAL(
         experts_per_device <= supported_num_experts_per_device,
         "requires a semaphore per expert, expected {} experts per device but got {}",
         supported_num_experts_per_device,
         experts_per_device);
+    auto e0_tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_core_range_set, INVALID);
+    auto e1_tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_core_range_set, INVALID);
 
-    auto e0_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
-    auto e1_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+    // T:
+    // - N/A
+    // MM:
+    // - T drain-sync signal to MMs that chunk has arrived
+    auto matmul_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
 
     ////// CBs //////
 
@@ -556,9 +562,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         // Semaphores
         {"partial_metadata_ready_semaphore_id", partial_metadata_ready_semaphore_id},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
-        {"chunk_available_semaphore_id", chunk_available_semaphore_id},
-        {"e0_chunk_ready_semaphore_id", e0_chunk_ready_semaphore_id},
-        {"e1_chunk_ready_semaphore_id", e1_chunk_ready_semaphore_id},
+        {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
+        {"e0_tilize_chunk_ready_semaphore_id", e0_tilize_chunk_ready_semaphore_id},
+        {"e1_tilize_chunk_ready_semaphore_id", e1_tilize_chunk_ready_semaphore_id},
+        {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};

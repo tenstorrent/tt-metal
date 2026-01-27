@@ -134,7 +134,6 @@ void kernel_main() {
     constexpr uint32_t hidden_size = get_named_compile_time_arg_val("hidden_size");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
-    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
@@ -145,6 +144,21 @@ void kernel_main() {
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
 
+    // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
+    constexpr uint32_t drain_core_noc_x = get_named_compile_time_arg_val("drain_core_noc_x");
+    constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
+    constexpr uint32_t remote_counts_cb_id = get_named_compile_time_arg_val("remote_counts_cb_id");
+    constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
+
+    // T multicast coordinates
+    constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
+    constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
+    constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
+    constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
+    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
+
     // Multicast coordinates for signalling MM cores
     constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
     constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
@@ -154,13 +168,19 @@ void kernel_main() {
     constexpr uint32_t num_matmul_bounding_box_cores = get_named_compile_time_arg_val("num_matmul_bounding_box_cores");
 
     // Semaphores
-    constexpr uint32_t chunk_available_semaphore_id = get_named_compile_time_arg_val("chunk_available_semaphore_id");
-    constexpr uint32_t e0_chunk_ready_semaphore_id = get_named_compile_time_arg_val("e0_chunk_ready_semaphore_id");
-    constexpr uint32_t e1_chunk_ready_semaphore_id = get_named_compile_time_arg_val("e1_chunk_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_available_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_available_semaphore_id");
+    constexpr uint32_t e0_tilize_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("e0_tilize_chunk_ready_semaphore_id");
+    constexpr uint32_t e1_tilize_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("e1_tilize_chunk_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
 
-    uint32_t chunk_available_semaphore_addr = get_semaphore(chunk_available_semaphore_id);
-    uint32_t e0_chunk_ready_semaphore_addr = get_semaphore(e0_chunk_ready_semaphore_id);
-    uint32_t e1_chunk_ready_semaphore_addr = get_semaphore(e1_chunk_ready_semaphore_id);
+    uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
+    uint32_t e0_tilize_chunk_ready_semaphore_addr = get_semaphore(e0_tilize_chunk_ready_semaphore_id);
+    uint32_t e1_tilize_chunk_ready_semaphore_addr = get_semaphore(e1_tilize_chunk_ready_semaphore_id);
+    uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
 
     // For parallel metadata processing - BRISC processes second half of this core's token range
     // Note: These are computed at runtime based on core_token_start/end in Step 3
@@ -379,8 +399,9 @@ void kernel_main() {
         uint32_t num_expert_tokens = num_tokens_per_expert[e];
         uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
 
-        // figure out which expert semaphore we're using
-        uint32_t chunk_ready_semaphore_addr = e == 0 ? e0_chunk_ready_semaphore_addr : e1_chunk_ready_semaphore_addr;
+        // figure out which semaphore we're using to coordinate with drain-sync core
+        uint32_t tilize_chunk_ready_semaphore_addr =
+            e == 0 ? e0_tilize_chunk_ready_semaphore_addr : e1_tilize_chunk_ready_semaphore_addr;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; chunk++) {
             // Wait for compute to push tiles_per_chunk tiles
@@ -391,60 +412,84 @@ void kernel_main() {
             /*
              * Send chunks to MM cores;
              * 1) Wait for buffer on matmul cores to be free
+             *    - Can skip if it's the first chunk per expert
              * 2) Send the chunk
-             * 3) Signal via semaphore to MM that the chunk has arrived
+             * 3) Signal via semaphore to T drain-sync-core that you've sent your chunk
+             * 4) T drain-sync-core waits until all T non-drain-sync cores have sent their chunk
+             * 5) T drain-sync-core signals to MM cores that chunks have arrived
              */
 
-            // TODO: (GR) a bunch of this can be factored out of the chunk loop
-
-            // == 1  ==
-
+            // == 1 ==
             // can skip for the first chunk per expert
-            // if (chunk != 0) {
-            //     uint32_t wait_value = num_matmul_cores * (chunk + e * (num_expert_chunks - 1));
-            //     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_available_semaphore_addr),
-            //     wait_value);
-            // }
+            if (chunk != 0) {
+                uint32_t wait_value =
+                    chunk + e * (num_expert_chunks - 1);  // don't wait on the first chunk of each expert
+
+                // TODO: (GR) uncomment during integration
+                // noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr
+                // uint32_t*>(matmul_chunk_available_semaphore_addr), wait_value);
+            }
 
             // == 2 ==
+            uint32_t l1_read_addr = get_read_ptr(tilizer_output_cb_id);
+            uint32_t l1_write_addr =
+                matmul_chunk_input_tensor_address + (e * tiles_per_row + width_tile_start) * output_page_size;
 
-            // uint32_t l1_read_addr = get_read_ptr(tilizer_output_cb_id);
-            // uint32_t l1_write_addr = matmul_chunk_input_tensor_address + (e * tiles_per_row + width_tile_start) *
-            // output_page_size;
+            uint64_t total_chunks_mcast_addr = get_safe_multicast_noc_addr(
+                matmul_mcast_start_x, matmul_mcast_start_y, matmul_mcast_end_x, matmul_mcast_end_y, l1_write_addr);
 
-            // uint64_t total_chunks_mcast_addr = get_safe_multicast_noc_addr(
-            //     matmul_mcast_start_x,
-            //     matmul_mcast_start_y,
-            //     matmul_mcast_end_x,
-            //     matmul_mcast_end_y,
-            //     l1_write_addr);
+            noc_async_write_multicast(
+                l1_read_addr,
+                total_chunks_mcast_addr,
+                tiles_per_chunk * output_page_size,
+                num_matmul_bounding_box_cores);
 
-            // noc_async_write_multicast(
-            //     l1_read_addr,
-            //     total_chunks_mcast_addr,
-            //     tiles_per_chunk * output_page_size,
-            //     num_matmul_bounding_box_cores);
+            noc_async_write_barrier();
 
-            // // == 3 ==
+            if (is_drain_tilizer_core) {
+                if (num_tilizer_cores > 1) {
+                    // == 4 ==
+                    // wait for non-drain-sync cores to signal that they've sent their chunk
+                    // we use a different semaphore per expert
+                    uint32_t wait_value = (num_tilizer_cores - 1) * chunk;
+                    noc_semaphore_wait(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr), wait_value);
+                }
 
-            // // set local semaphore value
-            // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_ready_semaphore_addr), 1);
+                // == 5 ==
+                uint32_t set_value = chunk + e * num_expert_chunks;
 
-            // // get mcast address
-            // uint64_t matmul_chunk_ready_semaphore_addr = get_safe_multicast_noc_addr(
-            //     matmul_mcast_start_x,
-            //     matmul_mcast_start_y,
-            //     matmul_mcast_end_x,
-            //     matmul_mcast_end_y,
-            //     chunk_ready_semaphore_addr);
+                // set local value
+                noc_semaphore_set(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr), set_value);
 
-            // // multicast semaphore
-            // noc_semaphore_set_multicast(
-            //     chunk_ready_semaphore_addr, matmul_chunk_ready_semaphore_addr, num_matmul_bounding_box_cores);
+                // get mcast address
+                uint64_t matmul_chunk_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+                    matmul_mcast_start_x,
+                    matmul_mcast_start_y,
+                    matmul_mcast_end_x,
+                    matmul_mcast_end_y,
+                    matmul_chunk_ready_semaphore_addr);
+
+                // multicast semaphore
+                noc_semaphore_set_multicast(
+                    matmul_chunk_ready_semaphore_addr,
+                    matmul_chunk_ready_semaphore_mcast_addr,
+                    num_matmul_bounding_box_cores);
+            } else {
+                // == 3 ==
+                // signal drain-sync core that we've sent our chunk
+                uint64_t drain_semaphore_noc_addr =
+                    get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr);
+
+                noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+            }
 
             /* END - WRITE TO MATMUL */
 
             /* START - WRITE TO OUTPUT TENSOR */
+            // TODO: (GR) remove this block during integration
+
             uint32_t l1_read_addr = get_read_ptr(tilizer_output_cb_id);
 
             // Compute the tile row for this chunk
@@ -475,4 +520,6 @@ void kernel_main() {
     // Pop the per-expert counts and total_chunks (cleanup)
     cb_pop_front(per_expert_total_tokens_cb_id, experts_per_device);
     cb_pop_front(total_chunks_cb_id, 1);
+
+    noc_async_write_barrier();
 }
