@@ -566,8 +566,8 @@ all_gather_minimal_matmul_async_factory_helper(
      * Create kernels
      */
 
-    bool in0_is_output_writer = !transpose_core_grid;
-    bool in1_is_output_writer = transpose_core_grid;
+    bool in0_is_output_writer = transpose_core_grid;
+    bool in1_is_output_writer = !transpose_core_grid;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
