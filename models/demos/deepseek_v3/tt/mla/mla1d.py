@@ -270,14 +270,16 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
         )
 
         # KV
@@ -286,7 +288,8 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
         )
         wkv_a_r_config = {
             "dims": [1],
@@ -305,7 +308,8 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
         )
 
         return {

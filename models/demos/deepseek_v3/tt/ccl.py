@@ -55,7 +55,7 @@ class CCL:
         Get the maximum number of links for the given axis.
         """
 
-        return 1  # Multi-link has PCC issues
+        return 4  # Multi-link has PCC issues
 
         if axis == 0:
             return 4

@@ -526,7 +526,7 @@ def run_test_forward_pass_mla2d(
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
-    ("prefill", seq_len, 1, None) for seq_len in [1024]  # PREFILL_SEQ_LENS
+    ("prefill", seq_len, 1, None) for seq_len in [8 * 1024]  # PREFILL_SEQ_LENS
 ]  # decode_position_ids is not applicable for prefill
 # [
 #     # mode, seq_len, batch_size_per_row, decode_position_ids
@@ -549,7 +549,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
