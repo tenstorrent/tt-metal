@@ -129,7 +129,7 @@ protected:
         memory_layout_ = allocate_worker_memory(mesh_device_);
 
         // Create destination node (second device)
-        FabricNodeId dest_node(MeshId{0}, 1);  // mesh_id=1, device_id=0
+        FabricNodeId dest_node(MeshId{0}, 1);  // mesh_id=0, device_id=1
 
         // Create and launch program (note: correct argument order)
         program_ = create_traffic_generator_program(
