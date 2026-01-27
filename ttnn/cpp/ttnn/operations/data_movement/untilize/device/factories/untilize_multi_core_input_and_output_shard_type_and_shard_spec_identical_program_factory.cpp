@@ -77,7 +77,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t shard_vol = nd_shard_spec.shard_shape.volume();
 
         num_tiles_per_block = shard_width / tile_width;
-        num_blocks_per_shard = shard_height / tile_height * shard_vol / (shard_height * shard_width);
+        num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
         num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
         auto distribution_spec = BufferDistributionSpec::from_shard_spec(
