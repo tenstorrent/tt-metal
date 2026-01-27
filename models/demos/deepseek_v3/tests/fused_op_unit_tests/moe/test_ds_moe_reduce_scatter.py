@@ -425,26 +425,10 @@ def _run_ds_moe_reduce_scatter_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.99999, 0.2, 0.2, 746.527),
         ("prefill", 128, 0.99999, 0.2, 0.2, 723.624),
-        pytest.param(
-            "prefill",
-            32768,
-            0.99999,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            0.99999,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 0.99999, 0.2, 0.2, 723.624, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.99999, 0.2, 0.2, 723.624, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.99999, 0.2, 0.2, 723.624, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.99999, 0.2, 0.2, 723.624, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(

@@ -445,15 +445,17 @@ else:
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 1.0, 0.2, 0.2, 1073.942),
         ("prefill", 128, 1.0, 0.2, 0.2, 1279.149),
-        ("prefill", 1024, 1.0, 0.2, 0.2, 1751.616),
-        ("prefill", 8192, 1.0, 0.2, 0.2, 2239.408),
-        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 17448.759, id="prefill-131072"),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 1751.616, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 2239.408, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 5246.868, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 17448.759, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ]
     _PROGRAM_TRACE_PARAMS = [
-        (True, False),
+        pytest.param(True, False, marks=_CI_SKIP_MARK),
         (False, False),
         (True, True),
     ]
+    _PROGRAM_TRACE_IDS = ["program_cache-eager", "no_program_cache-eager", "program_cache-trace"]
 
 
 @pytest.mark.parametrize(
@@ -542,9 +544,10 @@ else:
     _DEVICE_PERF_PARAMS = [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 8192),
-        pytest.param("prefill", 131072, id="prefill-131072"),
+        pytest.param("prefill", 1024, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ]
 
 

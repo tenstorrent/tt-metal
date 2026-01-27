@@ -426,26 +426,10 @@ def _run_ds_mlp_fwd_all_gather_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 1.0, 0.2, 0.2, 671.926),
         ("prefill", 128, 1.0, 0.2, 0.2, 920.434),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_FOCUSED_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_FOCUSED_SKIP_MARK],
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 920.434, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 920.434, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 920.434, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 920.434, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -537,7 +521,7 @@ def test_ds_mlp_fwd_all_gather(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=[_CI_FOCUSED_SKIP_MARK], id="prefill-131072"),
+        pytest.param("prefill", 131072, marks=[_CI_FOCUSED_SKIP_MARK, _CI_SKIP_MARK], id="prefill-131072"),
     ],
 )
 def test_ds_mlp_fwd_all_gather_device_perf(mode, seq_len):

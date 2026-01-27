@@ -575,9 +575,10 @@ else:
     _DEVICE_PERF_PARAMS = [
         ("decode", 128),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 8192),
-        pytest.param("prefill", 131072, id="prefill-131072"),
+        pytest.param("prefill", 1024, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ]
 
 

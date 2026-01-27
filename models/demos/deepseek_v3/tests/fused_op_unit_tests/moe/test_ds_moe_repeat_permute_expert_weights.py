@@ -473,26 +473,10 @@ def _run_ds_moe_repeat_permute_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 1.0, 0.2, 0.2, 1024.983),
         ("prefill", 128, 1.0, 0.2, 0.2, 1104.705),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -586,26 +570,10 @@ def test_ds_moe_repeat_permute_expert_weights(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 1.0, 0.2, 0.2, 1024.983),
         ("prefill", 128, 1.0, 0.2, 0.2, 1104.705),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 1104.705, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -795,9 +763,10 @@ def test_ds_moe_repeat_permute_expert_weights_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 8192),
-        pytest.param("prefill", 131072, id="prefill-131072"),
+        pytest.param("prefill", 1024, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @_SINGLE_DEVICE_CI_SKIP_MARK

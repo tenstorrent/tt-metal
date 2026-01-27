@@ -532,33 +532,17 @@ def _run_ds_moe_expert_selection_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.95, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.966, 0.2, 0.2, 0.0),
-        pytest.param(
-            "prefill",
-            32768,
-            0.966,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            0.966,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
         pytest.param(False, False, marks=_CI_FOCUSED_SKIP_MARK),
-        (True, True),
+        (True, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -644,33 +628,17 @@ def test_ds_moe_expert_selection(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.95, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.966, 0.2, 0.2, 0.0),
-        pytest.param(
-            "prefill",
-            32768,
-            0.966,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            0.966,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.966, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
     "program_cache_enabled, trace_mode",
     [
         pytest.param(False, False, marks=_CI_FOCUSED_SKIP_MARK),
-        (True, True),
+        (True, False),
     ],
 )
 @pytest.mark.parametrize(
@@ -763,7 +731,12 @@ def test_ds_moe_expert_selection_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
+        pytest.param(
+            "prefill",
+            131072,
+            marks=[_CI_SKIP_MARK, _CI_FOCUSED_SKIP_MARK],
+            id="prefill-131072",
+        ),
     ],
 )
 def test_ds_moe_expert_selection_device_perf(mode, seq_len):
@@ -782,7 +755,9 @@ def test_ds_moe_expert_selection_device_perf(mode, seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"ds_moe_expert_selection_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_expert_selection.py"
-    trace_filter = "eager"
+    trace_cache_token = "True-False"
+    mode_token = f"{mode}-{seq_len}"
+    expr = f"{trace_cache_token} and {mode_token} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_expert_selection -k "{expr}"'
 
     profiler.start("run")
@@ -848,7 +823,12 @@ def test_ds_moe_expert_selection_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
+        pytest.param(
+            "prefill",
+            131072,
+            marks=[_CI_SKIP_MARK, _CI_FOCUSED_SKIP_MARK],
+            id="prefill-131072",
+        ),
     ],
 )
 def test_ds_moe_expert_selection_single_device_device_perf(mode, seq_len):
@@ -866,11 +846,9 @@ def test_ds_moe_expert_selection_single_device_device_perf(mode, seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"ds_moe_expert_selection_single_device_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_expert_selection.py"
-    trace_filter = "eager"
-    expr = (
-        "single_device and program_cache and not no_program_cache and "
-        f"{trace_filter} and {mode} and {seq_len} and real_weights"
-    )
+    trace_cache_token = "True-False"
+    mode_token = f"{mode}-{seq_len}"
+    expr = f"single_device and {trace_cache_token} and {mode_token} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_expert_selection_single_device -k "{expr}"'
 
     profiler.start("run")

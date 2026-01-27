@@ -381,26 +381,10 @@ def _run_ds_lm_head_fwd_mesh_scatter_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets for long seq lengths.
         ("decode", 32, 1.0, 0.2, 0.2, 127767.789),
         ("prefill", 128, 1.0, 0.2, 0.2, 99067.926),
-        pytest.param(
-            "prefill",
-            32768,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            1.0,
-            0.2,
-            0.2,
-            0.0,
-            marks=[_CI_SKIP_MARK],
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 99067.926, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 99067.926, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 99067.926, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 99067.926, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(

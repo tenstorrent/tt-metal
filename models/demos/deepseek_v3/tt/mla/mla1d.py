@@ -1191,7 +1191,7 @@ class MLA1D(AbstractModule):
         # 1,1,32,576 L1 interleaved
 
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
-        # 1,32,1(32),576 L1 interleaved
+        # 1,1(32),32,576 L1 interleaved
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
         # 1,32,1(32),576 L1 interleaved
         tt_kvpe = ttnn.mesh_partition(

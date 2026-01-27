@@ -481,8 +481,10 @@ def _run_ds_embedding_fwd_typecast_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 32, 1.0, 0.2, 0.2, 241.189),
         ("prefill", 128, 1.0, 0.2, 0.2, 219.207),
-        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 0.0, marks=[_CI_SKIP_MARK], id="prefill-32768"),
-        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 0.0, marks=[_CI_SKIP_MARK], id="prefill-131072"),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -572,8 +574,10 @@ def test_ds_embedding_fwd_typecast(
     [
         ("decode", 32, 1.0, 0.2, 0.2, 241.189),
         ("prefill", 128, 1.0, 0.2, 0.2, 219.207),
-        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 0.0, marks=[_CI_SKIP_MARK], id="prefill-32768"),
-        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 0.0, marks=[_CI_SKIP_MARK], id="prefill-131072"),
+        pytest.param("prefill", 1024, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 1.0, 0.2, 0.2, 219.207, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(

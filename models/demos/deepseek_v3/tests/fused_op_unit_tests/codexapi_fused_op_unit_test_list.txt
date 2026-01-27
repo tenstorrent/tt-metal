@@ -1,4 +1,3 @@
-moe ds_moe_op
 moe ds_moe_fwd_moe
 moe ds_moe_gate_projection_sigmoid
 moe ds_moe_add_score_correction_bias

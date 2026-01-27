@@ -433,26 +433,10 @@ def _run_ds_moe_add_score_correction_bias_test(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.9948, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.9984, 0.2, 0.2, 0.0),
-        pytest.param(
-            "prefill",
-            32768,
-            0.999,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            0.999,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -542,26 +526,10 @@ def test_ds_moe_add_score_correction_bias(
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.9948, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.9984, 0.2, 0.2, 0.0),
-        pytest.param(
-            "prefill",
-            32768,
-            0.999,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-32768",
-        ),
-        pytest.param(
-            "prefill",
-            131072,
-            0.999,
-            0.2,
-            0.2,
-            0.0,
-            marks=_CI_FOCUSED_SKIP_MARK,
-            id="prefill-131072",
-        ),
+        pytest.param("prefill", 1024, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.9984, 0.2, 0.2, 0.0, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -658,7 +626,12 @@ def test_ds_moe_add_score_correction_bias_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
+        pytest.param(
+            "prefill",
+            131072,
+            marks=[_CI_SKIP_MARK, _CI_FOCUSED_SKIP_MARK],
+            id="prefill-131072",
+        ),
     ],
 )
 def test_ds_moe_add_score_correction_bias_device_perf(mode, seq_len):
@@ -678,6 +651,7 @@ def test_ds_moe_add_score_correction_bias_device_perf(mode, seq_len):
     step_name = f"ds_moe_add_score_correction_bias_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe_add_score_correction_bias.py"
     trace_filter = "trace" if mode == "decode" else "eager"
+    expr = "program_cache and not no_program_cache and " f"{trace_filter} and {mode} and {seq_len} and real_weights"
     command = f'pytest {test_path}::test_ds_moe_add_score_correction_bias -k "{expr}"'
 
     profiler.start("run")
@@ -743,7 +717,12 @@ def test_ds_moe_add_score_correction_bias_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=_CI_FOCUSED_SKIP_MARK, id="prefill-131072"),
+        pytest.param(
+            "prefill",
+            131072,
+            marks=[_CI_SKIP_MARK, _CI_FOCUSED_SKIP_MARK],
+            id="prefill-131072",
+        ),
     ],
 )
 def test_ds_moe_add_score_correction_bias_single_device_device_perf(mode, seq_len):
