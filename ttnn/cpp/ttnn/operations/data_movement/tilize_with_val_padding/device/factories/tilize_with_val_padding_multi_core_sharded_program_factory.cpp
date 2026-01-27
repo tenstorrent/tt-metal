@@ -115,7 +115,7 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
 
     CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         all_cores,
         ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = compute_args});
 

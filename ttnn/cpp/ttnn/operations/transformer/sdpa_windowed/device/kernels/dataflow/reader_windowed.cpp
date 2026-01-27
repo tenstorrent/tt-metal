@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "api/debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
+#include "ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
 #include "api/tensor/tensor_accessor.h"
 
 #if defined(WATCHER_OVERHEAD_OK)

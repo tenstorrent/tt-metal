@@ -82,7 +82,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
@@ -92,7 +92,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
