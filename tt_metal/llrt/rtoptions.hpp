@@ -654,6 +654,13 @@ public:
             runtime_target_device_ = tt::TargetDevice::Mock;
         }
     }
+    void clear_mock_cluster_desc() {
+        mock_cluster_desc_path.clear();
+        // Only reset to Silicon if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Silicon;
+        }
+    }
 
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
