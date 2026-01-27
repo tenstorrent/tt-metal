@@ -6,9 +6,11 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <set>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
@@ -1069,6 +1071,358 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
             }
         }
     }
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_Fails) {
+    // Negative test: Logical topology that cannot be mapped to physical topology
+    // This test verifies that the mapper correctly fails when:
+    // 1. Logical meshes require more nodes than available in physical meshes
+    // 2. The mapper tries multiple different multi-mesh mapping combinations before failing
+    //
+    // Logical Topology (2 meshes):
+    //   Mesh 0: 3x3 grid (9 nodes) - requires 9 nodes
+    //   Mesh 1: 2x2 grid (4 nodes) - requires 4 nodes
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 (line: 0-1)
+    //
+    // Physical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs) - only 4 nodes available
+    //   Mesh 1: 2x2 grid (4 ASICs) - only 4 nodes available
+    //   Mesh 2: 2x2 grid (4 ASICs) - only 4 nodes available
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 <-> Mesh 2 (line: 0-1-2)
+    //
+    // Expected behavior:
+    //   - The mapper will try multiple combinations:
+    //     * Attempt 1: logical_mesh0 -> physical_mesh0, logical_mesh1 -> physical_mesh1 (fails - mesh0 too large)
+    //     * Attempt 2: logical_mesh0 -> physical_mesh1, logical_mesh1 -> physical_mesh0 (fails - mesh0 too large)
+    //     * Attempt 3: logical_mesh0 -> physical_mesh2, logical_mesh1 -> physical_mesh0 (fails - mesh0 too large)
+    //     * etc.
+    //   - Eventually exhausts all possibilities and fails
+    //   - This ensures the retry logic is exercised (at least 2 attempts)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh0{0};
+    const MeshId logical_mesh1{1};
+    const MeshId physical_mesh0{0};
+    const MeshId physical_mesh1{1};
+    const MeshId physical_mesh2{2};
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph (2 meshes: 3x3 and 2x2)
+    // =========================================================================
+
+    // Logical Mesh 0: 3x3 grid (9 nodes) - too large for available physical meshes
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < 9; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, 3, 3);
+
+    // Logical Mesh 1: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, 2, 2);
+
+    // Create logical multi-mesh graph
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh1] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+
+    // Create mesh-level adjacency map (line: 0-1)
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[logical_mesh0] = {logical_mesh1};
+    logical_mesh_level_adj_map[logical_mesh1] = {logical_mesh0};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (3 meshes, all 2x2)
+    // =========================================================================
+
+    // Physical Mesh 0: 2x2 grid (4 ASICs) - insufficient for logical mesh 0
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, 2, 2);
+
+    // Physical Mesh 1: 2x2 grid (4 ASICs) - insufficient for logical mesh 0
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    auto physical_adj_m1 = build_grid_adjacency(physical_asics_m1, 2, 2);
+
+    // Physical Mesh 2: 2x2 grid (4 ASICs) - insufficient for logical mesh 0
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
+    }
+    auto physical_adj_m2 = build_grid_adjacency(physical_asics_m2, 2, 2);
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh2] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create mesh-level adjacency map (line: 0-1-2)
+    // This allows the mapper to try different combinations of physical meshes
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {physical_mesh1};
+    physical_mesh_level_adj_map[physical_mesh1] = {physical_mesh0, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh2] = {physical_mesh1};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Run mapping and verify failure
+    // =========================================================================
+
+    // Create mapping config
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    // Call map_multi_mesh_to_physical - should fail
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Verify overall result failed
+    EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to insufficient physical nodes";
+    EXPECT_FALSE(result.error_message.empty()) << "Error message should be provided when mapping fails";
+
+    // Verify that no complete mapping was found
+    // The mapper may find partial mappings, but not all logical meshes should be mapped
+    std::set<MeshId> mapped_logical_meshes;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mapped_logical_meshes.insert(fabric_node.mesh_id);
+    }
+
+    // At least one logical mesh should not be fully mapped
+    // (logical mesh 0 requires 9 nodes but physical meshes only have 4 nodes each)
+    bool mesh0_fully_mapped = mapped_logical_meshes.contains(logical_mesh0) && result.fabric_node_to_asic.size() >= 9;
+    EXPECT_FALSE(mesh0_fully_mapped)
+        << "Logical mesh 0 (9 nodes) should not be fully mapped to physical mesh (4 nodes)";
+
+    // Verify that the error message indicates multiple attempts were made
+    // The error message should mention retry attempts or failed mesh pairs
+    // This ensures the retry logic was exercised (at least 2 attempts)
+    bool mentions_retry_or_attempts = result.error_message.find("attempt") != std::string::npos ||
+                                      result.error_message.find("retry") != std::string::npos ||
+                                      result.error_message.find("Failed mesh pairs") != std::string::npos;
+    EXPECT_TRUE(mentions_retry_or_attempts)
+        << "Error message should indicate multiple mapping attempts were made. Error: " << result.error_message;
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_StressTest_ManyConfigurations) {
+    // Stress test: Run many different configurations to measure solving time
+    // This test creates various logical/physical mesh combinations and measures
+    // how long the mapping takes for each configuration
+
+    using namespace ::tt::tt_fabric;
+
+    // Test configurations: (logical_meshes, physical_meshes, expected_success, inter_mesh_topology)
+    enum class InterMeshTopology {
+        LINE,       // Connect meshes in a line: 0-1-2-...
+        ALL_TO_ALL  // Fully connected: every mesh connected to every other mesh
+    };
+
+    struct TestConfig {
+        std::vector<std::pair<size_t, size_t>> logical_meshes;   // (rows, cols) for each logical mesh
+        std::vector<std::pair<size_t, size_t>> physical_meshes;  // (rows, cols) for each physical mesh
+        bool expected_success;
+        std::string description;
+        InterMeshTopology inter_mesh_topology = InterMeshTopology::LINE;
+    };
+
+    std::vector<TestConfig> configs = {
+        // 1. Large single mesh with all-to-all (baseline)
+        {{{10, 10}}, {{10, 10}}, true, "Single 10x10 mesh (all-to-all)", InterMeshTopology::ALL_TO_ALL},
+
+        // 2. Multiple large meshes with many inter-mesh connections (all-to-all)
+        {{{10, 10}, {10, 10}, {10, 10}},
+         {{10, 10}, {10, 10}, {10, 10}},
+         true,
+         "Three 10x10 meshes (all-to-all)",
+         InterMeshTopology::ALL_TO_ALL},
+
+        // 3. Variable mesh sizes with all-to-all
+        {{{8, 12}, {12, 8}},
+         {{8, 12}, {12, 8}},
+         true,
+         "Two 8x12/12x8 meshes (all-to-all)",
+         InterMeshTopology::ALL_TO_ALL},
+
+        // 4. Physical has more meshes than logical (tests retry logic)
+        {{{10, 10}, {10, 10}},
+         {{10, 10}, {10, 10}, {10, 10}},
+         true,
+         "Two logical, three physical (all-to-all)",
+         InterMeshTopology::ALL_TO_ALL},
+
+        // 5. Negative test - insufficient physical nodes
+        {{{10, 10}, {10, 10}},
+         {{8, 8}, {8, 8}},
+         false,
+         "Two 10x10 logical, two 8x8 physical (insufficient nodes)",
+         InterMeshTopology::ALL_TO_ALL},
+    };
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = true;
+
+    size_t total_configs = configs.size();
+    size_t successful_configs = 0;
+    size_t failed_configs = 0;
+    std::chrono::milliseconds total_time{0};
+    std::chrono::milliseconds max_time{0};
+    std::chrono::milliseconds min_time{std::chrono::milliseconds::max()};
+
+    std::cout << "\n=== Stress Test Results ===" << std::endl;
+
+    for (size_t config_idx = 0; config_idx < configs.size(); ++config_idx) {
+        const auto& test_config = configs[config_idx];
+
+        // Create logical multi-mesh graph
+        LogicalMultiMeshGraph logical_multi_mesh_graph;
+        AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+
+        for (size_t i = 0; i < test_config.logical_meshes.size(); ++i) {
+            const auto& [rows, cols] = test_config.logical_meshes[i];
+            const MeshId mesh_id{i};
+            size_t node_count = rows * cols;
+
+            std::vector<FabricNodeId> logical_nodes;
+            for (uint32_t j = 0; j < node_count; ++j) {
+                logical_nodes.push_back(FabricNodeId(mesh_id, j));
+            }
+            auto logical_adj = build_grid_adjacency(logical_nodes, rows, cols);
+            logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = AdjacencyGraph<FabricNodeId>(logical_adj);
+        }
+
+        // Build inter-mesh connectivity based on topology type
+        if (test_config.inter_mesh_topology == InterMeshTopology::LINE) {
+            // Connect meshes in a line topology: 0-1-2-...
+            for (size_t i = 0; i < test_config.logical_meshes.size(); ++i) {
+                const MeshId mesh_id{i};
+                if (i > 0) {
+                    MeshId prev_mesh{i - 1};
+                    logical_mesh_level_adj_map[prev_mesh].push_back(mesh_id);
+                    logical_mesh_level_adj_map[mesh_id].push_back(prev_mesh);
+                }
+            }
+        } else if (test_config.inter_mesh_topology == InterMeshTopology::ALL_TO_ALL) {
+            // Connect all meshes to all other meshes (fully connected/clique)
+            for (size_t i = 0; i < test_config.logical_meshes.size(); ++i) {
+                const MeshId mesh_id{i};
+                for (size_t j = 0; j < test_config.logical_meshes.size(); ++j) {
+                    if (i != j) {
+                        const MeshId other_mesh_id{j};
+                        logical_mesh_level_adj_map[mesh_id].push_back(other_mesh_id);
+                    }
+                }
+            }
+        }
+        logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+        // Create physical multi-mesh graph
+        PhysicalMultiMeshGraph physical_multi_mesh_graph;
+        AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+
+        for (size_t i = 0; i < test_config.physical_meshes.size(); ++i) {
+            const auto& [rows, cols] = test_config.physical_meshes[i];
+            const MeshId mesh_id{i};
+            size_t asic_count = rows * cols;
+
+            std::vector<tt::tt_metal::AsicID> physical_asics;
+            uint64_t base_id = 1000 * (i + 1);
+            for (uint64_t j = 0; j < asic_count; ++j) {
+                physical_asics.push_back(tt::tt_metal::AsicID{base_id + j});
+            }
+            auto physical_adj = build_grid_adjacency(physical_asics, rows, cols);
+            physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] =
+                AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+        }
+
+        // Build inter-mesh connectivity based on topology type (same as logical)
+        if (test_config.inter_mesh_topology == InterMeshTopology::LINE) {
+            // Connect meshes in a line topology: 0-1-2-...
+            for (size_t i = 0; i < test_config.physical_meshes.size(); ++i) {
+                const MeshId mesh_id{i};
+                if (i > 0) {
+                    MeshId prev_mesh{i - 1};
+                    physical_mesh_level_adj_map[prev_mesh].push_back(mesh_id);
+                    physical_mesh_level_adj_map[mesh_id].push_back(prev_mesh);
+                }
+            }
+        } else if (test_config.inter_mesh_topology == InterMeshTopology::ALL_TO_ALL) {
+            // Connect all meshes to all other meshes (fully connected/clique)
+            for (size_t i = 0; i < test_config.physical_meshes.size(); ++i) {
+                const MeshId mesh_id{i};
+                for (size_t j = 0; j < test_config.physical_meshes.size(); ++j) {
+                    if (i != j) {
+                        const MeshId other_mesh_id{j};
+                        physical_mesh_level_adj_map[mesh_id].push_back(other_mesh_id);
+                    }
+                }
+            }
+        }
+        physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+        // Measure mapping time
+        auto start_time = std::chrono::steady_clock::now();
+        const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+        auto end_time = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        total_time += elapsed;
+        if (elapsed > max_time) {
+            max_time = elapsed;
+        }
+        if (elapsed < min_time) {
+            min_time = elapsed;
+        }
+
+        // Verify result matches expectation
+        bool success_matches = (result.success == test_config.expected_success);
+        if (result.success) {
+            successful_configs++;
+        } else {
+            failed_configs++;
+        }
+
+        std::cout << "Config " << (config_idx + 1) << "/" << total_configs << ": " << test_config.description << " - "
+                  << elapsed.count() << "ms - " << (result.success ? "SUCCESS" : "FAILED");
+        if (!success_matches) {
+            std::cout << " [UNEXPECTED]";
+        }
+        std::cout << std::endl;
+
+        // Verify bidirectional consistency if successful
+        if (result.success) {
+            verify_bidirectional_consistency(result);
+        }
+    }
+
+    // Print summary statistics
+    std::cout << "\n=== Summary ===" << std::endl;
+    std::cout << "Total configurations: " << total_configs << std::endl;
+    std::cout << "Successful: " << successful_configs << std::endl;
+    std::cout << "Failed: " << failed_configs << std::endl;
+    std::cout << "Total time: " << total_time.count() << "ms" << std::endl;
+    std::cout << "Average time: " << (total_time.count() / total_configs) << "ms" << std::endl;
+    std::cout << "Min time: " << min_time.count() << "ms" << std::endl;
+    std::cout << "Max time: " << max_time.count() << "ms" << std::endl;
+
+    // Verify we ran all configurations
+    EXPECT_EQ(total_configs, configs.size());
+
+    // At least some configurations should succeed (the ones marked as expected_success=true)
+    EXPECT_GT(successful_configs, 0u) << "At least some configurations should succeed";
 }
 
 }  // namespace

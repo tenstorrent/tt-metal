@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include <limits>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
@@ -486,12 +489,13 @@ TopologyMappingResult perform_intra_mesh_mapping(
     const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
     const ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     ::tt::tt_fabric::ConnectionValidationMode validation_mode,
-    MeshId logical_mesh_id) {
+    MeshId logical_mesh_id,
+    bool quiet_mode = false) {
     TopologyMappingResult result;
 
     // Perform the sub mapping for the fabric node id to the asic id
-    auto sub_mapping =
-        ::tt::tt_fabric::solve_topology_mapping(logical_graph, physical_graph, intra_mesh_constraints, validation_mode);
+    auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
+        logical_graph, physical_graph, intra_mesh_constraints, validation_mode, quiet_mode);
 
     // Populate result
     result.success = sub_mapping.success;
@@ -565,6 +569,7 @@ std::string build_inter_mesh_mapping_error_message(
         "Inter-mesh mapping failed after {} attempt(s). "
         "Logical meshes being mapped: [{}] ({} total). "
         "Physical meshes available: [{}] ({} total). "
+        "Failed mesh pair configurations tried: {} out of {} possible combinations. "
         "Inter-mesh validation mode: {}. "
         "Solver error: {}.{}",
         retry_attempt,
@@ -572,6 +577,8 @@ std::string build_inter_mesh_mapping_error_message(
         logical_meshes.size(),
         physical_meshes_str,
         physical_meshes.size(),
+        failed_mesh_pairs.size(),
+        logical_meshes.size() * physical_meshes.size(),
         validation_mode_str,
         solver_error_message,
         failed_pairs_str);
@@ -609,6 +616,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
         physical_meshes.push_back(mesh_id);
     }
 
+    // Log initial mapping setup
+    log_info(
+        tt::LogFabric,
+        "Starting multi-mesh mapping: {} logical mesh(es) to {} physical mesh(es)",
+        logical_meshes.size(),
+        physical_meshes.size());
+
     // If rank bindings are disabled, initialize valid mappings for all logical meshes
     // to all physical meshes so that forbidden constraints can be applied
     if (config.disable_rank_bindings) {
@@ -616,6 +630,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
         for (const auto& logical_mesh_id : logical_meshes) {
             inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_mesh_set);
         }
+        log_debug(tt::LogFabric, "Rank bindings disabled - all logical meshes can map to any physical mesh");
     }
 
     bool success = false;
@@ -626,12 +641,15 @@ TopologyMappingResult map_multi_mesh_to_physical(
     // This should be sufficient for most cases: if we have N logical meshes and M physical meshes,
     // worst case is N*M attempts (trying each logical mesh with each physical mesh)
     const unsigned int max_retry_attempts = logical_meshes.size() * physical_meshes.size() + 1;
+    log_debug(tt::LogFabric, "Maximum retry attempts: {}", max_retry_attempts);
 
     while (!success) {
         retry_attempt++;
 
         // Safety check to prevent infinite loops
         if (retry_attempt > max_retry_attempts) {
+            log_info(
+                tt::LogFabric, "Multi-mesh mapping failed: Maximum retry attempts ({}) exceeded", max_retry_attempts);
             result.success = false;
             result.error_message = build_inter_mesh_mapping_error_message(
                 retry_attempt - 1,
@@ -646,12 +664,27 @@ TopologyMappingResult map_multi_mesh_to_physical(
             return result;
         }
 
+        // Use quiet mode for retry attempts (failures are expected during retries)
+        // Only log errors if this is the final attempt
+        bool quiet_mode = (retry_attempt < max_retry_attempts);
+
+        log_info(
+            tt::LogFabric,
+            "Multi-mesh mapping attempt {}/{}: Trying inter-mesh mapping",
+            retry_attempt,
+            max_retry_attempts);
+        if (!failed_mesh_pairs.empty()) {
+            log_debug(tt::LogFabric, "Failed mesh pairs from previous attempts: {}", failed_mesh_pairs.size());
+        }
+
         // Perform inter-mesh mapping
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
-            mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode);
+            mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
 
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {
+            log_info(tt::LogFabric, "Multi-mesh mapping attempt {} failed: Inter-mesh mapping failed", retry_attempt);
+            log_debug(tt::LogFabric, "Inter-mesh mapping error: {}", solver_result.error_message);
             result.success = false;
             result.error_message = build_inter_mesh_mapping_error_message(
                 retry_attempt,
@@ -662,6 +695,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
                 failed_mesh_pairs);
             return result;
         }
+
+        // Log successful inter-mesh mapping
+        log_info(
+            tt::LogFabric,
+            "Attempt {}: Inter-mesh mapping succeeded, found {} mesh pair(s)",
+            retry_attempt,
+            solver_result.target_to_global.size());
 
         unsigned int mapped_mesh_pairs = 0;
         std::vector<std::pair<MeshId, MeshId>> current_attempt_failed_pairs;
@@ -688,13 +728,67 @@ TopologyMappingResult map_multi_mesh_to_physical(
             auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
 
             // Perform intra-mesh mapping
+            // Use quiet mode for retry attempts (failures are expected during retries)
             auto intra_mesh_result = perform_intra_mesh_mapping(
-                logical_graph, physical_graph, intra_mesh_constraints, validation_mode, logical_mesh_id);
+                logical_graph, physical_graph, intra_mesh_constraints, validation_mode, logical_mesh_id, quiet_mode);
 
             // If the intra-mesh mapping fails, add a forbidden constraint so it doesn't try to map this pair again
             if (!intra_mesh_result.success) {
-                inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id);
-                current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                log_info(
+                    tt::LogFabric,
+                    "Attempt {}: Intra-mesh mapping failed for mesh {} -> {}",
+                    retry_attempt,
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get());
+                try {
+                    inter_mesh_constraints.add_forbidden_constraint(logical_mesh_id, physical_mesh_id);
+                    current_attempt_failed_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+                } catch (const std::exception& e) {
+                    // If adding forbidden constraint causes overconstrained nodes (no valid mappings left),
+                    // this means we've exhausted all possibilities for this logical mesh.
+                    // Treat this as a failure and return with an appropriate error message.
+                    // Update failed pairs to include the current one that caused the exception
+                    failed_mesh_pairs.insert(
+                        failed_mesh_pairs.end(),
+                        current_attempt_failed_pairs.begin(),
+                        current_attempt_failed_pairs.end());
+                    failed_mesh_pairs.emplace_back(logical_mesh_id, physical_mesh_id);
+
+                    // Count how many times this logical mesh failed to map
+                    size_t failed_count_for_this_mesh = 0;
+                    for (const auto& [log_id, phys_id] : failed_mesh_pairs) {
+                        if (log_id == logical_mesh_id) {
+                            failed_count_for_this_mesh++;
+                        }
+                    }
+
+                    log_info(
+                        tt::LogFabric,
+                        "Multi-mesh mapping failed after {} attempt(s): Tried {} different mesh configurations. "
+                        "Logical mesh {} failed to map to {} out of {} physical meshes. "
+                        "Total failed mesh pair combinations: {}",
+                        retry_attempt,
+                        failed_mesh_pairs.size(),
+                        logical_mesh_id.get(),
+                        failed_count_for_this_mesh,
+                        physical_meshes.size(),
+                        failed_mesh_pairs.size());
+                    result.success = false;
+                    result.error_message = build_inter_mesh_mapping_error_message(
+                        retry_attempt,
+                        logical_meshes,
+                        physical_meshes,
+                        inter_mesh_validation_mode,
+                        fmt::format(
+                            "All mapping possibilities exhausted for logical mesh {} after trying {} different mesh "
+                            "configurations. "
+                            "Constraint error: {}",
+                            logical_mesh_id.get(),
+                            failed_mesh_pairs.size(),
+                            e.what()),
+                        failed_mesh_pairs);
+                    return result;
+                }
             } else {
                 mapped_mesh_pairs++;
                 // Add the mapping to the result
@@ -712,8 +806,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // If all mesh pairs were mapped we can stop the loop
         if (mapped_mesh_pairs == mesh_mappings.size()) {
             success = true;
+            log_info(
+                tt::LogFabric,
+                "Multi-mesh mapping succeeded after {} attempt(s): {} mesh pair(s) mapped",
+                retry_attempt,
+                mapped_mesh_pairs);
         } else {
             // Remove all the results that were added so far and start over
+            log_info(
+                tt::LogFabric,
+                "Attempt {}: Only {}/{} mesh pair(s) mapped, retrying",
+                retry_attempt,
+                mapped_mesh_pairs,
+                mesh_mappings.size());
             result.fabric_node_to_asic.clear();
             result.asic_to_fabric_node.clear();
         }
