@@ -11,14 +11,12 @@
 
 #include "batch_norm.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
 void bind_batch_norm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::batch_norm,
+    const auto* doc =
         R"doc(
         Applies batch norm over each channel on :attr:`input_tensor`.
         See `Spatial Batch Normalization <https://arxiv.org/abs/1502.03167>`_ for more details.
@@ -72,8 +70,14 @@ void bind_batch_norm_operation(nb::module_& mod) {
 
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
-        )doc",
-        ttnn::nanobind_arguments_t{
+        )doc";
+
+    // Bind the free function directly - no struct!
+    ttnn::bind_function<"batch_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::batch_norm,
             nb::arg("input"),
             nb::kw_only(),
             nb::arg("running_mean") = nb::none(),
@@ -85,6 +89,6 @@ void bind_batch_norm_operation(nb::module_& mod) {
             nb::arg("bias") = nb::none(),
             nb::arg("output") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::normalization::detail

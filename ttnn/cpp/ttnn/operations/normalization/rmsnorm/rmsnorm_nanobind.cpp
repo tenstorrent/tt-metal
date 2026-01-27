@@ -7,16 +7,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rmsnorm.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_rms_norm(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::rms_norm,
-        R"doc(
+    const auto* doc = R"doc(
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
@@ -89,8 +86,13 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
             - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
-        )doc",
-        ttnn::nanobind_arguments_t{
+        )doc";
+
+    ttnn::bind_function<"rms_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::rms_norm,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("epsilon") = 1e-12,
@@ -99,7 +101,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::normalization::detail
