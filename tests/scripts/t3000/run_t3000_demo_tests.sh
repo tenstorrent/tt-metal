@@ -286,7 +286,7 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -359,9 +359,9 @@ run_t3000_gemma3_tests() {
   gemma27b=google/gemma-3-27b-it
   tt_cache_gemma27b=$TT_CACHE_HOME/$gemma27b
 
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
@@ -376,7 +376,7 @@ run_t3000_whisper_tests() {
 
   echo "LOG_METAL: Running run_t3000_whisper_tests"
 
-  pytest -n auto models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -1,1 +1,1 @@
-../../../../models/demos/wormhole/vgg_unet/tests/pcc/test_vgg_unet.py
+../../../../models/demos/vision/segmentation/vgg_unet/wormhole/tests/pcc/test_vgg_unet.py

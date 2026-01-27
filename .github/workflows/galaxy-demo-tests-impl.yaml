@@ -238,7 +238,7 @@ jobs:
         if: ${{ matrix.test-group.model == 'whisper' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
+          pytest models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
       - name: Run Stable Diffusion 3.5 demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'sd35' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
