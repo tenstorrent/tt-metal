@@ -531,7 +531,7 @@ The function can be summarized by the following pseudo-code:
    read_runtime_arguments()
    read_compile_time_arguments()
    create_address_generators()
-   for (i in 0 .. n_tiles - 1) {
+   for (i in 0 .. n_tiles) {
        transfer_tile_from_dram_to_circular_buffer(in0, i)
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
@@ -576,7 +576,7 @@ The function can be summarized by the following pseudo-code:
 
    read_compile_time_arguments()
    initialize_tensix_engine_for_elementwise_addition()
-   for (i in 0 .. n_tiles - 1) {
+   for (i in 0 .. n_tiles) {
        add_tiles_in_input_circular_buffers()
        write_result_to_output_circular_buffer()
    }
@@ -641,7 +641,7 @@ The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
 
-   for (i in 0 .. n_tiles - 1) {
+   for (i in 0 .. n_tiles) {
        transfer_tile_from_circular_buffer_to_dram(out0, i)
    }
 
