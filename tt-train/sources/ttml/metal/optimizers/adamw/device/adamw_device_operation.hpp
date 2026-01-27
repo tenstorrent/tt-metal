@@ -7,8 +7,7 @@
 #include <optional>
 
 #include "adamw_device_operation_types.hpp"
-#include "adamw_full_precision_program_factory.hpp"
-#include "adamw_half_precision_program_factory.hpp"
+#include "adamw_program_factory.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
@@ -18,7 +17,7 @@ struct AdamWDeviceOperation {
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<AdamWHalfPrecisionProgramFactory, AdamWFullPrecisionProgramFactory>;
+    using program_factory_t = std::variant<AdamWProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
