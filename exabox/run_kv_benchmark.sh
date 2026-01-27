@@ -43,19 +43,19 @@ MPI_OPTS="--hostfile ${HOSTFILE} --mca btl_tcp_if_exclude docker0,lo --tag-outpu
 run_benchmark() {
     local sender_mesh=$1
     local receiver_mesh=$2
-    
+
     echo ""
     echo "============================================================"
     echo "Running: ${sender_mesh} → ${receiver_mesh}"
     echo "============================================================"
-    
+
     tt-run --verbose \
         --rank-binding tests/tt_metal/distributed/config/exabox_2_galaxy_rank_binding.yaml \
         --mpi-args "${MPI_OPTS}" \
         python tests/ttnn/distributed/benchmark_galaxy_kv_transfer.py \
             --sender-mesh ${sender_mesh} \
             --receiver-mesh ${receiver_mesh}
-    
+
     local exit_code=$?
     echo "Exit code: ${exit_code}"
     return ${exit_code}
