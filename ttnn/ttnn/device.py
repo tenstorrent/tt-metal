@@ -51,8 +51,8 @@ def close_device(device: "ttnn.device.Device"):
     # to close the device to release handles and allow subsequent operations.
     try:
         synchronize_device(device)
-    except Exception as e:
-        logger.warning(f"close_device: synchronize_device failed with: {e}. Continuing with device close.")
+    except Exception:
+        logger.exception("close_device: synchronize_device failed. Continuing with device close.")
 
     ttnn._ttnn.device.close_device(device)
 
