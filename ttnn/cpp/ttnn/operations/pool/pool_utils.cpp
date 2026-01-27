@@ -553,9 +553,37 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
     halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
 
-    // Use the num_cores from the sliding_window_config which already has the correct parallel config
-    uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;
-    uint32_t num_cores_c = sliding_window_config.num_cores_c;
+    // Get num_cores from the input memory config (for the sliced input)
+    // The sliding_window_config.num_cores_nhw is for the FULL output, not the slice
+    uint32_t num_cores_nhw = 1;
+    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_cores_nhw = input_memory_config.shard_spec().value().grid.num_cores();
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
+        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
+        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            num_cores_nhw = grid_size.x;
+        } else {
+            num_cores_nhw = grid_size.y;
+        }
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_nhw = 1;
+    }
+
+    // Calculate num_cores_c from input_memory_config to be consistent
+    uint32_t num_cores_c = 1;  // Default for HEIGHT_SHARDED
+    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_c = input_memory_config.shard_spec().value().grid.num_cores();
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
+        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
+        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            num_cores_c = grid_size.y;
+        } else {
+            num_cores_c = grid_size.x;
+        }
+    }
+
     halo_config.num_cores_nhw = num_cores_nhw;
     halo_config.num_cores_c = num_cores_c;
 
@@ -564,14 +592,20 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     uint32_t halo_output_size = precise_halo_output_size * input_datum_size;
 
     // Create output memory config with correct output shard shape
-    // Output has same C dimension (width) but different NHW dimension (height) due to pooling
+    // Output shard shape should be based on the ACTUAL pooled output dimensions, not the halo output
+    // The halo output is the padded INPUT to the pool operation (with overlap), which is much larger
     auto input_shard_spec = input_memory_config.shard_spec().value();
-    // The output shard height (NHW dimension) is the number of output elements calculated by halo
-    // divided by the width (C dimension). precise_halo_output_size is already per-core output elements.
+
+    // Calculate the actual pooled output size per core
+    uint32_t pool_output_nhw_per_core = slice_output_height * slice_output_width / num_cores_nhw;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        pool_output_nhw_per_core = tt::round_up(pool_output_nhw_per_core, tt::constants::TILE_HEIGHT);
+    }
+
     tt::tt_metal::ShardSpec output_shard_spec(
         input_shard_spec.grid,
-        {precise_halo_output_size / input_shard_shape[1],  // height = NHW per core
-         input_shard_shape[1]},                            // width = C per core (unchanged)
+        {pool_output_nhw_per_core,  // height = actual pooled output NHW per core
+         input_shard_shape[1]},     // width = C per core (unchanged)
         input_shard_spec.orientation);
     auto output_memory_config = tt::tt_metal::MemoryConfig(
         input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
@@ -598,12 +632,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         dtype,
         config_tensor_in_dram);
 
-    // Calculate actual pool output tensor size (not halo output which is the padded pool input)
-    // Pool output shape is based on slice_output_height/width and channels
-    uint32_t pool_output_nhw_per_core = slice_output_height * slice_output_width / num_cores_nhw;
-    if (output_layout == tt::tt_metal::Layout::TILE) {
-        pool_output_nhw_per_core = tt::round_up(pool_output_nhw_per_core, tt::constants::TILE_HEIGHT);
-    }
+    // Calculate actual pool output tensor size for memory tracking
     uint32_t output_datum_size = input_datum_size;  // Pool output has same dtype as input
     uint32_t output_tensor_size = pool_output_nhw_per_core * input_shard_shape[1] * output_datum_size;
 

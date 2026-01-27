@@ -895,7 +895,6 @@ enum class Pool2dExecutionPath {
 Pool2dExecutionPath determine_pool2d_execution_path(
     const ttnn::Tensor& input_tensor, const std::optional<const Op2DSliceConfig>& slice_config) {
     bool is_l1 = input_tensor.memory_config().is_l1();
-    bool is_dram = input_tensor.memory_config().is_dram();
 
     // If slice config explicitly specifies L1_FULL, use L1 path
     if (slice_config.has_value() && slice_config->slice_type == Op2DSliceConfig::SliceType::L1_FULL) {
