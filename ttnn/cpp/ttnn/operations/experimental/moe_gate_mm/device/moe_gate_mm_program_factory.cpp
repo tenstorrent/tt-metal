@@ -24,33 +24,42 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Get the cores for the program
-    const auto dram_bank2core_coords_full =
+    const auto dram_bank2core_coords =
         tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
             tt::tt_metal::NOC::RISCV_0_default);
 
-    // Let us pick the first 8 cores, since those are all we need.
-    const auto dram_bank2core_coords = std::vector(
-        dram_bank2core_coords_full.begin(),
-        dram_bank2core_coords_full.begin() + std::min<size_t>(8, dram_bank2core_coords_full.size()));
-
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
+
+    // Pick the first core as the reduce core
+    constexpr uint32_t reduce_core_id = 0;
+    const auto reduce_core =
+        tensor_args.input_tensor.device()->worker_core_from_logical_core(dram_bank2core_coords[reduce_core_id]);
+    const auto reduce_core_physical_x = static_cast<uint32_t>(reduce_core.x);
+    const auto reduce_core_physical_y = static_cast<uint32_t>(reduce_core.y);
 
     // CBs used in the MoE Gate MM operation
     /*
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    32*3  |      196608   |
+        | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    32*3  |      196608     |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
-        | cb_s2c_out     | CBIndex::c_2  | Float16_b  | true  |    1     |      2048       |
+        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
+        | cb_w2c_in2     | CBIndex::c_3  | Float32    | true  |    8*12  |      196608     |
+        | cb_s2c_out     | CBIndex::c_4  | Float16_b  | true  |    8     |      16384      |
         ------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
+        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
+        {"cb_w2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float32, true, 8 * 12},
     };
+
+    // Create a semaphore in the reduce core for all cores to signal that they have sent their data
+    const auto reduce_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
 
@@ -68,7 +77,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
         sharded_cb_specs = {
             {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 224, tensor_args.input_tensor.buffer()},
-            {"cb_s2c_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 1, tensor_args.output_tensor.buffer()}};
+            {"cb_s2c_out", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 8, tensor_args.output_tensor.buffer()}};
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
@@ -90,6 +99,9 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
+        {"reduce_core_id", reduce_core_id},
+        {"reduce_core_physical_x", reduce_core_physical_x},
+        {"reduce_core_physical_y", reduce_core_physical_y},
     };
 
     // Create kernels for the program
@@ -133,6 +145,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
+    runtime_args.push_back(reduce_semaphore);
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
