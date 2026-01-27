@@ -27,7 +27,7 @@ public:
         }
     }
 };
-using fn_init = void(uint32_t, uint32_t);
+using fn_init = void(uint32_t, uint32_t, uint32_t);
 using fn_compute = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 struct LLK_Node {
     fn_init* llk_init;
@@ -87,7 +87,7 @@ void unroll_llk() {
 
     reconfig_data_format(cur_llk.CB_A, cur_llk.CB_B);
     pack_reconfig_data_format(cur_llk.CB_OUT);
-    cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B);
+    cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B, __builtin_LINE());
     for (uint32_t i = 0; i < cb_iterations; i++) {
         if constexpr (cur_llk.debug_mode == 1) {
             // UNPACK(DPRINT << "=============START NODE==============" << ENDL());
