@@ -86,8 +86,7 @@ void AdamWFused::step() {
             m_beta2_pow,
             m_config.epsilon,
             m_config.weight_decay,
-            m_config.stochastic_rounding,
-            m_steps);
+            m_config.stochastic_rounding);
     }
 }
 
