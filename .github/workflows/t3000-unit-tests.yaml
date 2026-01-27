@@ -218,8 +218,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: test-artifacts/
-          pattern: test-results-*
-          merge-multiple: true
 
       - name: Generate Model Status Chart
         run: |
@@ -230,18 +228,57 @@ jobs:
           import xml.etree.ElementTree as ET
           from collections import defaultdict
 
+          print("=== Debug: Finding XML files ===")
+
+          # List all files in test-artifacts directory
+          for root, dirs, files in os.walk('test-artifacts'):
+              print(f"Directory: {root}")
+              for file in files:
+                  print(f"  File: {file}")
+
+          # Find all XML files
+          xml_files = glob.glob('test-artifacts/**/*.xml', recursive=True)
+          print(f"Found {len(xml_files)} XML files:")
+          for xml_file in xml_files:
+              print(f"  {xml_file}")
+
           # Determine which devices actually ran based on available test artifacts
           available_devices = set()
-          for xml_file in glob.glob('test-artifacts/**/*.xml', recursive=True):
+          for xml_file in xml_files:
               filename = os.path.basename(xml_file)
+              print(f"Processing filename: {filename}")
+
               if filename.startswith('results-'):
                   parts = filename[8:].replace('.xml', '').split('-')
+                  print(f"  Filename parts after 'results-': {parts}")
                   if len(parts) >= 1:
                       device = parts[0]
                       available_devices.add(device)
+                      print(f"  Added device: {device}")
 
           devices = sorted(list(available_devices))
-          print(f"Found test results for devices: {devices}")
+          print(f"=== Available devices: {devices} ===")
+
+          if not devices:
+              print("No devices found! This suggests either:")
+              print("1. No XML test result files were downloaded")
+              print("2. The XML files don't follow the expected naming pattern")
+              print("3. The artifact download didn't work correctly")
+
+              # Create empty results as fallback
+              output_data = {
+                  "tt_transformers": {},
+                  "standalone": {},
+                  "devices": []
+              }
+              with open('model-status.json', 'w') as f:
+                  json.dump(output_data, f, indent=2)
+
+              with open('model-status-report.md', 'w') as f:
+                  f.write("# Model Test Status Report\n\n**Error:** No test results found.\n")
+
+              print("Generated empty status files due to missing test data.")
+              exit(0)
 
           # Define model configurations per device (only include available devices)
           all_tt_transformers_models = {
@@ -258,15 +295,15 @@ jobs:
           }
 
           all_standalone_models = {
-              'n150': ['falcon-7b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'n300': ['falcon-7b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'n150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'n300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'p100': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'p150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'p300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'WH-LOUDBOX': ['falcon-7b', 'falcon-40b', 'resnet-50', 'vit', 'llama3.3-70b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'WH-LOUDBOX': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'BH-QB2': ['llama3.3-70b', 'flux.1-dev', 'wan2.2-t2v-a14b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'BH-LOUDBOX': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'WH-6U': ['falcon-7b', 'falcon-40b', 'resnet-50', 'vit', 'llama3.3-70b', 'mamba-2.8b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'WH-6U': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'BH-6U': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert']
           }
 
@@ -282,12 +319,15 @@ jobs:
           for device_models in standalone_models.values():
               all_standalone_models.update(device_models)
 
+          print(f"=== TT-Transformers models for available devices: {sorted(all_tt_models)} ===")
+          print(f"=== Standalone models for available devices: {sorted(all_standalone_models)} ===")
+
           # Parse test results
           test_results = defaultdict(lambda: defaultdict(list))  # test_results[device][model] = [test_results]
 
           # Find and parse XML files
           parsed_files = 0
-          for xml_file in glob.glob('test-artifacts/**/*.xml', recursive=True):
+          for xml_file in xml_files:
               try:
                   tree = ET.parse(xml_file)
                   root = tree.getroot()
@@ -320,7 +360,7 @@ jobs:
               except Exception as e:
                   print(f"Error parsing {xml_file}: {e}")
 
-          print(f"Parsed {parsed_files} test result files")
+          print(f"=== Parsed {parsed_files} test result files ===")
 
           # Generate status for TT-Transformers models
           tt_status = {}
