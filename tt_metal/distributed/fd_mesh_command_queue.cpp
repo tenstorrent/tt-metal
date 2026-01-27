@@ -168,13 +168,12 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
             }
         }
 
-        if (num_outstanding_reads_ != 0) {
+        if (auto reads = num_outstanding_reads_.exchange(0); reads != 0) {
             log_warning(
                 LogMetal,
                 "FDMeshCommandQueue destructor: {} outstanding reads remaining. "
                 "This may indicate a device hang or timeout occurred.",
-                num_outstanding_reads_.load());
-            num_outstanding_reads_.store(0);
+                reads);
         }
     }
 
