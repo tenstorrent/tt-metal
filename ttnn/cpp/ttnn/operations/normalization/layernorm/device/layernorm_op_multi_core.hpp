@@ -33,7 +33,10 @@ struct LayerNormMultiCoreProgramFactory {
         const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,

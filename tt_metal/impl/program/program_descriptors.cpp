@@ -37,10 +37,23 @@ std::optional<uint32_t> ProgramDescriptor::find_available_semaphore_id(
 
 namespace {
 
-// Helper function to check if two CoreRangeSets overlap
-bool core_ranges_overlap(const CoreRangeSet& a, const CoreRangeSet& b) {
-    for (const auto& range_a : a.ranges()) {
-        for (const auto& range_b : b.ranges()) {
+// Helper function to collect all core ranges from kernels in a descriptor
+// Returns a vector of CoreRange instead of CoreRangeSet to avoid overlap validation
+// (different kernels like reader/writer/compute can legitimately run on the same cores)
+std::vector<CoreRange> collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
+    std::vector<CoreRange> all_ranges;
+    for (const auto& kernel : desc.kernels) {
+        for (const auto& range : kernel.core_ranges.ranges()) {
+            all_ranges.push_back(range);
+        }
+    }
+    return all_ranges;
+}
+
+// Check if any range in vec_a overlaps with any range in vec_b
+bool ranges_overlap_between_descriptors(const std::vector<CoreRange>& vec_a, const std::vector<CoreRange>& vec_b) {
+    for (const auto& range_a : vec_a) {
+        for (const auto& range_b : vec_b) {
             if (range_a.intersects(range_b)) {
                 return true;
             }
@@ -49,26 +62,17 @@ bool core_ranges_overlap(const CoreRangeSet& a, const CoreRangeSet& b) {
     return false;
 }
 
-// Helper function to collect all core ranges from kernels in a descriptor
-CoreRangeSet collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
-    std::set<CoreRange> all_ranges;
-    for (const auto& kernel : desc.kernels) {
-        for (const auto& range : kernel.core_ranges.ranges()) {
-            all_ranges.insert(range);
-        }
-    }
-    return CoreRangeSet(all_ranges);
-}
-
 }  // namespace
 
 void ProgramDescriptor::merge(const ProgramDescriptor& other) {
-    // Check for overlapping core ranges in kernels
-    CoreRangeSet this_ranges = collect_all_kernel_core_ranges(*this);
-    CoreRangeSet other_ranges = collect_all_kernel_core_ranges(other);
+    // Check for overlapping core ranges between descriptors
+    // (different kernels within a single descriptor can share cores, but
+    // kernels from different descriptors should not overlap)
+    auto this_ranges = collect_all_kernel_core_ranges(*this);
+    auto other_ranges = collect_all_kernel_core_ranges(other);
 
     TT_FATAL(
-        !core_ranges_overlap(this_ranges, other_ranges),
+        !ranges_overlap_between_descriptors(this_ranges, other_ranges),
         "Cannot merge ProgramDescriptors with overlapping kernel core ranges. "
         "Ensure that each descriptor operates on a distinct set of cores.");
 
@@ -101,12 +105,14 @@ ProgramDescriptor ProgramDescriptor::merge_descriptors(const std::vector<Program
     }
 
     // Check all pairs of descriptors for overlapping core ranges
+    // (different kernels within a single descriptor can share cores, but
+    // kernels from different descriptors should not overlap)
     for (size_t i = 0; i < descriptors.size(); ++i) {
-        CoreRangeSet ranges_i = collect_all_kernel_core_ranges(descriptors[i]);
+        auto ranges_i = collect_all_kernel_core_ranges(descriptors[i]);
         for (size_t j = i + 1; j < descriptors.size(); ++j) {
-            CoreRangeSet ranges_j = collect_all_kernel_core_ranges(descriptors[j]);
+            auto ranges_j = collect_all_kernel_core_ranges(descriptors[j]);
             TT_FATAL(
-                !core_ranges_overlap(ranges_i, ranges_j),
+                !ranges_overlap_between_descriptors(ranges_i, ranges_j),
                 "Cannot merge ProgramDescriptors with overlapping kernel core ranges between descriptor {} and {}. "
                 "Ensure that each descriptor operates on a distinct set of cores.",
                 i,
