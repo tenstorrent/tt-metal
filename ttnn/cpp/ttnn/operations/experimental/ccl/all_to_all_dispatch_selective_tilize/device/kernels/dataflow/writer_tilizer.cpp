@@ -142,15 +142,11 @@ void kernel_main() {
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
 
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
-    constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
 
     // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
     constexpr uint32_t drain_core_noc_x = get_named_compile_time_arg_val("drain_core_noc_x");
     constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
-    constexpr uint32_t remote_counts_cb_id = get_named_compile_time_arg_val("remote_counts_cb_id");
-    constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
 
     // T multicast coordinates
     constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
@@ -438,11 +434,12 @@ void kernel_main() {
             uint64_t total_chunks_mcast_addr = get_safe_multicast_noc_addr(
                 matmul_mcast_start_x, matmul_mcast_start_y, matmul_mcast_end_x, matmul_mcast_end_y, l1_write_addr);
 
-            noc_async_write_multicast(
-                l1_read_addr,
-                total_chunks_mcast_addr,
-                tiles_per_chunk * output_page_size,
-                num_matmul_bounding_box_cores);
+            // TODO: (GR) uncomment during integration
+            // noc_async_write_multicast(
+            //     l1_read_addr,
+            //     total_chunks_mcast_addr,
+            //     tiles_per_chunk * output_page_size,
+            //     num_matmul_bounding_box_cores);
 
             noc_async_write_barrier();
 
@@ -451,7 +448,7 @@ void kernel_main() {
                     // == 4 ==
                     // wait for non-drain-sync cores to signal that they've sent their chunk
                     // we use a different semaphore per expert
-                    uint32_t wait_value = (num_tilizer_cores - 1) * chunk;
+                    uint32_t wait_value = (num_tilizer_cores - 1) * (chunk + 1);
                     noc_semaphore_wait(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr), wait_value);
                 }
@@ -490,7 +487,7 @@ void kernel_main() {
             /* START - WRITE TO OUTPUT TENSOR */
             // TODO: (GR) remove this block during integration
 
-            uint32_t l1_read_addr = get_read_ptr(tilizer_output_cb_id);
+            // uint32_t l1_read_addr = get_read_ptr(tilizer_output_cb_id);
 
             // Compute the tile row for this chunk
             // linear_row_start = expert * tokens + chunk * tokens_per_chunk
