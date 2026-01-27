@@ -497,7 +497,7 @@ create_program_batch_sharded(
 
     // First, set idle args for non-worker cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
-        bool is_worker = worker_cores_set.find(core) != worker_cores_set.end();
+        bool is_worker = worker_cores_set.contains(core);
 
         if (!is_worker) {
             // Idle core - set minimal args (1 arg each)
