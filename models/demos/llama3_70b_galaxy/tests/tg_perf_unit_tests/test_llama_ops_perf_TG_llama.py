@@ -39,6 +39,16 @@ def test_llama_tg_ops_perf_device(
     benchmark_data = BenchmarkData()
     step_name = f"Llama_TG_{op_name}"
 
+    # Map test names to actual DeviceOperation class names in profiler output
+    op_name_mapping = {
+        "LayerNorm": "LayerNormDeviceOperation",
+        "ScaledDotProductAttentionDecode": "SdpaDecodeDeviceOperation",
+        "RotaryEmbeddingLlamaFusedQK": "RotaryEmbeddingLlamaFusedQKDeviceOperation",
+        "Embeddings": "EmbeddingsDeviceOperation",
+        "PagedUpdateCacheDeviceOperation": "PagedFusedUpdateCacheDeviceOperation",
+    }
+    profiler_op_name = op_name_mapping.get(op_name, op_name)
+
     command = f"pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_ops.py::test_llama_tg_{op_name}"
     cols = ["DEVICE KERNEL"]
     inference_time_key = "DEVICE KERNEL DURATION [ns]"
@@ -46,7 +56,9 @@ def test_llama_tg_ops_perf_device(
 
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch, op_name, has_signposts=False)
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch, profiler_op_name, has_signposts=False
+    )
     profiler.end(step_name)
     profiler.end("run")
 

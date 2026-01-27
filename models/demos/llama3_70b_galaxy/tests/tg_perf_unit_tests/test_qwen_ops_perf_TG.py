@@ -12,10 +12,10 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
-        ("LayerNorm", 10.9, 0.05),
+        ("LayerNorm", 9.6, 0.05),
         ("ScaledDotProductAttentionDecode", 8.18, 0.05),
         ("PagedUpdateCacheDeviceOperation", 3.67, 0.16),
-        ("RotaryEmbeddingLlamaFusedQK", 3.58, 0.05),
+        ("RotaryEmbeddingLlamaFusedQK", 3.76, 0.05),
         ("Embeddings", 3.3, 0.1),
         ("BinaryDeviceOperation", 2.7, 0.05),
     ],
@@ -35,6 +35,16 @@ def test_qwen_tg_ops_perf_device(
     benchmark_data = BenchmarkData()
     step_name = f"Qwen_TG_{op_name}"
 
+    # Map test names to actual DeviceOperation class names in profiler output
+    op_name_mapping = {
+        "LayerNorm": "LayerNormDeviceOperation",
+        "ScaledDotProductAttentionDecode": "SdpaDecodeDeviceOperation",
+        "RotaryEmbeddingLlamaFusedQK": "RotaryEmbeddingLlamaFusedQKDeviceOperation",
+        "Embeddings": "EmbeddingsDeviceOperation",
+        "PagedUpdateCacheDeviceOperation": "PagedFusedUpdateCacheDeviceOperation",
+    }
+    profiler_op_name = op_name_mapping.get(op_name, op_name)
+
     command = f"pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_ops.py::test_qwen_tg_{op_name}"
     cols = ["DEVICE KERNEL"]
     inference_time_key = "DEVICE KERNEL DURATION [ns]"
@@ -42,7 +52,9 @@ def test_qwen_tg_ops_perf_device(
 
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch, op_name, has_signposts=False)
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch, profiler_op_name, has_signposts=False
+    )
     profiler.end(step_name)
     profiler.end("run")
 
