@@ -116,7 +116,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/compute_dummy.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
