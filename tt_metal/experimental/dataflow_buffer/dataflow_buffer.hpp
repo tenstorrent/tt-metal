@@ -86,10 +86,10 @@ struct DataflowBufferImpl {
 class TileCounterAllocator {
 public:
     ::experimental::PackedTileCounter allocate(uint8_t tensix_id);
-    void reset() { next_tc_id_ = 0; }
+    void reset() { next_tc_id_.fill(0); }
 
 private:
-    uint8_t next_tc_id_ = 0;
+    std::array<uint8_t, 4> next_tc_id_ = {0};
 };
 
 uint32_t finalize_dfbs(
