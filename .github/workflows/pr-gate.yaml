@@ -188,11 +188,60 @@ jobs:
           name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
       - name: Install packages
+        timeout-minutes: 15
         run: |
           set -euo pipefail
 
-          apt update
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
+          # Diagnostic: Check network connectivity
+          echo "🔍 Checking network connectivity..."
+          if ! timeout 5 bash -c 'cat < /dev/null > /dev/tcp/8.8.8.8/53' 2>/dev/null; then
+            echo "⚠️  Warning: Network connectivity check failed"
+          else
+            echo "✅ Network connectivity OK"
+          fi
+
+          # Diagnostic: Check DNS resolution
+          echo "🔍 Checking DNS resolution..."
+          if ! timeout 5 getent hosts archive.ubuntu.com > /dev/null 2>&1; then
+            echo "⚠️  Warning: DNS resolution check failed for archive.ubuntu.com"
+          else
+            echo "✅ DNS resolution OK"
+          fi
+
+          # Diagnostic: Check for apt lock files
+          echo "🔍 Checking for apt lock files..."
+          if [ -f /var/lib/apt/lists/lock ] || [ -f /var/lib/dpkg/lock ] || [ -f /var/cache/apt/archives/lock ]; then
+            echo "⚠️  Warning: Apt lock files detected. Attempting to remove stale locks..."
+            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/cache/apt/archives/lock || true
+          else
+            echo "✅ No apt lock files detected"
+          fi
+
+          # Diagnostic: List packages to install
+          echo "📦 Packages to install:"
+          ls -lh ./pkgs/*.deb || echo "⚠️  Warning: No .deb files found in ./pkgs/"
+
+          # Run apt update with timeout and verbose output
+          echo "🔄 Running apt update..."
+          timeout 300 apt update -qq || {
+            echo "❌ apt update failed or timed out after 5 minutes"
+            echo "📊 Network diagnostics:"
+            timeout 5 ping -c 2 archive.ubuntu.com || echo "  - Cannot reach archive.ubuntu.com"
+            timeout 5 nslookup archive.ubuntu.com || echo "  - DNS lookup failed"
+            exit 1
+          }
+          echo "✅ apt update completed"
+
+          # Run apt install with timeout and verbose output
+          echo "📥 Installing packages..."
+          timeout 600 apt install -y -o Debug::pkgProblemResolver=1 -o Debug::pkgDepCache::AutoInstall=1 ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb || {
+            echo "❌ apt install failed or timed out after 10 minutes"
+            echo "📊 Dependency diagnostics:"
+            dpkg -l | grep -E "(tt-metalium|tt-nn)" || echo "  - No packages installed"
+            apt-cache depends ./pkgs/tt-metalium_*.deb 2>&1 | head -20 || echo "  - Cannot analyze dependencies"
+            exit 1
+          }
+          echo "✅ Package installation completed"
 
       - name: ⬇️ Checkout
         uses: actions/checkout@v5
