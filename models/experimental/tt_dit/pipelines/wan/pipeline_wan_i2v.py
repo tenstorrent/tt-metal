@@ -14,11 +14,10 @@ import regex as re
 import time
 import torch
 import torchvision.transforms.functional as TF
-from transformers import AutoTokenizer, UMT5EncoderModel
 
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.loaders import WanLoraLoaderMixin
-from diffusers.models import AutoencoderKLWan, WanTransformer3DModel as TorchWanTransformer3DModel
+from diffusers.models import AutoencoderKLWan
 from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
@@ -29,7 +28,7 @@ import ttnn
 from loguru import logger
 from ...parallel.manager import CCLManager
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
-from ...models.vae.vae_wan2_1 import WanDecoder
+from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
 from ...utils import cache
@@ -90,21 +89,6 @@ def preprocess(image, w, h):
     elif isinstance(image[0], torch.Tensor):
         image = torch.cat(image, dim=0)
     return image
-
-
-def prepare_latents(image):
-    logger.info("Preparing latents...")
-    model_id = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
-    image_encoder = CLIPVisionModel.from_pretrained(model_id, subfolder="image_encoder", torch_dtype=torch.float32)
-    vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
-    pipe = WanImageToVideoPipeline.from_pretrained(
-        model_id, vae=vae, image_encoder=image_encoder, torch_dtype=torch.bfloat16
-    )
-    pipe.to("cpu")
-    logger.info("Preprocessing image...")
-    image = preprocess(image, 1280, 720)
-    latents, mask_w_cond = pipe.prepare_latents(image, batch_size=1, width=1280, height=720)
-    return latents, mask_w_cond
 
 
 def basic_clean(text):
@@ -173,12 +157,12 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
     ):
         super().__init__()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="tokenizer", trust_remote_code=True
-        )
-        self.text_encoder = UMT5EncoderModel.from_pretrained(
-            "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="text_encoder", trust_remote_code=True
-        )
+        self.tokenizer = None  # = AutoTokenizer.from_pretrained(
+        # "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="tokenizer", trust_remote_code=True
+        # )
+        self.text_encoder = None  # = UMT5EncoderModel.from_pretrained(
+        #    "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="text_encoder", trust_remote_code=True
+        # )
         self.vae = AutoencoderKLWan.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="vae", trust_remote_code=True
         )
@@ -188,12 +172,12 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         # self.scheduler.set_shift(3.0)
         logger.info(f"Scheduler {self.scheduler}...{self.scheduler.flow_shift}")
         # breakpoint()
-        self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
-        )
-        self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
-            "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
-        )
+        self.torch_transformer = None  # = TorchWanTransformer3DModel.from_pretrained(
+        #    "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
+        # )
+        self.torch_transformer_2 = None  # = TorchWanTransformer3DModel.from_pretrained(
+        #    "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
+        # )
 
         self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
@@ -210,9 +194,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
         self.is_fsdp = is_fsdp
-        if not self.dynamic_load:
-            self._load_transformer1()
-            self._load_transformer2()
+        # if not self.dynamic_load:
+        #    self._load_transformer1()
+        #    self._load_transformer2()
 
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
@@ -227,6 +211,22 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
         )
+
+        self.tt_encoder = WanEncoder(
+            base_dim=self.vae.config.base_dim,
+            in_channels=self.vae.config.in_channels,
+            z_dim=self.vae.config.z_dim,
+            dim_mult=self.vae.config.dim_mult,
+            num_res_blocks=self.vae.config.num_res_blocks,
+            attn_scales=self.vae.config.attn_scales,
+            temperal_downsample=self.vae.config.temperal_downsample,
+            is_residual=self.vae.config.is_residual,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.vae_parallel_config,
+        )
+
+        self.tt_encoder.load_state_dict(self.vae.state_dict())
 
         # self.tt_vae.load_state_dict(self.vae.state_dict())
 
@@ -460,6 +460,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         logger.info(f"Finished preparing image: {y.shape}")
         return y
 
+    def encode_image(self, image: PIL.Image.Image):
+        return self.encode_on_host(torch.concat([image[None].cpu(), torch.zeros(3, 80, 128)])[0])
+
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],
@@ -590,10 +593,27 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         if self.config.boundary_ratio is None and guidance_scale_2 is not None:
             raise ValueError("`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None.")
 
+    def prepare_latents_torch(self, image, width, height):
+        image = self.video_processor.preprocess(image, height=height, width=width).to(None, dtype=torch.float32)
+        logger.info("Preparing latents...")
+        model_id = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+        image_encoder = CLIPVisionModel.from_pretrained(model_id, subfolder="image_encoder", torch_dtype=torch.float32)
+        vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
+        pipe = WanImageToVideoPipeline.from_pretrained(
+            model_id, vae=vae, image_encoder=image_encoder, torch_dtype=torch.bfloat16
+        )
+        pipe.to("cpu")
+        logger.info("Preprocessing image...")
+        # image = preprocess(image, width, height)
+        logger.info(f"Encoding image with shape {image.shape}...")
+        latents, mask_w_cond = pipe.prepare_latents(image, batch_size=1, width=width, height=height)
+        return latents, mask_w_cond
+
     def prepare_latents(
         self,
-        batch_size: int,
-        num_channels_latents: int = 36,
+        image: PIL.Image.Image,
+        batch_size: int = 1,
+        num_channels_latents: int = 16,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -602,6 +622,62 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        # Convert image to tensor
+        image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+        image = image.unsqueeze(2)
+        if self.config.expand_timesteps:
+            video_condition = image
+        else:
+            video_condition = torch.cat(
+                [image, image.new_zeros(image.shape[0], image.shape[1], num_frames - 1, height, width)], dim=2
+            )
+
+        # Convert to ttnn
+        tt_video_condition_BTHWC = video_condition.permute(0, 2, 3, 4, 1)
+        # --> Do the required padding and sharding. Verify if this is needed.
+        tt_video_condition_BTHWC = conv_pad_in_channels(tt_video_condition_BTHWC)
+        tt_video_condition_BTHWC, logical_h = conv_pad_height(
+            tt_video_condition_BTHWC,
+            self.vae_parallel_config.height_parallel.factor
+            * self.vae_scale_factor_spatial
+            * 2,  # Ensure each downsample output is divisible by 2.
+        )
+        tt_video_condition_BTHWC = bf16_tensor_2dshard(
+            tt_video_condition_BTHWC,
+            self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                self.vae_parallel_config.width_parallel.mesh_axis: 3,
+            },
+        )
+
+        encoded_video_BCTHW, new_logical_h = self.tt_encoder(tt_video_condition_BTHWC, logical_h)
+
+        # convert to torch
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        encoded_video_torch = ttnn.to_torch(
+            encoded_video_BCTHW,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
+            ),
+        )
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch.to(dtype=dtype)
+
+        latents_mean = (
+            torch.tensor(self.vae.config.latents_mean)
+            .view(1, self.vae.config.z_dim, 1, 1, 1)
+            .to(encoded_video_torch.device, encoded_video_torch.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+            encoded_video_torch.device, encoded_video_torch.dtype
+        )
+
+        encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
+
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
 
@@ -611,7 +687,6 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             num_channels_latents,
             num_latent_frames,
             int(height) // self.vae_scale_factor_spatial,
-            # 58,
             int(width) // self.vae_scale_factor_spatial,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -621,7 +696,16 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             )
         # torch.manual_seed(2)
         latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
-        return latents
+
+        # Add latent mask
+        msk = torch.ones(batch_size, num_frames, shape[-2], shape[-1])
+        msk[:, 1:] = 0
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4, shape[-2], shape[-1])
+        msk = msk.transpose(1, 2)
+        # breakpoint()
+
+        return latents, encoded_video_torch  # torch.concat([msk, encoded_video_torch], dim=1)
 
     @property
     def guidance_scale(self):
@@ -778,6 +862,24 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         self._attention_kwargs = attention_kwargs
         self._current_timestep = None
         self._interrupt = False
+
+        # latents, y = self.prepare_latents_torch(image,width=width, height=height)
+        # torch.save(latents, "torch_ref_latents.pt")
+        # torch.save(y, "torch_ref_y.pt")
+        latents = torch.load("torch_ref_latents.pt")
+        y = torch.load("torch_ref_y.pt")
+        logger.info(
+            f"torch_ref_latents=> shape: {latents.shape}, mean: {latents.mean()}, std: {latents.std()}, max: {latents.max()}, min: {latents.min()}"
+        )
+        logger.info(f"torch_ref_y=> shape: {y.shape}, mean: {y.mean()}, std: {y.std()}, max: {y.max()}, min: {y.min()}")
+
+        latents, y = self.prepare_latents(image, height=height, width=width)
+        logger.info(
+            f"tt_latents=> shape: {latents.shape}, mean: {latents.mean()}, std: {latents.std()}, max: {latents.max()}, min: {latents.min()}"
+        )
+        logger.info(f"tt_y=> shape: {y.shape}, mean: {y.mean()}, std: {y.std()}, max: {y.max()}, min: {y.min()}")
+
+        breakpoint()
 
         # device = self._execution_device
         device = "cpu"
