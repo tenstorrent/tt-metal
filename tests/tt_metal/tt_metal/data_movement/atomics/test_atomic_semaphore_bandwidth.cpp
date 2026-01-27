@@ -25,6 +25,7 @@ struct AtomicSemaphoreConfig {
     uint32_t semaphore_addr_offset = 4096;  // Place semaphore 4KB from base
     uint32_t atomic_inc_value = 1;
     NOC noc_id = NOC::NOC_0;
+    bool use_posted_atomics = false;  // false = non-posted (default), true = posted
 };
 
 /// @brief Runs atomic semaphore bandwidth test with sender and receiver cores
@@ -83,7 +84,8 @@ bool run_atomic_semaphore_test(
         (uint32_t)test_config.atomic_inc_value,
         (uint32_t)test_config.test_id,
         (uint32_t)packed_receiver_core_coordinates,
-        (uint32_t)test_config.semaphore_addr_offset};
+        (uint32_t)test_config.semaphore_addr_offset,
+        (uint32_t)test_config.use_posted_atomics};
 
     // Compile-time arguments for receiver kernel
     vector<uint32_t> receiver_compile_args = {
@@ -190,7 +192,8 @@ void increment_value_sweep_test(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 1},
-    CoreCoord receiver_core = {0, 0}) {
+    CoreCoord receiver_core = {0, 0},
+    bool use_posted_atomics = false) {
     // Test parameters for bandwidth sweep
     uint32_t max_transactions = 64;
     uint32_t max_increment_value = 4;
@@ -208,16 +211,18 @@ void increment_value_sweep_test(
                     .num_of_transactions = num_transactions,
                     .semaphore_addr_offset = 4096,
                     .atomic_inc_value = atomic_inc_value,
-                    .noc_id = noc_id};
+                    .noc_id = noc_id,
+                    .use_posted_atomics = use_posted_atomics};
 
                 // Passing in atomic_inc_value twice: Once for "Pages" and once for "AtomicInc" to maintain consistency
                 log_info(
                     LogTest,
-                    "Testing: NOC={}, Transactions={}, Pages={}, AtomicInc={}",
+                    "Testing: NOC={}, Transactions={}, Pages={}, AtomicInc={}, Mode={}",
                     (noc_id == NOC::NOC_0) ? "NOC_0" : "NOC_1",
                     num_transactions,
                     atomic_inc_value,
-                    atomic_inc_value);
+                    atomic_inc_value,
+                    use_posted_atomics ? "posted" : "non-posted");
 
                 EXPECT_TRUE(run_atomic_semaphore_test(mesh_device, config));
             }
@@ -283,6 +288,39 @@ TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) 
         test_id,
         sender_core,     // Sender core
         CoreCoord(0, 0)  // Receiver core
+    );
+}
+
+// ========== Posted Atomics Tests (same as above but with use_posted_atomics=true) ==========
+
+TEST_F(GenericMeshDeviceFixture, PostedAtomicSemaphoreAdjacentIncrementValueSweep) {
+    uint32_t test_id = 400;
+
+    unit_tests::dm::atomics::increment_value_sweep_test(
+        get_mesh_device(),
+        test_id,
+        CoreCoord(0, 1),  // Sender core
+        CoreCoord(0, 0),  // Receiver core
+        true              // use_posted_atomics
+    );
+}
+
+TEST_F(GenericMeshDeviceFixture, PostedAtomicSemaphoreNonAdjacentIncrementValueSweep) {
+    uint32_t test_id = 401;
+
+    auto logical_grid_size = get_mesh_device()->logical_grid_size();
+
+    TT_FATAL(logical_grid_size.x > 2 && logical_grid_size.y > 2, "Test assumes grid size is at least 3x3");
+
+    // Sender core is pulled in 1 row & 1 column from opposite corner to avoid dispatch cores
+    auto sender_core = CoreCoord(logical_grid_size.x - 2, logical_grid_size.y - 2);
+
+    unit_tests::dm::atomics::increment_value_sweep_test(
+        get_mesh_device(),
+        test_id,
+        sender_core,      // Sender core
+        CoreCoord(0, 0),  // Receiver core
+        true              // use_posted_atomics
     );
 }
 
