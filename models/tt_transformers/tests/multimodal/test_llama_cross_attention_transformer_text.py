@@ -22,12 +22,13 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
-def prune_weights_90b(partial_state_dict):
+def prune_weights_90b(partial_state_dict, num_hidden_layers):
     weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
+
     for k in partial_state_dict.keys():
         found = re.search(r"\d+", k)
         if found:
-            if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
+            if int(k[found.start() : found.end()]) in [i for i in range(num_hidden_layers) if i not in (0, 3)]:
                 partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
 
     rename = lambda k: (
@@ -76,7 +77,7 @@ def test_cross_attention_transformer_text_inference(
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
     model_repo_name = os.getenv("HF_MODEL")
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
+    # config contains parameters for the whole multimodal network the subset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config._attn_implementation = "sdpa"
     config.text_config._attn_implementation = "sdpa"
@@ -85,7 +86,7 @@ def test_cross_attention_transformer_text_inference(
     model_args.max_seq_len = 4096
     model_dtype_hf = (
         torch.float32
-    )  # prefereably torch.bfloat16 but unit tests may run on machines without bfloat16 support
+    )  # preferably torch.bfloat16 but unit tests may run on machines without bfloat16 support
     n_iter = 10
     if model_args.is_90b:
         # [INFO] use bfloat16 for in reference model to avoid OOM on host
@@ -127,7 +128,7 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict.update(lm_head_weights)
 
     if model_args.is_90b:
-        partial_state_dict = prune_weights_90b(partial_state_dict)
+        partial_state_dict = prune_weights_90b(partial_state_dict, config.text_config.num_hidden_layers)
 
     if model_dtype_hf == torch.float32:
         for k, v in partial_state_dict.items():
@@ -232,8 +233,8 @@ def test_cross_attention_transformer_text_inference(
             )
             pt_xattn_cache_chunks = [
                 kv
-                for i in reference_model.model.cross_attention_layers
-                for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
+                for layer_idx in reference_model.model.cross_attention_layers
+                for kv in (T.past_key_values.key_cache[layer_idx], T.past_key_values.value_cache[layer_idx])
             ]
         else:
             T = get_ref_model_logits(
