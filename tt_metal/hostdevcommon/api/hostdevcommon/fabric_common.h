@@ -540,8 +540,6 @@ struct routing_l1_info_t {
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
 };
-
-// >>>>>>> 13b07bd139 ([Fabric] support router state)
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
