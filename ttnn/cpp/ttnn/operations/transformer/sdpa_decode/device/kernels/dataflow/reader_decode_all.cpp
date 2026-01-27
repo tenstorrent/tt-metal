@@ -326,24 +326,26 @@ void kernel_main() {
                         }
                     } else {
                         // Read V chunk in row major order, write in row-major order
+                        // V is an independent tensor with its own layout (width = vDHt, not DHt)
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
                         barrier_count = 0;
 
                         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
                             uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
+                            // Use vDHt for V tensor's width since V is independent
                             uint32_t physical_v_tile_id =
                                 (is_page_table_sharded)
                                     ? virtual_seq_tile_id_to_physical_tile_id<
                                           uint16_t,
                                           num_kv_heads,
                                           block_size_t,
-                                          DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
+                                          vDHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
                                     : virtual_seq_tile_id_to_physical_tile_id<
                                           uint32_t,
                                           num_kv_heads,
                                           block_size_t,
-                                          DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
+                                          vDHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
                             for (uint32_t col = 0; col < vDHt; ++col) {
                                 noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
                                 physical_v_tile_id += 1;
@@ -354,7 +356,7 @@ void kernel_main() {
                                     barrier_count = 0;
                                 }
                             }
-                            physical_v_tile_id += (DHt - vDHt);  // Skip the padding!
+                            // No padding to skip - V is an independent tensor with contiguous layout
                         }
                     }
 
@@ -372,6 +374,12 @@ void kernel_main() {
             const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * DHt;
             uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
 
+            // V has its own layout when it's an independent tensor (width = vDHt, not DHt)
+            const uint32_t v_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * vDHt;
+            const uint32_t v_head_offset = cur_head * St * vDHt;
+            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * vDHt;
+            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
             read_kv_mask_chunks<
                 DHt,
                 vDHt,
@@ -386,6 +394,7 @@ void kernel_main() {
                 k_chunk_start,
                 k_chunk_end,
                 k_start_tile_id,
+                v_start_tile_id,
                 mask_start_tile_id,
                 Sk_chunk_t_dynamic,
                 k_chunk_tiles,
