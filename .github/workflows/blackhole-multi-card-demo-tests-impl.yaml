@@ -62,7 +62,7 @@ jobs:
             owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - "in-service"
+      - testing-downbin-19-5
       - arch-blackhole
       - "${{ inputs.runner-label }}"
       - "${{ inputs.extra-tag }}"
@@ -244,7 +244,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate-large-models-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - "in-service"
+      - testing-downbin-19-5
       - arch-blackhole
       - "${{ inputs.runner-label }}"
       - "${{ inputs.extra-tag }}"
@@ -415,7 +415,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate-tt-dit-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - "in-service"
+      - testing-downbin-19-5
       - arch-blackhole
       - "${{ inputs.runner-label }}"
       - "${{ inputs.extra-tag }}"

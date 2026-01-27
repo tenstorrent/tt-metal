@@ -79,7 +79,7 @@ jobs:
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
-      - in-service
+      - testing-downbin-19-5
       - arch-blackhole
       - ${{ inputs.runner-label }}
     container:
