@@ -161,10 +161,14 @@ create_program_batch_sharded(
     log_debug(tt::LogOp, "num_input_storage_cores: {}", num_input_storage_cores);
     log_debug(tt::LogOp, "num_output_storage_cores: {}", num_output_storage_cores);
 
+    // Currently, both input and output storage cores must match the number of workers (DRAM banks).
+    // This is because the factory uses a 1:1 mapping: worker[i] reads from input_storage[i] and
+    // writes to output_storage[i]. Supporting different numbers would require more complex mapping, where multiple
+    // workers read from the same storage core.
     TT_FATAL(
         num_input_storage_cores == num_workers,
         "Input storage cores ({}) must match number of workers/DRAM banks ({}). "
-        "For batch sharding, use an L1 shard grid with {} cores.",
+        "Use an L1 shard grid with {} cores.",
         num_input_storage_cores,
         num_workers,
         num_workers);
@@ -172,7 +176,7 @@ create_program_batch_sharded(
     TT_FATAL(
         num_output_storage_cores == num_workers,
         "Output storage cores ({}) must match number of workers/DRAM banks ({}). "
-        "For batch sharding, use an L1 shard grid with {} cores.",
+        "Use an L1 shard grid with {} cores.",
         num_output_storage_cores,
         num_workers,
         num_workers);

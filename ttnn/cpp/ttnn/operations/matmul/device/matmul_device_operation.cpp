@@ -1111,27 +1111,19 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::
                                              MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                    // For batch sharding: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
-                    // Each core handles B/num_cores complete matmuls
-                    // Output shard grid should match input A's shard grid (L1 sharded by batch)
-                    const auto& input_shard_spec = input_tensor_a.shard_spec().value();
-                    CoreRangeSet all_cores = input_shard_spec.grid;
+                    // For batched DRAM sharded matmul, use the user-provided output shard spec
+                    TT_FATAL(
+                        attributes.output_mem_config.shard_spec().has_value(),
+                        "Output memory config must have a shard spec for batched DRAM sharded matmul");
 
-                    // Output shard shape should match input's batch sharding:
-                    // Input A shard: [batches_per_core * M, N]
-                    // Output shard: [batches_per_core * M, K]
-                    uint32_t input_shard_height = input_shard_spec.shape[0];  // batches_per_core * M
                     uint32_t per_core_N = program_config.per_core_N;
 
                     TT_FATAL(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    ShardSpec shard_spec = ShardSpec{
-                        all_cores,
-                        {input_shard_height, per_core_N * in1_tile.get_width()},
-                        input_shard_spec.orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    // Use the user-provided shard spec directly
+                    auto mem_config = attributes.output_mem_config;
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
