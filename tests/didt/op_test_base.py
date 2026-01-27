@@ -199,7 +199,8 @@ class OpTestBase:
                 # Load next round of activations from DRAM to required memory config
                 self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
-            out.deallocate(True)
+            if out is not None:
+                out.deallocate(True)
 
             logger.info(f"Iteration = {i}, done!")
 

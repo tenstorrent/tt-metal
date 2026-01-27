@@ -57,9 +57,12 @@ class DutyCycleTest(OpTestBase):
         )
         self.non_mm_loops = (non_mm_loops,)
         self.wl_loops = (wl_loops,)
+        self.trace_id = None
 
     def run_device_operation(self):
-        for i in range(self.wl_loops[0]):
+        if self.trace_id is None:
+            # Ensure all binaries are compiled/loaded before starting trace capture.
+            # Trace capture does not allow device writes (e.g. binary loading) on fast dispatch paths.
             ttnn.matmul(
                 self.activations,
                 self.weights,
@@ -68,21 +71,32 @@ class DutyCycleTest(OpTestBase):
                 dtype=self.out_dtype,
                 compute_kernel_config=self.compute_config,
             )
-            for j in range(self.non_mm_loops[0]):
-                ttnn.cos(
+            ttnn.cos(
+                self.weights,
+            )
+
+            self.trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            for i in range(self.wl_loops[0]):
+                ttnn.matmul(
+                    self.activations,
                     self.weights,
+                    program_config=self.program_config,
+                    memory_config=self.out_mem_config,
+                    dtype=self.out_dtype,
+                    compute_kernel_config=self.compute_config,
                 )
+                for j in range(self.non_mm_loops[0]):
+                    ttnn.cos(
+                        self.weights,
+                    )
+            ttnn.end_trace_capture(self.mesh_device, self.trace_id, cq_id=0)
+        else:
+            ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
 
-        return ttnn.matmul(
-            self.activations,
-            self.weights,
-            program_config=self.program_config,
-            memory_config=self.out_mem_config,
-            dtype=self.out_dtype,
-            compute_kernel_config=self.compute_config,
-        )
+        return None
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 491520000}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [

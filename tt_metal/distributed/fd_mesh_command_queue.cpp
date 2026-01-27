@@ -6,6 +6,9 @@
 
 #include <tracy/Tracy.hpp>
 
+#include <tt-logger/tt-logger.hpp>
+#include <thread>
+#include <chrono>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -954,12 +957,22 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+
+    // add delay here of variable length - depending on env variable TT_STAGGER_CHIPS_DELAY
+    const char* stagger_chips_delay = std::getenv("TT_STAGGER_CHIPS_DELAY");
+    uint32_t stagger_chips_delay_value = stagger_chips_delay ? std::stoi(stagger_chips_delay) : 0;
+    // log_info(tt::LogMetal, "Stagger chips delay value: {} ns", stagger_chips_delay_value);
+
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
+        // log_info(tt::LogMetal, "Sleeping for {} ns", stagger_chips_delay_value);
+        std::this_thread::sleep_for(std::chrono::nanoseconds(stagger_chips_delay_value));
+        // log_info(tt::LogMetal, "Done sleeping");
         auto device = mesh_device_->impl().get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
+        // log_info(tt::LogMetal, "Cmd sent to device {}", device->id());
     });
 }
 
@@ -1102,9 +1115,18 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         buffer->num_pages(),
         buffer->address());
 
+    // add delay here of variable length - depending on env variable TT_STAGGER_CHIPS_DELAY
+    const char* stagger_chips_delay = std::getenv("TT_STAGGER_CHIPS_DELAY");
+    uint32_t stagger_chips_delay_value = stagger_chips_delay ? std::stoi(stagger_chips_delay) : 0;
+    // log_info(tt::LogMetal, "Stagger chips delay value: {} ns", stagger_chips_delay_value);
+
     for (auto* device : mesh_device_->get_devices()) {
+        // log_info(tt::LogMetal, "Sleeping for {} ns", stagger_chips_delay_value);
+        std::this_thread::sleep_for(std::chrono::nanoseconds(stagger_chips_delay_value));
+        // log_info(tt::LogMetal, "Done sleeping");
         trace_dispatch::issue_trace_commands(
             mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
+        // log_info(tt::LogMetal, "Issued trace commands for device {}", device->id());
     }
 
     // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
