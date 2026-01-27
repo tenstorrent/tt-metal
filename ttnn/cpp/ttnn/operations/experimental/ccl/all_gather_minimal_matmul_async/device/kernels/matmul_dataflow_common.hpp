@@ -35,6 +35,7 @@ uint32_t compute_actual_k_block(
     uint64_t out_ready_semaphore_injector_core_noc_addr,
     uint32_t& sem_target,
     bool is_injector_core,
+    bool is_receiving_core,
     uint32_t& slices_received,
     uint32_t in0_core_order_size) {
 #else
@@ -75,12 +76,12 @@ uint32_t compute_actual_k_block(
         if (is_injector_core) {
             noc_semaphore_wait_min(out_ready_semaphore, sem_target + in0_core_order_size);
             sem_target += in0_core_order_size;
-        } else {
-            // increment your local, and then update the injector core
-            noc_semaphore_wait_min(out_ready_semaphore, sem_target + 1);
-            sem_target++;
-            noc_semaphore_inc(out_ready_semaphore_injector_core_noc_addr, 1);
-        }
+        }  //  else if (is_receiving_core) {
+        //     // increment your local, and then update the injector core
+        //     noc_semaphore_wait_min(out_ready_semaphore, sem_target + 1);
+        //     sem_target++;
+        //     noc_semaphore_inc(out_ready_semaphore_injector_core_noc_addr, 1);
+        // }
         if (device_k_block_iter == 0) {
             slices_received++;
         }
