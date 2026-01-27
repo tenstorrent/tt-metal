@@ -437,7 +437,7 @@ To compute all tiles in ``C_block``, the core needs the matching tiles from ``A`
 Taken together, ``A_block`` and ``B_block`` are typically too large to fit into on‑chip SRAM.
 To fix this, we split the ``Kt`` dimension into smaller K-blocks of size ``K_block_tiles``,
 such that ``num_k_blocks = Kt / K_block_tiles``.
-For each K-block index ``b`` in range ``0 .. num_k_blocks`` we define:
+For each K-block index ``b`` in range ``0 .. num_k_blocks - 1`` we define:
 
 * ``A_slab(b)``: tiles of ``A``, not consisting of full rows, but rather of only appropriate ``K_block_tiles`` tiles
   in the row (size: ``M_block_tiles * K_block_tiles``).
@@ -468,13 +468,21 @@ there are ``num_k_blocks`` = ``3`` K-blocks. Therefore:
 
 Each "slab" is indicated by a different shade of purple in Figure 4.
 
-To figure out the exact computation that needs to be performed, such that each slab needs to be read
-only once, we need to consider the computation of a single output tile ``C[i][j]``:
+To see what computation needs to be performed such that each slab is read
+only once, consider the computation for a single output tile ``C[i][j]``:
 
 .. figure:: images/sum_standard.png
    :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
-   :width: 200
+   :width: 250
    :align: center
+
+where:
+
+* ``i`` is a tile row index in ``0 .. M_block_tiles - 1``
+* ``j`` is a tile column index in ``0 .. N_block_tiles - 1``
+* ``k`` is a tile index along the K direction in ``0 .. Kt - 1``
+* ``A[i][k] × B[k][j]`` indicates multiplying A's tile at ``(i,k)`` with
+  B's tile at ``(k,j)`` and adding to the tile ``C[i][j]``.
 
 This requires traversing every tile in row ``i`` of ``A_block`` and every tile in column ``j``
 of ``B_block``. However, we know that we don't have the entire row of ``A`` and column of ``B``
@@ -488,9 +496,18 @@ Therefore, we can decompose the computation of ``C[i][j]`` so that for every ``b
 and calculate contributions from ``A_slab(b)`` and ``B_slab(b)`` to all output tiles that are part
 of ``C_block`` before proceeding to the next pair of slabs.
 
-We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
-Each K-block ``b`` spans some range of ``k`` values: ``b * K_block_tiles .. (b + 1) * K_block_tiles``.
-Given this, we can decompose the computation of ``C[i][j]`` as follows:
+
+
+We can split the range of ``k`` into K-blocks of size ``K_block_tiles``.
+For each K-block ``b`` we define the **set of k-indices** that are part of this K-block as:
+
+.. figure:: images/sum_k_indices_set.png
+   :alt: K-indices in K-block
+   :width: 350
+   :align: center
+
+Breaking the original equation across the K-blocks, we get:
+
 
 .. figure:: images/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
@@ -515,17 +532,25 @@ Note that if understanding above equations with respect to tiles is confusing,
 try thinking of them as individual elements rather than tiles.
 The underlying math is the same, but it becomes easier to verify your understanding.
 
+
+
+
+We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
+Each K-block ``b`` spans some range of ``k`` values: ``(b * K_block_tiles) .. ((b + 1) * K_block_tiles - 1)``.
+Given this, we can decompose the computation of ``C[i][j]`` as follows:
+
+
 The overall approach can be summarized by the following pseudo-code for a compute core:
 
 .. code-block:: cpp
 
    // For every K-block:
-   for (b in 0 .. num_k_blocks) {
+   for (b in 0 .. num_k_blocks - 1) {
        Ensure that A_slab(b) is in CB0 // Size: M_block_tiles * K_block_tiles.
        Ensure that B_slab(b) is in CB1 // Size: K_block_tiles * N_block_tiles.
        // For every output tile (i,j) in this C_block:
-       for (i in 0 .. M_block_tiles) { // For every row in the A_slab(b)
-           for (j in 0 .. N_block_tiles) { // For every column in the B_slab(b)
+       for (i in 0 .. M_block_tiles - 1) { // For every row in the A_slab(b)
+           for (j in 0 .. N_block_tiles - 1) { // For every column in the B_slab(b)
                // Get the current accumulator tile for C(i,j)
                acc_tile = zero_tile()
                if (b != 0)
@@ -534,7 +559,7 @@ The overall approach can be summarized by the following pseudo-code for a comput
                   acc_tile = partial_C_tile(i, j)
 
                // Add this K-block's contribution to acc_tile
-               for (k_local in 0 .. K_block_tiles) { // Iterate over K dimension of the K-block
+               for (k_local in 0 .. K_block_tiles - 1) { // Iterate over K dimension of the K-block
                    // Indices into the current A and B slabs
                    a_tile = A_slab_tile(i, k_local)
                    b_tile = B_slab_tile(k_local, j)
