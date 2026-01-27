@@ -13,6 +13,7 @@
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
 #include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -333,13 +334,17 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
         bool identical_shard_specs = false;
-        identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
-                                 output_tensor.nd_shard_spec().has_value() &&
-                                 input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
         identical_shard_specs |= input_tensor_a.shard_spec().has_value() && output_tensor.shard_spec().has_value() &&
                                  input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
         if (identical_shard_specs) {
             return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        }
+        identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
+                                 output_tensor.nd_shard_spec().has_value() &&
+                                 input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
+
+        if (identical_shard_specs) {
+            return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
 

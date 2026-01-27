@@ -12,6 +12,7 @@
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
 #include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
@@ -41,6 +42,7 @@ struct UntilizeDeviceOperation {
         UntilizeMultiCoreSubCoreGridsProgramFactory,
         UntilizeMultiCoreBlockProgramFactory,
         UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory,
+        UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory,
         UntilizeMultiCoreParallelizeColumnProgramFactory,
         UntilizeMultiCoreProgramFactory>;
 
