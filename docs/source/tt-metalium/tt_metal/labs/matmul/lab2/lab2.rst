@@ -655,7 +655,8 @@ Follow these steps to complete the exercise:
    This parameter needs to be chosen so it divides ``Kt`` evenly.
    Given that the tile size is fixed to ``32x32`` on all Tenstorrent architectures,
    as of the time of this writing, and given the matrix sizes, ``Kt = 320 / 32 = 10`` for this lab.
-   Given this, the only meaningful values for ``K_block_tiles`` are ``2`` or ``5``.
+   Given this, the only non-trivial choices for ``K_block_tiles`` we will explore in this
+   lab are ``2`` and ``5``.
    A lower value of ``K_block_tiles`` allows for larger matrix sizes to fit into the
    available on-chip SRAM, since lower ``K_block_tiles`` means fewer tiles in each slab.
    Therefore, start by setting this parameter to ``2``.
