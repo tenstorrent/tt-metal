@@ -81,6 +81,99 @@ jobs:
       - name: Create ccache tmpdir
         run: mkdir -p /tmp/ccache
 
+      - name: Test Redis auth on build pod
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          echo "=== Testing Redis Auth on Build Pod ==="
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
+          REDIS_USER="${{ vars.REDIS_USER }}"
+
+          echo "Build pod Redis connection details:"
+          echo "Host: ${REDIS_HOST}"
+          echo "Port: ${REDIS_PORT}"
+          echo "User: ${REDIS_USER}"
+          echo "Password length: ${#REDIS_PASS} characters"
+          echo "Password starts with: ${REDIS_PASS:0:3}..."
+          echo "Hostname: $(hostname)"
+          echo "Pod IP: $(hostname -i 2>/dev/null || echo 'unknown')"
+
+          if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
+            echo "=== Testing Redis auth methods on build pod ==="
+
+            # Test basic connectivity
+            echo "1. Testing basic connectivity..."
+            if timeout 5 bash -c "echo > /dev/tcp/$REDIS_HOST/$REDIS_PORT"; then
+              echo "✅ Network connectivity to Redis works"
+            else
+              echo "❌ Network connectivity to Redis failed"
+              exit 1
+            fi
+
+            # Install tools for Redis testing
+            echo "2. Installing Redis testing tools..."
+            if ! command -v redis-cli &> /dev/null; then
+              echo "Installing redis-cli..."
+              apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+            fi
+
+            # Test auth with redis-cli
+            echo "3. Testing Redis auth with redis-cli..."
+            if [ -n "$REDIS_USER" ]; then
+              echo "Testing with user and password..."
+              if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --user "$REDIS_USER" --pass "$REDIS_PASS" ping 2>&1 | grep -q "PONG"; then
+                echo "✅ User+password auth works on build pod"
+                AUTH_METHOD="--user $REDIS_USER --pass $REDIS_PASS"
+              else
+                echo "❌ User+password auth failed on build pod"
+              fi
+            fi
+
+            if [ -z "${AUTH_METHOD:-}" ]; then
+              echo "Testing with password only..."
+              if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" ping 2>&1 | grep -q "PONG"; then
+                echo "✅ Password-only auth works on build pod"
+                AUTH_METHOD="-a $REDIS_PASS"
+              else
+                echo "❌ Password-only auth failed on build pod"
+                echo "Redis response:"
+                redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" ping 2>&1
+              fi
+            fi
+
+            # Test writing to default DB (used by build)
+            if [ -n "${AUTH_METHOD:-}" ]; then
+              echo "4. Testing write to default DB (used by build ccache)..."
+              BUILD_TEST_KEY="build-test-$(date +%s)"
+              BUILD_TEST_VALUE="build-pod-test-$(hostname)"
+
+              if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -n 1 $AUTH_METHOD SET "$BUILD_TEST_KEY" "$BUILD_TEST_VALUE" EX 300 2>&1 | grep -q "OK"; then
+                echo "✅ Successfully wrote test key to Redis default DB from build pod"
+
+                # Verify we can read it back
+                READ_VALUE=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -n 1 $AUTH_METHOD GET "$BUILD_TEST_KEY" 2>/dev/null || echo "")
+                if [ "$READ_VALUE" = "$BUILD_TEST_VALUE" ]; then
+                  echo "✅ Successfully read back test key from Redis default DB"
+                else
+                  echo "⚠️  Read back different value: $READ_VALUE"
+                fi
+
+                # Clean up
+                redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -n 1 $AUTH_METHOD DEL "$BUILD_TEST_KEY" >/dev/null 2>&1
+              else
+                echo "❌ Failed to write test key to Redis default DB from build pod"
+                redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -n 1 $AUTH_METHOD SET "$BUILD_TEST_KEY" "$BUILD_TEST_VALUE" EX 300
+              fi
+            else
+              echo "❌ No working authentication method found on build pod"
+            fi
+
+          else
+            echo "⚠️  Redis credentials not available on build pod"
+          fi
+
+
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
