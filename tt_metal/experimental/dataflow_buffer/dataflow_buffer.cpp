@@ -26,27 +26,69 @@ uint32_t CreateDataflowBuffer(
 namespace detail {
 
 ::experimental::PackedTileCounter TileCounterAllocator::allocate(uint8_t tensix_id) {
-    // 16 exposed to overlay
-    // TODO: Update for remapper
-    TT_FATAL(next_tc_id_ < 16, "Out of tile counters for tensix {}", (uint32_t)tensix_id);
-    uint8_t tc_id = next_tc_id_++;
+    TT_FATAL(tensix_id < 4, "Invalid tensix_id: {}", tensix_id);
+    TT_FATAL(next_tc_id_[tensix_id] < 16, "Out of tile counters for tensix {}", tensix_id);
+    uint8_t tc_id = next_tc_id_[tensix_id]++;
     return static_cast<::experimental::PackedTileCounter>((tensix_id << 5) | tc_id);
 }
 
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
-        return is_producer ? config.num_consumers : 1;
+        return is_producer ? 1 : config.num_producers;
     }
-    return (config.num_consumers + config.num_producers - 1) / config.num_producers;
+    // Strided mode:
+    // Producer: num_consumers / num_producers (number of consumers each producer is paired with)
+    // Consumer: num_producers / num_consumers (number of producers each consumer is paired with)
+    // When the ratio is < 1, use 1 (each pairs with exactly one of the other)
+    if (is_producer) {
+        if (config.num_consumers >= config.num_producers) {
+            TT_FATAL(
+                config.num_consumers % config.num_producers == 0,
+                "num_consumers {} must be divisible by num_producers {} for strided producer",
+                config.num_consumers,
+                config.num_producers);
+            return config.num_consumers / config.num_producers;
+        } else {
+            // More producers than consumers: each producer pairs with 1 consumer
+            return 1;
+        }
+    } else {
+        if (config.num_producers >= config.num_consumers) {
+            TT_FATAL(
+                config.num_producers % config.num_consumers == 0,
+                "num_producers {} must be divisible by num_consumers {} for strided consumer",
+                config.num_producers,
+                config.num_consumers);
+            return config.num_producers / config.num_consumers;
+        } else {
+            // More consumers than producers: each consumer pairs with 1 producer
+            return 1;
+        }
+    }
 }
 
-::experimental::PackedTileCounter get_shared_tc_for_consumer(
-    const DataflowBufferImpl* dfb, uint8_t consumer_idx, uint8_t tc_idx) {
-    // In strided mode, consumers share TCs with producers (unless remapper is used and we have diff 1:1 remappings)
-    // TODO: this needs to be updated when remapper is added
-    uint8_t producer_idx = (consumer_idx * dfb->config.num_producers) / dfb->config.num_consumers;
-    return dfb->risc_configs[producer_idx].config.packed_tile_counter[tc_idx];
+// Extract tensix IDs from risc_mask (bits 8-11)
+// Returns vector of tensix_ids (0-3) that are being used
+std::vector<uint8_t> extract_tensix_ids(uint16_t risc_mask) {
+    std::vector<uint8_t> tensix_ids;
+    uint16_t tensix_mask = (risc_mask >> 8) & 0x0F;  // bits 8-11
+    for (uint8_t i = 0; i < 4; i++) {
+        if (tensix_mask & (1 << i)) {
+            tensix_ids.push_back(i);
+        }
+    }
+    return tensix_ids;
 }
+
+// Get tensix_id for allocation when only DM RISCs are used
+// Round-robins through 0-3 based on pair index
+uint8_t get_dm_tensix_id_for_pair(uint8_t pair_index) { return pair_index % 4; }
+
+// Holds tile counters allocated together for a producer-consumer group
+struct TileCounterGroup {
+    ::experimental::PackedTileCounter producer_tc;
+    std::vector<::experimental::PackedTileCounter> consumer_tcs;
+};
 
 uint32_t DataflowBufferImpl::serialized_size() const {
     // One dfb_initializer_t + one dfb_initializer_per_risc_t per risc
@@ -192,10 +234,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     TT_FATAL(
         (config.producer_risc_mask & config.consumer_risc_mask) == 0,
         "producer_risc_mask and consumer_risc_mask must not overlap");
-    TT_FATAL(config.num_producers == 1, "DFB only supports one producer for now");
-    TT_FATAL(config.num_consumers == 1, "DFB only supports one consumer for now");
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
-    TT_FATAL(config.cap != ::experimental::AccessPattern::BLOCKED, "Blocked consumer pattern not supported yet");
     TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
         core_range_set.num_cores() == 1,
@@ -205,15 +244,12 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
-    // Assign logical ID (0, 1, 2, ...)
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
 
-    // Use risc_mask from config
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
-    // Set shared config fields
     dfb->entry_size = config.entry_size;
     dfb->stride_size = config.entry_size * std::max(config.num_producers, config.num_consumers);
 
@@ -251,11 +287,97 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
-    // Iterate over producer_risc_mask to create producer risc_configs
+    std::vector<uint8_t> producer_risc_ids;
+    std::vector<uint8_t> consumer_risc_ids;
     for (uint8_t risc_id = 0; risc_id < 16; risc_id++) {
-        if (!(config.producer_risc_mask & (1 << risc_id))) {
-            continue;
+        if (config.producer_risc_mask & (1 << risc_id)) {
+            producer_risc_ids.push_back(risc_id);
         }
+        if (config.consumer_risc_mask & (1 << risc_id)) {
+            consumer_risc_ids.push_back(risc_id);
+        }
+    }
+
+    // Extract tensix IDs from risc masks
+    std::vector<uint8_t> producer_tensix_ids = extract_tensix_ids(config.producer_risc_mask);
+    std::vector<uint8_t> consumer_tensix_ids = extract_tensix_ids(config.consumer_risc_mask);
+    bool has_tensix_riscs = !producer_tensix_ids.empty() || !consumer_tensix_ids.empty();
+
+    // Determine tensix_id to use for allocation
+    // If tensix RISCs are used, use those specific tensix_ids
+    // If only DM RISCs, round-robin through 0-3 per producer-consumer pair
+    auto get_tensix_id_for_pair = [&](uint8_t pair_index) -> uint8_t {
+        if (has_tensix_riscs) {
+            // Use tensix_ids from masks, round-robin if multiple
+            std::vector<uint8_t> all_tensix_ids = producer_tensix_ids;
+            all_tensix_ids.insert(all_tensix_ids.end(), consumer_tensix_ids.begin(), consumer_tensix_ids.end());
+            if (all_tensix_ids.empty()) {
+                return get_dm_tensix_id_for_pair(pair_index);
+            }
+            return all_tensix_ids[pair_index % all_tensix_ids.size()];
+        } else {
+            return get_dm_tensix_id_for_pair(pair_index);
+        }
+    };
+
+    std::vector<std::vector<TileCounterGroup>> tc_groups;  // [producer_idx][tc_slot]
+    tc_groups.resize(producer_risc_ids.size());
+
+    // For each producer, allocate TC groups (one per TC slot)
+    for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
+        tc_groups[producer_idx].resize(num_producer_tcs);
+
+        for (uint8_t tc_slot = 0; tc_slot < num_producer_tcs; tc_slot++) {
+            TileCounterGroup& group = tc_groups[producer_idx][tc_slot];
+
+            if (config.cap == ::experimental::AccessPattern::STRIDED) {
+                // Determine which consumer(s) this producer TC slot pairs with
+                // Strided pairing: producer N pairs with consumers N, N+num_producers, N+2*num_producers, etc.
+                uint8_t consumer_idx = (producer_idx + tc_slot * producer_risc_ids.size()) % consumer_risc_ids.size();
+
+                // Determine tensix_id based on consumer (all producers pairing with same consumer use same tensix_id)
+                uint8_t tensix_id = get_tensix_id_for_pair(consumer_idx);
+
+                group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
+                group.consumer_tcs.push_back(group.producer_tc);  // Shared TC for strided
+
+                log_info(
+                    tt::LogMetal,
+                    "Strided: Producer[{}] TC[{}] (tensix_id={}) pairs with Consumer[{}]",
+                    producer_idx,
+                    tc_slot,
+                    tensix_id,
+                    consumer_idx);
+            } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+                // Determine tensix_id for this producer TC slot
+                uint8_t tensix_id = get_tensix_id_for_pair(producer_idx * num_producer_tcs + tc_slot);
+
+                group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
+
+                // Allocate separate consumer TCs for Remapper 1-to-many mapping
+                for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
+                    uint8_t consumer_tensix_id = get_tensix_id_for_pair(producer_idx * num_producer_tcs + tc_slot);
+                    ::experimental::PackedTileCounter consumer_tc =
+                        tile_counter_allocator_.allocate(consumer_tensix_id);
+                    group.consumer_tcs.push_back(consumer_tc);
+                }
+
+                log_info(
+                    tt::LogMetal,
+                    "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
+                    producer_idx,
+                    tc_slot,
+                    tensix_id,
+                    group.consumer_tcs.size());
+            } else {
+                TT_FATAL(false, "Unsupported consumer access pattern");
+            }
+        }
+    }
+
+    // Create producer risc_configs and assign TCs from groups
+    for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
+        uint8_t risc_id = producer_risc_ids[producer_idx];
 
         DFBRiscConfig risc_config;
         risc_config.risc_id = risc_id;
@@ -264,22 +386,23 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
         log_info(tt::LogMetal, "Producer risc {} uses {} TCs", risc_id, num_producer_tcs);
 
-        // Fill arrays for round-robin TCs
         for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
-            risc_config.config.packed_tile_counter[tc] = tile_counter_allocator_.allocate(risc_id);
-            log_info(tt::LogMetal, "\tAssigned TC[{}]: {}", tc, (uint32_t)risc_config.config.packed_tile_counter[tc]);
+            risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][tc].producer_tc;
+            log_info(
+                tt::LogMetal,
+                "\tAssigned TC[{}]: (0x{:x}, 0x{:x})",
+                tc,
+                (uint32_t)::experimental::get_tensix_id(risc_config.config.packed_tile_counter[tc]),
+                (uint32_t)::experimental::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
 
         dfb->risc_configs.push_back(risc_config);
     }
 
-    // Iterate over consumer_risc_mask to create consumer risc_configs
-    uint8_t consumer_count = 0;
-    for (uint8_t risc_id = 0; risc_id < 16; risc_id++) {
-        if (!(config.consumer_risc_mask & (1 << risc_id))) {
-            continue;
-        }
+    // Create consumer risc_configs and assign TCs from groups
+    for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
+        uint8_t risc_id = consumer_risc_ids[consumer_idx];
 
         DFBRiscConfig risc_config;
         risc_config.risc_id = risc_id;
@@ -287,18 +410,46 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
         log_info(tt::LogMetal, "Consumer risc {} uses {} TCs", risc_id, num_consumer_tcs);
 
-        // Fill arrays for round-robin TCs
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
             if (config.cap == ::experimental::AccessPattern::STRIDED) {
-                risc_config.config.packed_tile_counter[tc] = get_shared_tc_for_consumer(dfb.get(), consumer_count, tc);
-                log_info(
-                    tt::LogMetal, "\tAssigned TC[{}]: {}", tc, (uint32_t)risc_config.config.packed_tile_counter[tc]);
+                // Strided pairing inverse: find which producer pairs with this consumer
+                // Producer pairing: consumer_idx = (producer_idx + tc_slot * num_producers) % num_consumers
+                uint8_t producer_idx;
+                uint8_t producer_tc_slot;
+
+                if (producer_risc_ids.size() > consumer_risc_ids.size()) {
+                    // More producers than consumers: each consumer pairs with multiple producers
+                    // The t-th producer pairing with consumer C is: C + t * num_consumers
+                    producer_idx = consumer_idx + tc * consumer_risc_ids.size();
+                    producer_tc_slot = 0;
+                } else if (consumer_risc_ids.size() > producer_risc_ids.size()) {
+                    // More consumers than producers: each producer pairs with multiple consumers
+                    producer_idx = consumer_idx % producer_risc_ids.size();
+                    producer_tc_slot = consumer_idx / producer_risc_ids.size();
+                } else {
+                    // Equal: 1:1 mapping
+                    producer_idx = consumer_idx;
+                    producer_tc_slot = tc;
+                }
+
+                risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
+            } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+                // For blocked mode, each consumer has num_producers TCs, one per producer
+                // The tc-th TC on this consumer pairs with the tc-th producer
+                uint8_t producer_idx = tc;
+                uint8_t producer_tc_slot = 0;
+                risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
             } else {
-                TT_FATAL(false, "Need to implement blocked consumer access pattern");
+                TT_FATAL(false, "Unsupported consumer access pattern");
             }
+            log_info(
+                tt::LogMetal,
+                "\tAssigned TC[{}]: (0x{:x}, 0x{:x})",
+                tc,
+                (uint32_t)::experimental::get_tensix_id(risc_config.config.packed_tile_counter[tc]),
+                (uint32_t)::experimental::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_consumer_tcs;
-        consumer_count++;
 
         dfb->risc_configs.push_back(risc_config);
     }
