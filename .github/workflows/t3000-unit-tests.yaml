@@ -20,6 +20,15 @@ on:
           - bh-loudbox
           - wh-6u
           - bh-6u
+      model-type:
+        description: 'Select model types to test'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - tt-transformers
+          - standalone
       regenerate-ttnn-cache:
         description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
         required: false
@@ -28,6 +37,10 @@ on:
   workflow_call:
     inputs:
       device:
+        required: false
+        type: string
+        default: 'all'
+      model-type:
         required: false
         type: string
         default: 'all'
@@ -59,6 +72,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # N300 Tests (Wormhole dual chip)
@@ -74,6 +88,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # P100 Tests (Blackhole single chip)
@@ -89,6 +104,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # P150 Tests (Blackhole single chip)
@@ -104,6 +120,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # P300 Tests (Blackhole dual chip)
@@ -119,6 +136,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
 
@@ -135,6 +153,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # BH QuietBox Tests (2xP300)
@@ -150,6 +169,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
   # BH LoudBox Tests
@@ -165,6 +185,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
 
@@ -181,6 +202,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
 
@@ -197,6 +219,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
       extra-tag: 'in-service'
 
