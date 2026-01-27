@@ -56,26 +56,9 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
-  # Parse platform dropdown to extract distro/version
-  parse-platform:
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-      enable-lto: ${{ steps.parse.outputs.enable-lto }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
-
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -86,7 +69,7 @@ jobs:
       ref: ${{ inputs.commit || github.sha }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120

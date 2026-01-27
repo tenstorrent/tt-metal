@@ -58,7 +58,7 @@ jobs:
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit

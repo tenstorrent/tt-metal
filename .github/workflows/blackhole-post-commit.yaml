@@ -135,7 +135,7 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   run-profiler-regression:
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml

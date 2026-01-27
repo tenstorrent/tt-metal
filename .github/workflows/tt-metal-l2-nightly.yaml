@@ -107,7 +107,7 @@ jobs:
       tracy: true
       skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:

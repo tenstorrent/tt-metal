@@ -1,5 +1,24 @@
 name: "Build tt-metal docker artifact"
 
+# =============================================================================
+# NAMING CONVENTION: Docker Image Tags
+# =============================================================================
+# This workflow outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag)
+# to indicate these are Docker image tags that were built/verified.
+#
+# Consuming workflows (like build-artifact.yaml) accept these values via
+# inputs with the "-docker-image" suffix (e.g., ci-build-docker-image) to
+# indicate these are pre-built Docker images to use.
+#
+# Example usage:
+#   build-docker-images:
+#     uses: ./.github/workflows/build-docker-artifact.yaml
+#   build:
+#     uses: ./.github/workflows/build-artifact.yaml
+#     with:
+#       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+# =============================================================================
+
 on:
   workflow_call:
     inputs:

@@ -68,26 +68,10 @@ jobs:
           TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
           echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
 
-  # Parse platform dropdown to extract distro/version
-  parse-platform:
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-      enable-lto: ${{ steps.parse.outputs.enable-lto }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
-
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: [parse-tests-json, parse-platform]
+    needs: [parse-tests-json]
     if: ${{ always() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -100,7 +84,7 @@ jobs:
       platform: ${{ inputs.platform }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
-      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
+      enable-lto: ${{ inputs.enable-lto }}
 
   sd-unit-tests:
     needs: [parse-tests-json, build-artifact]

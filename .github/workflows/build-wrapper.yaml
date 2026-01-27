@@ -59,30 +59,17 @@ permissions:
   packages: write
 
 jobs:
-  # parse-platform and build-dispatch are for direct workflow_dispatch calls
-  # They only run if NO pre-built docker image tags were provided (i.e., not called from merge-gate)
-  parse-platform:
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-      toolchain: ${{ steps.parse.outputs.toolchain }}
-      enable-lto: ${{ steps.parse.outputs.enable-lto }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
+  # =============================================================================
+  # NOTE: This workflow has two modes:
+  # 1. workflow_dispatch: Single platform build via build-dispatch job
+  # 2. workflow_call: Matrix build across multiple configs via build job
+  #
+  # Platform parsing is handled by build-artifact.yaml internally.
+  # =============================================================================
 
+  # build-dispatch is for direct workflow_dispatch calls only
   build-dispatch:
     if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
-    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -90,7 +77,7 @@ jobs:
     with:
       platform: ${{ inputs.platform }}
       build-type: "Release"
-      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
+      enable-lto: ${{ inputs.enable-lto }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true

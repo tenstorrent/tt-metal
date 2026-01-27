@@ -193,7 +193,7 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
   t3000-unit-tests:

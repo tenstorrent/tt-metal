@@ -59,7 +59,7 @@ jobs:
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:
     needs: build-artifact-profiler

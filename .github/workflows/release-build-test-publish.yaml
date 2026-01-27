@@ -34,7 +34,10 @@ permissions:
   id-token: write
 
 jobs:
-  # Parse platform to extract distro/version for downstream workflows
+  # Parse platform to extract distro/version for downstream workflows.
+  # NOTE: This parse-platform is needed because create-docker-release-image and
+  # release-docs jobs use the parsed distro/version values to construct image tags.
+  # This is different from workflows that just pass platform to build-artifact.yaml.
   parse-platform:
     runs-on: ubuntu-latest
     outputs:

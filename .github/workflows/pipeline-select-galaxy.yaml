@@ -194,7 +194,7 @@ jobs:
     needs: determine-tests
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       build-umd-tests: true

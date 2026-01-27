@@ -82,7 +82,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   models-perf:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

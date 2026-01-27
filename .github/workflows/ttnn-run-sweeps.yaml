@@ -696,7 +696,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}

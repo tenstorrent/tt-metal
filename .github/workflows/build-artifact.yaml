@@ -200,6 +200,18 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # =============================================================================
+  # ARCHITECTURE NOTE: Platform Parsing
+  # =============================================================================
+  # This workflow handles platform parsing internally via the parse-platform job.
+  # Callers should NOT run their own parse-platform job - just pass:
+  #   - platform: "Ubuntu 22.04" or "Ubuntu 24.04"
+  #   - enable-lto: true/false (optional, defaults based on platform)
+  #
+  # The parse-platform job converts the platform string to distro/version/toolchain
+  # and applies platform-specific defaults (e.g., LTO settings).
+  # =============================================================================
+
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
     runs-on: ubuntu-latest
@@ -218,6 +230,20 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto }}
+
+  # =============================================================================
+  # ARCHITECTURE NOTE: Docker Image Caching
+  # =============================================================================
+  # Docker images can be provided in two ways:
+  # 1. Pre-built: Pass ci-build-docker-image, dev-docker-image, etc. as inputs
+  #    (used by merge-gate.yaml which builds all images once upfront)
+  # 2. On-demand: Leave docker image inputs empty; build-docker-image job runs
+  #
+  # The "always() && !failure() && !cancelled()" pattern is used throughout to
+  # allow jobs to run even when upstream jobs are SKIPPED (not just successful).
+  # This is necessary because pre-built image inputs cause build-docker-image
+  # to be skipped, but downstream jobs still need to run.
+  # =============================================================================
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -278,7 +304,7 @@ jobs:
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
-    name: "🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }} ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}"
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro }} ${{ needs.parse-platform.outputs.version }}"
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on: tt-ubuntu-2204-large-stable
@@ -287,9 +313,9 @@ jobs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
     env:
-      # Resolved platform values (from parse-platform for workflow_dispatch, or direct inputs for workflow_call)
-      DISTRO: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
-      VERSION: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
+      # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
+      DISTRO: ${{ needs.parse-platform.outputs.distro }}
+      VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ needs.parse-platform.outputs.toolchain || inputs.toolchain }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}

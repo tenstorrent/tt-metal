@@ -47,7 +47,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   fd-nightly:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml

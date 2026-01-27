@@ -39,7 +39,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       build-wheel: true
   t3000-model-accuracy-perplexity-tests:
     needs: build-artifact

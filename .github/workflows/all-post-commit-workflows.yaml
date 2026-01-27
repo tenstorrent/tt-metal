@@ -64,24 +64,9 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
-  # Parse platform dropdown to extract distro/version/enable-lto
-  parse-platform:
-    runs-on: ubuntu-latest
-    outputs:
-      enable-lto: ${{ steps.parse.outputs.enable-lto }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
-
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -92,8 +77,7 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform }}
       skip-tt-train: false
-      # Enable LTO based on platform setting (user can override via checkbox)
-      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
+      enable-lto: ${{ inputs.enable-lto }}
 
   find-changed-files:
     runs-on: ubuntu-latest

@@ -46,7 +46,7 @@ jobs:
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   blackhole-multi-card-unit-tests:
     needs: build-artifact-profiler
     secrets: inherit

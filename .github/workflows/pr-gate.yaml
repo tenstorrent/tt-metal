@@ -76,22 +76,8 @@ permissions:
   packages: write
 
 jobs:
-  # Parse platform for docker builds - runs once for all downstream jobs
-  parse-platform:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
+  # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
+  # This workflow only needs to pass the platform string to downstream workflows.
 
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:

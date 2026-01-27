@@ -110,7 +110,7 @@ jobs:
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
   bh-nightly:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact

@@ -47,7 +47,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto != false }}
+      enable-lto: ${{ inputs.enable-lto }}
       build-wheel: true
   galaxy-nightly-tests:
     needs: build-artifact
