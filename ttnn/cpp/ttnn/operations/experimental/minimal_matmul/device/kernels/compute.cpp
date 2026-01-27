@@ -193,8 +193,12 @@ void add_bias_and_addcmul_block(
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
+#ifdef FUSE_TERNARY
+        cb_wait_front(ternary_a_cb, N_block_tiles);
+        cb_wait_front(ternary_b_cb, N_block_tiles);
+#endif  // FUSE_TERNARY
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
 
 #ifdef FUSE_BIAS
 #ifdef FUSE_TERNARY
@@ -234,11 +238,17 @@ void add_bias_and_addcmul_block(
                 fused_act_dst_id,  // odst: output destination
                 scalar_value);     // value: scalar multiplier
 #endif
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
+#ifdef FUSE_TERNARY
+        cb_pop_front(ternary_a_cb, N_block_tiles);
+        cb_pop_front(ternary_b_cb, N_block_tiles);
+#endif  // FUSE_TERNARY
         cb_push_back(out_cb, N_block_tiles);
     }
 }
@@ -296,7 +306,7 @@ void add_bias_and_addcmul_block_v1(
 #endif  // FUSE_TERNARY
 
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
 
 #ifdef FUSE_BIAS
 #ifdef FUSE_TERNARY
@@ -336,9 +346,11 @@ void add_bias_and_addcmul_block_v1(
                 fused_act_dst_id,  // odst: output destination
                 scalar_value);     // value: scalar multiplier
 #endif
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
 #ifdef FUSE_TERNARY
