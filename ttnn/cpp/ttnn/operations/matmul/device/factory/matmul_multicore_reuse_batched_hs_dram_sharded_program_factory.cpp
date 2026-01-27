@@ -667,6 +667,49 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     tt_metal::Buffer* in1_buffer = b.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(a.dtype()));
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(b.dtype()));
+
+    // Buffer size validation
+    TT_FATAL(
+        in0_buffer->size() % in0_single_tile_size == 0,
+        "Input A buffer size ({}) must be divisible by single tile size ({})",
+        in0_buffer->size(),
+        in0_single_tile_size);
+    TT_FATAL(
+        in1_buffer->size() % in1_single_tile_size == 0,
+        "Input B buffer size ({}) must be divisible by single tile size ({})",
+        in1_buffer->size(),
+        in1_single_tile_size);
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // Shape compatibility checks
+    TT_FATAL(
+        ashape[-1] == bshape[-2],
+        "Dimension N (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
+        ashape[-1],
+        bshape[-2]);
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        ashape[-2],
+        in0_tile_shape[0]);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        ashape[-1],
+        in0_tile_shape[1]);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        bshape[-2],
+        in1_tile_shape[0]);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        bshape[-1],
+        in1_tile_shape[1]);
+
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
     const auto& program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(
@@ -686,6 +729,19 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     uint32_t M = ashape[-2] / in0_tile_shape[0];  // M in tiles
     uint32_t N = ashape[-1] / in0_tile_shape[1];  // N in tiles (contracted dimension)
     uint32_t K = bshape[-1] / in1_tile_shape[1];  // K in tiles
+
+    // Batch sharding validation: per_core_M and per_core_N should equal M and K respectively
+    // because each core handles complete matmuls, not partial tiles
+    TT_FATAL(
+        per_core_M == M,
+        "For batch sharding, per_core_M ({}) must equal M ({}) - each core handles complete matmuls",
+        per_core_M,
+        M);
+    TT_FATAL(
+        per_core_N == K,
+        "For batch sharding, per_core_N ({}) must equal K ({}) - each core handles complete matmuls",
+        per_core_N,
+        K);
 
     TT_FATAL(N % in0_block_w == 0, "N ({}) must be divisible by in0_block_w ({})", N, in0_block_w);
 

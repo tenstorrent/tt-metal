@@ -22,26 +22,6 @@
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -305,9 +285,6 @@ void MAIN {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
-                                DPRINT << "matmul_block" << ENDL();
-                                UNPACK(print_full_tile(in0_cb_id, in0_index));
-                                UNPACK(print_full_tile(in1_cb_id, in1_index));
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,

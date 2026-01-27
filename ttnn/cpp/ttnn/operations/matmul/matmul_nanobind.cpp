@@ -459,7 +459,7 @@ void py_module(nb::module_& mod) {
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(
             mod, "MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig", R"doc(
-        This program config is a specialized config for batched DRAM sharded operations.
+        This program config is a specialised config for batched DRAM sharded operations, where the inputs are sharded along the batch dimension.
     )doc");
 
     matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config
@@ -624,6 +624,9 @@ void py_module(nb::module_& mod) {
                 * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
                   - Width Sharded (L1)
                   - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
+                  - Height Sharded (L1)
+                  - Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
                   - Interleaved (L1/DRAM)
