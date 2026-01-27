@@ -18,18 +18,17 @@ void FabricCommandInterface::pause_routers(const ControlPlane& control_plane) co
     // FR-4: Issue PAUSE command to all active routers
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     const auto router_cmd_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 
-        tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
-    
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
+
     RouterCommand cmd = RouterCommand::PAUSE;
-    
+
     const auto& router_cores = get_all_router_cores(control_plane);
     for (const auto& [fabric_node_id, channel_id] : router_cores) {
         ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-        
+
         cluster.write_core(
             &cmd,
             sizeof(RouterCommand),
@@ -42,18 +41,17 @@ void FabricCommandInterface::resume_routers(const ControlPlane& control_plane) c
     // FR-4: Issue RUN command to all active routers
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     const auto router_cmd_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 
-        tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
-    
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
+
     RouterCommand cmd = RouterCommand::RUN;
-    
+
     const auto& router_cores = get_all_router_cores(control_plane);
     for (const auto& [fabric_node_id, channel_id] : router_cores) {
         ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-        
+
         cluster.write_core(
             &cmd,
             sizeof(RouterCommand),
@@ -68,34 +66,33 @@ bool FabricCommandInterface::all_routers_in_state(
     // FR-5: Check if all routers are in specified state
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     const auto router_state_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 
-        tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
-    
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
+
     const auto& router_cores = get_all_router_cores(control_plane);
-    
+
     // Empty topology returns false (no routers to verify)
     if (router_cores.empty()) {
         return false;
     }
-    
+
     for (const auto& [fabric_node_id, channel_id] : router_cores) {
         ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-        
+
         RouterStateCommon state;
         cluster.read_core(
             &state,
             sizeof(RouterStateCommon),
             tt_cxy_pair(physical_chip_id, eth_core),
             router_state_addr);
-        
+
         if (state != expected_state) {
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -113,9 +110,9 @@ bool FabricCommandInterface::wait_for_state(
     std::chrono::milliseconds poll_interval) const {
     // FR-6: Wait for all routers to reach target state with timeout
     // Uses polling with std::this_thread::sleep_for between polls (NO BUSY-WAIT)
-    
+
     auto start_time = std::chrono::steady_clock::now();
-    
+
     while (true) {
         // Check if target state is reached
         if (all_routers_in_state(control_plane, target_state)) {
@@ -128,29 +125,28 @@ bool FabricCommandInterface::wait_for_state(
             // report the states of all routers
             auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-            
+
             const auto router_state_addr = hal.get_dev_addr(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 
-                tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
-            
+                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
+
             const auto& router_cores = get_all_router_cores(control_plane);
-            
+
             // Empty topology returns false (no routers to verify)
             if (router_cores.empty()) {
                 return false;
             }
-            
+
             for (const auto& [fabric_node_id, channel_id] : router_cores) {
                 ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
                 CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-                
+
                 RouterStateCommon state;
                 cluster.read_core(
                     &state,
                     sizeof(RouterStateCommon),
                     tt_cxy_pair(physical_chip_id, eth_core),
                     router_state_addr);
-                
+
                 log_info(LogTest, "Router state: {} (fabric_node_id: {}, channel_id: {})", state, fabric_node_id.mesh_id, fabric_node_id.chip_id, channel_id);
             }
             return false;
@@ -168,21 +164,20 @@ RouterStateCommon FabricCommandInterface::get_router_state(
     // FR-5: Query state of specific router
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     const auto router_state_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 
-        tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
-    
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
+
     ChipId physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
     CoreCoord eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, channel_id);
-    
+
     RouterStateCommon state;
     cluster.read_core(
         &state,
         sizeof(RouterStateCommon),
         tt_cxy_pair(physical_chip_id, eth_core),
         router_state_addr);
-    
+
     return state;
 }
 
@@ -198,7 +193,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> FabricCommandInterface::get_all_
         // Get mesh shape to iterate over all chips
         auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
         size_t num_chips = mesh_shape.mesh_size();
-        
+
         for (size_t chip_idx = 0; chip_idx < num_chips; ++chip_idx) {
             // Construct fabric node id for this chip position
             FabricNodeId fabric_node_id(mesh_id, static_cast<uint32_t>(chip_idx));

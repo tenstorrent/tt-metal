@@ -2012,7 +2012,7 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
         //
         // This can be avoided if the host guarantees that the reads are queued strictly behind writes
         // For the entirety of the H->D datapath. For the time being, this is too strong of a requirement
-        // for cases where router code is not running in traditional H->D server/PC configurations 
+        // for cases where router code is not running in traditional H->D server/PC configurations
         // (i.e. some custom IP integrations may not easily satisfy this guarantee this)
     }
 
@@ -2034,9 +2034,9 @@ void run_drain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt:
 
 void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (MY_ERISC_ID == 0) {
-        // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop before we 
-        // proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
-        
+        // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop
+        // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
+
         //
         // Wait for other eriscs will go here
         //
@@ -2176,14 +2176,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
     auto execute_main_loop = [&]() {
-            
         // while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/()) {
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
             did_something = false;
-    
+
             uint32_t tx_progress = 0;
             uint32_t rx_progress = 0;
-    
+
             if constexpr (is_sender_channel_serviced[0]) {
                 open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
@@ -2196,7 +2195,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
                 // Capture these to see if we made progress
-        
+
                 // There are some cases, mainly for performance, where we don't want to switch between sender channels
                 // so we interoduce this to provide finer grain control over when we disable the automatic switching
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
@@ -2209,7 +2208,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-        #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                 // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
                 // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
                 rx_progress |= run_receiver_channel_step<
@@ -2227,7 +2226,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders,
                     routing_table,
                     local_fabric_telemetry);
-        #else
+#else
                 rx_progress |= run_receiver_channel_step<
                     0,
                     ENABLE_FIRST_LEVEL_ACK_VC0,
@@ -2243,7 +2242,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders,
                     routing_table,
                     local_fabric_telemetry);
-        #endif
+#endif
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -2287,7 +2286,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                     }
-        #if defined(FABRIC_2D_VC1_SERVICED)
+#if defined(FABRIC_2D_VC1_SERVICED)
                     tx_progress |= run_sender_channel_step<
                         VC1_RECEIVER_CHANNEL,
                         ACTUAL_VC0_SENDER_CHANNELS,
@@ -2357,15 +2356,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         receiver_channel_response_credit_senders,
                         routing_table,
                         local_fabric_telemetry);
-        #endif  // FABRIC_2D_VC1_SERVICED
+#endif  // FABRIC_2D_VC1_SERVICED
                 }
             }
-    
+
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
                 uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
                 update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
-            }   
+            }
             // Compute idle conditions and update heartbeats in one helper
             if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
                 update_telemetry(
@@ -2375,7 +2374,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_fabric_telemetry,
                     fabric_telemetry);
             }
-    
+
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
                 if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2396,7 +2395,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             } else {
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
-    
+
             if constexpr (is_sender_channel_serviced[0]) {
                 close_perf_recording_window(inner_loop_perf_telemetry_collector);
                 if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
@@ -2439,14 +2438,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             };
         }
     } else {
-        // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we 
-        // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it 
+        // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we
+        // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
         // is paused, draining, retraining, etc.), we will wait enter a busy wait loop in the main run loop
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             execute_main_loop();
         }
     }
-    
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
