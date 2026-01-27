@@ -144,11 +144,11 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
     function_level_defaults,
 ):
     """
-    Test the all-to-all operation from line 1271 of mla1d.py with trace mode for performance measurement.
+    Test the all-to-all operation from line 1301 of mla1d.py with trace mode for performance measurement.
 
     This test captures a trace of the all-to-all operation that transposes Q tensor before flash attention.
 
-    Operation: all_to_all_async_generic with config wq_a2a_decode
+    Operation: all_to_all_async_generic with config flash_mla_reshard
     - Input shape per device: [1, 32, 16, 576] (before A2A)
     - cluster_axis=1 (along device row)
     - in_dim=2 (split num_heads: 16 heads -> 2 heads per device)
@@ -179,9 +179,23 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # Memory config - interleaved L1 (matching mla1d.py line 1271)
+    # Memory config (matching mla1d.py line 1301)
+    # Input: L1 interleaved
     input_mem_config = ttnn.L1_MEMORY_CONFIG
-    output_mem_config = ttnn.L1_MEMORY_CONFIG
+    # Output: L1 HEIGHT sharded 8x9 grid [32, 576] (matching flash_mla_reshard config)
+    # After all-to-all, shape is [1, 4, 128, 576], total height = 1 * 4 * 128 = 512
+    # Using 64 cores (8x9 grid minus 8 cores = 64 cores), shard height = 512 / 64 = 8 -> nearest_y = 32
+    output_core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}  # 8x8 grid = 64 cores
+    )
+    output_shard_shape = [32, 576]
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=output_shard_shape,
+        core_grid=output_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
     # Create input tensor
     logger.info(f"Running all-to-all test on {mesh_device.get_num_devices()} devices")
