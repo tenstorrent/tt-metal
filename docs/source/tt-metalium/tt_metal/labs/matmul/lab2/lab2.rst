@@ -653,15 +653,19 @@ Follow these steps to complete the exercise:
 
 #. Add a parameter for ``K_block_tiles``.
    This parameter needs to be chosen so it divides ``Kt`` evenly.
-   Given that the tile size is fixed to ``32x32`` on all Tenstorrent architectures,
-   as of the time of this writing, and given the matrix sizes, ``Kt = 320 / 32 = 10`` for this lab.
-   Given this, the only non-trivial choices for ``K_block_tiles`` we will explore in this
-   lab are ``2`` and ``5``.
    A lower value of ``K_block_tiles`` allows for larger matrix sizes to fit into the
    available on-chip SRAM, since lower ``K_block_tiles`` means fewer tiles in each slab.
-   Therefore, start by setting this parameter to ``2``.
-   Should the tile size change in the future, the value of ``K_block_tiles`` may need to
-   be adjusted accordingly.
+   A higher value increases on-chip SRAM usage, but results in fewer iterations of the
+   outer loop over K-blocks, which means that partial results, whose size does not depend
+   on ``K_block_tiles``, are loaded from and stored into CBs fewer times.
+
+   The tile size is ``32x32`` on all Tenstorrent architectures, as of the time of this writing.
+   Given the matrix sizes above, the number of tiles in the ``K`` dimension is ``Kt = 320 / 32 = 10``.
+   Given this, the only non-trivial choices for ``K_block_tiles`` we will explore in this
+   lab are ``2`` and ``5``. Start by setting this parameter to ``2``.
+
+   Note: Should the tile size change in the future, the value of ``K_block_tiles``
+   suitable for this lab may need to be adjusted accordingly.
 
 #. Make the core grid parameterizable, then determine appropriate values for the other
    blocking variables, based on the core grid size and the matrix sizes.
