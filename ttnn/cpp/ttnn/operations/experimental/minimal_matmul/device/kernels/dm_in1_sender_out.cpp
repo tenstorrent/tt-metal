@@ -117,8 +117,6 @@ void kernel_main() {
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
-    bool n_forward = true;
-    bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -135,9 +133,10 @@ void kernel_main() {
         }
 #endif
 
+        k_forward = true;
+
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
@@ -174,10 +173,6 @@ void kernel_main() {
                     }
                 }
 
-                if (reuse_block && k_block_iter == 0) {
-                    reuse_block = false;
-                    continue;
-                }
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -287,11 +282,6 @@ void kernel_main() {
                 }
             }
         }
-#ifndef FUSE_AG
-        n_forward = !n_forward;
-        // We get reuse on in1 when striding M block
-        reuse_block = true;
-#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
