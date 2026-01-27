@@ -17,11 +17,17 @@
 #include <stdexcept>
 #include <vector>
 
+#define TEST_ROW_WISE 0
+
 static constexpr uint32_t TILE_WIDTH = 32;
 static constexpr uint32_t TILE_HEIGHT = 32;
 
 unsigned char* input_image;
 unsigned char* output_image;
+
+int g_cnt = 0;
+int id_min = 100;
+int id_max = -1;
 
 using Shape = std::vector<uint32_t>;  // padded shapes (rank >= 2)
 
@@ -167,7 +173,8 @@ static std::vector<uint32_t> simulate_reader_kernel_src_tile_ids(
     std::vector<uint32_t> id_per_dim,
     const std::vector<uint32_t>& num_unpadded_tiles_per_dim,
     const std::vector<uint32_t>& num_padded_tiles_per_dim,
-    std::vector<unsigned char>* image) {
+    std::vector<int>& src_access,
+    bool print_debug) {
     const uint32_t num_dims = static_cast<uint32_t>(num_unpadded_tiles_per_dim.size());
     std::vector<uint32_t> ids;
     ids.reserve(num_tiles);
@@ -175,11 +182,17 @@ static std::vector<uint32_t> simulate_reader_kernel_src_tile_ids(
     uint32_t src_tile_id = start_id;
     for (uint32_t i = 0; i < num_tiles; ++i) {
         ids.push_back(src_tile_id);
-        if (image != nullptr) {
-            if (src_tile_id >= image->size()) {
-                throw std::runtime_error("tile_id out of bounds for image: " + std::to_string(src_tile_id));
+        g_cnt++;
+        if ((src_tile_id < 0) || (src_tile_id >= src_access.size())) {
+            std::cout << "tile_id is out of range. tile_id =" << src_tile_id << "\n";
+        } else {
+            src_access[src_tile_id]++;
+            if (id_min > static_cast<int>(src_tile_id)) {
+                id_min = static_cast<int>(src_tile_id);
             }
-            (*image)[src_tile_id] = 255;
+            if (id_max < static_cast<int>(src_tile_id)) {
+                id_max = static_cast<int>(src_tile_id);
+            }
         }
         // std::cout << "src_tile_id=" << src_tile_id << "\n";
         src_tile_id++;
@@ -197,17 +210,21 @@ static std::vector<uint32_t> simulate_reader_kernel_src_tile_ids(
 }
 
 int main() {
+    // Reset global counters
+    g_cnt = 0;
+    id_min = 100;
+    id_max = -1;
+
     // Example shapes (feel free to edit)
     // Rank-3 example: [D0, H, W] in elements for last two dims, and "tile units" for dim0 in tiled layout.
-#if 0
-    Shape input = {768, 768, 160};
-    Shape output = {686, 640, 128};
-    Shape slice_start = {4, 32, 32};
+#if TEST_ROW_WISE > 0
+    Shape input = {768, 160, 768};
+    Shape output = {686, 128, 686};
 #else
-    Shape input = {768, 768, 128};
+    Shape input = {768, 768, 160};
     Shape output = {686, 686, 128};
-    Shape slice_start = {0, 0, 0};
 #endif
+    Shape start = {0, 0, 0};
 
     // Pad H/W and start H/W to multiples of tile, like typical tiled paths
     auto pad32 = [](uint32_t v) { return (v % 32) ? (v + (32 - v % 32)) : v; };
@@ -215,8 +232,8 @@ int main() {
     input[2] = pad32(input[2]);
     output[1] = pad32(output[1]);
     output[2] = pad32(output[2]);
-    slice_start[1] = pad32(slice_start[1]);
-    slice_start[2] = pad32(slice_start[2]);
+    start[1] = pad32(start[1]);
+    start[2] = pad32(start[2]);
 
     // Build an "image" whose number of pixels equals the capacity of the input array.
     // width  = input[2]
@@ -231,7 +248,7 @@ int main() {
     std::vector<unsigned char> image(static_cast<size_t>(image_num_pixels), 0);
     output_image = image.data();
 
-    const auto st = compute_common_reader_state(input, output, slice_start);
+    const auto st = compute_common_reader_state(input, output, start);
 
     std::cout << "CommonReaderState\n";
     std::cout << "  start_offset=" << st.start_offset << "\n";
@@ -253,6 +270,11 @@ int main() {
 
     // Total unpadded tiles (same as output.physical_volume()/TILE_HW for tiled tensors)
     const uint32_t num_unpadded_tiles = output[0] * (output[1] / TILE_HEIGHT) * (output[2] / TILE_WIDTH);
+
+    // Initialize src_access tracking (similar to sample_block_tile_id_calc.cpp)
+    const uint32_t num_input_tiles = input[0] * (input[1] / TILE_HEIGHT) * (input[2] / TILE_WIDTH);
+    std::vector<int> src_access(num_input_tiles, 0);
+    std::cout << "src_access.size = " << src_access.size() << std::endl;
 
     // Provide (or hardcode) a split_work_to_cores result:
     // (Here: naive even split for demonstration.)
@@ -293,6 +315,8 @@ int main() {
         }
         const uint32_t capped_tiles = std::min(tiles_this_core, num_unpadded_tiles - num_tiles_written);
 
+        bool print_debug = false;
+
         auto per_core = compute_per_core_reader_args_like_ttnn(st, capped_tiles, num_tiles_written);
         auto ids = simulate_reader_kernel_src_tile_ids(
             per_core.start_id,
@@ -300,18 +324,47 @@ int main() {
             per_core.id_per_dim,
             st.num_unpadded_tiles_per_dim,
             st.num_padded_tiles_per_dim,
-            &image);
+            src_access,
+            print_debug);
 
-        std::cout << "core " << core << " num_tiles_written=" << num_tiles_written << " start_id=" << per_core.start_id
-                  << " num_tiles=" << per_core.num_tiles << "\n";
+        print_debug = false;
 
-        if (!last_ids.empty() && !ids.empty()) {
+        if (print_debug) {
+            std::cout << "core " << core << " num_tiles_written=" << num_tiles_written
+                      << " start_id=" << per_core.start_id << " num_tiles=" << per_core.num_tiles << "\n";
+        }
+
+        if (print_debug && !last_ids.empty() && !ids.empty()) {
             // quick continuity check: next core's first id should be >= previous core's last id
             std::cout << "  prev_last_id=" << last_ids.back() << " next_first_id=" << ids.front() << "\n";
         }
 
         last_ids = std::move(ids);
         num_tiles_written += capped_tiles;
+    }
+
+    // Print src_access statistics (similar to sample_block_tile_id_calc.cpp)
+    const uint32_t src_tiles_per_row = input[2] / TILE_WIDTH;
+    const uint32_t src_tiles_per_col = input[1] / TILE_HEIGHT;
+    std::cout << "g_count = " << g_cnt << ", min = " << id_min << ", max = " << id_max << "\n";
+    if (g_cnt) {
+        int k = 0, m = 0, n = 0;
+        std::cout << "[n " << n << "]\n";
+        for (size_t i = 0; i < src_access.size(); i++) {
+            // std::cout << "src_access[" << i << "] = " << src_access[i] << "\n";
+            std::cout << src_access[i] << " ";
+            k++;
+            if (k == src_tiles_per_row) {
+                std::cout << "\n";
+                k = 0;
+                m++;
+                if (m == src_tiles_per_col) {
+                    m = 0;
+                    n++;
+                    std::cout << "[n " << n << "]\n";
+                }
+            }
+        }
     }
 
     // Save the image to disk (PGM format).

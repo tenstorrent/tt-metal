@@ -18,10 +18,15 @@
 #include <stdexcept>
 #include <vector>
 
-#define TEST_ROW_WISE 1
+#define TEST_ROW_WISE 0
+#define PRINT_ACCESS 0
 
 static constexpr uint32_t TILE_WIDTH = 32;
 static constexpr uint32_t TILE_HEIGHT = 32;
+
+int g_cnt = 0;
+int id_min = 100;
+int id_max = -1;
 
 using Shape = std::vector<uint32_t>;  // e.g. [D0, D1, D2]
 
@@ -96,6 +101,7 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
     const std::vector<uint32_t>& shape_blocks,       // runtime "shape_blocks" (output iteration space)
     const std::vector<uint32_t>& block_id_gap,       // runtime "block_id_gap" (src_block_id_gap)
     const std::vector<uint32_t>& block_coord_start,  // runtime "block_coord"
+    std::vector<int>& src_access,
     const Shape& src_shape_blocks,
     bool print_debug) {
     ReaderKernelSimResult r;
@@ -130,8 +136,26 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
     }
 
     for (uint32_t i = 0; i < num_blocks; i++) {
-        uint32_t tile_id = src_block_id_start;
+        int32_t tile_id = src_block_id;
         for (uint32_t k = 0; k < num_tiles; k++) {
+            g_cnt++;
+
+            if (print_debug) {
+                std::cout << "k = " << k << ", tile_id = " << tile_id << "\n";
+            }
+
+            if ((tile_id < 0) || (tile_id >= src_access.size())) {
+                std::cout << "tile_id is out of range. tile_id =" << tile_id << "\n";
+            } else {
+                src_access[tile_id]++;
+                if (id_min > tile_id) {
+                    id_min = tile_id;
+                }
+                if (id_max < tile_id) {
+                    id_max = tile_id;
+                }
+            }
+
             tile_id += tile_id_stride;
         }
 #if 0
@@ -164,6 +188,161 @@ static ReaderKernelSimResult simulate_reader_kernel_src_block_id(
     r.final_src_block_id = src_block_id;
     r.final_block_coord = std::move(block_coord);
     return r;
+}
+
+// Simulate ONLY the out_block_id progression in the writer kernel:
+//   ttnn/.../slice_writer_unary_tile_row_col_interleaved.cpp
+//
+// This ignores the actual write_block() I/O and just reproduces:
+//   - out_block_id += block_id_stride
+//   - block_coord++ with wrap against shape_blocks
+//   - out_block_id += block_id_gap[j] when block_coord wraps
+struct WriterKernelSimResult {
+    std::vector<uint32_t> out_block_ids_used;  // one entry per block iteration
+    uint32_t final_out_block_id = 0;           // value after the loop finishes
+    std::vector<uint32_t> final_block_coord;   // block_coord after the loop finishes
+};
+
+static WriterKernelSimResult simulate_writer_kernel_out_block_id(
+    uint32_t out_block_id_start,
+    uint32_t num_blocks,
+    uint32_t block_id_stride,
+    uint32_t num_tiles,
+    uint32_t tile_id_stride,
+    const std::vector<uint32_t>& shape_blocks,       // runtime "shape_blocks" (output iteration space)
+    const std::vector<uint32_t>& block_id_gap,       // runtime "block_id_gap" (out_block_id_gap)
+    const std::vector<uint32_t>& block_coord_start,  // runtime "block_coord"
+    std::vector<int>& out_access,
+    const Shape& out_shape_blocks,
+    bool print_debug) {
+    WriterKernelSimResult r;
+    r.out_block_ids_used.reserve(num_blocks);
+
+    uint32_t out_block_id = out_block_id_start;
+    std::vector<uint32_t> block_coord = block_coord_start;
+    const int32_t num_dims = static_cast<int32_t>(shape_blocks.size());
+
+    if (print_debug) {
+        std::cout << " --------------------------------------------------------------\n";
+        std::cout << __FUNCTION__ << std::endl;
+        std::cout << "  out_block_id_start: " << out_block_id_start << "\n";
+        std::cout << "  num_blocks: " << num_blocks << "\n";
+        std::cout << "  block_id_stride: " << block_id_stride << "\n";
+        std::cout << "  shape_blocks: ";
+        for (auto& sb : shape_blocks) {
+            std::cout << "  " << sb << " ";
+        }
+        std::cout << "\n";
+        std::cout << "  block_id_gap: ";
+        for (auto& gap : block_id_gap) {
+            std::cout << "  " << gap << " ";
+        }
+        std::cout << "\n";
+        std::cout << "  block_coord_start: ";
+        for (auto& bc : block_coord_start) {
+            std::cout << "  " << bc << " ";
+        }
+        std::cout << "\n";
+        std::cout << " --------------------------------------------------------------\n";
+    }
+
+    for (uint32_t i = 0; i < num_blocks; i++) {
+        int32_t tile_id = out_block_id;
+        for (uint32_t k = 0; k < num_tiles; k++) {
+            g_cnt++;
+
+            if (print_debug) {
+                std::cout << "k = " << k << ", tile_id = " << tile_id << "\n";
+            }
+
+            if ((tile_id < 0) || (tile_id >= out_access.size())) {
+                std::cout << "tile_id is out of range. tile_id =" << tile_id << "\n";
+            } else {
+                out_access[tile_id]++;
+                if (id_min > tile_id) {
+                    id_min = tile_id;
+                }
+                if (id_max < tile_id) {
+                    id_max = tile_id;
+                }
+            }
+
+            tile_id += tile_id_stride;
+        }
+        r.out_block_ids_used.push_back(out_block_id);
+        out_block_id += block_id_stride;
+
+        // Kernel does: for j=num_dims-1..0: block_coord[j]++; if wrap -> add gap; else break
+        for (int32_t j = num_dims - 1; j >= 0; --j) {
+            block_coord[j]++;
+            if (block_coord[j] == shape_blocks[j]) {
+                block_coord[j] = 0;
+                out_block_id += block_id_gap[j];
+            } else {
+                break;
+            }
+        }
+    }
+
+    r.final_out_block_id = out_block_id;
+    r.final_block_coord = std::move(block_coord);
+    return r;
+}
+
+// Simulate split_work_to_cores function:
+//   tt_metal/common/work_split.cpp
+//
+// This simulates the work distribution logic used in slice_program_factory_tile_interleaved.cpp
+// Returns a simplified SplitWorkResult matching the structure used in the sample code.
+static SplitWorkResult simulate_split_work_to_cores(
+    uint32_t num_cores_x, uint32_t num_cores_y, uint32_t units_to_divide, bool row_wise = false) {
+    SplitWorkResult result;
+
+    if (units_to_divide == 0) {
+        result.num_cores = 0;
+        result.num_cores_in_core_group = 0;
+        result.num_cores_in_core_group_cliff = 0;
+        result.num_blocks_per_core = 0;
+        result.num_blocks_per_core_cliff = 0;
+        return result;
+    }
+
+    uint32_t max_num_cores = num_cores_x * num_cores_y;
+    uint32_t target_num_cores;
+
+    // Determine target number of cores
+    if (units_to_divide >= max_num_cores) {
+        target_num_cores = max_num_cores;
+    } else {
+        target_num_cores = units_to_divide;
+    }
+
+    result.num_cores = target_num_cores;
+
+    // Calculate work distribution
+    uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
+    uint32_t num_cores_with_more_work = units_to_divide % target_num_cores;
+
+    // Evenly divided units to all target cores
+    if (num_cores_with_more_work == 0) {
+        result.num_cores_in_core_group = target_num_cores;
+        result.num_cores_in_core_group_cliff = 0;
+        result.num_blocks_per_core = units_per_core_group_1;
+        result.num_blocks_per_core_cliff = 0;
+    }
+    // Uneven division of units across cores
+    else {
+        // Group of cores that do more work
+        uint32_t num_core_group_1_cores = num_cores_with_more_work;
+        uint32_t num_core_group_2_cores = target_num_cores - num_core_group_1_cores;
+
+        result.num_cores_in_core_group = num_core_group_1_cores;
+        result.num_cores_in_core_group_cliff = num_core_group_2_cores;
+        result.num_blocks_per_core = units_per_core_group_1 + 1;    // Group 1 gets one more
+        result.num_blocks_per_core_cliff = units_per_core_group_1;  // Group 2 gets base amount
+    }
+
+    return result;
 }
 
 // Specialization of the lambda from slice code for rank=3 (so coord has 2 dims).
@@ -313,22 +492,34 @@ static BlockIdResult compute_block_ids_rank3(
     return r;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     int rank = 3;
-#if 0
+    Shape input, output;
 #if TEST_ROW_WISE > 0
-    Shape input = {768, 160, 768};
-    Shape output = {686, 128, 640};
+    Shape default_input = {768, 160, 768};
+    Shape default_output = {686, 128, 686};
 #else
-    Shape input = {768, 768, 160};
-    Shape output = {686, 640, 128};
+    Shape default_input = {768, 768, 160};
+    Shape default_output = {686, 686, 128};
 #endif
-    Shape start = {4, 32, 32};
-#else
-    Shape input = {768, 768, 128};
-    Shape output = {686, 686, 128};
     Shape start = {0, 0, 0};
-#endif
+
+    // Parse input and output shape from arguments if provided.
+    // Usage: prog [input0 input1 input2 output0 output1 output2]
+    if (argc == 7) {
+        input = {
+            static_cast<uint32_t>(std::stoi(argv[1])),
+            static_cast<uint32_t>(std::stoi(argv[2])),
+            static_cast<uint32_t>(std::stoi(argv[3]))};
+        output = {
+            static_cast<uint32_t>(std::stoi(argv[4])),
+            static_cast<uint32_t>(std::stoi(argv[5])),
+            static_cast<uint32_t>(std::stoi(argv[6]))};
+    } else {
+        input = default_input;
+        output = default_output;
+    }
+
     // Pad H/W and start H/W to multiples of tile, like typical tiled paths
     auto pad32 = [](uint32_t v) { return (v % 32) ? (v + (32 - v % 32)) : v; };
     input[1] = pad32(input[1]);
@@ -338,9 +529,9 @@ int main() {
     start[1] = pad32(start[1]);
     start[2] = pad32(start[2]);
 
-    std::cout << "input  = [" << input[0] << " " << input[1] << ", " << input[2] << "]\n";
-    std::cout << "output = [" << output[0] << " " << output[1] << ", " << output[2] << "]\n";
-    std::cout << "start  = [" << start[0] << " " << start[1] << ", " << start[2] << "]\n";
+    std::cout << "input  = [" << input[0] << " " << input[1] << " " << input[2] << "]\n";
+    std::cout << "output = [" << output[0] << " " << output[1] << " " << output[2] << "]\n";
+    std::cout << "start  = [" << start[0] << " " << start[1] << " " << start[2] << "]\n";
 
     std::cout << "Tile Dimension" << "\n";
     std::cout << "input tiles = [" << input[0] << " " << input[1] / TILE_HEIGHT << " " << input[2] / TILE_WIDTH
@@ -350,8 +541,17 @@ int main() {
     std::cout << "start tiles  = [" << start[0] << " " << start[1] / TILE_HEIGHT << " " << start[2] / TILE_WIDTH
               << "]\n";
 
+    //
+    int input_size = input[0] * input[1] * input[2];
+    std::vector<int> src_access(input_size / 32 / 32, 0);
+    std::cout << "src_access.size = " << src_access.size() << std::endl;
+    //
+    int output_size = output[0] * output[1] * output[2];
+    std::vector<int> out_access(output_size / 32 / 32, 0);
+    std::cout << "out_access.size = " << out_access.size() << std::endl;
+
     // Example choice (your real code picks based on CB capacity).
-    bool row_wise = (output[rank - 1] > output[rank - 2]) ? true : false;
+    bool row_wise = (output[rank - 1] > output[rank - 2]);
     int num_blocks = output[0] * output[rank - 2] / TILE_HEIGHT * output[rank - 1] / TILE_WIDTH;
     if (row_wise) {
         num_blocks /= (output[rank - 1] / TILE_WIDTH);
@@ -359,18 +559,11 @@ int main() {
         num_blocks /= (output[rank - 2] / TILE_HEIGHT);
     }
 
-    // Example values (pretend these came from split_work_to_cores(...)).
-    SplitWorkResult split{
-        .num_cores = 64,
-        .num_cores_in_core_group = 56,
-        .num_cores_in_core_group_cliff = 0,
-        .num_blocks_per_core = 43,
-        .num_blocks_per_core_cliff = 0,
-    };
-
-    split.num_cores_in_core_group_cliff = split.num_cores - split.num_cores_in_core_group;
-    split.num_blocks_per_core_cliff =
-        (num_blocks - split.num_cores_in_core_group * split.num_blocks_per_core) / split.num_cores_in_core_group_cliff;
+    // Simulate split_work_to_cores (matching slice_program_factory_tile_interleaved.cpp logic)
+    // For this sample, use a typical grid size (e.g., 8x8 = 64 cores)
+    uint32_t num_cores_x = 8;
+    uint32_t num_cores_y = 8;
+    SplitWorkResult split = simulate_split_work_to_cores(num_cores_x, num_cores_y, num_blocks, row_wise);
 
     int proc_blocks = split.num_cores_in_core_group * split.num_blocks_per_core +
                       split.num_cores_in_core_group_cliff * split.num_blocks_per_core_cliff;
@@ -396,6 +589,9 @@ int main() {
 
     // Reader-kernel src_block_id progression verification (ignore actual read_block I/O)
     const uint32_t src_tiles_per_row = input[rank - 1] / TILE_WIDTH;
+    const uint32_t src_tiles_per_col = input[rank - 2] / TILE_HEIGHT;
+    const uint32_t out_tiles_per_row = output[rank - 1] / TILE_WIDTH;
+    const uint32_t out_tiles_per_col = output[rank - 2] / TILE_HEIGHT;
     const uint32_t src_block_id_stride = row_wise ? src_tiles_per_row : 1;  // compile-time block_id_stride
     const uint32_t tile_id_stride = row_wise ? 1 : src_tiles_per_row;
     for (size_t core_i = 0; core_i < r.per_core.size(); ++core_i) {
@@ -405,7 +601,7 @@ int main() {
         out_block_tile_pos = tile_id_to_3d_tile_coord(pc.out_block_tile_id, output);
         uint32_t num_tiles = (row_wise ? output[rank - 1] : output[rank - 2]) / TILE_WIDTH;
 
-        bool print_debug = true;
+        bool print_debug = false;
 
         if (print_debug) {
             std::cout << "core " << pc.core_index << " num_blocks=" << pc.num_blocks_arg << " block_coord=["
@@ -414,20 +610,41 @@ int main() {
                       << src_block_tile_pos[0] << "," << src_block_tile_pos[1] << "," << src_block_tile_pos[2] << "]"
                       << " out_block_tile_id=" << pc.out_block_tile_id << " out_block_tile_coord=["
                       << out_block_tile_pos[0] << "," << out_block_tile_pos[1] << "," << out_block_tile_pos[2] << "]"
-                      << std::endl;
+                      << " num_tiles=" << num_tiles << "," << "tile_id_stride=" << tile_id_stride << std::endl;
         }
+
+        print_debug = false;
 
         const auto sim = simulate_reader_kernel_src_block_id(
             /*src_block_id_start=*/pc.src_block_tile_id,
             /*num_blocks=*/pc.num_blocks_arg,
             /*block_id_stride=*/src_block_id_stride,
-            /*num_tiles=*/1,
-            /*tile_id_stride=*/1,
+            /*num_tiles=*/num_tiles,
+            /*tile_id_stride=*/tile_id_stride,
             /*shape_blocks=*/r.out_shape_blocks,
             /*block_id_gap=*/r.src_block_id_gap,
             /*block_coord_start=*/pc.block_coord,
+            /*src_access=*/src_access,
             /*src_shape_blocks=*/input,
-            /*print_debug=*/false);
+            /*print_debug=*/print_debug);
+
+        // Writer-kernel out_block_id progression verification (ignore actual write_block I/O)
+        const uint32_t out_block_id_stride =
+            row_wise ? out_tiles_per_row : 1;  // compile-time block_id_stride for writer
+        const uint32_t out_tile_id_stride = row_wise ? 1 : out_tiles_per_row;  // compile-time tile_id_stride for writer
+
+        const auto writer_sim = simulate_writer_kernel_out_block_id(
+            /*out_block_id_start=*/pc.out_block_tile_id,
+            /*num_blocks=*/pc.num_blocks_arg,
+            /*block_id_stride=*/out_block_id_stride,
+            /*num_tiles=*/num_tiles,
+            /*tile_id_stride=*/out_tile_id_stride,
+            /*shape_blocks=*/r.out_shape_blocks,
+            /*block_id_gap=*/r.out_block_id_gap,
+            /*block_coord_start=*/pc.block_coord,
+            /*out_access=*/out_access,
+            /*out_shape_blocks=*/output,
+            /*print_debug=*/print_debug);
 
         // Optional sanity check: the next core's start should match this core's "final" state
         // (because host advances block_coord by num_blocks_arg and re-computes src_block_tile_id).
@@ -440,6 +657,61 @@ int main() {
             if (sim.final_block_coord != next.block_coord) {
                 std::cout << "MISMATCH core " << core_i << ": sim.final_block_coord != next.block_coord\n";
             }
+            // Writer sanity check
+            if (writer_sim.final_out_block_id != next.out_block_tile_id) {
+                std::cout << "MISMATCH core " << core_i
+                          << ": writer_sim.final_out_block_id=" << writer_sim.final_out_block_id
+                          << " next.out_block_tile_id=" << next.out_block_tile_id << "\n";
+            }
+            if (writer_sim.final_block_coord != next.block_coord) {
+                std::cout << "MISMATCH core " << core_i << ": writer_sim.final_block_coord != next.block_coord\n";
+            }
         }
     }
+
+#if PRINT_ACCESS > 1
+    std::cout << "g_count = " << g_cnt << ", min = " << id_min << ", max = " << id_max << "\n";
+    if (g_cnt) {
+        int k, m, n;
+        k = m = n = 0;
+        std::cout << "src_access:\n";
+        std::cout << "[n " << n << "]\n";
+        for (int i = 0; i < src_access.size(); i++) {
+            // std::cout << "src_access[" << i << "] = " << src_access[i] << "\n";
+            std::cout << src_access[i] << " ";
+            k++;
+            if (k == src_tiles_per_row) {
+                std::cout << "\n";
+                k = 0;
+                m++;
+                if (m == src_tiles_per_col) {
+                    m = 0;
+                    n++;
+                    std::cout << "[n " << n << "]\n";
+                }
+            }
+        }
+        std::cout << "\n";
+
+        // Print out_access
+        k = m = n = 0;
+        std::cout << "out_access:\n";
+        std::cout << "[n " << n << "]\n";
+        for (int i = 0; i < out_access.size(); i++) {
+            // std::cout << "out_access[" << i << "] = " << out_access[i] << "\n";
+            std::cout << out_access[i] << " ";
+            k++;
+            if (k == out_tiles_per_row) {
+                std::cout << "\n";
+                k = 0;
+                m++;
+                if (m == out_tiles_per_col) {
+                    m = 0;
+                    n++;
+                    std::cout << "[n " << n << "]\n";
+                }
+            }
+        }
+    }
+#endif
 }
