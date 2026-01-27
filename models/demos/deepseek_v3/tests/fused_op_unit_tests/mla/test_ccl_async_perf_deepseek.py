@@ -1163,3 +1163,91 @@ def test_wkv_b2_sequence_deepseek_perf(
     assert (
         measured_avg_us > perf_target_us - threshold
     ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
+
+
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
+        (
+            "fwd_decode_q_rope_nope",
+            10,
+            179.46,
+        ),  # Sum: linear(28.81) + all-gather(106) + fast_reduce(7.75) + 3*slices(1.5+1.3+1)
+    ],
+)
+# 33uS slower than sum of unit tests
+@pytest.mark.models_device_performance_bare_metal
+def test_fwd_decode_q_rope_nope_deepseek_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+    galaxy_type,
+):
+    """
+    Test performance of the fwd_decode_q_rope_nope sequence from mla1d.py (lines 1234-1295).
+
+    This test measures the end-to-end performance of the operation sequence:
+    1. Linear projection (tt_q): 36.93 µs ? 57.5
+    2. Reshape: 38.5 µs ? 39
+    3. Slice tt_q_nope: 2.90 µs ? None
+    4. Slice tt_q_rope: 2.90 µs ? None
+    5. Permute tt_q_nope: 106 µs ? 4.75
+    6. Linear projection (tt_q_nope): 36.93 µs ? 50
+    7. Permute tt_q_nope: 23 µs ? 4.75
+    8. Permute tt_q_rope: 1.7 µs ? 4.75
+    9. Rotary embedding tt_q_rope: 4.56 µs ? 4.5
+    10. To memory config: 2.34 µs ? 1.18
+    11. Concat tt_q_nope and tt_q_rope: 7.26 µs ? 7.90
+
+    Total expected: 146.36 µs
+    """
+    subdir = "fused_op_unit_tests/mla"
+    command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_fwd_decode_q_rope_nope_deepseek.py -k {step_name}"
+    cols = ["DEVICE KERNEL"]
+
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    op_name = ""
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(
+        command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters, per_op=True
+    )
+    profiler.end(step_name)
+    profiler.end("run")
+    # Get the measured performance
+    print(results)
+    measured_min = 0
+    measured_max = 0
+    measured_avg = 0
+    measured_std = 0
+    for op in results.keys():
+        measured_min += results[op][cols[0]]["MIN"]
+        measured_max += results[op][cols[0]]["MAX"]
+        measured_avg += results[op][cols[0]]["AVG"]
+        measured_std += results[op][cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_wq_kv_a_sequence",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    threshold = max(THRESHOLD, perf_target_us * THRESHOLD_PERCENTAGE)
+
+    assert (
+        measured_avg_us < perf_target_us + threshold
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us, the threshold was {threshold} us"
+    assert (
+        measured_avg_us > perf_target_us - threshold
+    ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
