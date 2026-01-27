@@ -16,10 +16,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedWeight | None"]
-    | list["WeightConfig | SavedWeight | None"]
+    dict[str, "WeightConfig | SavedWeight | WeightSpec | None"]
+    | list["WeightConfig | SavedWeight | WeightSpec | None"]
     | tuple[
-        "WeightConfig | SavedWeight | None", ...
+        "WeightConfig | SavedWeight | WeightSpec | None", ...
     ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
