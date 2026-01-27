@@ -283,11 +283,17 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // T:
     // - Signal from drain-sync core to non-drain-sync cores that final metadata results are ready
     // MM:
-    // - T drain=sync core signals to MM cores that final metadata results are ready
+    // - T drain-sync core signals to MM cores that final metadata results are ready
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
 
     // T:
     // - MMs signal to Ts that space for new chunk is free
+    // MM:
+    // - N/A
+    auto chunk_available_semaphore_id = tt::tt_metal::CreateSemaphore(program, t_mm_core_range_set, INVALID);
+
+    // T:
+    // - N/A
     // MM:
     // - Ts signal to MMs that chunk has arrived
     // NOTE:
@@ -546,6 +552,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         // Semaphores
         {"partial_metadata_ready_semaphore_id", partial_metadata_ready_semaphore_id},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
+        {"chunk_available_semaphore_id", chunk_available_semaphore_id},
         {"e0_chunk_ready_semaphore_id", e0_chunk_ready_semaphore_id},
         {"e1_chunk_ready_semaphore_id", e1_chunk_ready_semaphore_id},
     };
@@ -599,24 +606,26 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         mapping_tensor.buffer()->address(),                   // 3
         output_tensor.buffer()->address(),                    // 4
         expert_activation_output_tensor.buffer()->address(),  // 5
+        expert_activation_output_tensor.buffer()
+            ->address(),  // 6  // TODO: (GR) placeholder for matmul_chunk_input_tensor
     };
 
     [[maybe_unused]] uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 6: is_drain_tilizer_core
+    selective_tilize_runtime_args.push_back(0);  // 7: is_drain_tilizer_core
 
     // Add work split runtime args for tilizer cores
     uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_offset
+    selective_tilize_runtime_args.push_back(0);  // 8: tilizer_subtoken_offset
     uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 7: tilizer_subtoken_size
+    selective_tilize_runtime_args.push_back(0);  // 9: tilizer_subtoken_size
 
     // Token range for parallel metadata processing across tilizer cores
     uint32_t core_token_start_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 8: core_token_start
+    selective_tilize_runtime_args.push_back(0);  // 10: core_token_start
     uint32_t core_token_end_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 9: core_token_end
+    selective_tilize_runtime_args.push_back(0);  // 11: core_token_end
     uint32_t tilizer_core_idx_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 10: tilizer_core_idx (0 = drain, 1-3 = non-drain)
+    selective_tilize_runtime_args.push_back(0);  // 12: tilizer_core_idx (0 = drain, 1-3 = non-drain)
 
     // NOC coordinates for all tilizer cores (for cross-core communication)
     // Runtime args starting at index 11: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
@@ -702,6 +711,10 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTi
             selective_tilize_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             selective_tilize_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
             selective_tilize_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
+            selective_tilize_runtime_args.at(4) = tensor_return_value[0].buffer()->address();
+            selective_tilize_runtime_args.at(5) = tensor_return_value[1].buffer()->address();
+            selective_tilize_runtime_args.at(6) =
+                tensor_return_value[1].buffer()->address();  // TODO: (GR) placeholder for matmul_chunk_input_tensor
         }
     }
 }
