@@ -14,6 +14,7 @@ struct SliceTileInterleavedProgramFactory {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
         std::vector<CoreCoord> cores;
+        uint32_t ncores{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

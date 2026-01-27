@@ -21,7 +21,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* block_id_gap = shape_blocks + num_dims;
     tt_l1_ptr uint32_t* block_coord = block_id_gap + num_dims;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src_args = TensorAccessorArgs<6>();
     const auto s = TensorAccessor(src_args, src_addr, size_tile);
 
     auto read_block = [&](uint32_t num_tiles, uint32_t start_id, uint32_t id_step, uint32_t size_tile) {

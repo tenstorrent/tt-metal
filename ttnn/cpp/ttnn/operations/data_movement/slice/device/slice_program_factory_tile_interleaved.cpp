@@ -185,7 +185,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
     uint32_t out_block_dim_size = row_wise ? out_tiles_per_row : out_tiles_per_col;
 
     const auto cores = corerange_to_cores(all_cores);
-    for (uint32_t i = 0; i < cores.size(); i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         const auto& core = cores[i];
         uint32_t num_blocks_arg = num_blocks_per_core;
         if (i >= core_group.size()) {
@@ -236,7 +236,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
         }
     }
 
-    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores}};
+    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores, num_cores}};
 }
 
 void SliceTileInterleavedProgramFactory::override_runtime_arguments(
@@ -245,8 +245,9 @@ void SliceTileInterleavedProgramFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
     const auto& cores = cached_program.shared_variables.cores;
+    const auto num_cores = cached_program.shared_variables.ncores;
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
         {
             auto& runtime_args =
                 GetRuntimeArgs(program, cached_program.shared_variables.unary_reader_kernel_id, cores[i]);
