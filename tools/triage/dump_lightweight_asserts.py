@@ -29,6 +29,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.hardware.risc_debug import CallstackEntryVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
@@ -192,6 +193,8 @@ def dump_lightweight_asserts(
             arguments_and_locals=arguments_and_locals,
         )
 
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         log_check_risc(
             risc_name,

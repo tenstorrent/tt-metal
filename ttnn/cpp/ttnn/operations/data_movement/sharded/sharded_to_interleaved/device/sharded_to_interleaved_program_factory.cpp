@@ -151,7 +151,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
             used_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }
