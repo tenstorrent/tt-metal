@@ -149,6 +149,10 @@ protected:
 };
 
 TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Test only supported for BLACKHOLE architecture";
+    }
+
     // Get control plane and mesh IDs
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
@@ -159,20 +163,20 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
     // Launch the traffic generator kernel
     launch_traffic_generator(worker_core);
     FabricCommandInterface cmd_interface(control_plane);
-    
+
     ASSERT_TRUE(cmd_interface.wait_for_state(control_plane, RouterStateCommon::RUNNING, std::chrono::milliseconds(5000)))
         << "Routers did start in running state";
     // Validate traffic is flowing
     ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
-    
+
     // Signal pause via control plane
     cmd_interface.pause_routers(control_plane);
     ASSERT_TRUE(cmd_interface.wait_for_pause(control_plane, std::chrono::milliseconds(2000)))
         << "Routers did not pause within timeout";
-    
+
     // Validate there is no traffic flowing after pause
     ASSERT_TRUE(!check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
-    
+
     // Signal resume via control plane
     cmd_interface.resume_routers(control_plane);
     ASSERT_TRUE(cmd_interface.wait_for_state(control_plane, RouterStateCommon::RUNNING, std::chrono::milliseconds(5000)))
@@ -180,7 +184,7 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
 
     // Validate traffic is flowing again
     ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(2000)));
-    
+
     // Signal teardown and wait for completion
     signal_worker_teardown(mesh_device_, worker_core,
         memory_layout_.teardown_signal_address);

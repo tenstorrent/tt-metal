@@ -27,12 +27,11 @@ WorkerMemoryLayout allocate_worker_memory(
     [[maybe_unused]] const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
 
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    
+
     // Get the unreserved L1 base address for Tensix cores from HAL
     uint32_t l1_unreserved_base = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, 
-        tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+
     // Get L1 alignment requirement
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
@@ -60,8 +59,9 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     auto program = std::make_shared<tt_metal::Program>();
 
     // Get source fabric node ID from the mesh device (use first device at coord 0,0)
-    tt_metal::distributed::MeshCoordinate src_coord(0, 0);
-    FabricNodeId src_fabric_node = device->get_fabric_node_id(src_coord);
+    // tt_metal::distributed::MeshCoordinate src_coord(0, 0);
+    FabricNodeId src_fabric_node(MeshId{0}, 0);  // mesh_id=1, device_id=0
+    // FabricNodeId src_fabric_node = device->get_fabric_node_id(src_coord);
 
     // Target core on remote chip for traffic destination
     CoreCoord remote_logical_core(0, 0);
@@ -69,8 +69,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     // Get remote buffer address from HAL (use unreserved L1 space on remote core)
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t remote_buffer_addr = hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, 
-        tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     // Get the physical NOC coords for the remote core
     auto physical_core = device->worker_core_from_logical_core(remote_logical_core);
@@ -107,7 +106,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     // Get a valid link index for the connection
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node, dest_fabric_node);
     TT_FATAL(!link_indices.empty(), "No forwarding link indices found for source {} to destination {}", src_fabric_node, dest_fabric_node);
-    
+
     // Append fabric connection runtime args
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node,
@@ -133,12 +132,12 @@ void signal_worker_teardown(
     // This signals the kernel to exit its main loop
 
     std::vector<uint32_t> data = {WORKER_TEARDOWN};
-    
+
     // Get the actual device where the kernel is running (first device in mesh)
     auto* device = mesh_device->get_devices()[0];
-    
+
     auto virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
-    
+
     // Use Cluster::write_core() to write to L1 on the device
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         data.data(),
