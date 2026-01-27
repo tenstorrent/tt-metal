@@ -243,6 +243,8 @@ jobs:
           path: test-artifacts/
 
       - name: Generate Model Status Chart
+        env:
+          MODEL_TYPE: ${{ inputs.model-type || 'all' }}
         run: |
           python3 << 'EOF'
           import json
@@ -414,47 +416,53 @@ jobs:
 
           print(f"=== Parsed {parsed_files} test result files ===")
 
-          # Generate status for TT-Transformers models
-          tt_status = {}
-          for model in sorted(all_tt_models):
-              tt_status[model] = {}
-              for device in devices:
-                  if model in tt_transformers_models.get(device, []):
-                      results = test_results[device].get(model, [])
-                      if len(results) == 0:
-                          status = "Failed"  # No results means failed
-                      elif len(results) < 3:
-                          status = "Partial"  # Missing some tests
-                      else:
-                          passed_count = sum(results)
-                          if passed_count == 3:
-                              status = "Passed"
-                          elif passed_count >= 1:
-                              status = "Partial"
-                          else:
-                              status = "Failed"
-                      print(f"TT-Transformers {model} on {device}: {len(results)} results, status = {status}")
-                  else:
-                      status = "NC"  # Not Compatible
-                  tt_status[model][device] = status
+          # Get model type filter from environment
+          model_type_filter = os.environ.get('MODEL_TYPE', 'all')
+          print(f"=== Model type filter: {model_type_filter} ===")
 
-          # Generate status for Standalone models
-          standalone_status = {}
-          for model in sorted(all_standalone_models):
-              standalone_status[model] = {}
-              for device in devices:
-                  if model in standalone_models.get(device, []):
-                      results = test_results[device].get(model, [])
-                      if len(results) > 0 and results[0]:
-                          status = "Passed"
-                      elif len(results) > 0:
-                          status = "Failed"
+          # Generate status for TT-Transformers models (only if requested)
+          tt_status = {}
+          if model_type_filter in ['all', 'tt-transformers']:
+              for model in sorted(all_tt_models):
+                  tt_status[model] = {}
+                  for device in devices:
+                      if model in tt_transformers_models.get(device, []):
+                          results = test_results[device].get(model, [])
+                          if len(results) == 0:
+                              status = "Failed"  # No results means failed
+                          elif len(results) < 3:
+                              status = "Partial"  # Missing some tests
+                          else:
+                              passed_count = sum(results)
+                              if passed_count == 3:
+                                  status = "Passed"
+                              elif passed_count >= 1:
+                                  status = "Partial"
+                              else:
+                                  status = "Failed"
+                          print(f"TT-Transformers {model} on {device}: {len(results)} results, status = {status}")
                       else:
-                          status = "Failed"  # No results means failed
-                      print(f"Standalone {model} on {device}: {len(results)} results, status = {status}")
-                  else:
-                      status = "NC"  # Not Compatible
-                  standalone_status[model][device] = status
+                          status = "NC"  # Not Compatible
+                      tt_status[model][device] = status
+
+          # Generate status for Standalone models (only if requested)
+          standalone_status = {}
+          if model_type_filter in ['all', 'standalone']:
+              for model in sorted(all_standalone_models):
+                  standalone_status[model] = {}
+                  for device in devices:
+                      if model in standalone_models.get(device, []):
+                          results = test_results[device].get(model, [])
+                          if len(results) > 0 and results[0]:
+                              status = "Passed"
+                          elif len(results) > 0:
+                              status = "Failed"
+                          else:
+                              status = "Failed"  # No results means failed
+                          print(f"Standalone {model} on {device}: {len(results)} results, status = {status}")
+                      else:
+                          status = "NC"  # Not Compatible
+                      standalone_status[model][device] = status
 
           # Generate JSON output
           output_data = {
@@ -509,6 +517,7 @@ jobs:
           markdown_content = f"""# Model Test Status Report
 
           **Devices Tested:** {device_list}
+          **Model Type Filter:** {model_type_filter}
           **Run ID:** {os.environ.get('GITHUB_RUN_ID', 'Unknown')}
 
           **Legend:**
@@ -519,8 +528,11 @@ jobs:
 
           """
 
-          markdown_content += generate_markdown_table("TT-Transformers Models", tt_status)
-          markdown_content += generate_markdown_table("Standalone Models", standalone_status)
+          # Only generate tables for selected model types
+          if tt_status:
+              markdown_content += generate_markdown_table("TT-Transformers Models", tt_status)
+          if standalone_status:
+              markdown_content += generate_markdown_table("Standalone Models", standalone_status)
 
           with open('model-status-report.md', 'w') as f:
               f.write(markdown_content)
