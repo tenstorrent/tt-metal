@@ -65,11 +65,47 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
 }
 
 FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    compute_kernel_lib::mul(cb_a, cb_b, cb_out, compute_kernel_lib::BinaryTileShape::single());
+    reconfig_data_format(cb_a, cb_b);
+    pack_reconfig_data_format(cb_out);
+
+    mul_tiles_init(cb_a, cb_b);
+
+    cb_wait_front(cb_a, 1);
+    cb_wait_front(cb_b, 1);
+    cb_reserve_back(cb_out, 1);
+
+    tile_regs_acquire();
+    mul_tiles(cb_a, cb_b, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_out);
+    tile_regs_release();
+
+    cb_push_back(cb_out, 1);
+    cb_pop_front(cb_a, 1);
+    cb_pop_front(cb_b, 1);
 }
 
 FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    compute_kernel_lib::add(cb_a, cb_b, cb_out, compute_kernel_lib::BinaryTileShape::single());
+    reconfig_data_format(cb_a, cb_b);
+    pack_reconfig_data_format(cb_out);
+
+    add_tiles_init(cb_a, cb_b);
+
+    cb_wait_front(cb_a, 1);
+    cb_wait_front(cb_b, 1);
+    cb_reserve_back(cb_out, 1);
+
+    tile_regs_acquire();
+    add_tiles(cb_a, cb_b, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_out);
+    tile_regs_release();
+
+    cb_push_back(cb_out, 1);
+    cb_pop_front(cb_a, 1);
+    cb_pop_front(cb_b, 1);
 }
 
 FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out, uint32_t num_input_units = 1) {
