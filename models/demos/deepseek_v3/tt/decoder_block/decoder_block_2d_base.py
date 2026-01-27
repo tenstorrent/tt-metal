@@ -101,7 +101,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
 
         # MLP
-        mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
+        # Check if is_mlp_tensor_parallel is in the config (for MoEDecoderBlock2D)
+        if "is_mlp_tensor_parallel" in cfg:
+            mlp_out = cls.forward_mlp_prefill(
+                mlp_norm_out, cfg["mlp"], is_mlp_tensor_parallel=cfg["is_mlp_tensor_parallel"]
+            )
+        else:
+            mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
 
         # MLP Residual
@@ -140,7 +146,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
-        mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
+        # Check if is_mlp_tensor_parallel is in the config (for MoEDecoderBlock2D)
+        if "is_mlp_tensor_parallel" in cfg:
+            mlp_out = cls.forward_mlp_decode(
+                mlp_norm_out, cfg["mlp"], is_mlp_tensor_parallel=cfg["is_mlp_tensor_parallel"]
+            )
+        else:
+            mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
 
         # MLP Residual

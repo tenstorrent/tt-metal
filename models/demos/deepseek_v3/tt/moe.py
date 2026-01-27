@@ -255,7 +255,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -263,18 +263,18 @@ class MoE(SharedStateAddOn, AbstractModule):
         global_tokens = x.shape[2] * num_dispatch_devices
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
-            return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg)
+            return cls._forward_chunked_prefill(x, cfg, chunk_size, is_tensor_parallel)
+        return cls._forward_impl(x, cfg, is_tensor_parallel)
 
     @classmethod
-    def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
+    def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int, is_tensor_parallel: bool = True) -> ttnn.Tensor:
         chunk_size = max(1, chunk_size)
         _, _, seq_len, _ = x.shape
         output_chunks: list[ttnn.Tensor] = []
         for start in range(0, seq_len, chunk_size):
             end = min(start + chunk_size, seq_len)
             x_chunk = ttnn.slice(x, [0, 0, start, 0], [x.shape[0], x.shape[1], end, x.shape[3]])
-            output_chunks.append(cls._forward_impl(x_chunk, cfg))
+            output_chunks.append(cls._forward_impl(x_chunk, cfg, is_tensor_parallel))
             ttnn.deallocate(x_chunk)
 
         if len(output_chunks) == 1:
@@ -285,7 +285,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
         # breakpoint()
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
@@ -299,7 +299,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         tp_size = cfg["mesh_device"].shape[1]
         x_dim = x.shape[-1]
 
-        if x_dim == hidden_size:
+        if x_dim == hidden_size or not is_tensor_parallel:
             # Already full hidden size; skip all_gather
             pass
         elif x_dim == hidden_size // tp_size:
@@ -331,9 +331,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Reduce Scatter
+        # Reduce Scatter (only if tensor parallel)
 
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        if is_tensor_parallel:
+            post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
 
         return post_combine_output_tensor
 
@@ -482,9 +483,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
+        return cls.forward(x, cfg, is_tensor_parallel)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
+        return cls.forward(x, cfg, is_tensor_parallel)

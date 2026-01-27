@@ -102,6 +102,7 @@ def run_test_forward_pass_decoder2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    is_mlp_tensor_parallel: bool = True,
 ):
     # Check params
     if mode == "prefill":
@@ -150,6 +151,13 @@ def run_test_forward_pass_decoder2d(
     )
     model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+
+    # Add is_mlp_tensor_parallel to the run_config for MoEDecoderBlock2D
+    from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
+
+    if issubclass(DecoderBlockClass, MoEDecoderBlock2D):
+        run_config["is_mlp_tensor_parallel"] = is_mlp_tensor_parallel
+        logger.info(f"Setting is_mlp_tensor_parallel={is_mlp_tensor_parallel} for MoEDecoderBlock2D")
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
@@ -228,6 +236,10 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "is_mlp_tensor_parallel",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
         pytest.param(
@@ -267,6 +279,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    is_mlp_tensor_parallel,
     module_path,
     reference_layer_idx,
     mode,
@@ -301,6 +314,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        is_mlp_tensor_parallel
     )
 
 
