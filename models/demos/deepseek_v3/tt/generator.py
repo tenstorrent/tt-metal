@@ -1081,7 +1081,7 @@ class DeepseekGenerator:
         return tuple(ttnn.clone(page_table_tt) for _ in range(num_layers))
 
     def _convert_vllm_page_table_for_batch(
-        self, page_table: torch.Tensor, device: ttnn.Device
+        self, page_table: torch.Tensor, device: ttnn.Device | ttnn.MeshDevice | None
     ) -> tuple[ttnn.Tensor, ...]:
         """
         Convert vLLM's block_tables (page_table) to TTNN tensor format for the entire batch.
