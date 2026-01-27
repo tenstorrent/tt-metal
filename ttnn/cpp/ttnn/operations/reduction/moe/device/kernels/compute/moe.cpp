@@ -173,9 +173,8 @@ void reduce_c(uint32_t rows, uint32_t cols) {
     // Postcondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    compute_kernel_lib::
-        reduce<pool_type, reduce_dim, in_cb, scale_cb, out_cb, compute_kernel_lib::reduce_policies::PersistentPolicy>(
-            compute_kernel_lib::InputBlockShape::of(rows, cols));
+    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::reduce_policies::PersistentPolicy>(
+        in_cb, scale_cb, out_cb, compute_kernel_lib::InputBlockShape::of(rows, cols));
 
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
