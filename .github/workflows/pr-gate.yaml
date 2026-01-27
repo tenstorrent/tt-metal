@@ -210,9 +210,9 @@ jobs:
 
           # Diagnostic: Check for apt lock files
           echo "🔍 Checking for apt lock files..."
-          if [ -f /var/lib/apt/lists/lock ] || [ -f /var/lib/dpkg/lock ] || [ -f /var/cache/apt/archives/lock ]; then
+          if [ -f /var/lib/apt/lists/lock ] || [ -f /var/lib/dpkg/lock ] || [ -f /var/lib/dpkg/lock-frontend ] || [ -f /var/cache/apt/archives/lock ]; then
             echo "⚠️  Warning: Apt lock files detected. Attempting to remove stale locks..."
-            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/cache/apt/archives/lock || true
+            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock || true
           else
             echo "✅ No apt lock files detected"
           fi
