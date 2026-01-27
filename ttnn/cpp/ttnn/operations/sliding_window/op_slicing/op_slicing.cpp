@@ -170,18 +170,13 @@ Op2DSliceConfig determine_slice_config(
 
     bool found_valid_config = false;
     while (current_num_slices <= ((output_sliced_dim + 1) / 2)) {
-        printf("current_num_slices=%u\n", current_num_slices);
-        printf("free memory: %zu\n", L1_stats.total_free_bytes);
         return_slice_config.num_slices = current_num_slices;
         uint32_t l1_usage = compute_L1_usage_for_slice_config(
             input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
-        printf("max l1_usage across all slices: %u\n", l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
-            printf("SUCCESS: Slicing fits in L1 (free=%zu >= needed=%u)\n", L1_stats.total_free_bytes, l1_usage);
             found_valid_config = true;
             break;
         }
-        printf("FAIL: Need to increase slices (free=%zu < needed=%u)\n", L1_stats.total_free_bytes, l1_usage);
         current_num_slices++;
     }
     TT_FATAL(

@@ -553,22 +553,11 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
     halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
 
-    // Get num_cores from parallel config
-    uint32_t num_cores_nhw = 1;
-    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-        num_cores_nhw = input_memory_config.shard_spec().value().grid.num_cores();
-    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
-        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
-        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-            num_cores_nhw = grid_size.x;
-        } else {
-            num_cores_nhw = grid_size.y;
-        }
-    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        num_cores_nhw = 1;
-    }
+    // Use the num_cores from the sliding_window_config which already has the correct parallel config
+    uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;
+    uint32_t num_cores_c = sliding_window_config.num_cores_c;
     halo_config.num_cores_nhw = num_cores_nhw;
+    halo_config.num_cores_c = num_cores_c;
 
     uint32_t precise_halo_output_size =
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
@@ -627,17 +616,6 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     uint32_t halo_phase_size = halo_input_size + halo_output_size;
     uint32_t pool_phase_size = halo_output_size + pool_cb_usage;
     uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
-
-    printf(
-        "Pool2D L1 Usage Calculation: halo_input=%u, halo_output=%u, pool_cb=%u, output_tensor=%u, "
-        "halo_phase=%u, pool_phase=%u, total=%u\n",
-        halo_input_size,
-        halo_output_size,
-        pool_cb_usage,
-        output_tensor_size,
-        halo_phase_size,
-        pool_phase_size,
-        total_size);
 
     log_trace(
         tt::LogOp,
