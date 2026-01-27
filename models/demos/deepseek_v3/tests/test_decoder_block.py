@@ -438,6 +438,7 @@ def run_test_forward_pass_decoder2d(
     num_iters: int = 20,
     warmup_iters: int = 5,
     profiler: BenchmarkProfiler = None,
+    is_mlp_tensor_parallel: bool = True,
 ):
     # Check params
     if mode == "prefill":
@@ -487,6 +488,13 @@ def run_test_forward_pass_decoder2d(
     )
     model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+
+    # Add is_mlp_tensor_parallel to the run_config for MoEDecoderBlock2D
+    from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
+
+    if issubclass(DecoderBlockClass, MoEDecoderBlock2D):
+        run_config["is_mlp_tensor_parallel"] = is_mlp_tensor_parallel
+        logger.info(f"Setting is_mlp_tensor_parallel={is_mlp_tensor_parallel} for MoEDecoderBlock2D")
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
@@ -595,6 +603,10 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     [False, True],
 )
 @pytest.mark.parametrize(
+    "is_mlp_tensor_parallel",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
         pytest.param(
@@ -661,6 +673,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 def test_forward_pass(
     use_synthetic_weights,
     trace_mode,
+    is_mlp_tensor_parallel,
     DecoderBlockClass: type[DecoderBlock1DBase],
     module_path,
     reference_layer_idx,
@@ -686,27 +699,52 @@ def test_forward_pass(
     # Create profiler for trace mode
     profiler = BenchmarkProfiler() if trace_mode else None
 
-    test_closure(
-        DecoderBlockClass,
-        module_path,
-        reference_layer_idx,
-        mode,
-        seq_len,
-        batch_size_per_row,
-        hf_config_short,
-        cache_path,
-        mesh_device,
-        model_path,
-        ccl,
-        force_recalculate_weight_config,
-        state_dict,
-        decode_position_ids,
-        use_synthetic_weights,
-        trace_mode,
-        num_iters,
-        warmup_iters,
-        profiler,
-    )
+    # Check if we need to pass is_mlp_tensor_parallel (only for decoder2d tests)
+    if test_closure.__name__ == "run_test_forward_pass_decoder2d":
+        test_closure(
+            DecoderBlockClass,
+            module_path,
+            reference_layer_idx,
+            mode,
+            seq_len,
+            batch_size_per_row,
+            hf_config_short,
+            cache_path,
+            mesh_device,
+            model_path,
+            ccl,
+            force_recalculate_weight_config,
+            state_dict,
+            decode_position_ids,
+            use_synthetic_weights,
+            trace_mode,
+            num_iters,
+            warmup_iters,
+            profiler,
+            is_mlp_tensor_parallel,
+        )
+    else:
+        test_closure(
+            DecoderBlockClass,
+            module_path,
+            reference_layer_idx,
+            mode,
+            seq_len,
+            batch_size_per_row,
+            hf_config_short,
+            cache_path,
+            mesh_device,
+            model_path,
+            ccl,
+            force_recalculate_weight_config,
+            state_dict,
+            decode_position_ids,
+            use_synthetic_weights,
+            trace_mode,
+            num_iters,
+            warmup_iters,
+            profiler,
+        )
 
 
 if __name__ == "__main__":

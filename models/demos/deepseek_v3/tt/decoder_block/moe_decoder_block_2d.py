@@ -94,14 +94,54 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     @abstractmethod
-    def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_prefill(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
+    def forward_mlp_prefill(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, is_mlp_tensor_parallel: bool = True
+    ) -> ttnn.Tensor:
+        if not is_mlp_tensor_parallel:
+            # When not tensor parallel at MLP level, handle all_gather and reduce_scatter here
+            # All gather at the beginning
+            x = ttnn.experimental.all_gather_async(
+                x, **cfg["moe"]["ccl"].populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+            )
+
+            # Call MoE and SharedExpert without tensor parallelism
+            mlp_out = MoE.forward_prefill(x, cfg["moe"], is_tensor_parallel=False)
+            mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"], is_tensor_parallel=False)
+
+            # Reduce scatter at the end
+            ccl = cfg["moe"]["ccl"]
+            mlp_out = ttnn.experimental.reduce_scatter_minimal_async(
+                mlp_out, **ccl.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"])
+            )
+        else:
+            # Default behavior with tensor parallelism handled inside each component
+            mlp_out = MoE.forward_prefill(x, cfg["moe"])
+            mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
         return mlp_out
 
     @classmethod
     @abstractmethod
-    def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_decode(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
+    def forward_mlp_decode(
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig, is_mlp_tensor_parallel: bool = True
+    ) -> ttnn.Tensor:
+        if not is_mlp_tensor_parallel:
+            # When not tensor parallel at MLP level, handle all_gather and reduce_scatter here
+            # All gather at the beginning
+            x = ttnn.experimental.all_gather_async(
+                x, **cfg["moe"]["ccl"].populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+            )
+
+            # Call MoE and SharedExpert without tensor parallelism
+            mlp_out = MoE.forward_decode(x, cfg["moe"], is_tensor_parallel=False)
+            mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"], is_tensor_parallel=False)
+
+            # Reduce scatter at the end
+            ccl = cfg["moe"]["ccl"]
+            mlp_out = ttnn.experimental.reduce_scatter_minimal_async(
+                mlp_out, **ccl.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"])
+            )
+        else:
+            # Default behavior with tensor parallelism handled inside each component
+            mlp_out = MoE.forward_decode(x, cfg["moe"])
+            mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
         return mlp_out
