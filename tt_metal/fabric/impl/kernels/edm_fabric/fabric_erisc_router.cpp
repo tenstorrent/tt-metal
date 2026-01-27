@@ -268,6 +268,7 @@ write to the same receiver channel.
 ////////////////////////////////////////////////
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
+#define OVERLAY_REGISTER_ZERO 0UL
 
 // read and write stream scratch register store values as uint32_t
 enum class CoordinatedEriscContextSwitchState : uint32_t {
@@ -2346,7 +2347,6 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
-#define OVERLAY_REGISTER_ZERO 0UL
     if constexpr (I == OVERLAY_REGISTER_ZERO) {
         using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
         ConnectionLiveSemaphorePtrType connection_live_semaphore_ptr =
@@ -2668,16 +2668,11 @@ void kernel_main() {
     // Common runtime args:
     ///////////////////////
     // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
-
-    #define OVERLAY_REGISTER_ZERO 0UL
-
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
-    local_sender_channel_connection_semaphore_addrs[0] = get_stream_scratch_register_address<OVERLAY_REGISTER_ZERO>();
-    arg_idx++;
+    local_sender_channel_connection_semaphore_addrs[0UL] = get_stream_scratch_register_address<OVERLAY_REGISTER_ZERO>();
     for (size_t i = 1UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    //arg_idx += MAX_NUM_SENDER_CHANNELS;
 
     // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
