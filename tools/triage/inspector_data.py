@@ -22,8 +22,9 @@ Owner:
     tt-vjovanovic
 """
 
+from dataclasses import dataclass
 from triage import triage_singleton, ScriptConfig, run_script
-from parse_inspector_logs import get_data as get_logs_data, get_log_directory
+from parse_inspector_logs import get_log_directory
 import asyncio
 import capnp
 import os
@@ -34,8 +35,6 @@ script_config = ScriptConfig(
     data_provider=True,
 )
 
-InspectorData = inspector_capnp.Inspector
-
 
 class InspectorException(Exception):
     pass
@@ -45,31 +44,33 @@ class InspectorRpcRemoteException(InspectorException):
     pass
 
 
-class InspectorRpcController(InspectorData):
+class InspectorRpcController:
     def __init__(self, host, port):
         self.host = host
         self.port = port
-        self.running = None
-        self.queue = asyncio.Queue()
-        self.loop = asyncio.new_event_loop()
-        self.task = self.loop.create_task(self.__connect_client())
-        self.background_thread = threading.Thread(target=self.__asyncio_background)
-        self.background_thread.daemon = True
-        self.background_thread.start()
-        while not self.running:
-            if self.task.done():
+        self._running = None
+        self._queue = asyncio.Queue()
+        self._loop = asyncio.new_event_loop()
+        self._task = self._loop.create_task(self.__connect_client())
+        self._background_thread = threading.Thread(target=self.__asyncio_background)
+        self._background_thread.daemon = True
+        self._background_thread.start()
+        while not self._running:
+            if self._task.done():
                 self.stop()
-                exception = self.task.exception()
+                exception = self._task.exception()
                 assert exception is not None
                 raise exception
+        self.runtime_rpc: inspector_capnp.RuntimeInspector = self.__get_rpc_channel_wrapper("RuntimeInspector", inspector_capnp.RuntimeInspector)  # type: ignore
+        self.ttnn_rpc: inspector_capnp.TtnnInspector = self.__get_rpc_channel_wrapper("TtnnInspector", inspector_capnp.TtnnInspector)  # type: ignore
 
     def __del__(self):
-        if self.running:
+        if self._running:
             self.stop()
 
     def __asyncio_background(self):
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
 
     async def __connect_client(self):
         try:
@@ -77,35 +78,55 @@ class InspectorRpcController(InspectorData):
                 try:
                     connection = await capnp.AsyncIoStream.create_connection(host=self.host, port=self.port)
                     client = capnp.TwoPartyClient(connection)
-                    self.inspector_rpc = client.bootstrap().cast_as(inspector_capnp.capnp_scheme.Inspector)
-                    self.running = True
+                    self.inspector_rpc: inspector_capnp.InspectorChannelRegistry = self.__get_rpc_wrapper(
+                        client.bootstrap(), inspector_capnp.InspectorChannelRegistry
+                    )  # type: ignore
+                    self._running = True
                 except:
-                    self.loop.stop()
+                    self._loop.stop()
                     raise
                 while True:
-                    request = await self.queue.get()
+                    request = await self._queue.get()
 
                     # If the request is None, stop has been initiated
                     if request is None:
-                        self.running = False
+                        self._running = False
                         break
 
         finally:
-            self.loop.stop()
+            self._loop.stop()
 
-    async def __call_rpc(self, method_name: str, *args, **kwargs):
-        if not self.running:
+    def __get_rpc_channel_wrapper(self, channel_name: str, channel_type):
+        channel = self.inspector_rpc.getChannel(channel_name).channel
+        return self.__get_rpc_wrapper(channel, channel_type)
+
+    def __get_rpc_wrapper(self, channel, channel_type):
+        class ChannelWrapper:
+            def __init__(self, rpc, controller: "InspectorRpcController"):
+                self.rpc = rpc
+                self.controller = controller
+
+            def __getattr__(self, name: str):
+                return self.controller._get_async_method_call(self.rpc, name)
+
+        rpc = channel.cast_as(channel_type)
+        return ChannelWrapper(rpc, self)
+
+    async def __call_rpc(self, rpc, method_name: str, *args, **kwargs):
+        if not self._running:
             raise RuntimeError("RPC client is not running")
 
-        method = getattr(self.inspector_rpc, method_name)
+        method = getattr(rpc, method_name)
         return await method(*args, **kwargs)
 
     REMOTE_EXCEPTION_TEXT_START = "remote exception: e.what() = "
 
-    def __getattr__(self, name: str):
+    def _get_async_method_call(self, rpc, name: str):
         def method(*args, **kwargs):
             try:
-                return asyncio.run_coroutine_threadsafe(self.__call_rpc(name, *args, **kwargs), self.loop).result()
+                return asyncio.run_coroutine_threadsafe(
+                    self.__call_rpc(rpc, name, *args, **kwargs), self._loop
+                ).result()
             except capnp.lib.capnp.KjException as e:
                 if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
                     message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
@@ -114,27 +135,27 @@ class InspectorRpcController(InspectorData):
         return method
 
     async def __async_stop(self):
-        await self.queue.put(None)
+        await self._queue.put(None)
 
     def stop(self):
-        if self.running:
-            asyncio.run_coroutine_threadsafe(self.__async_stop(), self.loop).result()
-            self.background_thread.join()
+        if self._running:
+            asyncio.run_coroutine_threadsafe(self.__async_stop(), self._loop).result()
+            self._background_thread.join()
 
 
 class InspectorUnserializedMethod(InspectorException):
     pass
 
 
-class InspectorRpcSerialized(InspectorData):
-    def __init__(self, directory: str):
+class InspectorRpcSerialized:
+    def __init__(self, directory: str, rpc_type):
         self.__directory = directory
-        self.__methods = inspector_capnp.capnp_scheme.Inspector.schema.methods
-        if not os.path.exists(directory) or not os.path.exists(os.path.join(directory, "getPrograms.capnp.bin")):
-            raise ValueError(f"Serialized RPC data not found in directory {directory}")
+        self.__methods = rpc_type.schema.methods
 
     def __getattr__(self, method_name: str):
         if method_name in self.__methods:
+            if not os.path.exists(self.__directory):
+                raise ValueError(f"Serialized RPC data not found in directory {self.__directory}")
             serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
             if not os.path.exists(serialized_path):
                 raise InspectorUnserializedMethod(
@@ -157,7 +178,11 @@ class InspectorRpcSerialized(InspectorData):
         pass
 
 
-# TODO: parse_inspector_logs types should have different field names and different return types (not dictionary, but named tuple with array of elements)
+@dataclass
+class InspectorData:
+    inspector_channel_registry: inspector_capnp.InspectorChannelRegistry
+    runtime_rpc: inspector_capnp.RuntimeInspector
+    ttnn_rpc: inspector_capnp.TtnnInspector
 
 
 @triage_singleton
@@ -168,7 +193,8 @@ def run(args, context) -> InspectorData:
 
     # First try to connect to Inspector RPC
     try:
-        return InspectorRpcController(rpc_host, rpc_port)
+        controller = InspectorRpcController(rpc_host, rpc_port)
+        return InspectorData(controller.inspector_rpc, controller.runtime_rpc, controller.ttnn_rpc)
     except:
         pass
 
@@ -179,7 +205,13 @@ def run(args, context) -> InspectorData:
 
     # Try to load serialized RPC data
     try:
-        return InspectorRpcSerialized(log_directory)
+        runtime_rpc_serialized: inspector_capnp.RuntimeInspector = InspectorRpcSerialized(
+            os.path.join(log_directory, "RuntimeInspector"), inspector_capnp.RuntimeInspector
+        )  # type: ignore
+        ttnn_rpc_serialized: inspector_capnp.TtnnInspector = InspectorRpcSerialized(
+            os.path.join(log_directory, "TtnnInspector"), inspector_capnp.TtnnInspector
+        )  # type: ignore
+        return InspectorData(None, runtime_rpc_serialized, ttnn_rpc_serialized)
     except:
         raise InspectorException(
             "There is no Inspector RPC data, cannot continue. "

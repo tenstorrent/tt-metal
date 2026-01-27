@@ -74,7 +74,6 @@ tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @TT-BrianLiu @tenstorrent
 tt_metal/impl/context/ @jbaumanTT @nhuang-tt @aliuTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
-tt_metal/impl/debug/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
@@ -131,7 +130,6 @@ tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @
 tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/ @tt-asaigal @tt-aho @aliuTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_metal/debug_tools/inspector @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 
 # misc tests
 tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
@@ -373,6 +371,16 @@ models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttn
 
 # tracy
 tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
+
+# Inspector
+scripts/generate_rpc_channel.py @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+scripts/generate_rpc_stub.py @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/debug_tools/inspector @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/inspector.hpp @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+tt_metal/impl/debug/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+ttnn/api/ttnn/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
+ttnn/core/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass
 
 # tt-triage
 tools/tt-triage.py @tt-vjovanovic @adjordjevic-TT @miacim @onenezicTT @tenstorrent/codeowner-bypass

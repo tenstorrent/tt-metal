@@ -4,9 +4,10 @@
 
 # Cap'N Proto file schema: https://capnproto.org/language.html
 
-@0xf8b5d6e3c2a19074;
+@0xd9769c4def840384;
 
 using Cxx = import "/capnp/c++.capnp";
+using Rpc = import "/tt-metalium/experimental/inspector_rpc.capnp";
 $Cxx.namespace("tt::tt_metal::inspector::rpc");
 
 # Inspector RPC interface for querying TT-Metal runtime state
@@ -63,15 +64,6 @@ struct MeshWorkloadData {
     meshWorkloadId @0 :UInt64;
     programs @1 :List(MeshWorkloadProgramData);
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
-    # High-level operation metadata
-    # Empty if workload was not created by a tracked operation
-    name @3 :Text;        # Operation name
-    parameters @4 :Text;  # Operation parameters
-}
-
-struct MeshWorkloadRuntimeIdEntry {
-    workloadId @0 :UInt64;
-    runtimeId @1 :UInt64;
 }
 
 # Build environment info for a specific device
@@ -135,7 +127,7 @@ struct MetalDeviceIdToUniqueId {
     uniqueId @1 :UInt64;
 }
 
-interface Inspector {
+interface RuntimeInspector extends(Rpc.InspectorChannel) {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
 
@@ -162,7 +154,4 @@ interface Inspector {
 
     # Get mapping from metal device ID to unique ID for all devices
     getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
-
-    # Get runtime IDs for mesh workloads
-    getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 }

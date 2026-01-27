@@ -186,6 +186,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
+    -pthread # Required for PCH consistency across all targets
 )
 
 # Planned to be temporary, remove later.
@@ -226,6 +227,8 @@ if(ENABLE_TRACY AND TARGET TracyClient)
     message(STATUS "Adding -Wno-unused-variable to TracyClient")
     target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
 endif()
+
+include(inspector)
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)

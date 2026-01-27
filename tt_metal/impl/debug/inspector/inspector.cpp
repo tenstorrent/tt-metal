@@ -5,7 +5,6 @@
 #include "inspector.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
-#include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -345,47 +344,6 @@ void Inspector::mesh_workload_set_program_binary_status(
     }
 }
 
-void Inspector::mesh_workload_set_operation_name_and_parameters(
-    const distributed::MeshWorkloadImpl* mesh_workload,
-    std::string_view operation_name,
-    std::string_view operation_parameters) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    try {
-        auto* data = get_inspector_data();
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.name = std::string(operation_name);
-        mesh_workload_data.parameters = std::string(operation_parameters);
-        // Keep log/event name stable for tooling compatibility.
-        data->logger.log_mesh_workload_operation_name_and_parameters(
-            mesh_workload_data, operation_name, operation_parameters);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_set_runtime_id(
-    const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    try {
-        auto* data = get_inspector_data();
-
-        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
-        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
-
-        // Keep only the last MAX_RUNTIME_ID_ENTRIES
-        if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
-            data->runtime_ids.pop_front();
-        }
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log workload runtime ID: {}", e.what());
-    }
-}
-
 // Set dispatch core info
 void Inspector::set_dispatch_core_info(
     const tt_cxy_pair& virtual_core,
@@ -492,6 +450,19 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     return empty_rpc_server;
 }
 
+inspector::rpc::RuntimeInspectorRpcChannel& Inspector::get_runtime_inspector_rpc() {
+    if (is_enabled()) {
+        try {
+            auto* data = get_inspector_data();
+            return data->get_runtime_inspector_rpc();
+        } catch (const std::exception& e) {
+            TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
+        }
+    }
+    static inspector::rpc::RuntimeInspectorRpcChannel empty_runtime_inspector_rpc;
+    return empty_runtime_inspector_rpc;
+}
+
 void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     if (!is_enabled()) {
         return;
@@ -510,20 +481,12 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
 
 namespace experimental::inspector {
 
-bool IsEnabled() {
-    return Inspector::is_enabled();
-}
+bool IsEnabled() { return Inspector::is_enabled(); }
 
-void EmitMeshWorkloadAnnotation(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    std::string_view operation_name,
-    std::string_view operation_parameters) {
-    tt::tt_metal::Inspector::mesh_workload_set_operation_name_and_parameters(
-        &workload.impl(), operation_name, operation_parameters);
-}
-
-void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id) {
-    tt::tt_metal::Inspector::mesh_workload_set_runtime_id(&workload.impl(), runtime_id);
+// API function to register an Inspector RPC channel
+void RegisterInspectorRpcChannel(
+    std::string_view name, tt::tt_metal::inspector::rpc::InspectorChannel::Client channel) {
+    Inspector::get_rpc_server().registerChannel(std::string(name), kj::mv(channel));
 }
 
 }  // namespace experimental::inspector

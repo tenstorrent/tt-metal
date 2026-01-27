@@ -1,0 +1,1 @@
+../../ttnn/core/inspector/ttnn_rpc.capnp

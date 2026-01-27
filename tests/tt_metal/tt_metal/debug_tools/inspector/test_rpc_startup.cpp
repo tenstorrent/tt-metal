@@ -52,15 +52,13 @@ class InspectorFixture : public ::testing::Test {
         kj::Own<kj::NetworkAddress> addr = network.parseAddress(address).wait(waitScope);
         kj::Own<kj::AsyncIoStream> conn = addr->connect().wait(waitScope);
         capnp::TwoPartyClient client(*conn);
-        tt::tt_metal::inspector::rpc::Inspector::Client inspector = client.bootstrap().castAs<tt::tt_metal::inspector::rpc::Inspector>();
-        auto request = inspector.getProgramsRequest();
+        tt::tt_metal::inspector::rpc::InspectorChannelRegistry::Client inspectorChannelRegistry =
+            client.bootstrap().castAs<tt::tt_metal::inspector::rpc::InspectorChannelRegistry>();
+        auto request = inspectorChannelRegistry.getChannelNamesRequest();
         auto response = request.send().wait(waitScope);
     }
 
     void start(tt::tt_metal::inspector::RpcServerController& controller, const std::string& address) {
-        controller.get_rpc_server().setGetProgramsCallback([](auto result) {
-            result.initPrograms(0);
-        });
         controller.start(address);
     }
 };

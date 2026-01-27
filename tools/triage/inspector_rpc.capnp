@@ -1,0 +1,1 @@
+../../tt_metal/api/tt-metalium/experimental/inspector_rpc.capnp
