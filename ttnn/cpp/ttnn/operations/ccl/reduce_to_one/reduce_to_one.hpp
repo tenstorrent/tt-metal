@@ -17,6 +17,7 @@ struct ExecuteReduceToOne {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& root_coord,
+        const MeshCoordinate& exit_coord,
         tt::tt_fabric::Topology topology,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);

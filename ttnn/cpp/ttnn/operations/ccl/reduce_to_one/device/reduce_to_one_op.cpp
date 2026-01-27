@@ -104,9 +104,9 @@ ReduceToOneOp::ReduceToOne::cached_mesh_workload_t ReduceToOneOp::ReduceToOne::c
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-    semaphores.reserve(3);
-    // 3 semaphores: round1 (within column), round2 (within column), round3 (cross-column)
-    for (size_t i = 0; i < 3; ++i) {
+    semaphores.reserve(4);
+    // 4 semaphores: round1, round2, round3 (reduction tree), exit (ROOT1 to exit_coord)
+    for (size_t i = 0; i < 4; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
@@ -161,11 +161,13 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
     tensor_return_value_t& tensor_return_value,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     const auto& root_coordinate = operation_attributes.root_coord;
+    const auto& exit_coordinate = operation_attributes.exit_coord;
 
     return reduce_to_one_program_factory(
         tensor_args,
         operation_attributes,
         root_coordinate,
+        exit_coordinate,
         mesh_coordinate,
         forward_coord,
         backward_coord,
@@ -180,11 +182,12 @@ ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<Tensor>& optional_intermediate_tensor) {
     using OperationType = ttnn::operations::ccl::ReduceToOneOp;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{root_coord, topology, input_tensor.tensor_spec()},
+        OperationType::operation_attributes_t{root_coord, exit_coord, topology, input_tensor.tensor_spec()},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
 }
 }  // namespace ttnn::prim
