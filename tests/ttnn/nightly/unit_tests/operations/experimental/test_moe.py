@@ -324,9 +324,9 @@ def get_accuracy_metrics(torch_output, tt_output):
     }
 
 
-def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
+def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     logger.info(
-        f"Running test_moe with M={M}, K={K}, N={N}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
+        f"Running test_moe with M={M}, K={K}, N={N}, E={E}, L={L}, check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
     )
 
     # --------------------------------------------------------------------------
@@ -423,7 +423,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
             dtype=w0_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=weight0_1_shard_memory_config,
+            memory_config=w0_w1_mem_config,
         )
 
         # ------------------------------------------------------------------------
@@ -551,17 +551,19 @@ SHAPE2TIME = {
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "M, K, N",
+    "M, K, N, E, L",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
 @pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
-def test_moe(device, M, K, N, check_accuracy, dump_outputs):
+def test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     accuracy_metrics = run_test_moe(
         device,
         M,
         K,
         N,
+        E,
+        L,
         check_accuracy,
         dump_outputs,
     )
@@ -579,14 +581,15 @@ def test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 
 @pytest.mark.parametrize(
-    "M, K, N",
+    "M, K, N, E, L",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
 @pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
-def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
-    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-dispatch_row]"
+def test_moe_performance(M, K, N, E, L, check_accuracy, dump_outputs):
+    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-E={E}-L={L}-dispatch_row]"
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
+
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
     duration_us = r["DEVICE KERNEL DURATION [ns]"].sum() / 1000.0
     logger.info(f"Duration per layer: {duration_us / L} us")
@@ -614,8 +617,8 @@ def test_moe_performance(M, K, N, check_accuracy, dump_outputs):
     logger.warning(f"Useful Bandwidth: {bandwidth} GB/s")
 
     assert (
-        duration_us < SHAPE2TIME[(M, K, N)]
-    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N)]} us"
+        duration_us < SHAPE2TIME[(M, K, N, E, L)]
+    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N, E, L)]} us"
 
 
 def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]) -> dict[str, float]:
