@@ -37,13 +37,18 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
     TT_FATAL(num_fd_inits_ == 0, "Fast Dispatch can only be manually initialized and torn down once.");
     TT_FATAL(
-        cluster.is_ubb_galaxy(),
-        "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy clusters.");
+        cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
+        "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
     const auto& device_manager = MetalContext::instance().device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
+
+    // Reinitialize dispatch managers to pick up FD core descriptor before allocating cores
+    tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(true);
+    MetalContext::instance().reinitialize_dispatch_managers();
+
     for (const auto& dev : active_devices) {
         TT_FATAL(dev->num_hw_cqs() == num_hw_cqs, "All devices must have the same number of command queues.");
         dev->init_command_queue_host();
@@ -101,6 +106,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     fast_dispatch_enabled_ = false;
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
+
+    // Reinitialize dispatch managers to pick up SD core descriptor after disabling FD
+    MetalContext::instance().reinitialize_dispatch_managers();
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -7,6 +7,7 @@
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
@@ -99,6 +100,10 @@ public:
 
     // Switch from mock mode to real hardware (requires all devices to be closed)
     void reinitialize_for_real_hardware();
+
+    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
+    // This updates cached dispatch/compute core allocations to match current dispatch mode
+    void reinitialize_dispatch_managers();
 
     // Control plane accessors
     void initialize_control_plane();
