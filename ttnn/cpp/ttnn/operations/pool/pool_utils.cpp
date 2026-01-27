@@ -545,15 +545,21 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     auto input_shard_shape = input_memory_config.shard_spec().value().shape;
 
     // Halo input uses the actual input dtype
-    uint32_t halo_input_datum_size = 1;  // Default for BFLOAT8_B
-    if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
-        halo_input_datum_size = 4;
-    } else if (input_dtype == tt::tt_metal::DataType::BFLOAT16) {
-        halo_input_datum_size = 2;
-    } else if (input_dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        halo_input_datum_size = 1;
+    // For BFLOAT8_B, we need to calculate based on tile size, not element size
+    uint32_t halo_input_size = 0;
+    if (input_dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+        // BFLOAT8_B uses block/tile format with 1088 bytes per tile
+        uint32_t num_tiles = (input_shard_shape[0] * input_shard_shape[1]) / tt::constants::TILE_HW;
+        halo_input_size = num_tiles * tt::tile_size(tt::DataFormat::Bfp8_b);
+    } else {
+        uint32_t halo_input_datum_size = 0;
+        if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
+            halo_input_datum_size = 4;
+        } else if (input_dtype == tt::tt_metal::DataType::BFLOAT16) {
+            halo_input_datum_size = 2;
+        }
+        halo_input_size = input_shard_shape[0] * input_shard_shape[1] * halo_input_datum_size;
     }
-    uint32_t halo_input_size = input_shard_shape[0] * input_shard_shape[1] * halo_input_datum_size;
 
     // Halo output and pool operations use BFLOAT16 (or FLOAT32)
     // Halo converts BFLOAT8_B -> BFLOAT16, so pool always works with BFLOAT16/FLOAT32
