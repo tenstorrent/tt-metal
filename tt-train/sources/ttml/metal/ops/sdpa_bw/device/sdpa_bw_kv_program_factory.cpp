@@ -45,22 +45,18 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_8;
-constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_9;
-constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_10;
-constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_11;
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_12;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_13;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_14;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_15;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_16;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_17;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
+constexpr auto kGradValueAccumCbIndex = tt::CBIndex::c_8;
+constexpr auto kGradKeyAccumCbIndex = tt::CBIndex::c_9;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_15;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
-
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -231,17 +227,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
-        program, all_cores, kPrevGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_grad_value_accum = create_circular_buffer(
+        program, all_cores, kGradValueAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
-        program, all_cores, kCurGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
-
-    [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
-        program, all_cores, kPrevGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
-
-    [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
-        program, all_cores, kCurGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
+        program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
         program,
@@ -313,10 +303,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
-    }
-
     SDPABackwardKVKernels kernels;
 
     // Reader compile-time arguments
@@ -356,10 +342,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradValueHolderCbIndex
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kCurGradValueHolderCbIndex
-        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradKeyHolderCbIndex
-        mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradKeyHolderCbIndex
+        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
         return mode;
     };
 
@@ -381,7 +365,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
@@ -406,7 +390,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,

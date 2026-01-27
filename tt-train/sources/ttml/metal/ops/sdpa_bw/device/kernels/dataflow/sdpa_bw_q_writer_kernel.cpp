@@ -14,7 +14,7 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices for gradients
-    constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;  // Output: grad_Q
+    constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;  // Output: grad_Q
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
