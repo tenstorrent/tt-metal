@@ -1864,7 +1864,7 @@ FORCE_INLINE
 void noc_async_posted_atomic_barrier(uint8_t noc_idx = noc_index) {
     RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER, false, noc_idx);
 
-    WAYPOINT("NPABW");
+    WAYPOINT("NPAW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         do {
             invalidate_l1_cache();
@@ -1873,7 +1873,7 @@ void noc_async_posted_atomic_barrier(uint8_t noc_idx = noc_index) {
         while (!ncrisc_noc_posted_atomics_sent(noc_idx));
     }
     invalidate_l1_cache();
-    WAYPOINT("NPABD");
+    WAYPOINT("NPAD");
 }
 
 /**
