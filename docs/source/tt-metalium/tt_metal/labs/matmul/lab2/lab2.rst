@@ -449,7 +449,7 @@ the partial results for ``C_block`` can all fit into the on-chip SRAM at the sam
 
 .. figure:: images/split_k_dimension.png
    :alt: Splitting the Kt dimension into K-blocks
-   :width: 250
+   :width: 900
    :align: center
 
    Figure 4: Splitting the Kt dimension into K-blocks
@@ -543,7 +543,7 @@ The overall approach can be summarized by the following pseudo-code for a comput
                   // Load the partial result built so far
                   acc_tile = partial_C_tile(i, j)
 
-               // Add this K-block's contribution to acc_tile
+               // Compute partial result for block b and add it to acc_tile
                for (k_local in 0 .. K_block_tiles - 1) { // Iterate over K dimension of the K-block
                    // Indices into the current A and B slabs
                    a_tile = A_slab_tile(i, k_local)
