@@ -1,9 +1,9 @@
 name: Analyze ND Failures
 
 on:
-  # schedule:
-  #   # Run every hour at minute 0
-  #   - cron: '0 * * * *'
+  schedule:
+    # Run every hour at minute 0
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       update_mode:
@@ -76,11 +76,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
-      # - name: Upload job failure cluster data
-      #   if: ${{ !cancelled() }}
-      #   uses: ./.github/actions/upload-data-via-sftp
-      #   with:
-      #     ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-      #     sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
-      #     username: job-failure-cluster-writer
-      #     hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+      - name: Upload job failure cluster data
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
+          username: job-failure-cluster-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
