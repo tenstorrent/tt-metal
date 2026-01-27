@@ -1,8 +1,7 @@
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
-#!/usr/bin/env python3
 """Load ttnn_operations_master.json into Neon.tech PostgreSQL.
 
 Schema design:
@@ -155,13 +154,13 @@ def extract_tensor_info(tensor_data):
 
 
 def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count):
-    """Get or create a hardware entry, return the ID."""
+    """Get or create a hardware entry, return (hardware_id, hw_key)."""
     # Normalize device_series (can be string or array)
     if isinstance(device_series, list):
         device_series = device_series[0] if device_series else None
 
     if not board_type:
-        return None
+        return None, None
 
     hw_key = (board_type, device_series, card_count)
     if hw_key not in hardware_cache:
@@ -230,6 +229,9 @@ def get_or_create_mesh_config(
 
 def get_or_create_model(cur, model_cache, source_file, hf_model):
     """Get or create a model entry, return the ID."""
+    if not source_file:
+        return None
+
     model_key = (source_file, hf_model)
     if model_key not in model_cache:
         model_family = extract_model_family(source_file, hf_model)
@@ -495,6 +497,8 @@ def load_data():
 
                 # Link ALL sources to this config via junction table
                 for model_id in model_ids:
+                    if model_id is None:
+                        continue
                     cur.execute(
                         """
                         INSERT INTO ttnn_ops.ttnn_configuration_model (configuration_id, model_id)

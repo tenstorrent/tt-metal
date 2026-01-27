@@ -316,8 +316,7 @@ class MasterConfigLoader:
                     )
                 ) as config_json
             FROM ttnn_ops.ttnn_configuration c
-            JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
-            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
             {cte_where}
             GROUP BY c.operation_id, c.ttnn_configuration_id, c.full_config_json
         )
@@ -395,8 +394,7 @@ class MasterConfigLoader:
                     )
                 ) as config_json
             FROM ttnn_ops.ttnn_configuration c
-            JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
-            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+            JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
             WHERE c.operation_id IN (
                 SELECT o.ttnn_operation_id FROM ttnn_ops.ttnn_operation o
                 WHERE o.operation_name = %s OR o.base_operation_name = %s
