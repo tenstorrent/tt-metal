@@ -32,25 +32,6 @@ def create_torch_input(L, in0_num_cores, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, M, K)
     """
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for layer in range(L):
-    #     for expert in range(E):
-    #         for k_chunk_id in range(K // 32):
-    #             k_start, k_end = k_chunk_id * 32, k_chunk_id * 32 + 32
-    #             chunk_value = le_val * 0.001 * k_chunk_id
-    #             torch_input[layer, :, expert, :, k_start:k_end] = chunk_value
-    #         le_val *= -1
-    # torch_input = 0.25 * 0.25 *torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    # k_half = K // 2
-    # # Interleave the positive and negatives
-    # for i in range(K):
-    #     if i % 2 == 0:
-    #         torch_input[..., i] = 0.25
-    #     else:
-    #         torch_input[..., i] = -0.25
-    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
     torch_input = torch.rand((L, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1)
     return torch_input
@@ -68,19 +49,6 @@ def create_torch_w(L, K, N):
     Returns:
         torch_w: Tensor of shape (L, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
-
     torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w
 
@@ -96,9 +64,28 @@ def prepare_w_tensor(torch_w, L, K, N):
         N: Output dimension
 
     Returns:
-        torch_w: Tensor of shape (L, E, K, 4096)
+        torch_w: Tensor of shape (L, K, N)
     """
-    return torch_w
+    # Each bank gets all of N, and 18/20 tiles of K.
+    w_tile_view = torch_w.view(L, -1, ttnn.TILE_SIZE, N)
+
+    each_shard = []
+
+    start_tile = 0
+    for bank_id in range(8):
+        num_tiles = 18 if bank_id < 8 else 20
+        each_shard.append(w_tile_view[:, start_tile : start_tile + num_tiles, :, :])
+        start_tile += num_tiles
+
+        if num_tiles < 20:
+            each_shard.append(torch.zeros(L, 2, ttnn.TILE_SIZE, N, dtype=torch_w.dtype))
+
+    torch_w_reordered = torch.cat(each_shard, dim=1).view(L, 8, -1, ttnn.TILE_SIZE, N)
+    return torch_w_reordered.permute(1, 0, 2, 3, 4)
+
+
+def prepare_output_tensor(tt_output, in0_num_cores, M, N):
+    return tt_output[0]
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -123,8 +110,6 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     # Shard grid
     # --------------------------------------------------------------------------
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
-    # Pick only the first 8 cores
-    in0_core_coords = in0_core_coords[:8]
 
     core2dram = {}
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
@@ -140,7 +125,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     in0_dtype = ttnn.bfloat16
     w_dtype = ttnn.bfloat16
-    num_dram_banks = 8
+    num_dram_banks = len(in0_core_coords)
 
     dram_core_coords = [ttnn.CoreCoord(core2dram[in0_core_coord], 0) for in0_core_coord in in0_core_coords]
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
@@ -167,25 +152,25 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     # Create DRAM shard spec for w
     # Tensor shape: (L, K, N) -> Sharded across N cores
     # ------------------------------------------------------------------------
-    w_shard_height = L * K * 1
-    w_shard_width = ttnn.TILE_SIZE
+    w_shard_height = L * 2 * math.ceil(K / ttnn.TILE_SIZE / num_dram_banks / 2) * ttnn.TILE_SIZE
+    w_shard_width = N
 
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
 
-    w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+    w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for output
     # Tensor shape: (M, N) -> Sharded across N cores
     # ------------------------------------------------------------------------
-    output_shard_height = M
-    output_shard_width = ttnn.TILE_SIZE
+    output_shard_height = in0_num_cores * M
+    output_shard_width = N
     output_shard_spec = ttnn.ShardSpec(
         in0_core_range_set, (output_shard_height, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR
     )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     tt_output = ttnn.empty(
-        (M, N),
+        (in0_num_cores, M, N),
         dtype=in0_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -270,8 +255,10 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
         for layer_id in range(L):
             torch_layer_output = torch_w_output_ref[layer_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, :, :]
-            layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
+            tt_output = prepare_output_tensor(tt_layer_output, in0_num_cores, M, N)
+            layer_metrics = get_accuracy_metrics(torch_layer_output, tt_output)
             all_accuracy_metrics[layer_id] = layer_metrics
+            breakpoint()
 
     if dump_outputs:
         torch.set_printoptions(profile="full")
@@ -349,17 +336,17 @@ def test_moe_mm_performance(M, K, N, L, check_accuracy, dump_outputs):
     logger.warning(f"Total Duration: {duration_us} us")
 
     bytes_per_tile = 2048  # bfloat16
-    num_cores = 8
+    num_cores = 12
 
     Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
-    w_tiles_per_core = math.ceil(Nt / num_cores) * Kt
+    w_tiles_per_core = 2 * math.ceil(Kt / num_cores / 2) * Nt
 
     total_bytes_transferred = L * num_cores * w_tiles_per_core * bytes_per_tile
     realized_bandwidth = int(total_bytes_transferred / (duration_us * 1000))
     logger.warning(f"Realized Bandwidth: {realized_bandwidth} GB/s")
 
-    total_tiles_per_core = Kt * Nt
-    total_bytes_used = L * total_tiles_per_core * bytes_per_tile
+    total_tiles = Kt * Nt
+    total_bytes_used = L * total_tiles * bytes_per_tile
     bandwidth = int(total_bytes_used / (duration_us * 1000))
     logger.warning(f"Useful Bandwidth: {bandwidth} GB/s")
 
