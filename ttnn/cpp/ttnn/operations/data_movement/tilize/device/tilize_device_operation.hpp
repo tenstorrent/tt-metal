@@ -11,6 +11,7 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_width_sharded_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 
 namespace ttnn::prim {
@@ -24,7 +25,8 @@ struct TilizeDeviceOperation {
         TilizeMultiCoreInterleavedProgramFactory,
         TilizeMultiCoreBlockProgramFactory,
         TilizeSingleCoreProgramFactory,
-        TilizeMultiCoreShardedProgramFactory>;
+        TilizeMultiCoreShardedProgramFactory,
+        TilizeMultiCoreWidthShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
