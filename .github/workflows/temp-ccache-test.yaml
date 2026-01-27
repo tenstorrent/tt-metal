@@ -251,6 +251,53 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact-2.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact-2.outputs.wheel-artifact-name }}
 
+      - name: Install diffoscope for build comparison
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq diffoscope 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+          diffoscope --version
+
+      - name: Compare build artifacts with diffoscope
+        run: |
+          echo "========================================="
+          echo "=== Comparing Build Artifacts with diffoscope ===="
+          echo "========================================="
+          echo "Comparing build-artifact-1 (run1) vs build-artifact-2 (run2)"
+          echo ""
+
+          # Compare key binaries and libraries
+          echo "=== Comparing hardware libraries ===="
+          if [ -d "build/lib" ]; then
+            for lib in build/lib/*.a build/lib/*.so; do
+              if [ -f "$lib" ]; then
+                echo "Analyzing: $lib"
+                diffoscope --text /tmp/diffoscope_$(basename $lib).txt "$lib" "$lib" 2>&1 || true
+                if [ -f "/tmp/diffoscope_$(basename $lib).txt" ]; then
+                  echo "Differences in $(basename $lib):"
+                  head -50 "/tmp/diffoscope_$(basename $lib).txt" || true
+                fi
+              fi
+            done
+          fi
+
+          echo ""
+          echo "=== Comparing TTNN shared libraries ===="
+          if [ -d "ttnn/ttnn" ]; then
+            for so in ttnn/ttnn/*.so; do
+              if [ -f "$so" ]; then
+                echo "Analyzing: $so"
+                diffoscope --text /tmp/diffoscope_$(basename $so).txt "$so" "$so" 2>&1 || true
+                if [ -f "/tmp/diffoscope_$(basename $so).txt" ]; then
+                  echo "Differences in $(basename $so):"
+                  head -50 "/tmp/diffoscope_$(basename $so).txt" || true
+                fi
+              fi
+            done
+          fi
+
+          echo ""
+          echo "Note: diffoscope detailed reports saved to /tmp/diffoscope_*.txt"
+
       - name: Clear kernel caches for Run 2
         run: |
           echo ""
@@ -353,6 +400,15 @@ jobs:
           else
             echo "ℹ️  No cache activity detected"
           fi
+
+      - name: Upload diffoscope comparison reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diffoscope-reports-run2-${{ github.run_id }}
+          path: /tmp/diffoscope_*.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
   ttnn-ccache-test-run3:
     needs: [build-artifact-1, ttnn-ccache-test-run1]
