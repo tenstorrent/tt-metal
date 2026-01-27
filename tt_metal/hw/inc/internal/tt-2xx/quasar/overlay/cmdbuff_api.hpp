@@ -1614,12 +1614,222 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         set_dest_##buf_name(dest_addr);                                                                                \
         set_len_##buf_name(len_bytes);                                                                                 \
         issue_##buf_name();                                                                                            \
+    }                                                                                                                  \
+    inline __attribute__((always_inline)) void set_value_##buf_name(                                                   \
+        uint32_t transaction_id,                                                                                       \
+        uint32_t tx_q,                                                                                                 \
+        uint64_t write_ptr_addr,                                                                                       \
+        uint64_t write_ptr_val,                                                                                        \
+        uint32_t size,                                                                                                 \
+        uint64_t snoop = 0) {                                                                                          \
+        TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u reg_opt;                                                                       \
+        reset_##buf_name();                                                                                            \
+        idma_setup_as_copy_##buf_name(false);                                                                          \
+        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
+        setup_wrapping_vcs_##buf_name(true, 0, 0, tx_q, tx_q);                                                         \
+        setup_trids_##buf_name(transaction_id);                                                                        \
+        set_src_##buf_name(write_ptr_val);                                                                             \
+        set_dest_##buf_name(write_ptr_addr);                                                                           \
+        set_len_##buf_name(size);                                                                                      \
+        reg_opt.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET);                \
+        reg_opt.f.src_protocol = 4;                                                                                    \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET, reg_opt.val);                 \
+        if (snoop & 2) {                                                                                               \
+            TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u reg_pkt;                                                                 \
+            reg_pkt.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET);          \
+            reg_pkt.f.snoop_bit = snoop;                                                                               \
+            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET, reg_pkt.val);           \
+        }                                                                                                              \
+        issue_##buf_name();                                                                                            \
     }
 
 DEFINE_CMD_BUFS(cmdbuf_0, CMDBUF_0)
 DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
 
 #undef DEFINE_CMD_BUFS
+
+#ifdef CCE_TOP_LEVEL
+#ifdef CCE_ETH_ENABLED
+
+#define DEFINE_ETH_CMD_BUFS(buf_name, cmdbuf)                                                                          \
+    inline __attribute__((always_inline)) void eth_copy_##buf_name(                                                    \
+        uint64_t src_addr,                                                                                             \
+        uint64_t dest_addr,                                                                                            \
+        uint64_t len_bytes,                                                                                            \
+        uint32_t max_bytes_in_packet,                                                                                  \
+        uint32_t transaction_id,                                                                                       \
+        uint32_t tx_q,                                                                                                 \
+        uint32_t snoop = 0) {                                                                                          \
+        reset_##buf_name();                                                                                            \
+        idma_setup_as_copy_##buf_name(false);                                                                          \
+        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
+        setup_wrapping_vcs_##buf_name(true, 0, 0, tx_q, tx_q);                                                         \
+        setup_trids_##buf_name(transaction_id);                                                                        \
+        set_src_##buf_name(src_addr);                                                                                  \
+        set_dest_##buf_name(dest_addr);                                                                                \
+        set_len_##buf_name(len_bytes);                                                                                 \
+        setup_max_bytes_in_packet_##buf_name(max_bytes_in_packet);                                                     \
+        if (snoop & 2) {                                                                                               \
+            TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u reg_pkt;                                                                 \
+            reg_pkt.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET);          \
+            reg_pkt.f.snoop_bit = snoop;                                                                               \
+            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET, reg_pkt.val);           \
+        }                                                                                                              \
+        issue_##buf_name();                                                                                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void eth_send_inline_##buf_name(                                             \
+        uint32_t transaction_id, uint32_t tx_q, uint64_t write_ptr_addr, uint64_t write_ptr_val, uint64_t snoop = 0) { \
+        TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u reg_opt;                                                                       \
+        reset_##buf_name();                                                                                            \
+        idma_setup_as_copy_##buf_name(false);                                                                          \
+        setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
+        setup_wrapping_vcs_##buf_name(true, 0, 0, tx_q, tx_q);                                                         \
+        setup_trids_##buf_name(transaction_id);                                                                        \
+        set_src_##buf_name(write_ptr_val);                                                                             \
+        set_dest_##buf_name(write_ptr_addr);                                                                           \
+        set_len_##buf_name(8);                                                                                         \
+        reg_opt.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET);                \
+        reg_opt.f.src_protocol = 4;                                                                                    \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_AXI_OPT_1_REG_OFFSET, reg_opt.val);                 \
+        if (snoop & 2) {                                                                                               \
+            TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u reg_pkt;                                                                 \
+            reg_pkt.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET);          \
+            reg_pkt.f.snoop_bit = snoop & 1;                                                                           \
+            CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET, reg_pkt.val);           \
+        }                                                                                                              \
+        issue_##buf_name();                                                                                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void eth_quick_send_inline_##buf_name(                                       \
+        uint32_t transaction_id, uint32_t tx_q, uint64_t write_ptr_addr, uint64_t write_ptr_val, uint64_t snoop = 0) { \
+        setup_trids_##buf_name(transaction_id);                                                                        \
+        set_src_##buf_name(write_ptr_val);                                                                             \
+        set_dest_##buf_name(write_ptr_addr);                                                                           \
+        issue_##buf_name();                                                                                            \
+    }                                                                                                                  \
+    inline __attribute__((always_inline)) void eth_quick_copy_##buf_name(                                              \
+        uint64_t src_addr, uint64_t dest_addr, uint64_t len_bytes, uint32_t transaction_id, uint32_t tx_q) {           \
+        setup_trids_##buf_name(transaction_id);                                                                        \
+        setup_wrapping_vcs_##buf_name(true, 0, 0, tx_q, tx_q);                                                         \
+        set_src_##buf_name(src_addr);                                                                                  \
+        set_dest_##buf_name(dest_addr);                                                                                \
+        set_len_##buf_name(len_bytes);                                                                                 \
+        issue_##buf_name();                                                                                            \
+    }                                                                                                                  \
+    inline __attribute__((always_inline)) void eth_superquick_copy_##buf_name(                                         \
+        uint64_t src_addr, uint64_t dest_addr, uint64_t len_bytes) {                                                   \
+        set_src_##buf_name(src_addr);                                                                                  \
+        set_dest_##buf_name(dest_addr);                                                                                \
+        set_len_##buf_name(len_bytes);                                                                                 \
+        issue_##buf_name();                                                                                            \
+    }
+
+DEFINE_ETH_CMD_BUFS(cmdbuf_0, CMDBUF_0)
+DEFINE_ETH_CMD_BUFS(cmdbuf_1, CMDBUF_1)
+
+#undef DEFINE_ETH_CMD_BUFS
+#endif  // CCE_ETH_ENABLED
+
+#define DEFINE_CCE_DMA_CMD_BUFS(buf_name, cmdbuf)                                                               \
+    /*                                                                                                          \
+     * @def idma_copy_no_issue_cmdbuf_0                                                                         \
+     * @def idma_copy_no_issue_cmdbuf_1                                                                         \
+     *                                                                                                          \
+     * @brief Complete iDMA copy operation setup without issuing                                                \
+     *                                                                                                          \
+     * @param src_addr Source address                                                                           \
+     * @param dest_addr Destination address                                                                     \
+     * @param len_bytes Size of data in bytes                                                                   \
+     * @param transaction_id Transaction ID for this operation                                                  \
+     *                                                                                                          \
+     * @note This macro creates 2 inline functions, 1 per each cmd buffer                                       \
+     */                                                                                                         \
+    inline __attribute__((always_inline)) void idma_copy_no_issue_##buf_name(                                   \
+        uint64_t src_addr, uint64_t dest_addr, uint64_t len_bytes, uint32_t transaction_id = CMDBUF_DEF_TRID) { \
+        reset_##buf_name();                                                                                     \
+        idma_setup_as_copy_##buf_name(false);                                                                   \
+        setup_ongoing_##buf_name(false, false, false, false, false);                                            \
+        setup_vcs_##buf_name(true);                                                                             \
+        setup_trids_##buf_name(transaction_id);                                                                 \
+        set_src_##buf_name(src_addr);                                                                           \
+        set_dest_##buf_name(dest_addr);                                                                         \
+        set_len_##buf_name(len_bytes);                                                                          \
+    }                                                                                                           \
+                                                                                                                \
+    /*                                                                                                          \
+     * @def idma_copy_prep_cmdbuf_0                                                                             \
+     * @def idma_copy_prep_cmdbuf_1                                                                             \
+     *                                                                                                          \
+     * @brief Prepare command buffer for iDMA copy operations                                                   \
+     *                                                                                                          \
+     * Sets up the command buffer with reset, idma copy mode, VCs, and max bytes per packet.                    \
+     * After calling this, use idma_fast_copy or set_src/set_dest/set_len/issue to perform transfers.           \
+     *                                                                                                          \
+     * @param be_id Backend ID for VC setup (0 to NUM_DMA_BE-2)                                                 \
+     * @param tr_id Transaction ID                                                                              \
+     * @param max_bytes_in_packet Maximum bytes per packet                                                      \
+     *                                                                                                          \
+     * @note This macro creates 2 inline functions, 1 per each cmd buffer                                       \
+     */                                                                                                         \
+    inline __attribute__((always_inline)) void idma_copy_prep_##buf_name(                                       \
+        uint32_t be_id, uint32_t tr_id, uint32_t max_bytes_in_packet) {                                         \
+        reset_##buf_name();                                                                                     \
+        idma_setup_as_copy_##buf_name(false);                                                                   \
+        setup_ongoing_##buf_name(false, false, false, false, false);                                            \
+        setup_trids_##buf_name(tr_id);                                                                          \
+        setup_wrapping_vcs_##buf_name(true, be_id, be_id + 1, 0);                                               \
+        setup_max_bytes_in_packet_##buf_name(max_bytes_in_packet);                                              \
+    }                                                                                                           \
+                                                                                                                \
+    /*                                                                                                          \
+     * @def idma_fast_copy_cmdbuf_0                                                                             \
+     * @def idma_fast_copy_cmdbuf_1                                                                             \
+     *                                                                                                          \
+     * @brief Issue a fast iDMA copy transfer                                                                   \
+     *                                                                                                          \
+     * Sets source, destination, length and issues the transfer.                                                \
+     * Call idma_copy_prep first to setup the command buffer.                                                   \
+     * Does not wait for completion - use idma_acked to check completion.                                       \
+     *                                                                                                          \
+     * @param src_addr Source address                                                                           \
+     * @param dest_addr Destination address                                                                     \
+     * @param len_bytes Transfer size in bytes                                                                  \
+     *                                                                                                          \
+     * @note This macro creates 2 inline functions, 1 per each cmd buffer                                       \
+     */                                                                                                         \
+    inline __attribute__((always_inline)) void idma_fast_copy_##buf_name(                                       \
+        uint64_t src_addr, uint64_t dest_addr, uint64_t len_bytes) {                                            \
+        set_src_##buf_name(src_addr);                                                                           \
+        set_dest_##buf_name(dest_addr);                                                                         \
+        set_len_##buf_name(len_bytes);                                                                          \
+        issue_##buf_name();                                                                                     \
+    }
+
+DEFINE_CCE_DMA_CMD_BUFS(cmdbuf_0, CMDBUF_0)
+DEFINE_CCE_DMA_CMD_BUFS(cmdbuf_1, CMDBUF_1)
+
+#undef DEFINE_CCE_DMA_CMD_BUFS
+
+#ifdef CCE_DFC_ENABLED
+#define DEFINE_CCE_DMA_DFC_CMD_BUFS(buf_name, cmdbuf)                                                            \
+    inline __attribute__((always_inline)) void setup_data_fmt_##buf_name(                                        \
+        uint8_t src_data_fmt, uint8_t dst_data_fmt, uint8_t stoch_rnd_en, uint8_t overflow_en) {                 \
+        TT_ROCC_CMD_BUF_L1_ACCUM_CFG_reg_u data_fmt_union;                                                       \
+        data_fmt_union.f.src_data_fmt = src_data_fmt;                                                            \
+        data_fmt_union.f.dst_data_fmt = dst_data_fmt;                                                            \
+        data_fmt_union.f.stoch_rnd_en = stoch_rnd_en;                                                            \
+        data_fmt_union.f.overflow_en = overflow_en;                                                              \
+                                                                                                                 \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_L1_ACCUM_CFG_REG_OFFSET, data_fmt_union.val); \
+    }
+
+DEFINE_CCE_DMA_DFC_CMD_BUFS(cmdbuf_0, CMDBUF_0)
+DEFINE_CCE_DMA_DFC_CMD_BUFS(cmdbuf_1, CMDBUF_1)
+
+#undef DEFINE_CCE_DMA_DFC_CMD_BUFS
+#endif  // CCE_DFC_ENABLE
+#endif  // CCE_TOP_LEVEL
 
 //////////////////////
 /// Simple CMD Buf ///

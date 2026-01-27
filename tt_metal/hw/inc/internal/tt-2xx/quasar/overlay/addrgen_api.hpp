@@ -116,6 +116,16 @@ struct LoopConfig {
      */                                                                                                              \
     inline __attribute__((always_inline)) void reset_counters_##buf_name() { ADDRGEN_RESET_COUNTERS(cmdbuf); }       \
                                                                                                                      \
+    inline __attribute__((always_inline)) void setup_banking_order_shift_##buf_name(                                 \
+        uint32_t endpoint_id_shift, uint32_t src_bank_order = BANK_INNER, uint32_t dest_bank_order = BANK_INNER) {   \
+        TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
+        misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
+        misc.f.bank_offset = endpoint_id_shift;                                                                      \
+        misc.f.src_bank_order = src_bank_order;                                                                      \
+        misc.f.dst_bank_order = dest_bank_order;                                                                     \
+        ADDRGEN_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET, misc.val);                  \
+    }                                                                                                                \
+                                                                                                                     \
     inline __attribute__((always_inline)) void setup_src_banking_##buf_name(const BankingConfig& cfg) {              \
         TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;                                                                         \
         misc.val = TT_ROCC_ADDRESS_GEN_MISC_REG_DEFAULT;                                                             \
@@ -197,7 +207,6 @@ struct LoopConfig {
     inline __attribute__((always_inline)) void setup_src_base_start_##buf_name(uint64_t base_start) {                \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_BASE_REG_OFFSET, base_start);                 \
     }                                                                                                                \
-    /*                                                                                                               \
     /*                                                                                                               \
      * @def setup_src_inner_loop_addrgen_0()                                                                         \
      * @def setup_src_inner_loop_addrgen_1()                                                                         \
@@ -315,7 +324,6 @@ struct LoopConfig {
     inline __attribute__((always_inline)) void setup_dest_base_start_##buf_name(uint64_t base_start) {               \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_BASE_REG_OFFSET, base_start);                \
     }                                                                                                                \
-    /*                                                                                                               \
     /*                                                                                                               \
      * @def setup_dest_inner_loop_addrgen_0()                                                                        \
      * @def setup_dest_inner_loop_addrgen_1()                                                                        \
