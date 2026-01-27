@@ -259,7 +259,7 @@ The reader and writer kernels need to generate correct tile indices into the und
 needs to loop over the correct number of output tiles and inner-dimension tiles.
 
 All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
-this is because their values willbe known only at runtime, when the work distribution is known.
+This is because their values will be known only at runtime, when the work distribution is known.
 Arguments that are the same for all cores and are known at compile time can be passed as either compile-time arguments or runtime arguments.
 As discussed in Lab 1, the decision to use compile-time arguments vs. runtime arguments is based on a tradeoff between potential
 performance benefit from using compile-time arguments vs. kernels having to be recompiled for each different set of argument values.
@@ -449,14 +449,14 @@ the partial results for ``C_block`` can all fit into the on-chip SRAM at the sam
 
 .. figure:: images/split_k_dimension.png
    :alt: Splitting the Kt dimension into K-blocks
-   :width: 900
+   :width: 1100
    :align: center
 
    Figure 4: Splitting the Kt dimension into K-blocks
 
 An example is shown in Figure 4, where each rectangle represents a tile.
 In this example, ``Mt`` = 9, ``Nt`` = 9, ``Kt`` = 6, with the core grid size being ``3x3``.
-As a result, ``M_block_tiles`` = 3 and ``N_block_tiles`` = 3, whcih means ``C_block`` has shape ``3x3``.
+As a result, ``M_block_tiles = 3`` and ``N_block_tiles = 3``, which means ``C_block`` has shape ``3x3``.
 One of the ``C_block`` tiles is highlighted in purple in the output matrix ``C``.
 The corresponding ``A_block`` and ``B_block`` tiles are highlighted in shades of purple in the
 input matrices ``A`` and ``B``. If we assume that ``A_block`` and ``B_block`` are too large
@@ -473,7 +473,7 @@ only once, consider the computation for a single output tile ``C[i][j]`` within 
 
 .. figure:: images/sum_standard.png
    :alt: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``
-   :width: 250
+   :width: 120
    :align: center
 
 We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks.
@@ -484,7 +484,7 @@ Decomposing the original equation across K-blocks, we get:
 
 .. figure:: images/sum_composite.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``
-   :width: 250
+   :width: 300
    :align: center
 
 Define the partial result for block ``b`` as:
@@ -502,12 +502,12 @@ To get the final result, we need to add partial results for all K-blocks:
 
 .. figure:: images/sum_across_blocks.png
    :alt: ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``
-   :width: 200
+   :width: 300
    :align: center
 
 
 Observe that the above equations concerns only a single tile of the output ``C[i][j]``.
-This cimputation needs to be done for all tiles in ``C_block``, i.e. for all ``i`` and ``j``
+This computation needs to be done for all tiles in ``C_block``, i.e. for all ``i`` and ``j``
 in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
 If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
 compute the partial result for each tile, which would not be conducive to data reuse.
@@ -534,8 +534,8 @@ The overall approach can be summarized by the following pseudo-code for a comput
        Ensure that A_slab(b) is in CB0 // Size: M_block_tiles * K_block_tiles.
        Ensure that B_slab(b) is in CB1 // Size: K_block_tiles * N_block_tiles.
        // For every output tile (i,j) in this C_block:
-       for (i in 0 .. M_block_tiles - 1) { // For every row in the A_slab(b)
-           for (j in 0 .. N_block_tiles - 1) { // For every column in the B_slab(b)
+       for (i in 0 .. M_block_tiles - 1) { // For every row in C_block
+           for (j in 0 .. N_block_tiles - 1) { // For every column in C_block
                // Get the current accumulator tile for C(i,j)
                acc_tile = zero_tile()
                if (b != 0)
@@ -554,7 +554,7 @@ The overall approach can be summarized by the following pseudo-code for a comput
                }
 
                // Store updated result for C(i,j)
-               if (b == num_blocks - 1)
+               if (b == num_k_blocks - 1)
                   // Last K-block: acc_tile has the final result for C(i,j)
                   // Store it to the final destination.
                   final_C_tile(i, j) = acc_tile
@@ -565,60 +565,34 @@ The overall approach can be summarized by the following pseudo-code for a comput
        }
    }
 
-Visualizing the Data Reuse Opportunity
-======================================
 
-The following diagram illustrates the basic approach versus the optimized approach
-for a ``4x4`` output tile matrix with ``K=4`` inner dimension tiles::
+Data Reuse Evaluation
+=====================
 
-    BASIC APPROACH: Process output tiles one at a time (high DRAM traffic)
-    ======================================================================
+Consider the example in Figure 4, where ``Mt = 9``, ``Nt = 9``, ``Kt = 6``,
+and the core grid is ``3x3``.
+With basic (non-blocked) approach, each core computes one output tile at a time.
+For each output tile ``C[i][j]``, the core reads the full corresponding row of tiles
+of ``A`` and the full corresponding column of tiles of ``B`` from DRAM.
 
-         K tiles (inner dimension)
-         <---------------------->
-       +----+----+----+----+
-    M  | A0 | A1 | A2 | A3 |  Row 0 of A read for EACH output tile in row 0 of C
-    t  +----+----+----+----+
-    i  | A4 | A5 | A6 | A7 |  Row 1 of A read for EACH output tile in row 1 of C
-    l  +----+----+----+----+
-    e  | A8 | A9 |A10 |A11 |  ...
-    s  +----+----+----+----+
-       |A12 |A13 |A14 |A15 |
-       +----+----+----+----+
+For each output tile ``C[i][j]`` we need ``Kt = 6`` tiles from ``A`` and ``Kt = 6`` tiles from ``B``.
+Given that basic multi-core approach doesn't involve any reuse, such reads are repeated
+for every one of the ``Mt * Nt = 81`` output tiles in ``C``, resulting in
+``Mt * Nt * 2 * Kt = 81 * 2 * 6 = 972`` tile reads.
 
-    For C[0,0]: Read A row 0 (4 tiles) + B col 0 (4 tiles) = 8 DRAM reads
-    For C[0,1]: Read A row 0 (4 tiles) + B col 1 (4 tiles) = 8 DRAM reads
-    ...
-    Total for row 0 of C: 4 outputs x 8 reads = 32 DRAM reads
-    But A row 0 could be reused! Wasted: 3 x 4 = 12 redundant reads of A row 0
+With the blocking strategy and K-blocking described earlier, the core computes an
+entire ``3x3`` ``C_block`` at a time and splits the inner dimension into K-blocks.
+For any given core, every tile of ``A`` and ``B`` will be read exactly once.
+Since each core computes only a subset of the output tiles in ``C_block``, it needs
+to read only ``M_block_tiles * Kt`` tiles from ``A`` and ``Kt * N_block_tiles`` tiles from ``B``,
+which for this example means 18 tiles from ``A`` and 18 tiles from ``B``.
+Each of the ``num_cores = 9`` cores read this many tiles for a total of
+``num_cores * (M_block_tiles * Kt + Kt * N_block_tiles) = 9 * (3 * 6 + 6 * 3) = 324`` tile reads.
 
-
-    OPTIMIZED APPROACH: Group outputs into blocks, reuse data within blocks
-    =======================================================================
-
-    Assign a BLOCK of output tiles to each core (e.g., 2x2 tiles per core):
-
-       +----+----+----+----+
-       | C0 | C0 | C1 | C1 |   <- Core 0 computes top-left 2x2 block
-       +----+----+----+----+      Core 1 computes top-right 2x2 block
-       | C0 | C0 | C1 | C1 |
-       +----+----+----+----+
-       | C2 | C2 | C3 | C3 |   <- Core 2 computes bottom-left 2x2 block
-       +----+----+----+----+      Core 3 computes bottom-right 2x2 block
-       | C2 | C2 | C3 | C3 |
-       +----+----+----+----+
-
-    Now Core 0 can:
-    1. Read A rows 0-1 once (a "block" of A)
-    2. Read B columns 0-1 once (a "block" of B)
-    3. Compute partial products for **all 4 output tiles** simultaneously
-    4. Accumulate partial results in L1 (intermediate buffer)
-    5. Repeat for next block along K dimension
-    6. Write final results only once
-
-This blocking strategy reduces DRAM traffic by reusing input tiles across multiple
-output tiles computed by the same core. Note that data is not reused across cores.
-As an example, in the diagram above, both core 0 and core 1 read rows 0 and 1 of matrix ``A``.
+Thus the blocking strategy reduces the total number of tile reads by a factor of ``3``
+for this example.
+Such a reduction can produce significant performance improvements when the operation is
+memory-bound.
 
 
 Blocked Matrix Multiplication in TT-Metalium
@@ -636,18 +610,18 @@ In the context of blocked matrix multiplication, this results in the following p
 * The compute kernel produces a block of partial results into an intermediate
   CB using ``cb_reserve_back``, ``pack_tile`` and ``cb_push_back``.
 * On the next K-block, the same compute kernel reloads these partial results from the CB so it can
-  accumulate the next K-block's contribution.
-  It calls ``cb_wait_front`` to ensure the partial tiles are available, reads them
-  and then uses ``cb_pop_front`` to indicate they have been consumed.
-* The kernel computes another K-block's contribution and adds it to the partial result
+  accumulate the next K-block's contributions.
+  It calls ``cb_wait_front`` to ensure the previous partial results are available, reads them
+  and uses ``cb_pop_front`` to indicate they have been consumed.
+* The kernel computes another K-block's contributions and adds them to the partial results.
 * If this is not the last K-block, write the updated partial results back to the intermediate CB
   (again via ``reserve_back`` / ``pack_tile`` / ``push_back``) to be used in the next iteration.
-* If this is the last K-block, it writes the fully accumulated tiles into a separate output CB
+* If this is the last K-block, write the fully accumulated tiles into a separate output CB
   (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for writer kernel to consume.
 
-So the CB holding partials is never treated as random L1 memory; it is still a FIFO queue.
+As can be seen, the CB holding partial results is not treated as raw memory array; it is still a FIFO queue.
 What changes is who consumes and produces that queue over time: the compute kernel both produces
-and later consumes tiles from the same CB index, using the standard reserve/push/wait/pop protocol
+and later consumes tiles from the same CB, using the standard reserve/push/wait/pop protocol
 to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
 final outputs.
 
@@ -656,41 +630,54 @@ Exercise 2: Multi Core Matrix Multiplication with Data Reuse
 ============================================================
 
 In this exercise, you will implement a blocked multi-core matrix multiplication that
-implements data reuse on the device, based on the blocking and intermediate-buffer ideas described above.
+implements data reuse on the device, based on the blocking and intermediate CB ideas
+described above.
 You will compare performance to the multi-core implementation with equivalent
 core grid sizes from Exercise 1.
 
 Steps
 -----
 
-#. **Create a new program for data reuse**
-   Starting from your multi-core matrix multiplication program from Exercise 1, extend it to add
-   blocking variables and an intermediate circular buffer.
+#. Create a new program for data reuse.
+   Make a copy of your multi-core matrix multiplication program from Exercise 1,
+   then extend it to add blocking variables and an intermediate CB, as described
+   in the following steps.
+   Make sure matrix and tile sizes are parameterizable and set to the same values
+   as in previous exercises: ``A``: ``640x320``, and ``B``: ``320x640``.
+   Use predefined variables ``TILE_HEIGHT`` and ``TILE_WIDTH`` to compute the number of tiles.
+   As before, you can assume that ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``,
+   and ``K`` are divisible by ``TILE_HEIGHT``.
 
-#. Set fixed value for ``K_block_tiles``
-   Define ``K_block_tiles`` to be a parameter and start by setting it to ``2``. This ensures that
-   all the data fits into on-chip SRAM.
+#. Set fixed value for the ``K_block_tiles`` parameter.
+   This parameter needs to be chosen so it divides ``Kt`` evenly.
+   Given that tile size is fixed to ``32x32`` on all Tenstorrent architectures,
+   as of the time of this writing, then ``Kt = 320 / 32 = 10`` for this lab.
+   Given this, the only meaningful values for ``K_block_tiles`` are ``2`` or ``5``.
+   Start by setting this parameter to ``2``.
+   Starting with a lower value increases likelihood of data fitting into the on-chip SRAM,
+   since lower ``K_block_tiles`` means fewer tiles in each slab.
+   Should the tile size change in the future, the value of ``K_block_tiles`` should
+   be adjusted accordingly.
 
-#. Determine appropriate values for other blocking variables, based on the core grid size
-   and the matrix sizes (``640x320`` by ``320x640``). Use predefined variables ``TILE_HEIGHT``
-   and ``TILE_WIDTH`` to compute the number of tiles. As before, you can assume that
-   ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``, and ``K`` are divisible by ``TILE_HEIGHT``.
-   Allow core grid size to be specified as a parameter, but assume that the number of tiles divides evenly into the
-   number of cores in the appropriate dimension.
+#. Assume core grid is parameterizable, then determine appropriate values for other
+   blocking variables, based on the core grid size and the matrix sizes.
+   Also assume that the number of tiles divides evenly into the number of cores in the
+   corresponding dimension.
 
 #. Size circular buffers based on the blocking variables, keeping in mind the following:
 
-   - Input CBs need to store ``A_slab`` and ``B_slab`` and should use double buffering.
-   - Output CB needs to store ``C_block``, and should not use double buffering.
+   - Input CBs need to store full ``A_slab`` and ``B_slab`` and should use double buffering.
+   - Output CB needs to store full ``C_block``, and should not use double buffering.
      Since each core computes a whole ``C_block``, there is no need to double buffer.
-   - Intermediate CB needs to store the partial results, whose size is the same as ``C_block``.
-     Since the same kernel will both produce and consume the partial results, no double buffering
-     is needed.
+   - Intermediate CB needs to store the partial results, whose size is the same as full ``C_block``.
+     Since the same kernel will both produce and consume the partial results, double buffering
+     would not provide any benefit.
 
 #. Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
-   Reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers.
+   Reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers
+   in the same order that the compute kernel will use them.
    Order tiles within each slab in the CB in row-major order.
-   Writer kernel should read the ``C_block`` tiles from the circular buffer in row-major order and write
+   Writer kernel should read the ``C_block`` tiles from the output circular buffer in row-major order and write
    them to the output tensor in appropriate locations.
 
 #. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
@@ -699,7 +686,7 @@ Steps
      Given that matrix multiplication results will be written into either the output or intermediate
      buffers, you can use either of the two circular buffer indices in call to ``mm_init``.
      This is because ``mm_init`` uses the output circular buffer index only to determine output data
-     format related parameters, which are the same for both the output and intermediate buffers.
+     format related parameters, which are the same for both the output and intermediate CBs.
    * An efficient way to accumulate partial results is to use the destination register array.
      Recall that the ``matmul_tiles`` function adds to the existing values in the destination register
      rather than overwriting existing content. Therefore, if partial sum is first loaded into
@@ -707,22 +694,25 @@ Steps
      register in one operation.
    * Storing partial results into the intermediate CB is done in the same manner as storing
      the final results into the output buffer. However, loading data from the intermediate buffer
-     into the destination register requires a new operation: ``copy_tile(in_cb_id, in_tile_index, dst_tile_index)``,
-     defined in ``tt_metal/include/compute_kernel_api/tile_move_copy.h``.
-     This operation copies a tile from the intermediate CB to the destination register array
-     at specified index.
-     Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
-     to set up the Tensix engine for copy operation. Since the compute kernel code will alternate
-     between copying data and multiplying tiles, after the copy operaiton completes, we
-     need to call ``mm_init_short(in0_cb_id, in1_cb_id)`` to set up the Tensix Engine for
-     multiplication again.
-     Observe that we are calling ``_short`` versions of the initialization functions
-     (both ``mm_init_short`` and ``copy_tile_to_dst_init_short``), which are faster
-     than the full versions. The first call to ``mm_init`` performs more initialization steps that are no
-     longer needed in subsequent calls, and these operations are in common to both the copy and multiplication
-     operations, which is why ``_short`` versions are sufficient for later calls.
-     For optimal performance, **make sure to call these initialization functions only when required**.
-   * Remember that ``tile_regs_acquire`` sets all the tiles in the destination register array to 0.
+     into the destination register requires a new operation:
+
+     - ``copy_tile(in_cb_id, in_tile_index, dst_tile_index)`` defined in
+       ``tt_metal/include/compute_kernel_api/tile_move_copy.h`` copies a tile from the intermediate
+       CB to the destination register array at the specified index.
+     - Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
+       to set up the Tensix engine for copy operation.
+     - Since the compute kernel code will alternate between copying data and multiplying tiles,
+       after the copy operation completes, we need to call ``mm_init_short(in0_cb_id, in1_cb_id)``
+       to set up the Tensix Engine for multiplication again.
+       Observe that we are calling ``_short`` versions of the initialization functions
+       (both ``mm_init_short`` and ``copy_tile_to_dst_init_short``), which are faster
+       than the "full" versions. The first call to ``mm_init`` performs more initialization
+       steps that are no longer needed in subsequent calls, and these operations are in common to
+       both the copy and multiplication operations, which is why the ``_short`` versions are
+       sufficient for later calls.
+     - For optimal performance, **make sure to call these initialization functions only when required**.
+   * Remember that an efficient way to initialize all the tiles in the destination register array
+     to ``0`` is to call ``tile_regs_acquire``.
    * Remember that ``tile_regs_acquire`` does more than just set destination register array to 0.
      As such, it must always be called before using the destination register.
      Specifically, it must be called before calling ``copy_tile``, but does **not** need to be called
@@ -732,32 +722,36 @@ Steps
      number of tiles for the whole block of partial results at once. However, a simpler option is
      to just push and pop one tile at a time. This is possible because the i, j loop goes in
      the same order for every block.
-     Similar reasoning applies to the output buffer.
      Don't forget to call ``cb_pop_front`` for the intermediate CB at appropriate time to
      free up space for the next iteration.
+   * Similar reasoning applies to the output circular buffer. However, given that the output CB is written by the
+     compute kernel and read by the writer kernel, it is better for the compute kernel to push one tile at a time
+     to allow the writer kernel to start writing the results as soon as they are available.
+   * When writing the final results for the ``C_block`` tiles into the output CB, write the tiles
+     in row-major order, as the writer kernel expects.
 
 
-#. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels.
+#. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels
+   on each core.
    Note that in this case it is not required to use the ``split_work_to_cores`` function,
    because we are making a simplifying assumption that number of tiles divides evenly into the
    number of cores in the appropriate dimension. You can simply iterate over the ``x`` and ``y``
    dimensions of the core grid, construct ``CoreCoord`` for each coordinate and set the runtime
    arguments for the corresponding core.
 
-#. **Verify correctness**
-
-   Run your data reuse implementation and compare the output tensor to the reference implementation
+#. Run your data reuse implementation and compare the output tensor to the reference implementation
    to ensure that the results are correct.
 
-#. **Profile and compare performance**
-
-   Finally, profile your data reuse implementation using the device profiler for the following cases:
+#. Finally, profile your data reuse implementation using the device profiler for the following cases:
 
    * ``5x5`` core grid
    * ``10x10`` core grid
 
    Compare the firmware time of the data reuse implementation against the basic multi-core implementation
    with equivalent core grid sizes from Exercise 1.
+
+#. Repeat the previous steps for the other value of ``K_block_tiles`` (``5``).
+
 
 **Important Note**
 
@@ -773,31 +767,31 @@ There are many other ways in which the code could be further optimized. Here we 
 
 #. **Use multiple destination registers in the destination register array.**
    As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-   While previously we only used a single tile in the destination register array, the TT-Metalium
+   While so far we only used a single tile in the destination register array, the TT-Metalium
    programming model exposes the array holding up to 8 tiles of data.
    We could leverage this extra storage to keep multiple output tiles active at once.
-   By doing this, you can amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
+   By doing this, we could amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
    data is packed into CBs. Conceptually,  instead of computing a single output tile, packing it, and then moving on
-   to the next, you compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
+   to the next, we compute a small rectangular patch (up to ``8`` tiles) of the output in one shot while the
    corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
-   you pack all of its tiles out together in a batch.
+   we pack all of its tiles out together in a batch.
    This better matches the hardware's vectorization and register file structure and typically provides a throughput improvement.
 
 #. **Subblocking the Output**
-   On top of using multiple destination registers, you can go further by introducing subblocking:
-   instead of treating everything a core is responsible for as one big output region, you break
+   On top of using multiple destination registers, we could go further by introducing subblocking:
+   instead of treating everything a core is responsible for as one big output region, we break
    that region into smaller rectangular patches. The main motivation for this is reduction in on-chip memory usage.
    A smaller patch means fewer output tiles need to live in registers at once and fewer partial results need to be
-   stored in the intermediate buffer. That makes it easier to keep the active data set within on-chip memory limits,
+   stored in the intermediate CB. That makes it easier to keep the active data set within on-chip memory limits,
    allowing more aggressive blocking along the inner dimension, and often enables larger overall matrix sizes without
    exceeding on-chip memory limits.
 
    Mechanically, subblocking just adds one more level of tiling around the loops you already have.
-   Rather than sweeping the entire per-core output area in a single nested loop, you first step over patches,
-   and inside each patch you iterate over its local tile coordinates. For each patch you reload its partial
+   Rather than sweeping the entire per-core output area in a single nested loop, we first step over patches,
+   and inside each patch we iterate over its local tile coordinates. For each patch we reload its partial
    results into the destination registers, run the inner dimension accumulation for that patch, and then
    store updated results back to the appropriate buffer. The overall pattern of blocking along the inner dimension,
-   using an intermediate buffer for partial results, and exploiting multiple destination registers stays the same.
+   using an intermediate CB for partial results, and exploiting multiple destination registers stays the same.
    Subblocking simply applies it to a smaller output region at a time so the live data footprint is more tightly controlled.
 
 #. **Sharing Memory for Output and Intermediate CBs**
@@ -806,17 +800,18 @@ There are many other ways in which the code could be further optimized. Here we 
    we always finish consuming one before we start writing the other.
    Dedicating a separate region for partial results means less room for inputs or larger tiles.
 
-   In practice, this is done by configuring a single circular buffer allocation and exposing it through two logical views
-   (two different CB indices) that point into the same physical memory. The kernel then enforces a strict ordering:
+   In practice, sharing memory between the output and intermediate CBs can be achieved by configuring
+   a single circular buffer allocation and exposing it through two logical views
+   (two different CB indices) that point into the same physical memory. The compute kernel then enforces a strict ordering:
    wait for all tiles in a given range to be written out, reuse that range as intermediate storage for partials,
    and only after those partials are fully consumed reuse it again for final output.
 
 #. **Batching Tile Reads and Writes**
    Another possible optimization is to read multiple tiles that are contiguous in memory, instead of one tile at a time.
-   In the exercises so far, each tile for ``A`` or ``B`` is fetched with its own DRAM read, which is simple but incurs a
-   lot of small transfers and per-read overhead. Because the matrices are stored in tiled layout, with tiles stored in row-major order,
-   the tiles needed for a contiguous segment of a row are also contiguous in memory.
-   That means a core can reserve space for multiple tiles (e.g. an entire row slice of a K-block) in its circular buffer and then
+   In the exercises so far, each tile for ``A`` or ``B`` is fetched with its own DRAM read, which is simple but involves
+   multiple transfers, which may result in larger per-read overhead. Because the matrices are stored in tiled layout, with
+   tiles stored in row-major order, the tiles needed for a contiguous segment of a row are also contiguous in memory.
+   That means a core could reserve space for multiple tiles (e.g. an entire row slice of a K-block) in its circular buffer and then
    read all those tiles at once, reducing the number of DRAM transactions, which usually improves effective bandwidth,
    and lowers the per-tile cost of getting data into on-chip SRAM.
 
