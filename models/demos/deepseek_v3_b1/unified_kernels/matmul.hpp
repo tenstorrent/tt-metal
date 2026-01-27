@@ -77,7 +77,7 @@ struct Matmul {
     //   pop_in0 - whether to pop in0 after compute (default true)
     //   pop_in1 - whether to pop in1 after compute (default true)
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1>
+    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1, bool skip_init = false>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -123,10 +123,18 @@ struct Matmul {
                 tile_regs_release();
             } else {
                 // Use standard matmul API for multiple output tiles
-                // Process in blocks of up to 256 tiles (max DST size)
-                mm_block_init(args.in0, args.in1, args.out, transpose, out_subblock_w, out_subblock_h, in0_block_w);
+                // DST register size depends on sync mode and accumulator precision:
+                //   Half-sync: 8 tiles (FP16) or 4 tiles (FP32)
+                //   Full-sync: 16 tiles (FP16) or 8 tiles (FP32)
+                // DST_ACCUM_MODE = true means FP32 accumulator (half the tiles)
+                constexpr uint32_t base_dst_size = (DST_SYNC_MODE == DstSync::SyncFull) ? 16 : 8;
+                constexpr uint32_t max_dst_size = DST_ACCUM_MODE ? (base_dst_size / 2) : base_dst_size;
 
-                constexpr uint32_t max_dst_size = 256;
+                if constexpr (!skip_init) {
+                    mm_block_init(args.in0, args.in1, args.out, transpose, out_subblock_w, out_subblock_h, in0_block_w);
+                } else {
+                    mm_block_init_short(args.in0, args.in1, transpose, out_subblock_w, out_subblock_h, in0_block_w);
+                }
                 constexpr uint32_t num_blocks = (out_w + max_dst_size - 1) / max_dst_size;
 
                 uint32_t block_start = 0;
