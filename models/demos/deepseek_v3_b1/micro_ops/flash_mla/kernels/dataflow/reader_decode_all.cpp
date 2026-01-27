@@ -231,22 +231,59 @@ void kernel_main() {
                             k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
                         }
 
-                        // Page-based reads with per-page multicast pipelining
-                        // Each page is read, barriered, then NCRISC multicasts it immediately
-                        uint32_t src_addr_lo = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
+                        // Transaction ID pipelining: issue 2 reads before waiting (double buffering)
+                        // This overlaps DRAM read N+1 with multicast of page N
+                        constexpr uint32_t NUM_TRIDS = 2;  // Double buffering
+
+                        // src_base_addr is the local address within DRAM (low 32 bits of NOC addr)
+                        // src_offset starts at 0 and increments by page_size for each page
+                        uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
+                        uint32_t src_offset = 0;
                         uint32_t dst_addr = k_write_ptr;
-                        for (uint32_t page = 0; page < k_num_pages; ++page) {
-                            noc_async_read_one_packet_with_state(src_addr_lo, dst_addr, vc);
-                            noc_async_read_barrier();  // Wait for this page to be ready
 
-                            // Store page address for NCRISC and signal it's ready
-                            *k_addr_for_ncrisc_ptr = dst_addr;
-                            noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
+                        // Track addresses for each in-flight trid
+                        uint32_t dst_addrs[NUM_TRIDS];
+                        uint32_t curr_trid = 1;
+                        uint32_t wait_trid = 1;
+                        uint32_t pages_issued = 0;
+                        uint32_t pages_completed = 0;
 
-                            src_addr_lo += k_page_size;
+                        // Issue first NUM_TRIDS reads (fill pipeline)
+                        for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < k_num_pages; ++i) {
+                            noc_async_read_set_trid(curr_trid);
+                            dst_addrs[curr_trid - 1] = dst_addr;
+                            noc_async_read_one_packet_with_state_with_trid(
+                                src_base_addr, src_offset, dst_addr, curr_trid);
+                            src_offset += k_page_size;
                             dst_addr += k_page_size;
+                            curr_trid = (curr_trid % NUM_TRIDS) + 1;
+                            pages_issued++;
                         }
-                        // No barrier here - already done per-page above
+
+                        // Main loop: wait for oldest, signal, issue next
+                        while (pages_completed < k_num_pages) {
+                            // Wait for oldest read to complete
+                            noc_async_read_barrier_with_trid(wait_trid);
+
+                            // Signal NCRISC that this page is ready
+                            *k_addr_for_ncrisc_ptr = dst_addrs[wait_trid - 1];
+                            noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
+                            pages_completed++;
+
+                            // Issue next read if more pages remain
+                            if (pages_issued < k_num_pages) {
+                                noc_async_read_set_trid(curr_trid);
+                                dst_addrs[curr_trid - 1] = dst_addr;
+                                noc_async_read_one_packet_with_state_with_trid(
+                                    src_base_addr, src_offset, dst_addr, curr_trid);
+                                src_offset += k_page_size;
+                                dst_addr += k_page_size;
+                                curr_trid = (curr_trid % NUM_TRIDS) + 1;
+                                pages_issued++;
+                            }
+
+                            wait_trid = (wait_trid % NUM_TRIDS) + 1;
+                        }
                     } else {
                         DeviceZoneScopedN("mcast-sender-interleaved-read");
                         const uint32_t k_batch_offset = kv_batch * num_kv_heads * St * DHt;
