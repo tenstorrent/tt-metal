@@ -144,18 +144,19 @@ def create_compute_heavy_tensors(device):
 
 
 def run_left_only(device, tensors, num_iterations=1, use_signpost=False):
-    """Run RMS norm on left half only."""
+    """Run RMS norm on left half only using launch_composite."""
+    # Create branch descriptor ONCE
+    left_branch = ttnn.experimental.programs.rms_norm(
+        tensors["left"]["input"],
+        epsilon=1e-5,
+        weight=tensors["left"]["weight"],
+    )
+
     if use_signpost:
         signpost("left_only_start")
 
     for _ in range(num_iterations):
-        left_desc, left_output = ttnn.experimental.programs.rms_norm(
-            tensors["left"]["input"],
-            epsilon=1e-5,
-            weight=tensors["left"]["weight"],
-        )
-        io_tensors = [tensors["left"]["input"], tensors["left"]["weight"], left_output]
-        ttnn.generic_op(io_tensors, left_desc)
+        (left_output,) = ttnn.experimental.launch_composite([left_branch])
 
     ttnn.synchronize_device(device)
 
@@ -166,18 +167,19 @@ def run_left_only(device, tensors, num_iterations=1, use_signpost=False):
 
 
 def run_right_only(device, tensors, num_iterations=1, use_signpost=False):
-    """Run RMS norm on right half only."""
+    """Run RMS norm on right half only using launch_composite."""
+    # Create branch descriptor ONCE
+    right_branch = ttnn.experimental.programs.rms_norm(
+        tensors["right"]["input"],
+        epsilon=1e-5,
+        weight=tensors["right"]["weight"],
+    )
+
     if use_signpost:
         signpost("right_only_start")
 
     for _ in range(num_iterations):
-        right_desc, right_output = ttnn.experimental.programs.rms_norm(
-            tensors["right"]["input"],
-            epsilon=1e-5,
-            weight=tensors["right"]["weight"],
-        )
-        io_tensors = [tensors["right"]["input"], tensors["right"]["weight"], right_output]
-        ttnn.generic_op(io_tensors, right_desc)
+        (right_output,) = ttnn.experimental.launch_composite([right_branch])
 
     ttnn.synchronize_device(device)
 
@@ -188,28 +190,26 @@ def run_right_only(device, tensors, num_iterations=1, use_signpost=False):
 
 
 def run_sequential(device, tensors, num_iterations=1, use_signpost=False):
-    """Run left and right RMS norms sequentially."""
+    """Run left and right RMS norms sequentially using launch_composite."""
+    # Create branch descriptors ONCE
+    left_branch = ttnn.experimental.programs.rms_norm(
+        tensors["left"]["input"],
+        epsilon=1e-5,
+        weight=tensors["left"]["weight"],
+    )
+    right_branch = ttnn.experimental.programs.rms_norm(
+        tensors["right"]["input"],
+        epsilon=1e-5,
+        weight=tensors["right"]["weight"],
+    )
+
     if use_signpost:
         signpost("sequential_start")
 
     for _ in range(num_iterations):
-        # Left half
-        left_desc, left_output = ttnn.experimental.programs.rms_norm(
-            tensors["left"]["input"],
-            epsilon=1e-5,
-            weight=tensors["left"]["weight"],
-        )
-        left_io = [tensors["left"]["input"], tensors["left"]["weight"], left_output]
-        ttnn.generic_op(left_io, left_desc)
-
-        # Right half
-        right_desc, right_output = ttnn.experimental.programs.rms_norm(
-            tensors["right"]["input"],
-            epsilon=1e-5,
-            weight=tensors["right"]["weight"],
-        )
-        right_io = [tensors["right"]["input"], tensors["right"]["weight"], right_output]
-        ttnn.generic_op(right_io, right_desc)
+        # Run left then right (sequential - 2 separate dispatches)
+        (left_output,) = ttnn.experimental.launch_composite([left_branch])
+        (right_output,) = ttnn.experimental.launch_composite([right_branch])
 
     ttnn.synchronize_device(device)
 
@@ -220,36 +220,24 @@ def run_sequential(device, tensors, num_iterations=1, use_signpost=False):
 
 
 def run_parallel(device, tensors, num_iterations=1, use_signpost=False):
-    """Run left and right RMS norms in parallel using merged descriptors."""
+    """Run left and right RMS norms in parallel - creates branches each iteration."""
     if use_signpost:
         signpost("parallel_start")
 
     for _ in range(num_iterations):
-        # Create descriptors for both halves
-        left_desc, left_output = ttnn.experimental.programs.rms_norm(
+        # Create descriptors inside the loop (measures descriptor creation overhead)
+        left_branch = ttnn.experimental.programs.rms_norm(
             tensors["left"]["input"],
             epsilon=1e-5,
             weight=tensors["left"]["weight"],
         )
-        right_desc, right_output = ttnn.experimental.programs.rms_norm(
+        right_branch = ttnn.experimental.programs.rms_norm(
             tensors["right"]["input"],
             epsilon=1e-5,
             weight=tensors["right"]["weight"],
         )
-
-        # Merge and execute
-        io_tensors = [
-            tensors["left"]["input"],
-            tensors["left"]["weight"],
-            left_output,
-            tensors["right"]["input"],
-            tensors["right"]["weight"],
-            right_output,
-        ]
-        ttnn.experimental.launch_composite(
-            [(left_desc, left_output), (right_desc, right_output)],
-            io_tensors,
-        )
+        # launch_composite always merges; device cache handles compiled program caching
+        left_output, right_output = ttnn.experimental.launch_composite([left_branch, right_branch])
 
     ttnn.synchronize_device(device)
 
@@ -260,37 +248,36 @@ def run_parallel(device, tensors, num_iterations=1, use_signpost=False):
 
 
 def run_parallel_cached(device, tensors, num_iterations=1, use_signpost=False):
-    """Run parallel with descriptor caching (create descriptors once)."""
-    # Create descriptors ONCE outside the loop
-    left_desc, left_output = ttnn.experimental.programs.rms_norm(
+    """
+    Run parallel using launch_composite() with automatic caching.
+
+    Creates branch descriptors ONCE outside the loop. launch_composite()
+    automatically caches the merged descriptor based on branch identity.
+
+    This is the ideal usage pattern:
+    - Create branches once (outside loop)
+    - Call launch_composite with same branches in loop
+    - Merged descriptor is cached automatically
+    - Device program cache handles compiled program caching
+    """
+    # Create branch descriptors ONCE outside the loop
+    left_branch = ttnn.experimental.programs.rms_norm(
         tensors["left"]["input"],
         epsilon=1e-5,
         weight=tensors["left"]["weight"],
     )
-    right_desc, right_output = ttnn.experimental.programs.rms_norm(
+    right_branch = ttnn.experimental.programs.rms_norm(
         tensors["right"]["input"],
         epsilon=1e-5,
         weight=tensors["right"]["weight"],
     )
 
-    # Merge ONCE
-    merged_desc = ttnn.ProgramDescriptor.merge_descriptors([left_desc, right_desc])
-
-    # Build io_tensors ONCE
-    io_tensors = [
-        tensors["left"]["input"],
-        tensors["left"]["weight"],
-        left_output,
-        tensors["right"]["input"],
-        tensors["right"]["weight"],
-        right_output,
-    ]
-
     if use_signpost:
         signpost("parallel_cached_start")
 
     for _ in range(num_iterations):
-        ttnn.generic_op(io_tensors, merged_desc)
+        # launch_composite caches the merged descriptor automatically
+        left_output, right_output = ttnn.experimental.launch_composite([left_branch, right_branch])
 
     ttnn.synchronize_device(device)
 

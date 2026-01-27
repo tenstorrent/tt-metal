@@ -906,41 +906,29 @@ def test_experimental_rms_norm_disjoint_cores(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Create program descriptors using the experimental API
-    # Output tensors are created internally by the device operation
-    desc_1, output_tensor_1 = ttnn.experimental.programs.rms_norm(
+    # Create branch descriptors using the experimental API
+    # Output tensors are created internally by the BranchDescriptor
+    branch_1 = ttnn.experimental.programs.rms_norm(
         input_tensor_1,
         core_range_1,
         epsilon=eps,
         weight=weight_tensor_1,
     )
 
-    desc_2, output_tensor_2 = ttnn.experimental.programs.rms_norm(
+    branch_2 = ttnn.experimental.programs.rms_norm(
         input_tensor_2,
         core_range_2,
         epsilon=eps,
         weight=weight_tensor_2,
     )
 
-    logger.info(f"Created RMS norm descriptor 1 with {len(desc_1.kernels)} kernels")
-    logger.info(f"Created RMS norm descriptor 2 with {len(desc_2.kernels)} kernels")
-
-    # Build io_tensors list for all tensors referenced by the program
-    io_tensors = [
-        input_tensor_1,
-        weight_tensor_1,
-        output_tensor_1,
-        input_tensor_2,
-        weight_tensor_2,
-        output_tensor_2,
-    ]
+    logger.info(f"Created RMS norm branch 1 with {len(branch_1.descriptor.kernels)} kernels")
+    logger.info(f"Created RMS norm branch 2 with {len(branch_2.descriptor.kernels)} kernels")
 
     # Launch composite operation using the experimental API
+    # Outputs are returned from launch_composite
     logger.info("Executing merged RMS norm program via launch_composite...")
-    ttnn.experimental.launch_composite(
-        [(desc_1, output_tensor_1), (desc_2, output_tensor_2)],
-        io_tensors,
-    )
+    output_tensor_1, output_tensor_2 = ttnn.experimental.launch_composite([branch_1, branch_2])
 
     # Verify results
     torch_output_1 = ttnn.to_torch(output_tensor_1).reshape(torch_golden_1.shape)
@@ -1162,13 +1150,12 @@ def test_programs_layer_norm_auto_factory_selection(device):
     core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
     # programs.layer_norm should auto-select non-sharded factory
-    desc, output = ttnn.experimental.programs.layer_norm(input_tensor, core_range, epsilon=eps)
-    logger.info(f"Non-sharded: Created descriptor with {len(desc.kernels)} kernels")
-    assert len(desc.kernels) > 0
+    branch = ttnn.experimental.programs.layer_norm(input_tensor, core_range, epsilon=eps)
+    logger.info(f"Non-sharded: Created branch with {len(branch.descriptor.kernels)} kernels")
+    assert len(branch.descriptor.kernels) > 0
 
     # Execute and verify
-    io_tensors = [input_tensor, output]
-    ttnn.experimental.launch_composite([(desc, output)], io_tensors)
+    (output,) = ttnn.experimental.launch_composite([branch])
 
     torch_golden = torch.nn.functional.layer_norm(torch_input.float(), (w,), eps=eps).to(torch.bfloat16)
     torch_output = ttnn.to_torch(output).reshape(torch_golden.shape)
@@ -1201,13 +1188,12 @@ def test_programs_layer_norm_auto_factory_selection(device):
     )
 
     # programs.layer_norm should auto-select sharded factory (no core_range needed)
-    desc_sharded, output_sharded = ttnn.experimental.programs.layer_norm(input_tensor_sharded, epsilon=eps)
-    logger.info(f"Sharded: Created descriptor with {len(desc_sharded.kernels)} kernels")
-    assert len(desc_sharded.kernels) > 0
+    branch_sharded = ttnn.experimental.programs.layer_norm(input_tensor_sharded, epsilon=eps)
+    logger.info(f"Sharded: Created branch with {len(branch_sharded.descriptor.kernels)} kernels")
+    assert len(branch_sharded.descriptor.kernels) > 0
 
     # Execute and verify
-    io_tensors_sharded = [input_tensor_sharded, output_sharded]
-    ttnn.experimental.launch_composite([(desc_sharded, output_sharded)], io_tensors_sharded)
+    (output_sharded,) = ttnn.experimental.launch_composite([branch_sharded])
 
     torch_golden_sharded = torch.nn.functional.layer_norm(torch_input_sharded.float(), (w,), eps=eps).to(torch.bfloat16)
     torch_output_sharded = ttnn.to_torch(output_sharded).reshape(torch_golden_sharded.shape)
