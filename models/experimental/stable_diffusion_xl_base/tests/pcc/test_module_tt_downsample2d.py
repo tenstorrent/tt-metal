@@ -25,6 +25,9 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 320, 128, 128), 0),
         ((1024, 1024), (1, 640, 64, 64), 1),
+        # 512x512 image resolution
+        ((512, 512), (1, 320, 64, 64), 0),
+        ((512, 512), (1, 640, 32, 32), 1),
     ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])
@@ -75,7 +78,7 @@ def test_downsample2d(
     ttnn_input_tensor = to_channel_last_ttnn(
         torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG, ttnn.TILE_LAYOUT
     )
-
+    print(ttnn_input_tensor.shape)
     ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor, input_shape)
 
     output_tensor = from_channel_last_ttnn(
