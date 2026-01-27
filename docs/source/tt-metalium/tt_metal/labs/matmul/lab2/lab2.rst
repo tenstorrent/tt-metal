@@ -125,7 +125,9 @@ For example, if the matrix dimensions are ``288x288`` and the tile size is ``32x
 tiles is ``9 * 9 = 81``. Let us assume we choose to implement the matrix multiplication on ``11`` cores
 because other cores are needed for other tasks. Since ``81 / 11 = 7.36``, and the number of output tiles must be
 an integer, we choose ``8`` as the maximum number of output tiles per core.
-As a result, ``10`` cores are assigned ``8`` output tiles each, and the last core processes the remaining one tile.
+One way to divide the tiles is to assign the first four cores ``8`` output tiles each, and assign the remaining
+seven cores ``7`` output tiles each.
+ 
 The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
@@ -193,19 +195,19 @@ The following properties describe the output of ``tt::tt_metal::split_work_to_co
   ``all_cores`` may contain fewer cores than ``core_grid``.
 * ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
 * The total amount of work ``work_units`` is always fully assigned:
-  ``work_per_core_1 * num_cores_in_core_group_1 + work_per_core_2 * num_cores_in_core_group_2 == work_units``.
+  ``work_per_core_1 * core_group_1.num_cores() + work_per_core_2 * core_group_2.num_cores() == work_units``.
 * The function automatically handles uneven work distribution; there is no need to manage edge cases manually.
 
 
-Given the earlier example of splitting ``81`` output tiles across ``11`` cores, ``split_work_to_cores``
+Given the earlier example of splitting ``81`` output tiles across a grid with ``11`` cores, ``split_work_to_cores``
 may distribute the work as follows:
 
 * ``num_cores`` = ``11`` (all cores are used)
 * ``all_cores`` = Set containing coordinates of all ``11`` cores
-* ``core_group_1`` = Set containing coordinates of the first ``10`` cores (each processes ``8`` tiles)
-* ``core_group_2`` = Set containing a single coordinate of the last core (processes ``1`` tile)
+* ``core_group_1`` = A subset of four cores (each processing ``8`` tiles)
+* ``core_group_2`` = A subset of seven cores (each processing ``7`` tiles)
 * ``work_per_core_1`` = ``8`` (tiles per core in the primary group)
-* ``work_per_core_2`` = ``1`` (tiles for the secondary group core)
+* ``work_per_core_2`` = ``7`` (tiles for the secondary group core)
 
 
 A ``CoreRangeSet`` is a compact representation of an arbitrary set of logical cores, implemented as a collection
@@ -524,7 +526,7 @@ The underlying math is the same, but it becomes easier to verify your understand
 Blocked Matrix Multiplication with Data Reuse Pseudocode
 ========================================================
 
-The overall approach can be summarized by the following pseudo-code for a compute core:
+The overall approach can be summarized by the following pseudocode for a compute core:
 
 .. code-block:: cpp
 
