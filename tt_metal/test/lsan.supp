@@ -7,3 +7,15 @@
 # Bug: https://github.com/open-mpi/ompi/issues/12584
 # ASan Build with LeakSantizer complains about leaks in openmpi lib.
 leak:openmpi
+
+# PMIX library (part of MPI stack) has known leaks at shutdown
+leak:libpmix
+
+# Python interpreter doesn't free all memory at process exit.
+# This is intentional for performance (no point cleaning up when OS reclaims everything).
+# These show up as "leaks" but are not actual memory leaks in the traditional sense.
+leak:python3
+
+# PyTorch (libtorch_python.so) has similar intentional non-cleanup at exit.
+# These are well-known false positives when running PyTorch under LeakSanitizer.
+leak:libtorch_python
