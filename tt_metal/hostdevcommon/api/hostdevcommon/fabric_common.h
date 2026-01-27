@@ -9,6 +9,8 @@
 #include <array>
 #include <type_traits>
 
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
 namespace tt::tt_fabric {
 
 // Forward declaration to avoid including heavy host-only headers here
@@ -491,26 +493,32 @@ struct tensix_fabric_connections_l1_info_t {
 };
 
 enum RouterCommand : std::uint32_t {
-    NONE = 0,
-    ACTIVATE = 1,
-    PAUSE = 2,
-    STOP = 3,
+    RUN = 0, // ACTIVATE
+
+    //
+    PAUSE = 1,
+
+    //
+    STOP = 2,
+
+    //
+    DRAIN = 3,
+
+    RETRAIN = 4
 };
 
-// TODO: move to *_msgs.h definition
-enum RouterStateCommon : std::uint32_t {
-    INITIALIZED = 0,
-    ACTIVE = 1,
-    PAUSED = 2,
-    DRAINING = 3,
-    STOPPED = 4,
-};
 
 struct RouterStateManager {
     RouterStateCommon state;  // 4B, written by device, read by host
     uint8_t padding0[12];     //
     RouterCommand command;    // 4B, written by host, read by device
     uint8_t padding1[12];     //
+
+    // template <bool ENABLE_RISC_CPU_DATA_CACHE>
+    bool is_non_run_command_pending() const {
+        // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return command != RUN;
+    }
 };
 
 struct routing_l1_info_t {
@@ -520,7 +528,6 @@ struct routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-// <<<<<<< HEAD
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
@@ -532,15 +539,7 @@ struct routing_l1_info_t {
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
-} __attribute__((packed));
-// =======
-//     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};          // 96 bytes
-//     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
-//     intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 256 bytes
-//     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-//     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-//     uint8_t padding1[12] = {};                                              // pad to 16-byte alignment
-// };
+};
 
 // >>>>>>> 13b07bd139 ([Fabric] support router state)
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
@@ -561,7 +560,7 @@ static_assert(
 
 // Verify total struct size
 static_assert(
-    sizeof(routing_l1_info_t) == 2544,
+    sizeof(routing_l1_info_t) == 2576,
     "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
 
 struct worker_routing_l1_info_t {

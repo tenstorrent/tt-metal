@@ -626,6 +626,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
