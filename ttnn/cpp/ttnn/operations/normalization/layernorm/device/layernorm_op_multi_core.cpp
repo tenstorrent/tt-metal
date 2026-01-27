@@ -112,7 +112,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 }
 
 tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descriptor(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<CoreRangeSet>& core_range_set) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -211,14 +214,44 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_tile_rows_per_core_group_1,
-         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+    // Use provided core_range_set if available, otherwise compute from device grid
+    uint32_t num_cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_tile_rows_per_core_group_1;
+    uint32_t num_tile_rows_per_core_group_2;
+    CoreCoord grid_size;
+
+    if (core_range_set.has_value()) {
+        // Use provided CoreRangeSet
+        all_cores = core_range_set.value();
+        num_cores = all_cores.num_cores();
+        // Simple work split: distribute tile rows evenly across provided cores
+        num_tile_rows_per_core_group_1 = (num_tile_rows + num_cores - 1) / num_cores;
+        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1;
+        // When using fewer cores, some might get one less row
+        uint32_t remainder = num_tile_rows % num_cores;
+        if (remainder > 0) {
+            num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1 - 1;
+        }
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+        // Compute bounding box for grid_size
+        auto bbox = all_cores.bounding_box();
+        grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
+    } else {
+        // Original behavior: compute from device grid
+        grid_size = device->compute_with_storage_grid_size();
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_tile_rows_per_core_group_1,
+            num_tile_rows_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+    }
 
     // Create the sharded reciprocal LUT tensor if using Welford
     auto [recip_tensor, reciprocal_CB_size_bytes] =
@@ -421,8 +454,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_runtime_args.reserve(num_cores);
     compute_runtime_args.reserve(num_cores);
 
+    // Get list of cores to iterate over
+    auto core_coords = corerange_to_cores(all_cores, num_cores, true);
+
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = core_coords[i];
 
         uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
