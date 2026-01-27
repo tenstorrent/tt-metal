@@ -843,6 +843,98 @@ void process_write_packed_large(uint32_t* l1_cache) {
     cmd_ptr = data_ptr;
 }
 
+// Unicast variant of packed large write with uint32_t length and discard support
+void process_write_packed_large_unicast(uint32_t* l1_cache) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+
+    uint32_t count = cmd->write_packed_large_unicast.count;
+    uint32_t alignment = cmd->write_packed_large_unicast.alignment;
+    uint32_t write_offset_index = cmd->write_packed_large_unicast.write_offset_index;
+    uint32_t local_write_offset = write_offset[write_offset_index];
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
+
+    constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        count * sub_cmd_size / sizeof(uint32_t),
+        l1_cache);
+
+    uint32_t writes = 0;
+    CQDispatchWritePackedLargeUnicastSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeUnicastSubCmd*)l1_cache;
+
+    while (count != 0) {
+        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t length = sub_cmd_ptr->length;
+        uint32_t pad_size = align_power_of_2(length, alignment) - length;
+        
+        // Check if this is a discard transaction
+        bool is_discard = (dst_addr == CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD);
+        
+        if (!is_discard) {
+            // Normal unicast write
+            dst_addr += local_write_offset;
+            uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+            constexpr uint32_t num_dests = 1;  // Unicast only
+            
+            while (length != 0) {
+                // More data needs to be written, but we've exhausted the CB. Acquire more pages.
+                if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
+                    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
+                        // Block completion - account for all writes issued for this block before moving to next
+                        noc_nonposted_writes_num_issued[noc_index] += writes;
+                        writes = 0;
+                    });
+                }
+                // Transfer size is min(remaining_length, data_available_in_cb)
+                uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
+                uint32_t xfer_size = (length > available_data) ? available_data : length;
+                
+                noc_async_write(data_ptr, get_noc_addr_helper(dst_noc, dst_addr), xfer_size);
+                
+                writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);
+                length -= xfer_size;
+                data_ptr += xfer_size;
+                dst_addr += xfer_size;
+            }
+            
+            noc_nonposted_writes_num_issued[noc_index] += writes;
+            writes = 0;
+        } else {
+            // Discard: skip data without issuing NOC write
+            uint32_t remaining_length = length;
+            while (remaining_length != 0) {
+                if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
+                    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
+                        // No writes issued for discard
+                    });
+                }
+                uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
+                uint32_t skip_size = (remaining_length > available_data) ? available_data : remaining_length;
+                
+                data_ptr += skip_size;
+                remaining_length -= skip_size;
+            }
+        }
+
+        // Handle padded size and potential wrap
+        if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                if (will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                    pad_size -= orphan_size;
+                }
+            });
+        }
+        data_ptr += pad_size;
+
+        sub_cmd_ptr++;
+        count--;
+    }
+
+    cmd_ptr = data_ptr;
+}
+
 static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     return cmd_ptr + cmd->debug.stride;
@@ -1109,6 +1201,12 @@ re_run_command:
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
             process_write_packed_large(l1_cache);
+            break;
+
+        case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+            // DPRINT << "cmd_write_packed_large_unicast" << ENDL();
+            DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
+            process_write_packed_large_unicast(l1_cache);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:

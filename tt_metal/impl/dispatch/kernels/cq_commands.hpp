@@ -56,6 +56,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
+    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
@@ -331,6 +332,22 @@ struct CQDispatchWritePackedLargeCmd {
     uint16_t write_offset_index;
 } __attribute__((packed));
 
+// Unicast variant of packed large write with uint32_t length
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD = 0xffffffff;
+
+struct CQDispatchWritePackedLargeUnicastSubCmd {
+    uint32_t noc_xy_addr;
+    uint32_t addr;    // if 0xffffffff, data is discarded (not sent)
+    uint32_t length;  // full uint32_t range
+} __attribute__((packed));
+
+struct CQDispatchWritePackedLargeUnicastCmd {
+    uint8_t type;
+    uint16_t count;              // number of sub-cmds
+    uint16_t alignment;
+    uint16_t write_offset_index;
+} __attribute__((packed));
+
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NONE = 0x00;
 // Issue a write barrier
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
@@ -409,6 +426,7 @@ struct CQDispatchCmd {
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWritePackedLargeCmd write_packed_large;
+        CQDispatchWritePackedLargeUnicastCmd write_packed_large_unicast;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;
