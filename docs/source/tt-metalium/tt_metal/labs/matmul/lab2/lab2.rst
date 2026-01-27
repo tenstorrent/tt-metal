@@ -32,7 +32,7 @@ The key idea in multi core programs is **work distribution**, where we break a l
 ideally independent pieces and assign them to different cores to run in parallel.
 In a Single Program, Multiple Data (SPMD) computational model, each core executes the same code but operates on
 a different subset of the data. Achieving optimal performance generally requires keeping all cores busy
-(i.e. minimize idle time), and avoiding unnecessary communication.
+(i.e., minimize idle time), and avoiding unnecessary communication.
 
 Applying this principle to matrix multiplication, the computation itself is unchanged: we still multiply
 an ``MxK`` matrix ``A`` with a ``KxN`` matrix ``B`` to produce an ``MxN`` matrix ``C``, and we still
@@ -140,8 +140,8 @@ TT-Metalium includes utilities to simplify work distribution across cores.
 This is done in two steps:
 
 #. Determine the **amount** of work each core should do.
-#. Assign **specific instances of work** to specific cores, based on the amount of work each core should do
-   determined in the first step.
+#. Assign **specific instances of work** to specific cores, based on the amount of work each core should do,
+   as determined in the first step.
 
 TT-Metalium provides a utility function ``tt::tt_metal::split_work_to_cores(core_grid, work_units)``,
 which can be used to determine the amount of work each core should do.
@@ -180,9 +180,9 @@ The function returns a tuple containing several values:
 * ``CoreRangeSet core_group_1``: Primary group of cores, each handling ``work_per_core_1`` amount of work.
 * ``CoreRangeSet core_group_2``: Secondary group of cores, each handling ``work_per_core_2`` amount of work
   (empty if the work divides evenly).
-* ``uint32_t work_per_core_1``: Number of work units (e.g. output tiles) each core
+* ``uint32_t work_per_core_1``: Number of work units (e.g., output tiles) each core
   in the primary group processes.
-* ``uint32_t work_per_core_2``: Number of work units (e.g. output tiles) each core
+* ``uint32_t work_per_core_2``: Number of work units (e.g., output tiles) each core
   in the secondary group processes (0 if the work divides evenly).
 
 
@@ -259,7 +259,7 @@ information to perform only those operations that are needed for the output tile
 The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
 needs to loop over the correct number of output tiles and inner dimension tiles.
 
-All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
+All kernel arguments that need to be different between cores must be passed as runtime arguments and set differently for each core.
 This is because their values will be known only at runtime, when the work distribution is known.
 Arguments that are the same for all cores and are known at compile time can be passed as either compile-time arguments or runtime arguments.
 As discussed in Lab 1, choosing compile-time vs. runtime arguments trades off potential performance gains
@@ -275,7 +275,7 @@ Inspecting and Choosing Cores
 
 As shown earlier, the number of available compute cores on the device can be obtained using the
 ``compute_with_storage_grid_size()`` TT-Metalium C++ API. To call this API, you need to get the ``device`` object,
-which can be obtained from the program state object (i.e. ``prog_state.mesh_device.get()``).
+which can be obtained from the program state object (i.e., ``prog_state.mesh_device.get()``).
 
 In this lab, you will run matrix multiplication with a varying number of cores.
 The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
@@ -356,11 +356,11 @@ Blocked Matrix Multiplication
 =============================
 
 Instead of considering one row at a time, a more general approach is to group output tiles into
-rectangular blocks and assign such rectangular blocks to cores. For example, consider Core 1 in Figure 2
+rectangular blocks and assign such rectangular blocks to cores. For example, consider Core 1 in Figure 2,
 discussed earlier.
 Core 1 needs the first row of ``A`` and the last column of ``B`` to compute the output tile in the top right
 corner of the output, and only for that tile. Therefore, this data cannot be reused for any other computation.
-If we distribute work across e.g. ``9`` cores instead, such that each core computes ``3x3`` output tiles, then each core
+If we distribute work across e.g., ``9`` cores instead, such that each core computes ``3x3`` output tiles, then each core
 can use a row of ``A`` to produce output of three tiles in the same row of the output. Similarly, each core
 can use a column of ``B`` to produce output of three tiles in the same column of the output.
 This is shown in Figure 3.
@@ -506,7 +506,7 @@ To get the final result, we need to add partial results for all K-blocks:
 
 
 Observe that the above equations concern only a single tile of the output ``C[i][j]``.
-This computation needs to be done for all tiles in ``C_block``, i.e. for all ``i`` and ``j``
+This computation needs to be done for all tiles in ``C_block``, i.e., for all ``i`` and ``j``
 in ``0 .. M_block_tiles - 1`` and ``0 .. N_block_tiles - 1``.
 If we did this naively, we would iterate over ``i`` and ``j`` in the outer loops and then
 compute the partial result for each tile, which would not be conducive to data reuse.
@@ -637,8 +637,7 @@ described above.
 You will compare performance to the multi core implementation with equivalent
 core grid sizes from Exercise 1.
 
-Steps
------
+Follow these steps to complete the exercise:
 
 #. Create a new program for data reuse.
    Make a copy of your multi core matrix multiplication program from Exercise 1,
@@ -676,10 +675,10 @@ Steps
      would not provide any benefit.
 
 #. Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
-   Reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers
+   The reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers
    in the same order that the compute kernel will use them.
    Order tiles within each slab in the CB in row-major order.
-   Writer kernel should read the ``C_block`` tiles from the output circular buffer in row-major order and write
+   The writer kernel should read the ``C_block`` tiles from the output circular buffer in row-major order and write
    them to the output tensor in appropriate locations.
 
 #. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
@@ -816,9 +815,9 @@ There are many other ways in which the code could be further optimized. Here we 
 #. **Batching Tile Reads and Writes**
    Another possible optimization is to read multiple tiles that are contiguous in memory, instead of one tile at a time.
    In the exercises so far, each tile for ``A`` or ``B`` is fetched with its own DRAM read, which is simple but involves
-   multiple transfers, which may result in larger per-read overhead. Because the matrices are stored in tiled layout, with
+   multiple transfers, which may result in larger per-read overhead. Because the matrices are stored in a tiled layout, with
    tiles stored in row-major order, the tiles needed for a contiguous segment of a row are also contiguous in memory.
-   That means a core could reserve space for multiple tiles (e.g. an entire row slice of a K-block) in its circular buffer and then
+   That means a core could reserve space for multiple tiles (e.g., an entire row slice of a K-block) in its circular buffer and then
    read all those tiles at once, reducing the number of DRAM transactions, which usually improves effective bandwidth,
    and lowers the per-tile cost of getting data into on-chip SRAM.
 
