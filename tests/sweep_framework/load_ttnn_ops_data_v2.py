@@ -1083,7 +1083,6 @@ def find_config_line_numbers(json_path, operation_name, config_indices):
     Returns:
         Dict mapping config index to line number
     """
-    import re
 
     print(f"Finding line numbers for {operation_name} configs {config_indices}...")
 
