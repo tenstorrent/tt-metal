@@ -9,10 +9,8 @@ This script orchestrates the training of transformer models using a 3-tier archi
 - Aggregator: Averages gradients from workers
 - Optimizer: Applies optimizer updates
 """
-import os
-import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
+import sys
 import click
 import ttml
 from ttml.common.config import (

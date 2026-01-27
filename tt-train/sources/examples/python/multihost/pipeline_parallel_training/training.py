@@ -7,9 +7,8 @@
 This script orchestrates the training of transformer models (GPT-2, Llama)
 using configurations specified in YAML files.
 """
-import os
-import sys
 
+import sys
 import ttml
 from ttml.common.config import (
     load_config,
@@ -44,7 +43,7 @@ def main(config: str):
 
     # Initialize socket manager based on multihost configuration
     multihost_config = MultiHostConfig(
-        yaml_config["training_config"]["multihost_config"]
+        load_config(yaml_config["training_config"]["multihost_config"])
     )
     socket_type = (
         ttml.core.distributed.SocketType.FABRIC

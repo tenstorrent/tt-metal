@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --partition=debug
 #SBATCH --job-name=fabric_minimal
-#SBATCH --output=fabric_minimal_`%j.out
-#SBATCH --error=fabric_minimal_`%j.err
+#SBATCH --output=fabric_minimal_%j.out
+#SBATCH --error=fabric_minimal_%j.err
 
 # Set environmental variables
-export TT_METAL_HOME="/data/abustamante/tt-metal"
+export TT_METAL_HOME="/data/${USER}/tt-metal"
 export PYTHONPATH="${TT_METAL_HOME}:${PYTHONPATH}"
 source ${TT_METAL_HOME}/python_env/bin/activate
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"

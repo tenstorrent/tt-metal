@@ -89,7 +89,7 @@ def create_optimizer(model, yaml_config: dict):
 
     if use_sgd:
         sgd_cfg = ttml.optimizers.SGDConfig.make(
-            float(lr), 0.0, 0.0, float(weight_decay), False
+            float(lr), 0.0, float(weight_decay), 0.0, False
         )
         return ttml.optimizers.SGD(model.parameters(), sgd_cfg)
     else:
