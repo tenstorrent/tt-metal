@@ -57,7 +57,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
-    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
+    CQ_DISPATCH_CMD_MAX_COUNT,                        // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -343,7 +343,7 @@ struct CQDispatchWritePackedLargeUnicastSubCmd {
 
 struct CQDispatchWritePackedLargeUnicastCmd {
     uint8_t type;
-    uint16_t count;              // number of sub-cmds
+    uint16_t count;  // number of sub-cmds
     uint16_t alignment;
     uint16_t write_offset_index;
 } __attribute__((packed));
