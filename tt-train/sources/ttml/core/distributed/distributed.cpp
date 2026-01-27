@@ -35,7 +35,7 @@ void synchronize_gradients(const serialization::NamedParameters& parameters, std
 
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad()));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_axis));
         }
     }
 }
