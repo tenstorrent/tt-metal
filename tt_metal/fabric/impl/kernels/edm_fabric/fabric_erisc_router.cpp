@@ -2049,7 +2049,8 @@ void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volat
                     keep_running_pause = false;
                     break;
                 case RouterCommand::PAUSE:
-                    // nothing to do, we are paused
+                    // nothing to do, we are paused, we may as well context switch to base FW
+                    run_routing_without_noc_sync();
                     break;
                 case RouterCommand::DRAIN:
                     run_drain_step(state_manager_l1, termination_signal_ptr);
@@ -2072,9 +2073,10 @@ template <bool RISC_CPU_DATA_CACHE_ENABLED>
 FORCE_INLINE bool continue_running_main_run_loop(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr, tt_l1_ptr RouterStateManager* state_manager_l1) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
-            return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/();
-        } else {
             return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr);
+        } else {
+            return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) &&
+                   !state_manager_l1->is_non_run_command_pending /*<ENABLE_RISC_CPU_DATA_CACHE>*/ ();
         }
     } else {
         return !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr) && !state_manager_l1->is_non_run_command_pending/*<ENABLE_RISC_CPU_DATA_CACHE>*/();
@@ -2415,7 +2417,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             switch (reinterpret_cast<volatile tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
-                    if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+                    if constexpr (MY_ERISC_ID == 0) {
                         state_manager_l1->state = RouterStateCommon::RUNNING;
                     }
                     execute_main_loop();
@@ -3422,6 +3424,12 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 #endif
+    if constexpr (MY_ERISC_ID == 0) {
+        const auto* routing_table_l1 =
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+        state_manager_l1->state = RouterStateCommon::INITIALIZING;
+    }
 
     //////////////////////////////
     //////////////////////////////
