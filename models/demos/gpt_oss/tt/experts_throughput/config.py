@@ -86,7 +86,7 @@ class AllToAllDispatchConfig:
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
     num_links: int = 1
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
     subdevice_id: Optional[int] = None
     output_concat_dim: Optional[int] = 1  # 1 for decode 2 for prefill
 
@@ -114,7 +114,7 @@ class AllToAllCombineConfig:
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
     num_links: int = 1
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
 
     def as_dict(self):
         """Convert to kwargs dict for ttnn.all_to_all_combine."""
