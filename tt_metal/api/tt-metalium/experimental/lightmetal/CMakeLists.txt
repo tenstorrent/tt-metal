@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Experimental LightMetal API Headers
-set(TT_METAL_EXPERIMENTAL_LIGHTMETAL_API
-    api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
-    PARENT_SCOPE
+target_sources(
+    tt_metal
+    PUBLIC
+        FILE_SET api
+        FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_binary.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_capture_utils.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_replay.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_api.hpp
 )
