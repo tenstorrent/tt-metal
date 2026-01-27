@@ -29,9 +29,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [wormhole_b0]
+        arch: [wormhole_b0, blackhole]
         scenario: [single, tp2, tray]
         include:
+          # Wormhole B0 configuration
           - arch: wormhole_b0
             scenario: single
             num_containers: 32
@@ -55,6 +56,31 @@ jobs:
             container_prefix: tray
             mesh_descriptor: t3k_mesh_graph_descriptor.textproto
             test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            test_args: ""
+          # Blackhole configuration
+          - arch: blackhole
+            scenario: single
+            num_containers: 32
+            chips_per_container: 1
+            container_prefix: chip
+            mesh_descriptor: p100_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+            test_args: "-k test_fill"
+          - arch: blackhole
+            scenario: tp2
+            num_containers: 16
+            chips_per_container: 2
+            container_prefix: tp2
+            mesh_descriptor: p150_x2_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/nightly/test_all_gather_nightly.py
+            test_args: ""
+          - arch: blackhole
+            scenario: tray
+            num_containers: 4
+            chips_per_container: 8
+            container_prefix: tray
+            mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/nightly/test_all_gather_nightly.py
             test_args: ""
     runs-on:
       - topology-6u
