@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
