@@ -24,36 +24,32 @@ public:
     // For TP+DP: dp_axis=0, tp_axis=1
     // For TP only: tp_axis=0
     // For DP only: dp_axis=0
-    void configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp);
-
-    // Mesh device access
-    [[nodiscard]] ttnn::distributed::MeshDevice* get_mesh_device() const {
-        return m_mesh_device;
-    }
+    ParallelismContext(const ttnn::distributed::MeshDevice& mesh_device, bool enable_ddp, bool enable_tp);
 
     // Axis queries
-    [[nodiscard]] std::optional<uint32_t> get_dp_axis() const {
-        return m_dp_axis;
+    [[nodiscard]] std::optional<uint32_t> get_ddp_axis() const {
+        return m_ddp_axis;
     }
     [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
         return m_tp_axis;
     }
 
     // Size queries (computed from mesh_device->shape())
-    [[nodiscard]] uint32_t get_dp_size() const;
-    [[nodiscard]] uint32_t get_tp_size() const;
+    [[nodiscard]] const uint32_t get_ddp_size() const;
+    [[nodiscard]] const uint32_t get_tp_size() const;
 
-    [[nodiscard]] bool is_tp_enabled() const {
+    [[nodiscard]] const bool is_tp_enabled() const {
         return m_tp_axis.has_value();
     }
-    [[nodiscard]] bool is_dp_enabled() const {
-        return m_dp_axis.has_value();
+    [[nodiscard]] const bool is_ddp_enabled() const {
+        return m_ddp_axis.has_value();
     }
 
 private:
-    ttnn::distributed::MeshDevice* m_mesh_device = nullptr;
-    std::optional<uint32_t> m_dp_axis = std::nullopt;
+    std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
+    uint32_t m_num_ddp_devices = 1U;
+    uint32_t m_num_tp_devices = 1U;
 };
 
 class AutoContext {
@@ -107,7 +103,9 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
-    [[nodiscard]] ParallelismContext& get_parallelism_context();
+    [[nodiscard]] std::shared_ptr<const ParallelismContext> get_parallelism_context();
+
+    void initialize_parallelism_context(bool enable_ddp, bool enable_tp);
 
 private:
     AutoContext();
@@ -127,7 +125,7 @@ private:
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
-    ParallelismContext m_parallelism_context;
+    std::shared_ptr<const ParallelismContext> m_parallelism_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

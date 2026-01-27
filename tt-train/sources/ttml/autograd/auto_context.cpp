@@ -129,41 +129,48 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return *m_socket_manager;
 }
 
-[[nodiscard]] ParallelismContext& AutoContext::get_parallelism_context() {
-    return m_parallelism_context;
-}
-
-void ParallelismContext::configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp) {
+ParallelismContext::ParallelismContext(
+    const ttnn::distributed::MeshDevice& mesh_device, bool enable_ddp, bool enable_tp) {
     TT_FATAL(
-        (uint32_t)enable_dp + (uint32_t)enable_tp <= mesh_device->shape().dims(),
+        (uint32_t)enable_ddp + (uint32_t)enable_tp <= mesh_device.shape().dims(),
         "Mesh shape dimensions must be greater than the number of parallelization axes");
 
-    m_mesh_device = mesh_device;
-
     uint32_t axis = 0;
-    if (enable_dp) {
-        m_dp_axis = axis++;
+    if (enable_ddp) {
+        m_ddp_axis = axis++;
+        m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
     }
     if (enable_tp) {
         m_tp_axis = axis++;
+        m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
     }
 }
-
-uint32_t ParallelismContext::get_dp_size() const {
-    if (!m_dp_axis.has_value() || m_mesh_device == nullptr) {
-        return 1U;
+[[nodiscard]] std::shared_ptr<const ParallelismContext> AutoContext::get_parallelism_context() {
+    if (!m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is not initialized.");
     }
-    return m_mesh_device->shape()[m_dp_axis.value()];
+    return m_parallelism_context;
 }
 
-uint32_t ParallelismContext::get_tp_size() const {
-    if (m_mesh_device == nullptr) {
+void AutoContext::initialize_parallelism_context(bool enable_ddp, bool enable_tp) {
+    if (m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is already initialized.");
+    }
+    m_parallelism_context = std::make_shared<ParallelismContext>(get_device(), enable_ddp, enable_tp);
+}
+
+const uint32_t ParallelismContext::get_ddp_size() const {
+    if (!m_ddp_axis.has_value()) {
         return 1U;
     }
+    return m_num_ddp_devices;
+}
+
+const uint32_t ParallelismContext::get_tp_size() const {
     if (!m_tp_axis.has_value()) {
-        return static_cast<uint32_t>(m_mesh_device->num_devices());
+        return 1U;
     }
-    return m_mesh_device->shape()[m_tp_axis.value()];
+    return m_num_tp_devices;
 }
 
 }  // namespace ttml::autograd

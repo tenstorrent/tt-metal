@@ -17,7 +17,7 @@
 namespace ttml::models::distributed::llama {
 
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
-    auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
+    auto tp_axis = autograd::ctx().get_parallelism_context()->get_tp_axis();
 
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;

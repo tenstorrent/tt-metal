@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -77,6 +78,16 @@ int main(int argc, char** argv) {
     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     ttml::autograd::ctx().open_device(logical_mesh_shape);
 
+    // Initialize parallelism context for DDP only
+    ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/false);
+
+    // Get parallelism parameters from context
+    auto pctx = ttml::autograd::ctx().get_parallelism_context();
+    const auto dp_axis = pctx->get_ddp_axis();
+    const auto dp_size = pctx->get_ddp_size();
+
+    fmt::print("DDP enabled: {} devices, dp_axis: {}\n", dp_size, dp_axis.value_or(0));
+
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
         .n_features = num_features,
@@ -135,6 +146,10 @@ int main(int argc, char** argv) {
             float loss_float_1 = loss_xtensors[1](0);
             fmt::print("Step: {} Loss: {} {} {}\n", training_step++, loss_float_0, loss_float_1, mean_loss);
             loss->backward();
+
+            // Synchronize gradients across DDP devices
+            ttml::core::distributed::synchronize_gradients(model->parameters(), dp_axis);
+
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
         }

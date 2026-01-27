@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_llama8b_tp_dp"
   seed: 5489
   model_save_interval: 500
-  batch_size: 8  # Total batch size across all DP groups (16 per DP group with 4 DP groups)
+  batch_size: 8  # Total batch size across all DP groups
   gradient_accumulation_steps: 1
   num_epochs: 1
   max_steps: 10
@@ -16,8 +16,8 @@ training_config:
 
 device_config:
   enable_tp: true
-  enable_dp: true
-  mesh_shape: [4, 8]  # 4 DP groups x 8 TP devices = 32 devices (Galaxy)
+  enable_ddp: true
+  mesh_shape: [8, 4]  # 4 DP groups x 8 TP devices = 32 devices (Galaxy)
 
 eval_config:
   repetition_penalty: 1.0

@@ -70,8 +70,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 0;
-    uint32_t mesh_cols = 0;
+    uint32_t mesh_rows = 1;
+    uint32_t mesh_cols = 1;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 8x4\n", mesh_shape_str);
         return 1;
@@ -89,8 +89,20 @@ int main(int argc, char** argv) {
     // decided automatically: data parallel will always be the first one if
     // present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
     // tp and ep.
-    const uint32_t dp_size = logical_mesh_shape[0];
-    const uint32_t tp_size = logical_mesh_shape[1];
+
+    ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
+    ttml::autograd::ctx().open_device(logical_mesh_shape);
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // Initialize parallelism context for TP+DP
+    ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/true);
+
+    // Get parallelism parameters from context
+    auto pctx = ttml::autograd::ctx().get_parallelism_context();
+    auto dp_axis = pctx->get_ddp_axis();
+    auto tp_axis = pctx->get_tp_axis();
+    const uint32_t dp_size = pctx->get_ddp_size();
+    const uint32_t tp_size = pctx->get_tp_size();
 
     TT_FATAL(num_features % tp_size == 0, "num_features must be divisible by tp_size (going to be sharded)");
     TT_FATAL(num_targets % tp_size == 0, "num_targets must be divisible by tp_size (going to be sharded)");
@@ -108,10 +120,6 @@ int main(int argc, char** argv) {
                    dp_size);
         return 1;
     }
-
-    ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
-    ttml::autograd::ctx().open_device(logical_mesh_shape);
-    auto* device = &ttml::autograd::ctx().get_device();
 
     // Generate training dataset
     auto training_params = ttml::datasets::MakeRegressionParams{
@@ -185,18 +193,18 @@ int main(int argc, char** argv) {
     auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
 
     // Initialize model based on parallelism type
-    // shard_dim=1 specifies that weights should be sharded along mesh dimension 1 (TP dimension)
+    // shard_dim specifies that weights should be sharded along TP dimension
     std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_row_parallel) {
         fmt::print("Using RowParallelLinear: shards input features, all_reduces output\n");
         // RowParallelLinear: shards input features, all_reduces output
         model = std::make_shared<ttml::modules::distributed::RowParallelLinear>(
-            num_features, num_targets, /* has_bias */ bias, /* input_is_parallel */ true, /* shard_dim */ 1U);
+            num_features, num_targets, /* has_bias */ bias, /* input_is_parallel */ true, /* shard_dim */ tp_axis);
     } else {
         fmt::print("Using ColumnParallelLinear: shards output features, sharded output\n");
         // ColumnParallelLinear: shards output features, keeps output sharded
         model = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            num_features, num_targets, /* has_bias */ bias, /* gather_output */ false, /* shard_dim */ 1U);
+            num_features, num_targets, /* has_bias */ bias, /* gather_output */ false, /* shard_dim */ tp_axis);
     }
     fmt::print("Batch size: {}, DP groups: {}, TP size: {}\n", batch_size, dp_size, tp_size);
 
@@ -240,7 +248,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DP groups (average gradients for data parallelism)
-            ttml::core::distributed::synchronize_gradients(model->parameters(), 0U);
+            ttml::core::distributed::synchronize_gradients(model->parameters(), dp_axis);
 
             // Optimizer step
             optimizer.step();
