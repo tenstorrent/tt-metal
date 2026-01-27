@@ -3,6 +3,7 @@
 
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import nearest_32
@@ -104,7 +105,7 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
-        # hf_config.num_hidden_layers = 1
+        # hf_config.num_hidden_layers = 2
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
@@ -250,6 +251,7 @@ class Model:
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
+            logger.info(f"[LAYER] {i}/{len(self.layers)} start: user={user_id} mode={mode.value}")
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
 
             hidden_states = decoder_layer(
@@ -261,6 +263,8 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
             )
+            logger.info(f"[LAYER] {i}/{len(self.layers)} done")
+            ttnn.synchronize_device(self.mesh_device)
         logits = hidden_states
 
         if get_last_token != -1:
@@ -279,11 +283,13 @@ class Model:
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
         if config.tp > 1:
+            logger.info(f"[CCL] lm_head allgather: mode={mode.value} tp={config.tp} axis={self.mesh_config.tp_axis}")
             logits_gathered = self.mesh_config.allgather(
                 logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
             )
             logits.deallocate(True)
             logits = logits_gathered
+            logger.info(f"[CCL] lm_head allgather done")
 
         return logits
 

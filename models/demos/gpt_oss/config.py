@@ -9,6 +9,8 @@ across a mesh of devices for the GPT-OSS MoE model.
 from dataclasses import dataclass
 from enum import Enum
 
+from loguru import logger
+
 import ttnn
 
 
@@ -134,6 +136,7 @@ class MeshConfig:
             padded = True
 
         # Reduce-scatter along TP axis
+        logger.info(f"[CCL] allreduce RS start: shape={tensor.shape} axis={axis} topo={ccl_manager.topology}")
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
             dim=3,
@@ -144,8 +147,10 @@ class MeshConfig:
             cluster_axis=axis,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        logger.info(f"[CCL] allreduce RS done: shape={scattered.shape}")
 
         # All-gather back
+        logger.info(f"[CCL] allreduce AG start: shape={scattered.shape} axis={axis} topo={ccl_manager.topology}")
         gathered = ttnn.experimental.all_gather_async(
             scattered,
             dim=3,
@@ -157,6 +162,7 @@ class MeshConfig:
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        logger.info(f"[CCL] allreduce AG done: shape={gathered.shape}")
 
         # Remove padding if applied
         if padded:
@@ -172,18 +178,22 @@ class MeshConfig:
         Note: Caller should check if communication is needed before calling
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+        topo = ttnn.Topology.Linear if linear else ccl_manager.topology
 
-        return ttnn.experimental.all_gather_async(
+        logger.info(f"[CCL] allgather start: shape={tensor.shape} axis={axis} dim={dim} topo={topo}")
+        result = ttnn.experimental.all_gather_async(
             tensor,
             dim=dim,
             cluster_axis=axis,
             mesh_device=ccl_manager.mesh_device,
-            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
+            topology=topo,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
+        logger.info(f"[CCL] allgather done: shape={result.shape}")
+        return result
 
     def __repr__(self):
         decode_dp = self.total_devices // (self.decode.tp * self.decode.ep)

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 from torch import nn
 
 import ttnn
@@ -54,6 +55,7 @@ class RMSNorm(nn.Module):
             tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, dtype=ttnn.bfloat16)
 
             # AllGather stats
+            logger.info(f"[CCL] rmsnorm allgather start: shape={tt_stats.shape} axis=1 topo=Ring")
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
@@ -63,6 +65,7 @@ class RMSNorm(nn.Module):
                 memory_config=tt_gathered_stats_memory_config,
                 topology=ttnn.Topology.Ring,
             )
+            logger.info(f"[CCL] rmsnorm allgather done: shape={tt_gathered_stats.shape}")
             ttnn.deallocate(tt_stats)
 
             # Run distributed rmsnorm part 2

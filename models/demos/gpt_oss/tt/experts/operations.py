@@ -3,6 +3,8 @@
 
 """Core expert operations - pure functions for composability."""
 
+from loguru import logger
+
 import ttnn
 
 from .config import ExpertConfig
@@ -68,7 +70,10 @@ def reduce_experts(expert_output):
 
 def apply_expert_parallel_allreduce(tensor, mesh_config, ccl_manager):
     """Apply expert parallel allreduce communication."""
-    return mesh_config.allreduce(tensor, ccl_manager, axis=mesh_config.ep_axis)
+    logger.info(f"[CCL] expert_parallel allreduce: ep={mesh_config.ep} axis={mesh_config.ep_axis}")
+    result = mesh_config.allreduce(tensor, ccl_manager, axis=mesh_config.ep_axis)
+    logger.info(f"[CCL] expert_parallel allreduce done")
+    return result
 
 
 def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp):
@@ -91,8 +96,11 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
     """
     # Synchronize for prefill
     if seq_len > 1:
+        logger.info(f"[CCL] tensor_parallel sync: seq={seq_len}")
         ttnn.synchronize_device(mesh_device)  # ✅ Use explicit mesh_device
+        logger.info(f"[CCL] tensor_parallel sync done")
 
+    logger.info(f"[CCL] tensor_parallel allreduce: seq={seq_len} tp={tp}")
     tensor_allreduced = mesh_config.allreduce(
         tensor,
         ccl_manager,
@@ -100,10 +108,14 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
         axis=mesh_config.tp_axis,
     )
     tensor.deallocate(True)
+    logger.info(f"[CCL] tensor_parallel allreduce done")
 
     return tensor_allreduced
 
 
 def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
     """Apply sequence parallel allgather communication."""
-    return mesh_config.allgather(tensor, ccl_manager, axis=mesh_config.sp_axis, dim=-2)
+    logger.info(f"[CCL] sequence_parallel allgather: sp={mesh_config.sp} axis={mesh_config.sp_axis}")
+    result = mesh_config.allgather(tensor, ccl_manager, axis=mesh_config.sp_axis, dim=-2)
+    logger.info(f"[CCL] sequence_parallel allgather done")
+    return result

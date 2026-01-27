@@ -232,11 +232,12 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
         ),
         (
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
             1,  # data_parallel
             128,  # batch_size
-            1,  # repeat_batches
-            8 * 1024,  # max_seq_len
+            5,  # repeat_batches
+            128 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
@@ -401,10 +402,10 @@ def test_gpt_oss_demo(
         users_row_sharded=users_row_sharded,
         long_context_mode=long_context_mode,
     )
-    if long_context_mode:
-        pytest.skip(
-            f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
-        )
+    # if long_context_mode:
+    #     pytest.skip(
+    #         f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
+    #     )
 
     # Create generator (match tt-transformers pattern)
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)

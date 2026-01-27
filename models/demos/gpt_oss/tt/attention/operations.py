@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 import ttnn
 
 from .weights import AttentionWeights
@@ -132,9 +134,11 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: 
         Tensor after allreduce (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
+        logger.info(f"[CCL] attn allreduce: bs={batch_size} seq={seq_len} hs={hidden_size} tp={mesh_config.tp}")
         # tensor = ttnn.unsqueeze(tensor, 0)
         tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
         # tensor = ttnn.reshape(tensor, (batch_size, seq_len, hidden_size))
+        logger.info(f"[CCL] attn allreduce done")
     return tensor
 
 
