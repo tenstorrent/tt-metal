@@ -165,7 +165,7 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,

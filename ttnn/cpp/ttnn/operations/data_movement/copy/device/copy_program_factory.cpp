@@ -101,7 +101,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
     }
     const std::string reader_rm_path =
         sharded ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_stick_start_id.cpp"
-                : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp";
+                : "ttnn/cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp";
     const KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_start_id.cpp"
@@ -111,7 +111,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
 
     const std::string writer_rm_path =
         sharded ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_stick_start_id.cpp"
-                : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
+                : "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
     const KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_start_id.cpp"
@@ -123,7 +123,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
         const std::vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
             core_group_1,
             ComputeConfig{.compile_args = compute_kernel_args_group_1});
 
@@ -131,7 +131,7 @@ CopyProgramFactory::cached_program_t CopyProgramFactory::create(
             const std::vector<uint32_t> compute_kernel_args_group_2 = {num_units_per_core_group_2};
             CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
+                "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp",
                 core_group_2,
                 ComputeConfig{.compile_args = compute_kernel_args_group_2});
         }
