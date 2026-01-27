@@ -197,50 +197,28 @@ def run_kv_norm_only(device, tensors, num_iterations=1, use_signpost=False):
 
 
 def run_parallel_composite(device, tensors, num_iterations=1, use_signpost=False):
-    """Run q_norm and kv_norm in parallel using launch_composite with merged descriptors.
+    """Run q_norm and kv_norm in parallel - creates branches each iteration (no caching).
 
-    Uses the original L1 width sharded configuration. The sharded layernorm operations
-    are merged into a single program and executed via generic_op.
-
-    NOTE: This version creates descriptors/outputs inside the loop every iteration.
-    When device.enable_program_cache() is called, the compiled program is still cached
-    based on GenericOpDeviceOperation::compute_program_hash, which hashes the descriptor
-    structure (kernels, CBs, core ranges, etc). However, descriptor creation and merging
-    overhead is paid on every iteration.
+    NOTE: This version creates branch descriptors inside the loop and clears the cache
+    to force re-merge each iteration. This measures the overhead of branch creation.
     """
     if use_signpost:
         signpost("parallel_composite_start")
 
     for _ in range(num_iterations):
-        # Create program descriptors using the experimental API with original sharded inputs
-        # For sharded inputs, core_range_set is optional (validates shard spec is within range)
-        q_desc, q_output = ttnn.experimental.programs.rms_norm(
+        # Create branch descriptors inside the loop (measures descriptor creation overhead)
+        q_branch = ttnn.experimental.programs.rms_norm(
             tensors["q"]["input"],
             epsilon=1e-5,
             weight=tensors["q"]["weight"],
         )
-
-        kv_desc, kv_output = ttnn.experimental.programs.rms_norm(
+        kv_branch = ttnn.experimental.programs.rms_norm(
             tensors["kv"]["input"],
             epsilon=1e-5,
             weight=tensors["kv"]["weight"],
         )
-
-        # Build io_tensors list for all tensors referenced by the programs
-        io_tensors = [
-            tensors["q"]["input"],
-            tensors["q"]["weight"],
-            q_output,
-            tensors["kv"]["input"],
-            tensors["kv"]["weight"],
-            kv_output,
-        ]
-
-        # Launch composite - merges descriptors and executes via single generic_op call
-        ttnn.experimental.launch_composite(
-            [(q_desc, q_output), (kv_desc, kv_output)],
-            io_tensors,
-        )
+        # launch_composite always merges; device cache handles compiled program caching
+        q_output, kv_output = ttnn.experimental.launch_composite([q_branch, kv_branch])
 
     ttnn.synchronize_device(device)
 
@@ -251,54 +229,32 @@ def run_parallel_composite(device, tensors, num_iterations=1, use_signpost=False
 
 
 def run_parallel_composite_cached(device, tensors, num_iterations=1, use_signpost=False):
-    """Run q_norm and kv_norm in parallel using pre-created merged descriptors.
+    """Run q_norm and kv_norm in parallel using launch_composite with automatic caching.
 
-    Uses the original L1 width sharded configuration. The sharded layernorm operations
-    are merged into a single program once, then executed repeatedly.
-
-    This version minimizes host overhead by:
-    1. Creating descriptors and output tensors ONCE (outside the loop)
-    2. Merging descriptors ONCE
-    3. Executing the same merged descriptor repeatedly
-
-    With device.enable_program_cache(), GenericOpDeviceOperation::compute_program_hash
-    hashes the descriptor structure, so the compiled program is cached and reused on
-    subsequent generic_op calls. This version avoids both:
-    - Descriptor creation overhead (Python/C++ calls to create descriptors)
-    - Descriptor merging overhead (merge_descriptors call)
+    This is the ideal usage pattern:
+    - Create branch descriptors ONCE (outside loop)
+    - Call launch_composite with same branches in loop
+    - Merged descriptor is cached automatically by launch_composite
+    - Device program cache handles compiled program caching
     """
-    # Create program descriptors ONCE (outside the loop)
-    q_desc, q_output = ttnn.experimental.programs.rms_norm(
+    # Create branch descriptors ONCE outside the loop
+    q_branch = ttnn.experimental.programs.rms_norm(
         tensors["q"]["input"],
         epsilon=1e-5,
         weight=tensors["q"]["weight"],
     )
-
-    kv_desc, kv_output = ttnn.experimental.programs.rms_norm(
+    kv_branch = ttnn.experimental.programs.rms_norm(
         tensors["kv"]["input"],
         epsilon=1e-5,
         weight=tensors["kv"]["weight"],
     )
 
-    # Merge descriptors ONCE
-    merged_descriptor = ttnn.ProgramDescriptor.merge_descriptors([q_desc, kv_desc])
-
-    # Build io_tensors list ONCE (these tensors are reused)
-    io_tensors = [
-        tensors["q"]["input"],
-        tensors["q"]["weight"],
-        q_output,
-        tensors["kv"]["input"],
-        tensors["kv"]["weight"],
-        kv_output,
-    ]
-
     if use_signpost:
         signpost("parallel_composite_cached_start")
 
-    # Execute the cached merged program multiple times
+    # launch_composite caches the merged descriptor automatically
     for _ in range(num_iterations):
-        ttnn.generic_op(io_tensors, merged_descriptor)
+        q_output, kv_output = ttnn.experimental.launch_composite([q_branch, kv_branch])
 
     ttnn.synchronize_device(device)
 
