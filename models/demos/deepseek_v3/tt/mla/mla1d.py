@@ -1112,6 +1112,7 @@ class MLA1D(AbstractModule):
         print("cfg['wkv_b2'] shape: ", cfg["wkv_b2"]["input_tensor_b"].shape)
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
+        print("v_out shape before permute: ", v_out.shape)
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
         print("v_out shape after permute: ", v_out.shape)
 
@@ -1159,7 +1160,6 @@ class MLA1D(AbstractModule):
             )  # [1, seq_len, num_heads, v_head_dim]
 
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
-            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
             print("out shape after linear: ", out.shape)
 
