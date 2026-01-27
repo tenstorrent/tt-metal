@@ -321,33 +321,17 @@ void kernel_main() {
                 // cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
                 // uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
 
-                read_ternary_block_sync_v1<M_block_tiles, N_block_tiles>(
+                read_ternary_blocks_sync_v1<M_block_tiles, N_block_tiles>(
                     ternary_a_reader,
+                    ternary_b_reader,
                     out_shape,
                     cb_id_ternary_a,
+                    cb_id_ternary_b,
                     ternary_a_tile_size,
                     m_tile,
                     m_tile_end,
                     n_tile,
                     n_tile_end);
-
-                // cb_push_back(cb_id_ternary_a, out_block_num_tiles);
-            } else {
-                // Read ternary_b on this NoC (output writer handles ternary_b)
-                // cb_reserve_back(cb_id_ternary_b, out_block_num_tiles);
-                // uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
-
-                read_ternary_block_sync_v1<M_block_tiles, N_block_tiles>(
-                    ternary_b_reader,
-                    out_shape,
-                    cb_id_ternary_b,
-                    ternary_b_tile_size,
-                    m_tile,
-                    m_tile_end,
-                    n_tile,
-                    n_tile_end);
-
-                // cb_push_back(cb_id_ternary_b, out_block_num_tiles);
             }
 #endif
 
