@@ -81,12 +81,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
     const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
     /*
-    For non-causal case we must provide a padded mask if the K sequence length has been padded
-    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
-    don't affect attention of unpadded tokens.
-    In causal case, the causal mask takes care of masking K pad tokens.
+    For non-causal case with Q/K padding:
+    - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
+    - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
+    In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!is_causal) && (padded_Sk != Sk);
+    const bool use_padded_mask = (!is_causal) && ((padded_Sk != Sk) || (padded_Sq != Sq));
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;

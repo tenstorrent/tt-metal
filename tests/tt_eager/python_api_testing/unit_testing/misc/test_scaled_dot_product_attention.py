@@ -477,6 +477,7 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     (
         [128, 4, 4, 128, 32],  # Boltz
         [1, 16, 16, 128, 64],  # Boltz
+        [2, 8, 1, 160, 64],  # Padded: K-only (q32/k64,k128) and Q+K (q128/k64,k128)
     ),
 )
 @pytest.mark.parametrize("bcast_mask_batch_dim", [True, False], ids=["bcast-mask-batch-dim", "no-bcast-mask-batch-dim"])

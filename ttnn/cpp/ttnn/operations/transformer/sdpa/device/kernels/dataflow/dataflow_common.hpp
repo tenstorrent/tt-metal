@@ -207,30 +207,34 @@ void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t 
         noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
 }
 
+// Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16)
 template <uint32_t tile_bytes>
-void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
+void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
-    constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
-    static_assert(
-        tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
+    constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
+    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
+    constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
-    // Fill the first 64 bytes (16 uint32_t values) with 0xFFFFFFFF for exponents
-    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
-    constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);  // 16 words
-
-    for (uint32_t i = 0; i < exp_words; i++) {
-        ptr[i] = NEG_INF_EXP;
-    }
-
-    // Fill the next 512 bytes (128 uint32_t values) with 0xCCCCCCCC for mantissas
-    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;
-    constexpr uint32_t mant_words = num_mantissas / sizeof(uint32_t);  // 128 words
-
-    for (uint32_t i = exp_words; i < exp_words + mant_words; i++) {
-        ptr[i] = NEG_INF_MANT;
+    if constexpr (tile_bytes == bf16_size) {
+        // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
+        for (uint32_t i = 0; i < total_words; i++) {
+            ptr[i] = 0xFF80FF80;
+        }
+    } else {
+        // BFP formats (bfp4, bfp8): first 64 bytes are exponents, rest are mantissas
+        constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);
+        for (uint32_t i = 0; i < exp_words; i++) {
+            ptr[i] = 0xFFFFFFFF;
+        }
+        // bfp4: 0xCC per nibble (sign + magnitude), bfp8: 0x80 per byte (sign bit set)
+        constexpr uint32_t mant_pattern = (tile_bytes == bfp4_size) ? 0xCCCCCCCC : 0x80808080;
+        for (uint32_t i = exp_words; i < total_words; i++) {
+            ptr[i] = mant_pattern;
+        }
     }
 }
 
@@ -579,7 +583,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -628,7 +632,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
