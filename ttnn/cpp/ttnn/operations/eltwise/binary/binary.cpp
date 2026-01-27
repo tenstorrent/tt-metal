@@ -377,10 +377,6 @@ inline auto invoke_binary_ng(
                 post_activations,
                 std::nullopt,
                 sub_core_grids);
-            TT_FATAL(
-                result.layout() == Layout::ROW_MAJOR,
-                "Row-major binary_ng path expected row-major output but got {}",
-                result.layout());
 
             return result;
         } else {

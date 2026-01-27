@@ -1,228 +1,263 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+
+#define ALIGN_TO(len, align) (((len) + (align) - 1) / (align)) * (align)
+#ifndef RM_HAS_B
+#define RM_HAS_B 1
+#endif
 
 void kernel_main() {
     uint32_t index = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(index++);
     const uint32_t dst_num_tiles = get_arg_val<uint32_t>(index++);
+
     const uint32_t aD = get_arg_val<uint32_t>(index++);
     const uint32_t aN = get_arg_val<uint32_t>(index++);
     const uint32_t aC = get_arg_val<uint32_t>(index++);
-    const uint32_t aHt = get_arg_val<uint32_t>(index++);  // A Height (Elements)
-    const uint32_t aWt = get_arg_val<uint32_t>(index++);  // A Width (Elements)
+    const uint32_t aHt = get_arg_val<uint32_t>(index++);
+    const uint32_t aWt = get_arg_val<uint32_t>(index++);
 
     const uint32_t src_addr_b = get_arg_val<uint32_t>(index++);
     const uint32_t bD = get_arg_val<uint32_t>(index++);
     const uint32_t bN = get_arg_val<uint32_t>(index++);
     const uint32_t bC = get_arg_val<uint32_t>(index++);
-    const uint32_t bHt = get_arg_val<uint32_t>(index++);  // B Height (Elements)
-    const uint32_t bWt = get_arg_val<uint32_t>(index++);  // B Width (Elements)
+    const uint32_t bHt = get_arg_val<uint32_t>(index++);
+    const uint32_t bWt = get_arg_val<uint32_t>(index++);
 
+    const uint32_t cHt = get_arg_val<uint32_t>(index++);
+    const uint32_t cC = get_arg_val<uint32_t>(index++);
     const uint32_t current_row_start = get_arg_val<uint32_t>(index++);
-    const uint32_t num_rows = get_arg_val<uint32_t>(index++);       // Rows to process in this tile (e.g. 32)
-    const uint32_t page_size_arg = get_arg_val<uint32_t>(index++);  // Output Row Width (Bytes)
+    const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
+    const uint32_t row_width_elements = get_arg_val<uint32_t>(index++);
+    const uint32_t page_size_a_arg = get_arg_val<uint32_t>(index++);
+    const uint32_t page_size_b_arg = get_arg_val<uint32_t>(index++);
+    const uint32_t alignment_a = get_arg_val<uint32_t>(index++);
+    const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
+#if RM_HAS_B
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
-
+#endif
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    // --- Geometry & Size Calculations ---
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const uint32_t tile_hw = get_tile_hw(cb_id_src);
     constexpr uint32_t element_size = src_tile_bytes / tile_hw;
-    const uint32_t element_size_aligned = ((element_size + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+    const uint32_t element_size_aligned_a = ALIGN_TO(element_size, alignment_a);
+#if RM_HAS_B
+    const uint32_t element_size_aligned_b = ALIGN_TO(element_size, alignment_b);
+#else
+    const uint32_t element_size_aligned_b = element_size_aligned_a;
+#endif
     const uint32_t tile_bytes = tile_hw * element_size;
+    const uint32_t row_width_bytes = row_width_elements * element_size;
 
-    const uint32_t full_page_size = ((page_size_arg + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+    const uint32_t outHt = cHt;
+    const uint32_t outC = cC;
+    const uint32_t outN = (aN > bN) ? aN : bN;
+    const uint32_t outD = (aD > bD) ? aD : bD;
 
-    const uint32_t row_width_elements = full_page_size / element_size;
-
-    // Output Height (Logical Block Size for Broadcast)
-    // If we broadcast 1 -> H, the pattern repeats every max(H_a, H_b).
-    const uint32_t outHt = (aHt > bHt) ? aHt : bHt;
-
-    // --- Broadcast Mode Logic ---
-    // Enable Row Broadcast if H=1 and the Target Height > 1
-    // This handles both (1 -> N) and (1 -> 1 if N=1) correctly via the filling loop logic.
-    bool is_a_row_bcast = (aHt == 1 && outHt > 1);
     bool is_a_col_bcast = (aWt == 1 && row_width_elements > 1);
-
-    bool is_b_row_bcast = (bHt == 1 && outHt > 1);
+    const uint32_t page_size_a = is_a_col_bcast ? element_size : ALIGN_TO(page_size_a_arg, alignment_a);
+#if RM_HAS_B
     bool is_b_col_bcast = (bWt == 1 && row_width_elements > 1);
-
-    const uint32_t page_size_a = is_a_col_bcast ? element_size : full_page_size;
-    const uint32_t page_size_b = is_b_col_bcast ? element_size : full_page_size;
+    const uint32_t page_size_b = is_b_col_bcast ? element_size : ALIGN_TO(page_size_b_arg, alignment_b);
+#else
+    const bool is_b_col_bcast = false;
+    const uint32_t page_size_b = 0;
+#endif
 
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
+#if RM_HAS_B
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
+#endif
 
-    // --- Tiling/Chunking Logic ---
-    const uint32_t div = (row_width_elements + tile_hw - 1) / tile_hw;
-    const uint32_t num_batches = dst_num_tiles / div;
+    const uint32_t s_h_a = (aHt == 1) ? 0 : 1;
+    const uint32_t s_c_a = (aC == 1) ? 0 : aHt;
+    const uint32_t s_n_a = (aN == 1) ? 0 : aC * aHt;
+    const uint32_t s_d_a = (aD == 1) ? 0 : aN * aC * aHt;
+    const uint32_t s_nd_a = (aD * aN * aC * aHt);
 
-    // Max bytes per horizontal chunk 't'
-    uint32_t stride_size_bytes = full_page_size > tile_bytes ? tile_bytes : full_page_size;
+#if RM_HAS_B
+    const uint32_t s_h_b = (bHt == 1) ? 0 : 1;
+    const uint32_t s_c_b = (bC == 1) ? 0 : bHt;
+    const uint32_t s_n_b = (bN == 1) ? 0 : bC * bHt;
+    const uint32_t s_d_b = (bD == 1) ? 0 : bN * bC * bHt;
+    const uint32_t s_nd_b = (bD * bN * bC * bHt);
+#endif
 
-    uint32_t current_row_offset = 0;
+    uint32_t tmp = current_row_start;
+    uint32_t start_th = tmp % outHt;
+    tmp /= outHt;
+    uint32_t start_c = tmp % outC;
+    tmp /= outC;
+    uint32_t start_n = tmp % outN;
+    tmp /= outN;
+    uint32_t start_d = tmp % outD;
+    tmp /= outD;
+    uint32_t start_nd = tmp;
 
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        uint32_t bytes_left = full_page_size;
+    const uint32_t tiles_per_row = (row_width_elements + tile_hw - 1) / tile_hw;
+    uint32_t stride_size_bytes = (row_width_bytes > tile_bytes) ? tile_bytes : ALIGN_TO(row_width_bytes, alignment_a);
 
-        for (uint32_t t = 0; t < div; t++) {
-            cb_reserve_back(cb_id_src, 1);
-            cb_reserve_back(cb_id_src_b, 1);
+    uint32_t rows_in_current_tile = 0;
+    bool tile_reserved = false;
+    uint32_t tiles_pushed_count = 0;
 
-            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-            uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
+    for (uint32_t nd = start_nd; nd < 1 && tiles_pushed_count < dst_num_tiles; ++nd, start_d = 0) {
+        uint32_t ptr_nd_a = nd * s_nd_a;
+#if RM_HAS_B
+        uint32_t ptr_nd_b = nd * s_nd_b;
+#endif
 
-            uint32_t current_chunk_bytes = stride_size_bytes < bytes_left ? stride_size_bytes : bytes_left;
-            uint32_t current_chunk_elements = current_chunk_bytes / element_size;
+        for (uint32_t d = start_d; d < outD && tiles_pushed_count < dst_num_tiles; ++d, start_n = 0) {
+            uint32_t ptr_d_a = ptr_nd_a + d * s_d_a;
+#if RM_HAS_B
+            uint32_t ptr_d_b = ptr_nd_b + d * s_d_b;
+#endif
 
-            uint32_t a_read_bytes =
-                is_a_col_bcast ? element_size_aligned
-                               : ((current_chunk_bytes + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
-            uint32_t b_read_bytes =
-                is_b_col_bcast ? element_size_aligned
-                               : ((current_chunk_bytes + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+            for (uint32_t n = start_n; n < outN && tiles_pushed_count < dst_num_tiles; ++n, start_c = 0) {
+                uint32_t ptr_n_a = ptr_d_a + n * s_n_a;
+#if RM_HAS_B
+                uint32_t ptr_n_b = ptr_d_b + n * s_n_b;
+#endif
 
-            // =========================================================
-            // PHASE 1: ROW BROADCAST HANDLING
-            // =========================================================
+                for (uint32_t c = start_c; c < outC && tiles_pushed_count < dst_num_tiles; ++c, start_th = 0) {
+                    uint32_t ptr_c_a = ptr_n_a + c * s_c_a;
+#if RM_HAS_B
+                    uint32_t ptr_c_b = ptr_n_b + c * s_c_b;
+#endif
 
-            // --- Input A Row Broadcast ---
-            if (is_a_row_bcast) {
-                uint32_t current_row_global = current_row_start + current_row_offset;
-                uint32_t rows_remaining = num_rows;
+                    for (uint32_t th = start_th; th < outHt && tiles_pushed_count < dst_num_tiles;
+                         th += rows_per_tile) {
+                        uint32_t rows_remaining_in_block = outHt - th;
+                        uint32_t limit =
+                            (rows_remaining_in_block < rows_per_tile) ? rows_remaining_in_block : rows_per_tile;
 
-                while (rows_remaining > 0) {
-                    // Calculate Index: Map current output row to A's dimension.
-                    // If multi-batch, A index advances every 'outHt' rows.
-                    uint32_t a_index = 0;
-                    if ((aD * aN * aC) > 1) {
-                        a_index = (current_row_global / outHt) * aHt;
-                    }
+                        uint32_t row_block_a = ptr_c_a + th * s_h_a;
+#if RM_HAS_B
+                        uint32_t row_block_b = ptr_c_b + th * s_h_b;
+#endif
 
-                    // Boundary Check: Do not cross a Batch/Channel boundary in this smear op
-                    uint32_t rows_in_current_block = outHt - (current_row_global % outHt);
-                    uint32_t rows_to_fill =
-                        (rows_remaining < rows_in_current_block) ? rows_remaining : rows_in_current_block;
+                        uint32_t r_offset = 0;
+                        while (r_offset < limit && tiles_pushed_count < dst_num_tiles) {
+                            if (!tile_reserved) {
+                                cb_reserve_back(cb_id_src, tiles_per_row);
+#if RM_HAS_B
+                                cb_reserve_back(cb_id_src_b, tiles_per_row);
+#endif
+                                tile_reserved = true;
+                                rows_in_current_tile = 0;
+                            }
 
-                    uint32_t t_offset = is_a_col_bcast ? 0 : (stride_size_bytes * t);
-                    uint64_t addr = get_noc_addr(a_index, src) + t_offset;
+                            uint32_t space_in_tile = rows_per_tile - rows_in_current_tile;
+                            uint32_t rows_left = limit - r_offset;
+                            uint32_t chunk = (rows_left < space_in_tile) ? rows_left : space_in_tile;
 
-                    noc_async_read(addr, l1_write_addr_src, a_read_bytes);
-                    noc_async_read_barrier();
+                            for (uint32_t t_i = 0; t_i < tiles_per_row; ++t_i) {
+                                uint32_t t_offset = t_i * stride_size_bytes;
+                                uint32_t base_l1_a = get_write_ptr(cb_id_src) + (t_i * src_tile_bytes);
+#if RM_HAS_B
+                                uint32_t base_l1_b = get_write_ptr(cb_id_src_b) + (t_i * src_tile_bytes);
+#endif
 
-                    if (is_a_col_bcast) {  // Scalar Case
-                        FILL_TILE_WITH_FIRST_COLUMN_RM(l1_write_addr_src, row_width_elements);
-                    }
+                                uint32_t curr_l1_a = base_l1_a + (rows_in_current_tile * stride_size_bytes);
+#if RM_HAS_B
+                                uint32_t curr_l1_b = base_l1_b + (rows_in_current_tile * stride_size_bytes);
+#endif
 
-                    FILL_TILE_WITH_FIRST_ROW_RM(l1_write_addr_src, row_width_elements, rows_to_fill);
-                    noc_async_read_barrier();
+                                uint32_t bytes_left_in_row = row_width_bytes - t_offset;
+                                if (bytes_left_in_row > row_width_bytes) {
+                                    bytes_left_in_row = 0;
+                                }
+                                uint32_t current_chunk_bytes =
+                                    (stride_size_bytes < bytes_left_in_row) ? stride_size_bytes : bytes_left_in_row;
+                                uint32_t current_chunk_elements = current_chunk_bytes / element_size;
 
-                    l1_write_addr_src += rows_to_fill * row_width_elements * element_size;
-                    current_row_global += rows_to_fill;
-                    rows_remaining -= rows_to_fill;
-                }
-            }
+                                uint32_t read_len_a = is_a_col_bcast ? element_size_aligned_a
+                                                                     : ALIGN_TO(current_chunk_bytes, alignment_a);
+#if RM_HAS_B
+                                uint32_t read_len_b = is_b_col_bcast ? element_size_aligned_b
+                                                                     : ALIGN_TO(current_chunk_bytes, alignment_b);
+#endif
 
-            // --- Input B Row Broadcast ---
-            if (is_b_row_bcast) {
-                uint32_t current_row_global = current_row_start + current_row_offset;
-                uint32_t rows_remaining = num_rows;
+                                for (uint32_t k = 0; k < chunk; ++k) {
+                                    uint32_t logical_r = r_offset + k;
+                                    uint32_t row_idx_a = row_block_a + logical_r * s_h_a;
+#if RM_HAS_B
+                                    uint32_t row_idx_b = row_block_b + logical_r * s_h_b;
+#endif
 
-                while (rows_remaining > 0) {
-                    uint32_t b_index = 0;
-                    if ((bD * bN * bC) > 1) {
-                        b_index = (current_row_global / outHt) * bHt;
-                    }
+                                    uint64_t addr_a = get_noc_addr(row_idx_a, src) + (is_a_col_bcast ? 0 : t_offset);
+#if RM_HAS_B
+                                    uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + (is_b_col_bcast ? 0 : t_offset);
+#endif
 
-                    // Boundary Check: Do not cross a Batch/Channel boundary
-                    uint32_t rows_in_current_block = outHt - (current_row_global % outHt);
-                    uint32_t rows_to_fill =
-                        (rows_remaining < rows_in_current_block) ? rows_remaining : rows_in_current_block;
+                                    noc_async_read(addr_a, curr_l1_a, read_len_a);
+#if RM_HAS_B
+                                    noc_async_read(addr_b, curr_l1_b, read_len_b);
+#endif
 
-                    uint32_t t_offset = is_b_col_bcast ? 0 : (stride_size_bytes * t);
-                    uint64_t addr = get_noc_addr(b_index, src_b) + t_offset;
+                                    curr_l1_a += current_chunk_bytes;
+#if RM_HAS_B
+                                    curr_l1_b += current_chunk_bytes;
+#endif
+                                }
 
-                    noc_async_read(addr, l1_write_addr_src_b, b_read_bytes);
-                    noc_async_read_barrier();
+                                noc_async_read_barrier();
 
-                    if (is_b_col_bcast) {  // Scalar case
-                        FILL_TILE_WITH_FIRST_COLUMN_RM(l1_write_addr_src_b, row_width_elements);
-                    }
+                                if (is_a_col_bcast || is_b_col_bcast) {
+                                    curr_l1_a = base_l1_a + (rows_in_current_tile * stride_size_bytes);
+#if RM_HAS_B
+                                    curr_l1_b = base_l1_b + (rows_in_current_tile * stride_size_bytes);
+#endif
+                                    for (uint32_t k = 0; k < chunk; ++k) {
+                                        if (is_a_col_bcast) {
+                                            FILL_TILE_WITH_FIRST_COLUMN_RM(curr_l1_a, current_chunk_elements);
+                                        }
+#if RM_HAS_B
+                                        if (is_b_col_bcast) {
+                                            FILL_TILE_WITH_FIRST_COLUMN_RM(curr_l1_b, current_chunk_elements);
+                                        }
+#endif
+                                        curr_l1_a += current_chunk_bytes;
+#if RM_HAS_B
+                                        curr_l1_b += current_chunk_bytes;
+#endif
+                                    }
+                                }
+                            }
 
-                    FILL_TILE_WITH_FIRST_ROW_RM(l1_write_addr_src_b, row_width_elements, rows_to_fill);
-                    noc_async_read_barrier();
+                            rows_in_current_tile += chunk;
+                            r_offset += chunk;
 
-                    l1_write_addr_src_b += rows_to_fill * row_width_elements * element_size;
-                    current_row_global += rows_to_fill;
-                    rows_remaining -= rows_to_fill;
-                }
-            }
-
-            // =========================================================
-            // PHASE 2: PER-ROW PROCESSING (Col Bcast & Dense)
-            // =========================================================
-
-            uint32_t ptr_a = get_write_ptr(cb_id_src);
-            uint32_t ptr_b = get_write_ptr(cb_id_src_b);
-
-            if (!is_a_row_bcast || !is_b_row_bcast) {
-                for (uint32_t i = 0; i < num_rows; i++) {
-                    uint32_t current_row_global = current_row_start + current_row_offset + i;
-
-                    // --- Input A ---
-                    if (!is_a_row_bcast) {
-                        if (is_a_col_bcast) {
-                            uint32_t total = aN * aC * aD * aHt;
-                            uint32_t a_idx = ((aD * aN * aC) > 1) ? (current_row_global % total) : current_row_global;
-
-                            uint64_t addr = get_noc_addr(a_idx, src);
-                            noc_async_read(addr, ptr_a, element_size_aligned);
-                            noc_async_read_barrier();
-                            FILL_TILE_WITH_FIRST_COLUMN_RM(ptr_a, current_chunk_elements);
-                        } else {
-                            uint64_t addr = get_noc_addr(current_row_global, src) + stride_size_bytes * t;
-                            noc_async_read(addr, ptr_a, a_read_bytes);
-                            noc_async_read_barrier();
+                            if (rows_in_current_tile == rows_per_tile) {
+                                cb_push_back(cb_id_src, tiles_per_row);
+#if RM_HAS_B
+                                cb_push_back(cb_id_src_b, tiles_per_row);
+#endif
+                                tiles_pushed_count++;
+                                tile_reserved = false;
+                                rows_in_current_tile = 0;
+                            }
                         }
-                        ptr_a += current_chunk_bytes;
-                    }
-
-                    // --- Input B ---
-                    if (!is_b_row_bcast) {
-                        if (is_b_col_bcast) {
-                            uint32_t total = bN * bC * bD * bHt;
-                            uint32_t b_idx = ((bD * bN * bC) > 1) ? (current_row_global % total) : current_row_global;
-
-                            uint64_t addr = get_noc_addr(b_idx, src_b);
-                            noc_async_read(addr, ptr_b, element_size_aligned);
-                            noc_async_read_barrier();
-                            FILL_TILE_WITH_FIRST_COLUMN_RM(ptr_b, current_chunk_elements);
-                        } else {
-                            uint64_t addr = get_noc_addr(current_row_global, src_b) + stride_size_bytes * t;
-                            noc_async_read(addr, ptr_b, b_read_bytes);
-                            noc_async_read_barrier();
-                        }
-                        ptr_b += current_chunk_bytes;
                     }
                 }
             }
-            noc_async_read_barrier();
-
-            bytes_left -= current_chunk_bytes;
-            cb_push_back(cb_id_src, 1);
-            cb_push_back(cb_id_src_b, 1);
         }
-        current_row_offset += num_rows;
+    }
+
+    if (tile_reserved) {
+        cb_push_back(cb_id_src, tiles_per_row);
+#if RM_HAS_B
+        cb_push_back(cb_id_src_b, tiles_per_row);
+#endif
+        tiles_pushed_count++;
+        tile_reserved = false;
     }
 }

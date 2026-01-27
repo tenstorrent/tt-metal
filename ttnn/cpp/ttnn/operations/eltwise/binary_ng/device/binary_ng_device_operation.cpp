@@ -551,7 +551,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
-        
+
     auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
     if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR &&
         input_tensor_b.layout() == Layout::ROW_MAJOR) {
@@ -662,6 +662,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
 
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
+
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -681,7 +686,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         false,
         input_tensor_a.layout(),
         Layout::INVALID,
-        output_tensor ? output_tensor->layout() : Layout::TILE};
+        output_layout};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
