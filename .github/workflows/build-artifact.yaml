@@ -88,6 +88,11 @@ on:
         type: string
         default: ""
         description: "Workflow run ID to download artifacts from (skips build)"
+      name-suffix:
+        required: false
+        type: string
+        default: ""
+        description: "Optional suffix to append to artifact names for uniqueness"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -279,7 +284,8 @@ jobs:
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+          NAME_SUFFIX="${{ inputs.name-suffix }}"
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}${NAME_SUFFIX:+-}${NAME_SUFFIX}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -389,7 +395,8 @@ jobs:
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
+          NAME_SUFFIX="${{ inputs.name-suffix }}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}${NAME_SUFFIX:+_}${NAME_SUFFIX}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -415,3 +422,4 @@ jobs:
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
+      name-suffix: ${{ inputs.name-suffix }}

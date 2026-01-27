@@ -23,6 +23,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      name-suffix:
+        required: false
+        type: string
+        default: ""
+        description: "Optional suffix to append to artifact names for uniqueness"
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
@@ -101,7 +106,8 @@ jobs:
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}-${SANITIZED_REF}-${{ github.run_id }}"
+          NAME_SUFFIX="${{ inputs.name-suffix }}"
+          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}-${SANITIZED_REF}-${{ github.run_id }}${NAME_SUFFIX:+-}${NAME_SUFFIX}"
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
