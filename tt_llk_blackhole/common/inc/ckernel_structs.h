@@ -10,6 +10,7 @@ namespace ckernel
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
+    constexpr static uint32_t FPU_SFPU            = 0; // fpu <-> sfpu sync
     constexpr static uint32_t MATH_PACK           = 1; // math <-> pack sync on dest register
     constexpr static uint32_t UNPACK_TO_DEST      = 2; // unpack <-> math sync on unpack to dest
     constexpr static uint32_t UNPACK_OPERAND_SYNC = 3; // unpack <-> pack, math sync on operand get/release
