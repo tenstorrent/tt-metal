@@ -134,7 +134,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    if (in_use_ && !thread_exception_state_.load()) {
+    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
