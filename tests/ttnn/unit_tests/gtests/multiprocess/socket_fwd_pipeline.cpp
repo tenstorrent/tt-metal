@@ -198,6 +198,10 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
     }
 }
 
+// float convert_to_us(uint64_t cycles) {
+
+// }
+
 PhysicalSystemDescriptor create_physical_system_descriptor() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
@@ -266,7 +270,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     const bool is_pipeline_start = (*distributed_context->rank() == *pipeline_start_rank);
 
     // Create Barrier Buffer
-    auto barrier_buffer_size = 32;
+    auto barrier_buffer_size = sizeof(uint64_t) * 100;
     CoreRangeSet barrier_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     auto shard_params = ShardSpecBuffer(barrier_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     distributed::DeviceLocalBufferConfig barrier_buffer_specs = {
@@ -282,10 +286,12 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
     distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), barrier_buffer, barrier_data, true);
 
+    distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 0);
+
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
         auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
-        distributed::MeshCoordinate start_coord = pipeline_stages[*pipeline_start_rank].entry_node_coord;
+        start_coord = pipeline_stages[*pipeline_start_rank].entry_node_coord;
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
         auto fwd_connection = distributed::SocketConnection(
@@ -362,6 +368,18 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
     }
     barrier();
+    if (is_pipeline_start) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto start_device_id = mesh_device_->get_device(start_coord)->id();
+        auto start_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        std::vector<uint64_t> latencies = std::vector<uint64_t>(100, 0);
+        uint32_t base_addr = 1572032;
+        cluster.read_core(
+            latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
+        for (auto latency : latencies) {
+            std::cout << latency << std::endl;
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

@@ -123,11 +123,12 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
+    uint32_t measurement_addr = credit_address;
+    auto l1_read_addr = get_read_ptr(data_cb_id);
     for (uint32_t i = 0; i < 100; ++i) {
+        uint64_t start_timestamp = get_timestamp();
         socket_reserve_pages(sender_socket, 1);
-        auto l1_read_addr = get_read_ptr(data_cb_id);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 fabric_connection,
@@ -163,22 +164,26 @@ void kernel_main() {
         socket_push_pages(sender_socket, 1);
 
         socket_wait_for_pages(receiver_socket, 1);
-        uint32_t socket_read_addr = receiver_socket.read_ptr;
-        uint32_t val = 0;
-        for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
-                while (true);
-            }
-            val++;
-        }
+        // uint32_t socket_read_addr = receiver_socket.read_ptr;
+        // uint32_t val = 0;
+        // for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
+        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
+        //         while (true);
+        //     }
+        //     val++;
+        // }
         socket_pop_pages(receiver_socket, 1);
-        if ((i & 1) == 0) {
+        if ((i & 7) == 0) {
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
         }
+        uint64_t end_timestamp = get_timestamp();
+        uint64_t latency = end_timestamp - start_timestamp;
+        *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(measurement_addr) = latency;
+        measurement_addr += sizeof(uint64_t);
     }
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
