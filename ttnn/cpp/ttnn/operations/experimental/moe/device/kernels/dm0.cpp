@@ -133,94 +133,95 @@ void kernel_main() {
     // Expert loop
     //-------------------------------------------------------------------------
     // Set w0_w1 state once before loop (will be reused for all experts)
-    noc_async_read_one_packet_set_state<true>(dram_noc_addr, w0_w1_bytes_per_txn, vchannel);
+    // noc_async_read_one_packet_set_state<true>(dram_noc_addr, w0_w1_bytes_per_txn, vchannel);
 
-    //-------------------------------------------------------------------------
-    // Variables to track pipeline state
-    //-------------------------------------------------------------------------
-    uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
-    bool txns_in_flight = false;
+    // //-------------------------------------------------------------------------
+    // // Variables to track pipeline state
+    // //-------------------------------------------------------------------------
+    // uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
+    // bool txns_in_flight = false;
 
-    // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    // // We reserve one to kick start the pipeline, and then it is steady state
+    // cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        //-------------------------------------------------------------------------
-        // Pipelined reading of W0/W1
-        //-------------------------------------------------------------------------
-        uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+    // for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+    //     //-------------------------------------------------------------------------
+    //     // Pipelined reading of W0/W1
+    //     //-------------------------------------------------------------------------
+    //     uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-        for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
-            // Issue reads with current trid
-            noc_async_read_set_trid(trid_to_issue);
-            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
-            w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+    //     for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
+    //         // Issue reads with current trid
+    //         noc_async_read_set_trid(trid_to_issue);
+    //         noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+    //             dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
+    //         w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
 
-            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, trid_to_issue);
-            w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+    //         noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+    //             dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn,
+    //             trid_to_issue);
+    //         w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
 
-            ADVANCE_SLOT(slot_to_issue);
-            ADVANCE_TRID(trid_to_issue);
+    //         ADVANCE_SLOT(slot_to_issue);
+    //         ADVANCE_TRID(trid_to_issue);
 
-            // Only when we first start the pipeline, we don't have any txns in flight
-            if (txns_in_flight) {
-                noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    //         // Only when we first start the pipeline, we don't have any txns in flight
+    //         if (txns_in_flight) {
+    //             noc_async_read_barrier_with_trid(trid_to_wait);
+    //             cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                ADVANCE_TRID(trid_to_wait);
+    //             ADVANCE_TRID(trid_to_wait);
 
-                // Reserve for next block
-                // Reserve back is not incremental, so to reserve one more, we need to reserve 2
-                // This accounts for the one we already have reserved (for in-flight read)
-                cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
-            }
-            txns_in_flight = true;
-        }
+    //             // Reserve for next block
+    //             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
+    //             // This accounts for the one we already have reserved (for in-flight read)
+    //             cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+    //         }
+    //         txns_in_flight = true;
+    //     }
 
-        //-------------------------------------------------------------------------
-        // Pipelined reading of W2
-        //-------------------------------------------------------------------------
-        uint32_t w2_dram_read_offset = w2_expert_offset;
+    //     //-------------------------------------------------------------------------
+    //     // Pipelined reading of W2
+    //     //-------------------------------------------------------------------------
+    //     uint32_t w2_dram_read_offset = w2_expert_offset;
 
-        for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
-            // Issue reads with current trid
-            noc_async_read_set_trid(trid_to_issue);
-            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
-            w2_dram_read_offset += w2_bytes_per_txn;
+    //     for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+    //         // Issue reads with current trid
+    //         noc_async_read_set_trid(trid_to_issue);
+    //         noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+    //             dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
+    //         w2_dram_read_offset += w2_bytes_per_txn;
 
-            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
-            w2_dram_read_offset += w2_bytes_per_txn;
+    //         noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+    //             dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
+    //         w2_dram_read_offset += w2_bytes_per_txn;
 
-            ADVANCE_SLOT(slot_to_issue);
-            ADVANCE_TRID(trid_to_issue);
+    //         ADVANCE_SLOT(slot_to_issue);
+    //         ADVANCE_TRID(trid_to_issue);
 
-            noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    //         noc_async_read_barrier_with_trid(trid_to_wait);
+    //         cb_push_back(cb_r2c_w2, w2_tiles_per_block);
 
-            ADVANCE_TRID(trid_to_wait);
+    //         ADVANCE_TRID(trid_to_wait);
 
-            // Reserve for next block
-            // Reserve back is not incremental, so to reserve one more, we need to reserve 2
-            // This accounts for the one we already have reserved (for in-flight read)
-            cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
-        }
+    //         // Reserve for next block
+    //         // Reserve back is not incremental, so to reserve one more, we need to reserve 2
+    //         // This accounts for the one we already have reserved (for in-flight read)
+    //         cb_reserve_back(cb_r2c_w2, w2_tiles_per_block * 2);
+    //     }
 
-        // Update offsets for next expert
-        w0_w1_expert_offset += w0_w1_total_size_per_expert;
-        w2_expert_offset += w2_total_size_per_expert;
-    }
+    //     // Update offsets for next expert
+    //     w0_w1_expert_offset += w0_w1_total_size_per_expert;
+    //     w2_expert_offset += w2_total_size_per_expert;
+    // }
 
-    // Drain the pipeline - the last txn in flight
-    noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    // // Drain the pipeline - the last txn in flight
+    // noc_async_read_barrier_with_trid(trid_to_wait);
+    // cb_push_back(cb_r2c_w2, w2_tiles_per_block);
 
-    // We have one extra slot reserved, which we won't use.
-    // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+    // // We have one extra slot reserved, which we won't use.
+    // // For CB hygiene, we can push it back.
+    // cb_push_back(cb_r2c_w2, w2_tiles_per_block);
 }
 
 #undef ADVANCE_TRID

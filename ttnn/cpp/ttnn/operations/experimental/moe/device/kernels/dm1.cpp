@@ -97,44 +97,45 @@ void kernel_main() {
     }
     uint32_t semaphore_value = 0;
 
-    // Set state for the writes
-    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+    // // Set state for the writes
+    // noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
-    //-------------------------------------------------------------------------
-    // Expert loop
-    //-------------------------------------------------------------------------
-    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Wait for compute core to tell us that all mm01 data is ready
-        cb_wait_front(cb_c2w_rdy, 1);
-        cb_pop_front(cb_c2w_rdy, 1);
+    // //-------------------------------------------------------------------------
+    // // Expert loop
+    // //-------------------------------------------------------------------------
+    // for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+    //     // Wait for compute core to tell us that all mm01 data is ready
+    //     cb_wait_front(cb_c2w_rdy, 1);
+    //     cb_pop_front(cb_c2w_rdy, 1);
 
-        // Take the data in cb_s2c_in2 and send it to the next core in the ring
-        // Ring synchronization: all cores participate regardless of whether they had CB work
-        // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+    //     // Take the data in cb_s2c_in2 and send it to the next core in the ring
+    //     // Ring synchronization: all cores participate regardless of whether they had CB work
+    //     // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
 
-        for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-            // Wait for current data to be ready in cb_s2c_in2
-            noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+    //     for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+    //         // Wait for current data to be ready in cb_s2c_in2
+    //         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
 
-            // Signal to compute core that data is ready
-            cb_reserve_back(cb_w2c_rdy, 1);
-            cb_push_back(cb_w2c_rdy, 1);
+    //         // Signal to compute core that data is ready
+    //         cb_reserve_back(cb_w2c_rdy, 1);
+    //         cb_push_back(cb_w2c_rdy, 1);
 
-            // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-            // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-            const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
-            const uint64_t neighbor_dst_addr =
-                LOCAL_BUFFER_OFFSET[(step == (num_a2a_steps_per_iter - 1)) ? 0 : (step + 1)];
+    //         // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+    //         // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
+    //         const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
+    //         const uint64_t neighbor_dst_addr =
+    //             LOCAL_BUFFER_OFFSET[(step == (num_a2a_steps_per_iter - 1)) ? 0 : (step + 1)];
 
-            noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-            noc_async_write_one_packet_with_state</*posted=*/true>(
-                local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+    //         noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
+    //         noc_async_write_one_packet_with_state</*posted=*/true>(
+    //             local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-            // Signal neighbor that data is ready (increment their semaphore)
-            noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+    //         // Signal neighbor that data is ready (increment their semaphore)
+    //         noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1,
+    //         /*vc=*/vchannel);
 
-            // Ensure write and semaphore have left the core before continuing
-            noc_async_posted_atomic_barrier();
-        }
-    }
+    //         // Ensure write and semaphore have left the core before continuing
+    //         noc_async_posted_atomic_barrier();
+    //     }
+    // }
 }

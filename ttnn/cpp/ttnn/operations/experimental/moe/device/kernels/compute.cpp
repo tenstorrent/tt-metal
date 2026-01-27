@@ -9,6 +9,9 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "api/debug/dprint.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -83,26 +86,33 @@ void MAIN {
     // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
     constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_A;  // max(num_w0_w1_tiles_w)
 
+    DPRINT << "num_experts: " << num_experts << " tiles_per_step: " << tiles_per_step
+           << " w0_w1_blocks_per_two_elt_tile" << w0_w1_blocks_per_two_elt_tile
+           << " w0_w1_tiles_per_block: " << w0_w1_tiles_per_block << ENDL();
+
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
     // Pack is always configured to Float16_b
-    pack_reconfig_data_format(cb_s2c_in2);
+    // pack_reconfig_data_format(cb_s2c_in2);
 
-    // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
-    reconfig_data_format_srcb(cb_s2c_in);
+    // // Unpacker B is for input/activation and eltiwse inputs, so Float16_b
+    // reconfig_data_format_srcb(cb_s2c_in);
 
-    // Unpacker A is for W0,W1 and W2, so Bf4_b
-    reconfig_data_format_srca(cb_r2c_w0_w1);
+    // // Unpacker A is for W0,W1 and W2, so Bf4_b
+    // reconfig_data_format_srca(cb_r2c_w0_w1);
+    uint32_t ct_dim_val = 1;
 
     // Initialize matmul for W0
-    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+    mm_block_init(
+        cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/ct_dim_val, /*rt_dim=*/1, /*kt_dim=*/7);
 
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     uint32_t in0_offset_per_expert = 0;
     uint32_t out_offset_per_expert = 0;
+
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
@@ -111,120 +121,123 @@ void MAIN {
             uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
 
             tile_regs_acquire();
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+            DeviceZoneScopedN("MATMUL_K_DIM");
+            {
+                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                    // cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                    matmul_block(
-                        cb_s2c_in,
-                        cb_r2c_w0_w1,
-                        in0_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        matmul_block(
+                            cb_s2c_in,
+                            cb_r2c_w0_w1,
+                            in0_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/ct_dim_val,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/7);
+                    }
+                    // cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
-                cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+
+                //---------------------------------------------------------------------
+                // Apply SILU activation and then eltwise multiply
+                //---------------------------------------------------------------------
+                // silu_tile_init();
+                // silu_tile(0);
+                // silu_tile(2);
+
+                // mul_binary_tile_init();
+                // mul_binary_tile(0, 1, 0);
+                // mul_binary_tile(2, 3, 2);
+
+                tile_regs_commit();
+                tile_regs_wait();
+
+                // PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
+                // PACK(silu_tile_init());
+                // PACK(silu_tile(0));
+
+                // PACK(mul_binary_tile_init());
+                // PACK(mul_binary_tile(0, 1, 0));
+
+                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+                tile_regs_release();
             }
-
-            //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
-            //---------------------------------------------------------------------
-            silu_tile_init();
-            silu_tile(0);
-            silu_tile(2);
-
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-            mul_binary_tile(2, 3, 2);
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            // PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
-            // PACK(silu_tile_init());
-            // PACK(silu_tile(0));
-
-            // PACK(mul_binary_tile_init());
-            // PACK(mul_binary_tile(0, 1, 0));
-
-            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
-            pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
-            tile_regs_release();
         }
 
         // Signal to DM1 that the output from this core is ready
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
+        // cb_reserve_back(cb_c2w_rdy, 1);
+        // cb_push_back(cb_c2w_rdy, 1);
 
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
-        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-            uint32_t dm1_step = 0;
-            uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            if (iter == 0) {
-                cb_wait_front(cb_w2c_rdy, 1);
-            }
+        // uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        // for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+        //     uint32_t dm1_step = 0;
+        //     uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+        //     if (iter == 0) {
+        //         cb_wait_front(cb_w2c_rdy, 1);
+        //     }
 
-            uint32_t in2_offset = 0, in2_index = 0;
+        //     uint32_t in2_offset = 0, in2_index = 0;
 
-            tile_regs_acquire();
+        //     tile_regs_acquire();
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+        //     for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+        //         cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
-                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    // The last block has only 4 tiles of interest, so we exit early.
-                    if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                        if (iter == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                        }
-                        break;
-                    }
+        //         for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+        //             // The last block has only 4 tiles of interest, so we exit early.
+        //             if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+        //                 if (iter == 0) {
+        //                     cb_pop_front(cb_w2c_rdy, 1);
+        //                 }
+        //                 break;
+        //             }
 
-                    if (dm1_tiles_remaining == 0) {
-                        if (iter == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
-                        }
-                        dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_offset += tiles_per_step;
-                        in2_index = in2_offset;
-                    }
-                    dm1_tiles_remaining--;
+        //             if (dm1_tiles_remaining == 0) {
+        //                 if (iter == 0) {
+        //                     cb_pop_front(cb_w2c_rdy, 1);
+        //                     cb_wait_front(cb_w2c_rdy, 1);
+        //                 }
+        //                 dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+        //                 in2_offset += tiles_per_step;
+        //                 in2_index = in2_offset;
+        //             }
+        //             dm1_tiles_remaining--;
 
-                    matmul_block(
-                        cb_s2c_in2,
-                        cb_r2c_w2,
-                        in2_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
-                }
-                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
-            }
+        //             matmul_block(
+        //                 cb_s2c_in2,
+        //                 cb_r2c_w2,
+        //                 in2_index++,
+        //                 /*in1_index=*/k,
+        //                 /*idst=*/0,
+        //                 /*transpose=*/false,
+        //                 /*ct_dim=*/4,
+        //                 /*rt_dim=*/1,
+        //                 /*kt_dim=*/1);
+        //         }
+        //         cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+        //     }
 
-            tile_regs_commit();
+        //     tile_regs_commit();
 
-            tile_regs_wait();
-            // Pack this in-place for now.
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            tile_regs_release();
-        }
+        //     tile_regs_wait();
+        //     // Pack this in-place for now.
+        //     pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+        //     pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+        //     pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+        //     pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+        //     tile_regs_release();
+        // }
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push
-    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+    // cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+    // cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
 }
 }  // namespace NAMESPACE
