@@ -109,9 +109,7 @@ ReduceToOneOp::ReduceToOne::cached_mesh_workload_t ReduceToOneOp::ReduceToOne::c
     for (size_t i = 0; i < 3; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_one op");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
-    log_debug(tt::LogOp, "Synchronize devices in reduce_to_one op done");
 
     const auto& coords = tensor_coords.coords();
     const auto& root_coord = operation_attributes.root_coord;

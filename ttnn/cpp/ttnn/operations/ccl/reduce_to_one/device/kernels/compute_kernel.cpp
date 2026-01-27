@@ -38,6 +38,11 @@ FORCE_INLINE void reduce_step() {
 }
 
 void MAIN {
+    // LEAF devices don't do compute - early exit
+    if constexpr (device_role == MESH_LEAF) {
+        return;
+    }
+
     // Staged reduction using 32x32 tiles for compute optimization
     // Stage 1 (all ROOTs): local + received → output
     // Stage 2 (ROOT2, ROOT1): output + received → local (reuse local_cb)
