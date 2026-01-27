@@ -52,7 +52,7 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
-    static void destroy_instance();
+    static void destroy_instance(bool check_device_count = true);
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
