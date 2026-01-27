@@ -1,0 +1,103 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "parallel_device_operation.hpp"
+
+namespace ttnn::experimental::prim {
+
+// =============================================================================
+// ParallelDeviceOperation Implementation
+// =============================================================================
+
+ParallelDeviceOperation::program_factory_t ParallelDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return ParallelProgramFactory{};
+}
+
+void ParallelDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+void ParallelDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    TT_FATAL(!operation_attributes.branches.empty(), "ParallelDeviceOperation requires at least one branch");
+
+    // Validate that core ranges don't overlap between branches
+    for (size_t i = 0; i < operation_attributes.branches.size(); ++i) {
+        for (size_t j = i + 1; j < operation_attributes.branches.size(); ++j) {
+            const auto& cores_i = operation_attributes.branches[i].core_range();
+            const auto& cores_j = operation_attributes.branches[j].core_range();
+
+            auto intersection = cores_i.intersection(cores_j);
+            TT_FATAL(
+                intersection.empty(),
+                "Parallel branches must have disjoint core assignments. "
+                "Branch {} and branch {} have overlapping cores.",
+                i,
+                j);
+        }
+    }
+
+    // Validate each individual branch
+    for (const auto& branch : operation_attributes.branches) {
+        branch.check_on_cache_miss();
+    }
+}
+
+ParallelDeviceOperation::spec_return_value_t ParallelDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    spec_return_value_t specs;
+    specs.reserve(operation_attributes.branches.size());
+
+    for (const auto& branch : operation_attributes.branches) {
+        specs.push_back(branch.get_output_specs());
+    }
+
+    return specs;
+}
+
+ParallelDeviceOperation::tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    tensor_return_value_t outputs;
+    outputs.reserve(operation_attributes.branches.size());
+
+    for (const auto& branch : operation_attributes.branches) {
+        outputs.push_back(branch.make_output_tensors());
+    }
+
+    return outputs;
+}
+
+tt::stl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    // Hash together the operation type, number of branches, and core ranges
+    tt::stl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
+
+    for (const auto& branch : operation_attributes.branches) {
+        // Hash the branch's operation type
+        combined_hash = tt::stl::hash::hash_objects(combined_hash, branch.type_info().hash_code());
+
+        // Hash the core range to ensure different core configurations get different programs
+        for (const auto& range : branch.core_range().ranges()) {
+            combined_hash = tt::stl::hash::hash_objects(
+                combined_hash, range.start_coord.x, range.start_coord.y, range.end_coord.x, range.end_coord.y);
+        }
+    }
+
+    return combined_hash;
+}
+
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+std::vector<std::vector<Tensor>> parallel(ttnn::experimental::prim::ParallelParams operation_attributes) {
+    using OperationType = ttnn::experimental::prim::ParallelDeviceOperation;
+    auto tensor_args = OperationType::tensor_args_t{};
+
+    return ttnn::device_operation::launch<OperationType>(std::move(operation_attributes), tensor_args);
+}
+
+}  // namespace ttnn::prim

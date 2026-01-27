@@ -100,7 +100,21 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 }  // namespace
 
 LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory::create(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    // Create a new program and delegate to add_to()
+    Program program = Program();
+    shared_variables_t shared_vars =
+        add_to(program, operation_attributes, tensor_args, tensor_return_value, std::nullopt);
+    return cached_program_t{std::move(program), std::move(shared_vars)};
+}
+
+LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactory::add_to_impl(
+    tt::tt_metal::Program& program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -300,7 +314,6 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 
@@ -1108,12 +1121,14 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
             height_index = 0;
             width_index = i;
         } else {
+            // Normalize to relative coordinates (relative to start_core)
+            // This is necessary when the grid doesn't start at (0,0)
             if (row_wise) {
-                height_index = core.y;
-                width_index = core.x;
+                height_index = core.y - start_core.y;
+                width_index = core.x - start_core.x;
             } else {
-                height_index = core.x;
-                width_index = core.y;
+                height_index = core.x - start_core.x;
+                width_index = core.y - start_core.y;
             }
         }
 
@@ -1392,24 +1407,63 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .writer_kernel_ids = writer_kernel_ids,
-            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
-            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
-            .num_none_all_to_all_workers = num_none_all_to_all_workers,
-            .is_pre_all_gather = is_pre_all_gather,
-            .cb_in0 = cb_in0,
-            .cb_in1 = cb_in1,
-            .cb_stats = cb_stats,
-            .cb_add_out = cb_add_out,
-            .cb_output = cb_output,
-            .cores = cores}};
+    // Get the actual core range from shard spec for parallel composition
+    CoreRangeSet all_cores_set = a.shard_spec().value().grid;
+
+    return shared_variables_t{
+        .writer_kernel_ids = writer_kernel_ids,
+        .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
+        .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
+        .num_none_all_to_all_workers = num_none_all_to_all_workers,
+        .is_pre_all_gather = is_pre_all_gather,
+        .cb_in0 = cb_in0,
+        .cb_in1 = cb_in1,
+        .cb_stats = cb_stats,
+        .cb_add_out = cb_add_out,
+        .cb_output = cb_output,
+        .cores = cores,
+        .all_cores_set = all_cores_set};
+}
+
+LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactory::add_to(
+    tt::tt_metal::Program& program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<CoreRangeSet>& core_range_override) {
+    // Sharded layernorm uses complex multicast logic that assumes specific core layouts.
+    // The tensor's shard_spec already defines the core range to use.
+    // If core_range_override is provided, verify it matches the tensor's shard_spec.
+    if (core_range_override.has_value()) {
+        const auto& tensor_cores = tensor_args.input.shard_spec().value().grid;
+        TT_FATAL(
+            core_range_override.value() == tensor_cores,
+            "Sharded LayerNorm core_range_override ({}) must match the tensor's shard_spec grid ({})",
+            core_range_override.value(),
+            tensor_cores);
+    }
+
+    // Delegate to the implementation that adds all resources to the provided program
+    return add_to_impl(program, operation_attributes, tensor_args, tensor_return_value);
 }
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    // Delegate to the separated version (Program& + shared_variables_t&)
+    override_runtime_arguments(
+        cached_program.program,
+        cached_program.shared_variables,
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
+}
+
+void LayerNormShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    shared_variables_t& shared_vars,
     const LayerNormParams& /*operation_attributes*/,
     const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -1420,42 +1474,39 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
     const auto& stats_tensor = tensor_args.stats;
     auto* const dst_buffer = tensor_return_value.buffer();
 
-    const auto& capture = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    UpdateDynamicCircularBufferAddress(program, capture.cb_in0, *src_buffer_a);
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *src_buffer_a);
 
     if (b_tensor.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, capture.cb_in1, *b_tensor.value().buffer());
-        if (capture.is_pre_all_gather) {
-            UpdateDynamicCircularBufferAddress(program, capture.cb_add_out, *src_buffer_a);
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in1, *b_tensor.value().buffer());
+        if (shared_vars.is_pre_all_gather) {
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_add_out, *src_buffer_a);
         }
     }
     if (stats_tensor.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, capture.cb_stats, *stats_tensor.value().buffer());
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_stats, *stats_tensor.value().buffer());
     }
 
-    UpdateDynamicCircularBufferAddress(program, capture.cb_output, *dst_buffer);
+    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *dst_buffer);
 
-    auto& writer_sender_args_by_core = GetRuntimeArgs(program, capture.writer_mcast_sender_kernels_id);
-    auto& writer_receiver_args_by_core = capture.num_none_all_to_all_workers > 0
-                                             ? GetRuntimeArgs(program, capture.writer_mcast_receiver_kernels_id)
+    auto& writer_sender_args_by_core = GetRuntimeArgs(program, shared_vars.writer_mcast_sender_kernels_id);
+    auto& writer_receiver_args_by_core = shared_vars.num_none_all_to_all_workers > 0
+                                             ? GetRuntimeArgs(program, shared_vars.writer_mcast_receiver_kernels_id)
                                              : writer_sender_args_by_core;
 
     const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
     const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;
 
-    for (uint32_t i = 0; i < capture.cores.size(); ++i) {
-        const CoreCoord& core = capture.cores[i];
+    for (uint32_t i = 0; i < shared_vars.cores.size(); ++i) {
+        const CoreCoord& core = shared_vars.cores[i];
 
-        const auto writer_kernel_id = capture.writer_kernel_ids.at(i);
+        const auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
 
-        if (writer_kernel_id == capture.writer_mcast_sender_kernels_id) {
+        if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
             auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
             runtime_args[3] = gamma_address;
             runtime_args[4] = beta_address;
 
-        } else if (writer_kernel_id == capture.writer_mcast_receiver_kernels_id) {
+        } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
             auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
             runtime_args[3] = gamma_address;
             runtime_args[4] = beta_address;

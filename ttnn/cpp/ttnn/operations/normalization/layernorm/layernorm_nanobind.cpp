@@ -13,6 +13,7 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "layernorm.hpp"
+#include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -64,7 +65,7 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 }
 
 void bind_normalization_layernorm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    auto py_operation = ttnn::bind_registered_operation(
         mod,
         ttnn::layer_norm,
         R"doc(
@@ -159,6 +160,71 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()});
+
+    // Add branch() method for parallel execution support
+    // Returns BranchDescriptor by value (move semantics)
+    py_operation.def(
+        "branch",
+        [](const std::decay_t<decltype(ttnn::layer_norm)>& /*self*/,
+           const ttnn::Tensor& input_tensor,
+           const tt::tt_metal::CoreRangeSet& cores,
+           float epsilon,
+           const std::optional<const ttnn::Tensor>& weight,
+           const std::optional<const ttnn::Tensor>& bias,
+           const std::optional<const ttnn::Tensor>& residual_input_tensor,
+           const std::optional<MemoryConfig>& memory_config,
+           const std::optional<const prim::LayerNormProgramConfig>& program_config,
+           std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+            return ExecuteLayerNorm::branch(
+                input_tensor,
+                cores,
+                epsilon,
+                weight,
+                bias,
+                residual_input_tensor,
+                memory_config,
+                program_config,
+                compute_kernel_config);
+        },
+        nb::arg("input_tensor"),
+        nb::arg("cores"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12f,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        R"doc(
+            Create a branch descriptor for parallel execution with ttnn.parallel.
+
+            This allows running multiple Layer norm operations in parallel on disjoint
+            core ranges within a single fused program.
+
+            Args:
+                input_tensor (ttnn.Tensor): Input tensor to normalize.
+                cores (ttnn.CoreRangeSet): Core range for this branch (must be disjoint from other branches).
+
+            Keyword Args:
+                epsilon (float): Small constant for numerical stability. Defaults to 1e-12.
+                weight (ttnn.Tensor, optional): Gamma scale tensor. Defaults to None.
+                bias (ttnn.Tensor, optional): Beta bias tensor. Defaults to None.
+                residual_input_tensor (ttnn.Tensor, optional): Residual tensor. Defaults to None.
+                memory_config (ttnn.MemoryConfig, optional): Output memory config. Defaults to None.
+                program_config (ttnn.ProgramConfig, optional): Program config. Defaults to None.
+                compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute config. Defaults to None.
+
+            Returns:
+                BranchDescriptor: A branch descriptor for use with ttnn.parallel().
+
+            Example:
+                >>> cores_a = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (3, 3))])
+                >>> cores_b = ttnn.CoreRangeSet([ttnn.CoreRange((4, 0), (7, 3))])
+                >>> branch_a = ttnn.layer_norm.branch(input_a, cores_a, epsilon=1e-5, weight=w_a, bias=b_a)
+                >>> branch_b = ttnn.layer_norm.branch(input_b, cores_b, epsilon=1e-5, weight=w_b, bias=b_b)
+                >>> results = ttnn.parallel([branch_a, branch_b])
+        )doc");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {
