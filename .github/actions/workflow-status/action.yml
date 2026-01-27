@@ -33,10 +33,16 @@ runs:
 
           // Check optional jobs (treat skipped as success)
           for (const job of optionalJobs) {
-            const result = needs[job]?.result || "success"; // Default to success if missing
+            const result = needs[job]?.result;
+            if (result === undefined) {
+              core.setFailed(`Optional job '${job}' is not found in needs context or has no result. This may indicate a configuration error (job not in needs list or typo in job name).`);
+              continue;
+            }
             console.log(`Job: ${job}, Result: ${result}`);
-            if (result === "failure") {
-              core.setFailed(`Optional job '${job}' failed.`);
+            // Treat failure, cancelled (timeout), and timed_out as failures
+            // Skipped jobs are OK (treated as success)
+            if (result === "failure" || result === "cancelled" || result === "timed_out") {
+              core.setFailed(`Optional job '${job}' failed or timed out (result: ${result}).`);
             }
           }
 
