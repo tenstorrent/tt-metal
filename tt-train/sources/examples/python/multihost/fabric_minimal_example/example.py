@@ -32,9 +32,7 @@ def main(config: str):
     # Initialize distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
-    print(
-        f"Initialized autograd distributed context on host: {hostname} with args: {sys.argv}"
-    )
+    print(f"Initialized autograd distributed context on host: {hostname} with args: {sys.argv}")
     distributed_ctx = autograd_ctx.get_distributed_context()
     print(f"Got distributed context on host: {hostname}")
 
@@ -42,9 +40,7 @@ def main(config: str):
 
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
-    assert (
-        world_size > 1
-    ), f"World size must be greater than 1, world size: {world_size}"
+    assert world_size > 1, f"World size must be greater than 1, world size: {world_size}"
 
     # Initialize socket manager
     autograd_ctx.initialize_socket_manager(ttml.core.distributed.SocketType.FABRIC)
@@ -57,9 +53,7 @@ def main(config: str):
 
     N = 1024
     values = np.ones((1, 1, 1, N), dtype=np.float32) * (rank + 1)
-    tt_values = ttml.autograd.Tensor.from_numpy(
-        values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )
+    tt_values = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
     if rank > 0:
         socket_manager.send(tt_values, distributed_ctx, 0)
@@ -68,9 +62,7 @@ def main(config: str):
         print(f"Listening for tt_values on {hostname}")
         for other_rank in range(1, world_size):
             recv_from_other_rank = ttml.core.empty_like(tt_values)
-            recv_from_other_rank = socket_manager.recv(
-                recv_from_other_rank, distributed_ctx, other_rank
-            )
+            recv_from_other_rank = socket_manager.recv(recv_from_other_rank, distributed_ctx, other_rank)
             tt_values = tt_values + recv_from_other_rank
         device = autograd_ctx.get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)

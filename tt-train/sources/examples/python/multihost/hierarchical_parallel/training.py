@@ -71,9 +71,7 @@ def main(config: str, worker_type: str):
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
 
-    multihost_config = MultiHostConfig(
-        load_config(yaml_config["training_config"]["multihost_config"])
-    )
+    multihost_config = MultiHostConfig(load_config(yaml_config["training_config"]["multihost_config"]))
     num_workers = multihost_config.num_workers
 
     # Determine architecture based on world_size and num_workers
@@ -126,9 +124,7 @@ def main(config: str, worker_type: str):
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
-    print(
-        f"Device config DDP: {device_config.enable_ddp}, TP: {device_config.enable_tp} on rank {rank}"
-    )
+    print(f"Device config DDP: {device_config.enable_ddp}, TP: {device_config.enable_tp} on rank {rank}")
 
     # Execute appropriate worker function
     if worker_type == "worker":
@@ -154,9 +150,7 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
-        )
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()
