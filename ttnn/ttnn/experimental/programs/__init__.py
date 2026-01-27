@@ -5,13 +5,36 @@
 """
 ttnn.experimental.programs module for creating program descriptors.
 
-This module provides functions to create ProgramDescriptor objects for various operations.
-These descriptors can be merged and executed together using ttnn.experimental.launch_composite().
+This module provides functions to create ProgramBranch objects for various operations.
+These can be composed and executed together using ttnn.experimental.launch_composite().
 """
 
-from typing import Optional, Tuple
+from typing import List, NamedTuple, Optional
 
 import ttnn
+
+
+class ProgramBranch(NamedTuple):
+    """
+    A single operation branch for parallel composition.
+
+    Contains:
+    - descriptor: The ProgramDescriptor for the operation
+    - output: The output tensor (created by the operation's create_output_tensors)
+    - io_tensors: All tensors (inputs + output) for generic_op
+
+    Created by programs.rms_norm(), programs.layer_norm(), etc.
+    Passed to launch_composite() for execution.
+
+    Example:
+        >>> left = ttnn.experimental.programs.rms_norm(input1, weight=w1)
+        >>> right = ttnn.experimental.programs.rms_norm(input2, weight=w2)
+        >>> left_out, right_out = ttnn.experimental.launch_composite([left, right])
+    """
+
+    descriptor: "ttnn.ProgramDescriptor"
+    output: "ttnn.Tensor"
+    io_tensors: List["ttnn.Tensor"]
 
 
 def _create_program_config(input_tensor: "ttnn.Tensor") -> "ttnn.LayerNormProgramConfig":
@@ -41,6 +64,25 @@ def _create_program_config(input_tensor: "ttnn.Tensor") -> "ttnn.LayerNormProgra
     )
 
 
+def _build_io_tensors(
+    input_tensor: "ttnn.Tensor",
+    output_tensor: "ttnn.Tensor",
+    weight: Optional["ttnn.Tensor"] = None,
+    bias: Optional["ttnn.Tensor"] = None,
+    residual_input_tensor: Optional["ttnn.Tensor"] = None,
+) -> List["ttnn.Tensor"]:
+    """Build the io_tensors list for a layernorm/rmsnorm operation."""
+    io_tensors = [input_tensor]
+    if residual_input_tensor is not None:
+        io_tensors.append(residual_input_tensor)
+    if weight is not None:
+        io_tensors.append(weight)
+    if bias is not None:
+        io_tensors.append(bias)
+    io_tensors.append(output_tensor)
+    return io_tensors
+
+
 def rms_norm(
     input_tensor: "ttnn.Tensor",
     core_range_set: Optional["ttnn.CoreRangeSet"] = None,
@@ -50,13 +92,12 @@ def rms_norm(
     residual_input_tensor: Optional["ttnn.Tensor"] = None,
     compute_kernel_config: Optional["ttnn.DeviceComputeKernelConfig"] = None,
     memory_config: Optional["ttnn.MemoryConfig"] = None,
-) -> Tuple["ttnn.ProgramDescriptor", "ttnn.Tensor"]:
+) -> ProgramBranch:
     """
-    Create a ProgramDescriptor for an RMS norm operation.
+    Create a ProgramBranch for an RMS norm operation.
 
     Automatically selects the appropriate factory (sharded or non-sharded) based on
-    the input tensor's memory layout. Output tensor is created internally using the
-    device operation's create_output_tensors.
+    the input tensor's memory layout. Output tensor is created internally.
 
     Args:
         input_tensor: The input tensor (must be on device).
@@ -71,22 +112,13 @@ def rms_norm(
         memory_config: Optional output memory configuration. Defaults to input's memory config.
 
     Returns:
-        Tuple of (ProgramDescriptor, output_tensor) where:
-            - ProgramDescriptor describes the RMS norm program
-            - output_tensor is the created output tensor
-
-    Raises:
-        RuntimeError: If input tensors are not valid or on device.
-        RuntimeError: For non-sharded inputs, core_range_set must be provided.
+        ProgramBranch containing the program descriptor, output tensor, and io_tensors.
+        Use with ttnn.experimental.launch_composite() to execute.
 
     Example:
-        >>> import ttnn
-        >>> # Create tensors
-        >>> input_t = ttnn.from_torch(torch_input, device=device, ...)
-        >>> cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-        >>>
-        >>> # Create program descriptor
-        >>> desc, output = ttnn.experimental.programs.rms_norm(input_t, cores)
+        >>> left = ttnn.experimental.programs.rms_norm(input1, weight=w1)
+        >>> right = ttnn.experimental.programs.rms_norm(input2, weight=w2)
+        >>> left_out, right_out = ttnn.experimental.launch_composite([left, right])
     """
     device = input_tensor.device()
     arch = device.arch()
@@ -135,7 +167,10 @@ def rms_norm(
     factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
     program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, core_range_set)
 
-    return program_descriptor, output_tensor
+    # Build io_tensors list
+    io_tensors = _build_io_tensors(input_tensor, output_tensor, weight, bias, residual_input_tensor)
+
+    return ProgramBranch(program_descriptor, output_tensor, io_tensors)
 
 
 def layer_norm(
@@ -147,13 +182,12 @@ def layer_norm(
     residual_input_tensor: Optional["ttnn.Tensor"] = None,
     compute_kernel_config: Optional["ttnn.DeviceComputeKernelConfig"] = None,
     memory_config: Optional["ttnn.MemoryConfig"] = None,
-) -> Tuple["ttnn.ProgramDescriptor", "ttnn.Tensor"]:
+) -> ProgramBranch:
     """
-    Create a ProgramDescriptor for a layer norm operation.
+    Create a ProgramBranch for a layer norm operation.
 
     Automatically selects the appropriate factory (sharded or non-sharded) based on
-    the input tensor's memory layout. Output tensor is created internally using the
-    device operation's create_output_tensors.
+    the input tensor's memory layout. Output tensor is created internally.
 
     Args:
         input_tensor: The input tensor (must be on device).
@@ -168,22 +202,13 @@ def layer_norm(
         memory_config: Optional output memory configuration. Defaults to input's memory config.
 
     Returns:
-        Tuple of (ProgramDescriptor, output_tensor) where:
-            - ProgramDescriptor describes the layer norm program
-            - output_tensor is the created output tensor
-
-    Raises:
-        RuntimeError: If input tensors are not valid or on device.
-        RuntimeError: For non-sharded inputs, core_range_set must be provided.
+        ProgramBranch containing the program descriptor, output tensor, and io_tensors.
+        Use with ttnn.experimental.launch_composite() to execute.
 
     Example:
-        >>> import ttnn
-        >>> # Create tensors
-        >>> input_t = ttnn.from_torch(torch_input, device=device, ...)
-        >>> cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-        >>>
-        >>> # Create program descriptor
-        >>> desc, output = ttnn.experimental.programs.layer_norm(input_t, cores)
+        >>> left = ttnn.experimental.programs.layer_norm(input1, weight=w1, bias=b1)
+        >>> right = ttnn.experimental.programs.layer_norm(input2, weight=w2, bias=b2)
+        >>> left_out, right_out = ttnn.experimental.launch_composite([left, right])
     """
     device = input_tensor.device()
     arch = device.arch()
@@ -232,7 +257,10 @@ def layer_norm(
     factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
     program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, core_range_set)
 
-    return program_descriptor, output_tensor
+    # Build io_tensors list
+    io_tensors = _build_io_tensors(input_tensor, output_tensor, weight, bias, residual_input_tensor)
+
+    return ProgramBranch(program_descriptor, output_tensor, io_tensors)
 
 
-__all__ = ["rms_norm", "layer_norm"]
+__all__ = ["ProgramBranch", "rms_norm", "layer_norm"]
