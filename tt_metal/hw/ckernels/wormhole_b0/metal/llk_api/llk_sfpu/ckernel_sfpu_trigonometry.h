@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
@@ -136,17 +135,6 @@ inline void calculate_cosine() {
         v_endif;
         dst_reg[0] = v;
         dst_reg++;
-    }
-}
-
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_sfpu_trig() {
-    if constexpr (operation == SfpuType::sine) {
-        calculate_sine<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::cosine) {
-        calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::tan) {
-        calculate_tangent<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

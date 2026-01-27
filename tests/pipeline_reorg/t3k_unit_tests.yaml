@@ -142,6 +142,14 @@
   timeout: 20
   model-name: qwen25_vl
 
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_unit_tests
+  sku: wh_llmbox
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+  timeout: 10
+  model-name: qwen3_vl
+
 - name: t3k_gemma3-small_tests
   cmd: run_t3000_gemma3-small_tests
   sku: wh_llmbox
@@ -163,7 +171,7 @@
   sku: wh_llmbox
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
-  timeout: 10
+  timeout: 30
   model-name: gpt-oss
 
 - name: t3k_deepseek_tests
@@ -179,5 +187,5 @@
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 10
+  timeout: 12
   model-name: tttv2 modules

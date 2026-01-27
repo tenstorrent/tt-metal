@@ -502,12 +502,12 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     def check_outputs(tt_output):
         # tt_output is sharded across devices, each device has its chunk
         coords = list(tt_output.tensor_topology().mesh_coords())
-        view = mesh_device.get_view()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
         device_tensors = ttnn.get_device_tensors(tt_output)
 
         # Compare each local device's output with its corresponding chunk of reference.
         for coord, tt_device_out in zip(coords, device_tensors):
-            if not view.is_local(coord):
+            if view is not None and not view.is_local(coord):
                 continue
             col_idx = coord[1]  # Column index in mesh (cluster_axis=1)
             tt_output_torch = ttnn.to_torch(tt_device_out)

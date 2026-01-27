@@ -60,8 +60,8 @@ jobs:
             { name: "dispatch multicmd queue", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*', nightly: true }, # Only runs on Nightly-L2
             { name: "distributed", cmd: './build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*', nightly: true, auto-triage: true },  # Only runs on Nightly-L2
             { name: "eth, misc, and user kernel path", cmd: './build/test/tt_metal/unit_tests_eth && ./build/test/tt_metal/unit_tests_misc && rm -rf /tmp/kernels && mkdir -p /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*', nightly: true, auto-triage: true },
-            { name: "tools", cmd: './tests/scripts/run_tools_tests.sh && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=* && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=*', nightly: true, auto-triage: false },  # Only runs on Nightly-L2
-            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true },
+            { name: "tools", cmd: './tests/scripts/run_tools_tests.sh && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=* && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=* && TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1 ./build/test/tt_metal/unit_tests_noc_debugging --gtest_filter=*', nightly: true, auto-triage: false },  # Only runs on Nightly-L2
+            { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true, hang-detection-timeout: 10.0 },
             { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true, auto-triage: true },
             { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary', nightly: true, auto-triage: true },
           ]]
@@ -134,7 +134,8 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
-          slow-dispatch-timeout: 10
+          hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
+
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}

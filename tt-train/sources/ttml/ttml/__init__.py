@@ -72,15 +72,8 @@ def _initialize():
 _use_local_ttml = _initialize()
 
 import sys
-
-if _use_local_ttml:
-    from _ttml import *  # noqa: F401, F403
-    import _ttml
-else:
-    from ._ttml import *  # noqa: F401, F403
-    from . import _ttml
-
-# Import _recursive_import and apply it
+import ttnn
+from . import _ttml
 from ._recursive_import import _recursive_import_from_ttml
 
 _recursive_import_from_ttml(_ttml, sys.modules[__name__])

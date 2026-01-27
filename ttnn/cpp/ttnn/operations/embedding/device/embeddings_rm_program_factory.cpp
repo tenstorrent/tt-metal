@@ -60,20 +60,19 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
         core_group_1 = all_cores;
-        num_cores = all_cores.num_cores();
         num_blocks_per_core_group_1 = shard_spec.shape[0];
         num_blocks_per_core_group_2 = 0;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     } else {
         std::tie(
-            num_cores,
+            std::ignore,
             all_cores,
             core_group_1,
             core_group_2,
@@ -164,7 +163,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }

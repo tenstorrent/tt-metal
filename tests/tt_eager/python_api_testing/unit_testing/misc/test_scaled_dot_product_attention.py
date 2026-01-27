@@ -163,6 +163,7 @@ def run_sdpa_noncausal(
     sk=None,
     use_mask=True,
     rmse_threshold=None,
+    bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
 ):
     torch.manual_seed(1234)
@@ -193,7 +194,7 @@ def run_sdpa_noncausal(
         mask = torch.bernoulli(
             torch.full(
                 (
-                    b,
+                    1 if bcast_mask_batch_dim else b,
                     1 if bcast_mask_head_dim else nh,
                     sq,
                     sk,
@@ -476,10 +477,24 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     (
         [128, 4, 4, 128, 32],  # Boltz
         [1, 16, 16, 128, 64],  # Boltz
+        [2, 8, 1, 160, 64],  # Padded: K-only (q32/k64,k128) and Q+K (q128/k64,k128)
     ),
 )
+@pytest.mark.parametrize("bcast_mask_batch_dim", [True, False], ids=["bcast-mask-batch-dim", "no-bcast-mask-batch-dim"])
 @pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
-def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, bcast_mask_head_dim):
+def test_sdpa_noncausal_mask(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    bcast_mask_batch_dim,
+    bcast_mask_head_dim,
+):
     rmse_threshold = 0.007
     run_sdpa_noncausal(
         device,
@@ -493,6 +508,7 @@ def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_siz
         dtype,
         rmse_threshold=rmse_threshold,
         use_mask=True,
+        bcast_mask_batch_dim=bcast_mask_batch_dim,
         bcast_mask_head_dim=bcast_mask_head_dim,
     )
 

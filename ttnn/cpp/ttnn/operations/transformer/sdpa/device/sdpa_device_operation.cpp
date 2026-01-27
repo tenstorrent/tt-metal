@@ -15,18 +15,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace {
-
-std::uint32_t get_q_chunk_size(const SDPAParams& attrs) {
-    return attrs.program_config ? attrs.program_config->q_chunk_size : 32;
-}
-
-std::uint32_t get_k_chunk_size(const SDPAParams& attrs) {
-    return attrs.program_config ? attrs.program_config->k_chunk_size : 32;
-}
-
-}  // namespace
-
 SDPAOperation::program_factory_t SDPAOperation::select_program_factory(const SDPAParams&, const SDPAInputs&) {
     return SDPAProgramFactory{};
 }
@@ -101,29 +89,15 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             const auto q_shape = q.logical_shape();
             const auto k_shape = k.logical_shape();
 
-            TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
+            TT_FATAL(
+                mask_shape[0] == 1 || mask_shape[0] == q_shape[0],
+                "Mask batch dim must either be 1 (to be broadcasted across all batches) or must match Q batch "
+                "dimension");
             TT_FATAL(
                 mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
                 "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
-
-            // When given a mask, we must check that the mask can be divided by chunk size. Otherwise we'd need to pad
-            // the mask.
-            const auto q_chunk_size = get_q_chunk_size(attrs);
-            const auto k_chunk_size = get_k_chunk_size(attrs);
-            TT_FATAL(
-                q_shape[2] % q_chunk_size == 0,
-                "If mask is provided, Q sequence length must be divisible by q_chunk_size. Got q_seq_len: {}, "
-                "q_chunk_size: {}",
-                q_shape[2],
-                q_chunk_size);
-            TT_FATAL(
-                k_shape[2] % k_chunk_size == 0,
-                "If mask is provided, K sequence length must be divisible by k_chunk_size. Got k_seq_len: {}, "
-                "k_chunk_size: {}",
-                k_shape[2],
-                k_chunk_size);
         }
 
         // Shape checks

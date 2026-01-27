@@ -52,6 +52,7 @@ class DeepseekV3LMHead(nn.Module):
         ("prefill", 1024),
     ],
 )
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 def test_forward_pass(
     mode: str,
     batch_size_per_row: int,
