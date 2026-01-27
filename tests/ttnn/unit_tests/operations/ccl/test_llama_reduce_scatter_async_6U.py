@@ -18,8 +18,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
 
 from tests.ttnn.unit_tests.operations.ccl.test_llama_reduce_scatter_async_TG import run_reduce_scatter_test
 
-from conftest import is_6u
-
 
 @pytest.mark.parametrize(
     "device_params",
@@ -47,9 +45,6 @@ def test_fabric_reduce_scatter_tg_trace_6u(mesh_device, trace_mode, num_links, t
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not a Galaxy!")
-
-    if not is_6u():
-        pytest.skip("Not 6U!")
 
     dim = 3
     shard_height = 32
@@ -99,9 +94,6 @@ def test_fabric_reduce_scatter_tg_no_trace_6u(mesh_device, trace_mode, num_links
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not a Galaxy!")
-
-    if not is_6u():
-        pytest.skip("Not 6U!")
 
     dim = 3
     shard_height = 32

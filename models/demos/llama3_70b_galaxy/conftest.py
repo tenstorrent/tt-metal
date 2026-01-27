@@ -11,11 +11,6 @@ def ensure_gc():
     gc.collect()
 
 
-@pytest.fixture(autouse=True)
-def ensure_devices(ensure_devices_tg):
-    print("ensure_devices skipped")
-
-
 @pytest.fixture
 def device_params(request, galaxy_type):
     # Get param dict passed in from test parametrize (or default to empty dict)

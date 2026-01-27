@@ -5,11 +5,9 @@
 import pytest
 import ttnn
 
-from conftest import is_6u
 from tests.nightly.t3000.ccl.test_minimal_all_gather_matmul_async import run_all_gather_impl
 
 
-@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias",
