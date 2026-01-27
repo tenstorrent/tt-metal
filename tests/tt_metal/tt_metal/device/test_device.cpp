@@ -621,4 +621,67 @@ TEST_F(MeshDeviceFixture, QuasarAlignmentTest) {
     }
 }
 
+TEST_F(MeshDeviceFixture, QuasarReadWriteTest) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "This test is only supported on Quasar";
+    }
+
+    auto mesh_device = devices_.at(0);
+    auto* device = mesh_device->get_devices()[0];
+
+    const uint32_t size_bytes_first_write = 128;
+    const uint32_t size_bytes_second_write = 24;
+    const uint32_t base_l1_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    ASSERT_EQ(base_l1_addr % alignment, 0);
+
+    CoreCoord logical_core(0, 0);
+    uint32_t address = base_l1_addr;
+    while (address < base_l1_addr + 4096) {
+        std::vector<uint32_t> arrange_data_first_write(size_bytes_first_write / sizeof(uint32_t));
+        std::iota(arrange_data_first_write.begin(), arrange_data_first_write.end(), 1);
+
+        std::vector<uint32_t> arrange_data_second_write(size_bytes_second_write / sizeof(uint32_t));
+        std::iota(arrange_data_second_write.begin(), arrange_data_second_write.end(), 1);
+
+        log_info(tt::LogMetal, "Address {}", address);
+
+        tt_metal::detail::WriteToDeviceL1(
+            device, logical_core, address + size_bytes_first_write, arrange_data_second_write, CoreType::WORKER);
+        tt_metal::detail::WriteToDeviceL1(device, logical_core, address, arrange_data_first_write, CoreType::WORKER);
+
+        std::vector<uint32_t> read_data;
+        tt_metal::detail::ReadFromDeviceL1(
+            device,
+            logical_core,
+            address,
+            size_bytes_first_write + size_bytes_second_write,
+            read_data,
+            CoreType::WORKER);
+
+        std::vector<uint32_t> expected_data;
+        expected_data.reserve(arrange_data_first_write.size() + arrange_data_second_write.size());
+        expected_data.insert(expected_data.end(), arrange_data_first_write.begin(), arrange_data_first_write.end());
+        expected_data.insert(expected_data.end(), arrange_data_second_write.begin(), arrange_data_second_write.end());
+
+        auto print_vector = [](const std::vector<uint32_t>& vec) {
+            std::stringstream ss;
+            ss << "[";
+            for (size_t i = 0; i < vec.size(); i++) {
+                ss << vec[i];
+                if (i != vec.size() - 1) {
+                    ss << ", ";
+                }
+            }
+            ss << "]";
+            return ss.str();
+        };
+
+        EXPECT_EQ(read_data, expected_data)
+            << "Actual: " << print_vector(read_data) << "\nExpected: " << print_vector(expected_data);
+        address += alignment;
+    }
+}
+
 }  // namespace tt::tt_metal
