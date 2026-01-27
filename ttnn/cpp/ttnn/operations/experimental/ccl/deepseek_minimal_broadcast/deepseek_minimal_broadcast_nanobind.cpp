@@ -33,8 +33,19 @@ void bind_deepseek_minimal_broadcast_op(nb::module_ mod, const ccl_operation_t& 
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const uint32_t num_links,
-               const tt::tt_fabric::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
+               const tt::tt_fabric::Topology topology,
+               std::optional<uint32_t> secondary_cluster_axis,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    sender_coord,
+                    num_links,
+                    memory_config,
+                    topology,
+                    cluster_axis,
+                    subdevice_id,
+                    secondary_cluster_axis,
+                    persistent_output_buffer);
             },
             nb::arg("input_tensor"),
             nb::arg("sender_coord"),
@@ -43,7 +54,9 @@ void bind_deepseek_minimal_broadcast_op(nb::module_ mod, const ccl_operation_t& 
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
+            nb::arg("secondary_cluster_axis") = nb::none(),
+            nb::arg("persistent_output_buffer") = nb::none()});
 }
 
 }  // namespace
@@ -54,6 +67,8 @@ void bind_deepseek_minimal_broadcast(nb::module_& mod) {
         ttnn::experimental::deepseek_minimal_broadcast,
         R"doc(
         Performs a broadcast operation from a sender device to all other mesh devices across a cluster axis.
+        Supports dual-axis broadcast where the sender first sends to a secondary sender across a secondary axis,
+        then both senders broadcast along the primary cluster axis in parallel.
 
         Args:
             input_tensor (ttnn.Tensor)
@@ -67,11 +82,13 @@ void bind_deepseek_minimal_broadcast(nb::module_& mod) {
             num_links (int, optional): Number of links to use for the all-broadcast operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            secondary_cluster_axis (int, optional): For dual-axis broadcast, the secondary axis to first send data across before broadcasting along the primary axis. Defaults to `None`.
+            persistent_output_buffer (ttnn.Tensor, optional): Pre-allocated output buffer for persistent operation. When provided, barrier synchronization is skipped. Defaults to `None`.
 
         Returns:
             ttnn.Tensor of the output on the mesh device.
 
-        Example:
+        Example (single-axis):
             >>> sender_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> num_devices = 4
             >>> device_tensors = []
@@ -94,6 +111,16 @@ void bind_deepseek_minimal_broadcast(nb::module_& mod) {
                             memory_config=mem_config,
                             mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
             >>> output = ttnn.experimental.broadcast(ttnn_tensor, sender_coord)
+
+        Example (dual-axis for 4x2 mesh):
+            >>> # Sender at (1,0) first sends to (1,1) across axis 1, then both broadcast along axis 0
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(4, 2))
+            >>> sender_coord = MeshCoordinate((1, 0))
+            >>> output = ttnn.experimental.deepseek_minimal_broadcast(
+                    ttnn_tensor,
+                    sender_coord,
+                    cluster_axis=0,
+                    secondary_cluster_axis=1)
 
         )doc");
 }
