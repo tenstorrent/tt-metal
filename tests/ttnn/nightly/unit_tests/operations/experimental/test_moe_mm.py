@@ -98,10 +98,7 @@ def prepare_w_tensor(torch_w, L, K, N):
     Returns:
         torch_w: Tensor of shape (L, E, K, 4096)
     """
-
-    Nt = N // ttnn.TILE_SIZE  # 256 / 32 = 8 chunks per tensor
-    Kt = K // ttnn.TILE_SIZE  # 7168 / 32 = 224 chunks per tensor
-    pass
+    return torch_w
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -168,14 +165,32 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w
-    # Tensor shape: (L, K, N) -> padded and reordered to (8, L, K, N // 8)
+    # Tensor shape: (L, K, N) -> Sharded across N cores
     # ------------------------------------------------------------------------
     w_shard_height = L * K * 1
     w_shard_width = ttnn.TILE_SIZE
 
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
 
-    w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+    w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+
+    # ------------------------------------------------------------------------
+    # Create DRAM shard spec for output
+    # Tensor shape: (M, N) -> Sharded across N cores
+    # ------------------------------------------------------------------------
+    output_shard_height = M
+    output_shard_width = ttnn.TILE_SIZE
+    output_shard_spec = ttnn.ShardSpec(
+        in0_core_range_set, (output_shard_height, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    tt_output = ttnn.empty(
+        (M, N),
+        dtype=in0_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=output_mem_config,
+    )
 
     # ------------------------------------------------------------------------
     # Prepare the tensors
@@ -187,7 +202,6 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
         # ------------------------------------------------------------------------
         # Prepare w tensor (padded, and reordered)
         torch_w_reordered = prepare_w_tensor(torch_w, L, K, N)
-
         # Create tt_w tensor with DRAM sharding
         tt_w = ttnn.from_torch(
             torch_w_reordered,
@@ -205,7 +219,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
             memory_config=input_sharded_mem_config,
         )
         tt_w = ttnn.empty(
-            [num_dram_banks] + w_shard_spec.shape,
+            (L, K, N),
             dtype=w_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
@@ -232,12 +246,12 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
         _tt_output = ttnn.experimental.moe_gate_mm(
             tt_input,
             w_tensor=tt_w,
-            output_tensor=tt_input,
+            output_tensor=tt_output,
             layer_id=layer_id,
         )
 
         # Output is produced in-place on the input tensor
-        tt_to_torch_output = ttnn.to_torch(tt_input)
+        tt_to_torch_output = ttnn.to_torch(tt_output)
         all_outputs.append(tt_to_torch_output)
 
     tt_to_torch_outputs = torch.stack(all_outputs)
