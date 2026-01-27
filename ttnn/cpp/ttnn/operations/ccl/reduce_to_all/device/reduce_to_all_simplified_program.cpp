@@ -9,12 +9,15 @@
 // 2. All kernels run on shard cores only (no extra worker cores needed)
 // 3. Full zero-copy for input, neighbor data, and output via CB aliasing
 // 4. Single compute kernel handles both R1 and R2 reductions
+// 5. NO MUX - relay master connects directly to fabric router
 //
 // ARCHITECTURE:
 // - Each shard core runs: reader, compute, writer
 // - Reader: signals local input ready, waits for neighbor data
 // - Compute: R1 reduction, then R2 reduction, then final normalization
 // - Writer: sends local data to R1 neighbor, sends R1 result to R2 neighbor
+// - Relay master (1 per link) connects directly to fabric router
+// - Relay workers send packets to relay master via NOC
 //
 // ZERO-COPY DATA PATHS:
 // - Local input: CB aliased to input tensor shard (no memcpy on read)
@@ -37,47 +40,24 @@
 namespace ttnn::operations::ccl {
 namespace {
 
-// Helper to add mux compile-time args (prefixed to avoid unity build conflicts)
-void simplified_fabric_mux_ct_args(
-    const uint32_t num_workers_per_direction,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    std::vector<uint32_t>& worker_ct_args) {
-    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
-    worker_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());
-    worker_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
-    worker_ct_args.push_back(num_workers_per_direction);
-}
-
-// Helper to add mux runtime args (prefixed to avoid unity build conflicts)
-void simplified_fabric_mux_rt_args(
-    const bool is_termination_master,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const CoreCoord& mux_virtual_core,
-    const uint32_t worker_id,
-    const CoreCoord& worker_logical_core,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+// Helper to add fabric router connection runtime args for relay master
+// This replaces the mux connection - relay master now connects directly to fabric router
+void append_fabric_router_rt_args(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
     tt::tt_metal::Program& program,
-    CoreCoord termination_master_virtual_core,
-    uint32_t shared_termination_sync_sem,
+    const CoreCoord& worker_logical_core,
     std::vector<uint32_t>& worker_rt_args) {
-    worker_rt_args.push_back(is_termination_master);
-    worker_rt_args.push_back(mux_virtual_core.x);
-    worker_rt_args.push_back(mux_virtual_core.y);
-    worker_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));
-    worker_rt_args.push_back(shared_termination_sync_sem);
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(termination_master_virtual_core.x);
-    worker_rt_args.push_back(termination_master_virtual_core.y);
+    // Use the fabric API to append connection args
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        program,
+        worker_logical_core,
+        worker_rt_args,
+        tt::CoreType::WORKER);
 }
 
 }  // anonymous namespace
@@ -85,7 +65,7 @@ void simplified_fabric_mux_rt_args(
 ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>
 reduce_to_all_simplified_program_factory(
     const ReduceToAllOp::tensor_args_t& tensor_args,
-    const ReduceToAllOp::operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const ReduceToAllOp::operation_attributes_t& operation_attributes,
     [[maybe_unused]] const MeshCoordinate& root_coord,
     const float scale_fp32,
     const MeshCoordinate& device_coordinate,
@@ -485,35 +465,13 @@ reduce_to_all_simplified_program_factory(
     }
 
     // =========================================================================
-    // Setup mux cores and config
+    // NO MUX - Relay master connects directly to fabric router
     // =========================================================================
-    // With relay optimization: only 1 client per mux (the relay master)
-    // Previously: num_workers_per_direction = num_shard_cores / num_links = 4
-    constexpr uint32_t num_mux_clients_per_direction = 1;  // Only relay master connects to mux
-
-    std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
-    if (operation_attributes.input_mux_cores.has_value()) {
-        mux_cores = operation_attributes.input_mux_cores.value();
-    }
-    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
-
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-
-    tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_mux_clients_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
-
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    // Phase 2 optimization: removed mux entirely.
+    // Relay master now connects directly to the fabric router using WorkerToFabricEdmSender.
+    // This eliminates the mux kernel and reduces latency.
+    // Note: Fabric router connection info is read from L1 static memory (MEM_TENSIX_FABRIC_CONNECTIONS_BASE)
+    // by WorkerToFabricEdmSender::build_from_args<TENSIX>(), so no compile-time args needed here.
 
     // =========================================================================
     // Create kernel compile-time args
@@ -544,7 +502,8 @@ reduce_to_all_simplified_program_factory(
     };
 
     // Writer compile-time args
-    // Build base args first, then calculate mux indices based on size
+    // Phase 2: No mux - relay master connects directly to fabric router
+    // Note: Fabric router connection info is read from L1 static memory by build_from_args<TENSIX>()
     std::vector<uint32_t> writer_ct_args = {
         Sq_chunk_t,                          // 0
         vDHt,                                // 1
@@ -563,35 +522,6 @@ reduce_to_all_simplified_program_factory(
         relay_buffer_size,                   // 14 - size of each relay buffer
         (uint32_t)packet_header_size_bytes,  // 15 - packet header size
     };
-
-    // Calculate mux indices based on current size.
-    // The indices will be at positions 16 and 17, followed by the mux args.
-    // r1_mux_ct_idx points to where R1 mux args start (after base args + 2 indices)
-    // r2_mux_ct_idx points to where R2 mux args start (after R1 mux args)
-    constexpr uint32_t num_mux_args_per_direction = 5;
-    uint32_t r1_mux_ct_idx = writer_ct_args.size() + 2;  // +2 for the two index args we're about to add
-    uint32_t r2_mux_ct_idx = r1_mux_ct_idx + num_mux_args_per_direction;
-
-    // Push the calculated indices (positions 16 and 17)
-    writer_ct_args.push_back(r1_mux_ct_idx);
-    writer_ct_args.push_back(r2_mux_ct_idx);
-
-    // Add mux compile-time args for R1 and R2.
-    // NOTE: The compile-time args are IDENTICAL for both muxes because they come from
-    // the same mux_kernel_config. The FWD vs BWD direction only affects RUNTIME args
-    // (mux core coordinates, semaphores). The memory layout, buffer sizes, status
-    // addresses, etc. are the same for all muxes sharing a config.
-    // With relay optimization, only 1 client (relay master) connects to each mux.
-    simplified_fabric_mux_ct_args(
-        num_mux_clients_per_direction,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        writer_ct_args);  // R1 mux config
-    simplified_fabric_mux_ct_args(
-        num_mux_clients_per_direction,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        writer_ct_args);  // R2 mux config (identical values, different runtime mapping)
 
     // Compute compile-time args (23 total)
     // Layout matches compute.cpp expectations:
@@ -675,43 +605,28 @@ reduce_to_all_simplified_program_factory(
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
-    // Termination masters (first core per link)
-    // We need termination masters for both FWD and BWD mux, but we'll assign
-    // them to R1 and R2 based on device position
-    std::vector<CoreCoord> r1_term_masters = {cores_link_1[0], cores_link_2[0]};
-    std::vector<CoreCoord> r2_term_masters = {cores_link_1[0], cores_link_2[0]};
-
-    std::vector<uint32_t> r1_term_sems;
-    std::vector<uint32_t> r2_term_sems;
-    for (auto& tm : r1_term_masters) {
-        r1_term_sems.push_back(CreateSemaphore(program, {tm}, 0));
-    }
-    for (auto& tm : r2_term_masters) {
-        r2_term_sems.push_back(CreateSemaphore(program, {tm}, 0));
-    }
-
-    // Set mux runtime args
-    uint32_t mux_core_offset = 0;
+    // Get fabric node IDs for fabric router connections
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
-    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        for (uint32_t dir = 0; dir < 2; dir++) {
-            CoreCoord mux_logical_core = mux_cores[mux_core_offset++];
-            std::vector<uint32_t> mux_rt_args = {};
-            if (dir) {  // forward
-                if (forward_coord.has_value()) {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
-                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-                }
-            } else {
-                if (backward_coord.has_value()) {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
-                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-                }
-            }
+    std::optional<tt::tt_fabric::FabricNodeId> r1_dst_node_id;
+    std::optional<tt::tt_fabric::FabricNodeId> r2_dst_node_id;
+
+    // Determine R1 and R2 destinations based on device position
+    // Even devices: R1=FWD, R2=BWD; Odd devices: R1=BWD, R2=FWD
+    if (r1_uses_fwd_mux) {
+        // Even device: R1 goes forward, R2 goes backward
+        if (forward_coord.has_value()) {
+            r1_dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+        }
+        if (backward_coord.has_value()) {
+            r2_dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+        }
+    } else {
+        // Odd device: R1 goes backward, R2 goes forward
+        if (backward_coord.has_value()) {
+            r1_dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+        }
+        if (forward_coord.has_value()) {
+            r2_dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
         }
     }
 
@@ -769,6 +684,19 @@ reduce_to_all_simplified_program_factory(
                 writer_rt_args.push_back(relay_sems_per_link[link_idx][0]);  // 13: relay_sem_0
                 writer_rt_args.push_back(relay_sems_per_link[link_idx][1]);  // 14: relay_sem_1
                 writer_rt_args.push_back(relay_sems_per_link[link_idx][2]);  // 15: relay_sem_2
+
+                // Phase 2: Add fabric router connection args for R1 and R2
+                // Relay master connects directly to fabric router (no mux)
+                // Each connection needs: eth_channel, teardown_sem, buffer_idx_sem (appended by
+                // append_fabric_router_rt_args)
+                if (r1_dst_node_id.has_value()) {
+                    append_fabric_router_rt_args(
+                        src_node_id, r1_dst_node_id.value(), link_idx, program, core, writer_rt_args);
+                }
+                if (r2_dst_node_id.has_value()) {
+                    append_fabric_router_rt_args(
+                        src_node_id, r2_dst_node_id.value(), link_idx, program, core, writer_rt_args);
+                }
             } else {
                 // Relay worker runtime args:
                 // - Relay master NOC coordinates
@@ -782,54 +710,8 @@ reduce_to_all_simplified_program_factory(
                 writer_rt_args.push_back(relay_master_noc.y);    // 11: relay_master_noc_y
                 writer_rt_args.push_back(my_relay_buffer_addr);  // 12: my_relay_buffer_addr
                 writer_rt_args.push_back(my_relay_sem_addr);     // 13: my_relay_sem_addr
+                // Relay workers don't need fabric router args - they send to relay master
             }
-
-            // Determine which physical mux (FWD or BWD) is used for R1 and R2
-            // mux_cores layout: [link0_bwd, link0_fwd, link1_bwd, link1_fwd]
-            CoreCoord fwd_mux_logical = mux_cores[(link_idx * 2) + 1];
-            CoreCoord bwd_mux_logical = mux_cores[link_idx * 2];
-
-            // Map R1/R2 to FWD/BWD based on device position
-            CoreCoord r1_mux_logical = r1_uses_fwd_mux ? fwd_mux_logical : bwd_mux_logical;
-            CoreCoord r2_mux_logical = r1_uses_fwd_mux ? bwd_mux_logical : fwd_mux_logical;
-
-            CoreCoord r1_mux_virtual = mesh_device->worker_core_from_logical_core(r1_mux_logical);
-            CoreCoord r2_mux_virtual = mesh_device->worker_core_from_logical_core(r2_mux_logical);
-
-            CoreCoord r1_term_master = r1_term_masters[link_idx];
-            CoreCoord r2_term_master = r2_term_masters[link_idx];
-            CoreCoord r1_term_master_virtual = mesh_device->worker_core_from_logical_core(r1_term_master);
-            CoreCoord r2_term_master_virtual = mesh_device->worker_core_from_logical_core(r2_term_master);
-
-            // Add R1 mux runtime args
-            // With relay optimization, only relay master uses the mux (channel 0)
-            // All cores get mux args but only relay master uses them
-            // Always use worker_id 0 since mux is configured for 1 client only
-            constexpr uint32_t mux_worker_id = 0;
-            simplified_fabric_mux_rt_args(
-                is_relay_master,  // Only relay master is termination master
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                r1_mux_virtual,
-                mux_worker_id,
-                core,
-                mux_kernel_config,
-                program,
-                r1_term_master_virtual,
-                r1_term_sems[link_idx],
-                writer_rt_args);
-
-            // Add R2 mux runtime args
-            simplified_fabric_mux_rt_args(
-                is_relay_master,  // Only relay master is termination master
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                r2_mux_virtual,
-                mux_worker_id,
-                core,
-                mux_kernel_config,
-                program,
-                r2_term_master_virtual,
-                r2_term_sems[link_idx],
-                writer_rt_args);
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
 
