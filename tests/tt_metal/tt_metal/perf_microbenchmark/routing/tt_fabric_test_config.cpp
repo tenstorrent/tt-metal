@@ -4,6 +4,8 @@
 
 #include "tt_fabric_test_config.hpp"
 #include <optional>
+#include <variant>
+#include "routing/tt_fabric_test_common_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
@@ -67,6 +69,7 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
         "Unsupported device identifier format. Expected scalar chip_id, sequence [mesh_id, chip_id], or sequence "
         "[mesh_id, [row, col]].");
 }
+
 
 ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::Node& dest_yaml) {
     ParsedDestinationConfig config;
@@ -809,17 +812,18 @@ uint32_t CmdlineParser::get_hung_threshold() {
 }
 
 // YamlConfigParser private helpers
-std::variant<tt::tt_metal::CoreCoord, std::string> YamlConfigParser::parse_core_coord(const YAML::Node& node) {
+CoreConfig YamlConfigParser::parse_core_coord(const YAML::Node& node) {
     if (node.IsSequence()) {
         TT_FATAL(node.size() == 2, "Expected core coordinates to be a sequence of [x, y]");
         return tt::tt_metal::CoreCoord(parse_scalar<size_t>(node[0]), parse_scalar<size_t>(node[1]));
-    } else if (node.IsScalar()) {
+    } 
+    if (node.IsScalar()) {
         std::string field = parse_scalar<std::string>(node);
         TT_FATAL(field == "all", "Core field was not provided as a coordinate, thus must be string option 'all' to indicate core sweep. Instead got string: '{}'", field);
         return field;
-    } else {
-        TT_THROW("Expected core coordinates to be a sequence of [x, y], or 'all'.");
-    }
+    } 
+
+    TT_THROW("Expected core coordinates to be a sequence of [x, y], or 'all'.");
 }
 
 MeshCoordinate YamlConfigParser::parse_mesh_coord(const YAML::Node& node) {
@@ -971,14 +975,20 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);
 
     // Extract CoreCoord if present
-    if (parsed_sender.core.has_value() && std::holds_alternative<CoreCoord>(parsed_sender.core.value())) {
-        resolved_sender.core = std::get<CoreCoord>(parsed_sender.core.value());
+    if (parsed_sender.core.has_value()){
+        if (std::holds_alternative<CoreCoord>(parsed_sender.core.value())){
+            resolved_sender.core = std::get<CoreCoord>(parsed_sender.core.value());
+        }
+        else{
+            // At this point, core should not hold a string (e.g., "all") because sweep expansion
+            // is expected to have been performed earlier in expand_high_level_patterns.
+            TT_THROW("Unexpected sender.core variant in resolve_sender_config: core sweep expansion was not applied");
+        }
     }
 
     resolved_sender.patterns.reserve(parsed_sender.patterns.size());
     for (const auto& parsed_pattern : parsed_sender.patterns) {
-        TrafficPatternConfig traffic_pattern = resolve_traffic_pattern(parsed_pattern);
-        resolved_sender.patterns.push_back(std::move(traffic_pattern));
+        resolved_sender.patterns.push_back(resolve_traffic_pattern(parsed_pattern));
     }
 
     return resolved_sender;
@@ -1009,10 +1019,15 @@ DestinationConfig TestConfigBuilder::resolve_destination_config(const ParsedDest
     if (parsed_dest.device.has_value()) {
         resolved_dest.device = resolve_device_identifier(parsed_dest.device.value(), device_info_provider_);
     }
-    // Fully expect core to be of type CoreCoord here if defined, as this is within an expansion of the core sweep.
-    // If we were to get the "all" pattern here it would be UB, and throw to indicate.
     if (parsed_dest.core.has_value()) {
-        resolved_dest.core = std::get<tt::tt_metal::CoreCoord>(parsed_dest.core.value());
+        if(std::holds_alternative<CoreCoord>(parsed_dest.core.value())){
+            resolved_dest.core = std::get<tt::tt_metal::CoreCoord>(parsed_dest.core.value());
+        }
+        else{
+            // Fully expect core to be of type CoreCoord here if defined, as this is within an expansion of the core sweep.
+            // If we were to get the "all" pattern here it would be UB, and throw to indicate.
+            TT_THROW("Unexpected destination.core variant in resolve_destination_config: core sweep expansion was not applied");
+        }
     }
     resolved_dest.hops = parsed_dest.hops;
     resolved_dest.target_address = parsed_dest.target_address;
@@ -1028,15 +1043,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
 
     uint32_t max_iterations = 1;
 
-    // Pre-compute worker grid cores and index into when we iterate over max_iterations
-    tt::tt_metal::CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
-    std::vector<CoreCoord> all_cores;
-    all_cores.reserve(worker_grid.x * worker_grid.y);
-    for (uint32_t x = 0; x < worker_grid.x; ++x) {
-        for (uint32_t y = 0; y < worker_grid.y; ++y) {
-            all_cores.emplace_back(x, y);
-        }
-    }
+    std::vector<CoreCoord> all_cores = device_info_provider_.get_available_worker_cores();
     uint32_t total_cores = static_cast<uint32_t>(all_cores.size());
 
     // Check for sender core sweep
@@ -1131,26 +1138,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             iteration_test.parametrized_name = iteration_test.name;
         }
         if (max_iterations > 1) {
-            // Build descriptive name with core coordinates for core sweep iteration logging
-            if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
-                if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
-                    const auto& src = all_cores[sender_core_idx];
-                    const auto& dst = all_cores[dest_core_idx];
-                    iteration_test.parametrized_name += "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) +
-                                                        "]_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) +
-                                                        "]";
-                } else if (sender_core_sweep_iterations > 0) {
-                    const auto& src = all_cores[sender_core_idx];
-                    iteration_test.parametrized_name +=
-                        "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) + "]";
-                } else {
-                    const auto& dst = all_cores[dest_core_idx];
-                    iteration_test.parametrized_name +=
-                        "_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) + "]";
-                }
-            } else {
-                detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", i);
-            }
+            parametrize_core_sweep_test_name(iteration_test, sender_core_sweep_iterations, dest_core_sweep_iterations, sender_core_idx, dest_core_idx, all_cores, i);
         }
 
         iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
@@ -1218,6 +1206,28 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
     return expanded_tests;
 }
 
+void TestConfigBuilder::parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num){
+    // Build descriptive name with core coordinates for core sweep iteration logging
+    if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
+        if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
+            const auto& src = all_cores[sender_core_idx];
+            const auto& dst = all_cores[dest_core_idx];
+            iteration_test.parametrized_name += "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) +
+                                                "]_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) +
+                                                "]";
+        } else if (sender_core_sweep_iterations > 0) {
+            const auto& src = all_cores[sender_core_idx];
+            iteration_test.parametrized_name +=
+                "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) + "]";
+        } else {
+            const auto& dst = all_cores[dest_core_idx];
+            iteration_test.parametrized_name +=
+                "_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) + "]";
+        }
+    } else {
+        detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", iteration_num);
+    }
+}
 std::vector<ParsedSenderConfig> TestConfigBuilder::expand_sender_core_sweep(const std::vector<ParsedSenderConfig>& input_senders, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t sender_core_idx){
     std::vector<ParsedSenderConfig> expanded_senders;
     for (const auto& sender : input_senders) {
@@ -1280,6 +1290,7 @@ uint32_t TestConfigBuilder::calculate_sender_core_sweep_iterations(const std::ve
         if (sender.core.has_value() && std::holds_alternative<std::string>(sender.core.value()) &&
             std::get<std::string>(sender.core.value()) == "all") {
             sender_core_sweep_iterations = total_cores;
+            log_info(LogTest, "Sender core sweep detected: {} cores (core: all)", total_cores);
             break;
         }
     }
@@ -1294,6 +1305,7 @@ uint32_t TestConfigBuilder::calculate_dest_core_sweep_iterations(const std::vect
                 std::holds_alternative<std::string>(pattern.destination->core.value()) &&
                 std::get<std::string>(pattern.destination->core.value()) == "all") {
                 dest_core_sweep_iterations = total_cores;
+                log_info(LogTest, "Destination core sweep detected: {} cores (core: all)", total_cores);
                 break;
             }
         }
@@ -1306,38 +1318,20 @@ uint32_t TestConfigBuilder::calculate_dest_core_sweep_iterations(const std::vect
 
 uint32_t TestConfigBuilder::calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations){
     uint32_t core_sweep_iterations = 1;
-    bool sender_sweep = false, dest_sweep = false;
 
-    if(sender_core_sweep_iterations > 0) sender_sweep = true;
-    if(dest_core_sweep_iterations > 0) dest_sweep = true;
+    bool sender_core_sweep = false, dest_core_sweep = false;
+    if(sender_core_sweep_iterations > 0) { sender_core_sweep = true; }
+    if(dest_core_sweep_iterations > 0) { dest_core_sweep = true; }
 
-    if (sender_sweep && dest_sweep) {
+    if (sender_core_sweep && dest_core_sweep) {
         core_sweep_iterations = sender_core_sweep_iterations * dest_core_sweep_iterations;
-        log_info(
-            LogTest,
-            "Test '{}': Both sender and destination core sweeps detected. Creating {} iterations ({} senders × {} "
-            "destinations).",
-            p_config.name,
-            core_sweep_iterations,
-            sender_core_sweep_iterations,
-            dest_core_sweep_iterations);
-    } else if (sender_sweep) {
+    } else if (sender_core_sweep) {
         core_sweep_iterations = sender_core_sweep_iterations;
-        log_info(
-            LogTest,
-            "Test '{}': Sender core sweep detected ({} cores). Creating {} iterations (one per core).",
-            p_config.name,
-            sender_core_sweep_iterations,
-            sender_core_sweep_iterations);
-    } else if (dest_sweep) {
+    } else if (dest_core_sweep) {
         core_sweep_iterations = dest_core_sweep_iterations;
-        log_info(
-            LogTest,
-            "Test '{}': Destination core sweep detected ({} cores). Creating {} iterations (one per core).",
-            p_config.name,
-            dest_core_sweep_iterations,
-            dest_core_sweep_iterations);
     }
+
+    log_info(LogTest, "Test '{}': Total core sweep iterations: {}", p_config.name, core_sweep_iterations);
     return core_sweep_iterations;
 }
 
