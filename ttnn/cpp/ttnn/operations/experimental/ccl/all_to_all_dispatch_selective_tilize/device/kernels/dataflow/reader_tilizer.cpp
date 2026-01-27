@@ -487,7 +487,7 @@ void kernel_main() {
     // e_t buffer entry size (16B aligned for NOC DMA)
     constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
     // Size of e_t buffer for all experts (for multicast)
-    constexpr uint32_t e_t_buffer_total_size = experts_per_device * tokens * e_t_entry_size;
+    constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
 
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
@@ -688,7 +688,8 @@ void kernel_main() {
                     expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
                     // Write to e_t buffer (16B aligned entries for NOC DMA compatibility)
-                    const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * e_t_entry_size;
+                    const uint32_t e_t_offset =
+                        (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
                     *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
                     num_activated_tokens_per_expert[e]++;
 
@@ -730,7 +731,7 @@ void kernel_main() {
             uint32_t brisc_e_t_src_addr = brisc_e_t_buffer_base + e * brisc_tokens_capacity * e_t_entry_size;
 
             // Destination: main e_t buffer, after NCRISC's entries (16B aligned entries)
-            uint32_t e_t_dst_addr = e_t_buffer_base + (e * tokens + ncrisc_count) * e_t_entry_size;
+            uint32_t e_t_dst_addr = e_t_buffer_base + (e * (tokens + 1) + ncrisc_count) * e_t_entry_size;
 
             // Use NOC DMA for L1-to-L1 copy (local loopback)
             uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
@@ -801,12 +802,12 @@ void kernel_main() {
                     uint32_t remote_count = remote_e_t_counts[e];
                     if (remote_count > 0) {
                         // Source: remote core's e_t buffer, expert e's section starts at 0
-                        uint32_t remote_e_t_addr = get_write_ptr(e_t_buffer_id) + e * tokens * e_t_entry_size;
+                        uint32_t remote_e_t_addr = get_write_ptr(e_t_buffer_id) + e * (tokens + 1) * e_t_entry_size;
                         uint64_t remote_e_t_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_e_t_addr);
 
                         // Destination: drain's e_t buffer, after current entries for this expert
                         uint32_t local_e_t_dst =
-                            e_t_buffer_base + (e * tokens + num_activated_tokens_per_expert[e]) * e_t_entry_size;
+                            e_t_buffer_base + (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
 
                         noc_async_read(remote_e_t_noc_addr, local_e_t_dst, remote_count * e_t_entry_size);
 
@@ -842,7 +843,7 @@ void kernel_main() {
 
         // cap off e_t buffer with -1 (now includes merged counts, 16B aligned entries)
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            uint32_t e_t_buffer_addr = get_write_ptr(e_t_buffer_id) + e * tokens * e_t_entry_size;
+            uint32_t e_t_buffer_addr = get_write_ptr(e_t_buffer_id) + e * (tokens + 1) * e_t_entry_size;
             uint32_t* e_t_sentinel_ptr =
                 reinterpret_cast<uint32_t*>(e_t_buffer_addr + num_activated_tokens_per_expert[e] * e_t_entry_size);
             *e_t_sentinel_ptr = static_cast<uint32_t>(-1);
@@ -1035,7 +1036,7 @@ void kernel_main() {
     // The e_t buffer contains sparse token IDs for each expert, with 16B aligned entries
     for (uint32_t e = 0; e < experts_per_device; e++) {
         uint32_t num_tokens = num_activated_tokens_per_expert[e];
-        uint32_t e_t_expert_addr = e_t_buffer_base + e * tokens * e_t_entry_size;
+        uint32_t e_t_expert_addr = e_t_buffer_base + e * (tokens + 1) * e_t_entry_size;
 
         // Process tokens in chunks of tokens_per_chunk
         for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {

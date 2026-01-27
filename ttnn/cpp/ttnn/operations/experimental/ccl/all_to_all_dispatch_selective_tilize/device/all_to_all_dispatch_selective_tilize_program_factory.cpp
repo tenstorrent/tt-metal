@@ -325,8 +325,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_t_buffer_id,
         program,
         t_core_range_set,
-        tokens * e_t_entry_size,  // total tokens * 16B per entry
-        experts_per_device,       // number of experts on the device
+        (tokens + 1) * e_t_entry_size,  // (total tokens + -1 terminator) * 16B per entry
+        experts_per_device,             // number of experts on the device
         tt::DataFormat::UInt32);
 
     // Assume indices tensor is sharded in L1
