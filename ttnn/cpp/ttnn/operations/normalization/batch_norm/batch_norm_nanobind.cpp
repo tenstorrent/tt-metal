@@ -73,10 +73,8 @@ void bind_batch_norm_operation(nb::module_& mod) {
         )doc";
 
     // Bind the free function directly - no struct!
-    ttnn::bind_function(
+    ttnn::bind_function<"batch_norm">(
         mod,
-        "batch_norm",
-        "ttnn.batch_norm",
         doc,
         ttnn::overload_t(
             &ttnn::batch_norm,

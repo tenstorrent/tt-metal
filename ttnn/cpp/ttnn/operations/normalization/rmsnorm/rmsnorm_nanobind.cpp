@@ -88,10 +88,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
         )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"rms_norm">(
         mod,
-        "rms_norm",
-        "ttnn.rms_norm",
         doc,
         ttnn::overload_t(
             &ttnn::rms_norm,

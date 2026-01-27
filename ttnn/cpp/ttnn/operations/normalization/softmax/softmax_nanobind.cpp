@@ -130,10 +130,8 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
                 * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
     )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"softmax">(
         mod,
-        "softmax",
-        "ttnn.softmax",
         doc,
         ttnn::overload_t(
             nb::overload_cast<
@@ -204,10 +202,8 @@ void bind_normalization_softmax_scale_mask_operation(nb::module_& mod) {
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
     )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"scale_mask_softmax">(
         mod,
-        "scale_mask_softmax",
-        "ttnn.scale_mask_softmax",
         doc,
         ttnn::overload_t(
             nb::overload_cast<
@@ -270,10 +266,8 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
                 * Supports both default and sharded multi-core program configurations.
     )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"softmax_in_place">(
         mod,
-        "softmax_in_place",
-        "ttnn.softmax_in_place",
         doc,
         ttnn::overload_t(
             nb::overload_cast<
@@ -348,10 +342,8 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
                 * Internal block size constraints may restrict in-place operation for very large width tensors.
     )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"scale_mask_softmax_in_place">(
         mod,
-        "scale_mask_softmax_in_place",
-        "ttnn.scale_mask_softmax_in_place",
         doc,
         ttnn::overload_t(
             nb::overload_cast<
@@ -432,10 +424,8 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
                 * Scale parameter is typically provided for attention scaling
     )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"scale_causal_mask_hw_dims_softmax_in_place">(
         mod,
-        "scale_causal_mask_hw_dims_softmax_in_place",
-        "ttnn.scale_causal_mask_hw_dims_softmax_in_place",
         doc,
         ttnn::overload_t(
             nb::overload_cast<

@@ -107,10 +107,8 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - Width-sharding is not supported
         )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"group_norm">(
         mod,
-        "group_norm",
-        "ttnn.group_norm",
         doc,
         ttnn::overload_t(
             &ttnn::group_norm,

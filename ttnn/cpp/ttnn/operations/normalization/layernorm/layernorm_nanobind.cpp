@@ -146,13 +146,19 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function(
+    ttnn::bind_function<"layer_norm">(
         mod,
-        "layer_norm",
-        "ttnn.layer_norm",
         doc,
         ttnn::overload_t(
-            &ttnn::layer_norm,
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                float,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<ttnn::MemoryConfig>&,
+                const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
+                std::optional<const ttnn::DeviceComputeKernelConfig>>(&ttnn::layer_norm),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("epsilon") = 1e-12,

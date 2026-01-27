@@ -4,15 +4,19 @@
 
 #pragma once
 
-#include <cassert>
-#include <map>
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <string>
+#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <utility>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+
+#include <tt_stl/assert.hpp>
 
 namespace ttnn {
 
@@ -54,37 +58,47 @@ void add_call_overload(Class& cls, const overload_t<Func, Args...>& spec) {
 
 }  // namespace detail
 
+// C++20 non-type template parameter for string literals
+// This ensures each operation name creates a unique type across all translation units.
+// Uniqueness is determined by BOTH the string length (N) AND the actual character content.
+// For example: "split" (N=6) and "matmul" (N=7) are different types, and
+//              "split" and "split" are the same type (same N and same characters).
+//              "test" and "tset" are different types (same N by different characters).
+template <std::size_t N>
+struct unique_string {
+    std::array<char, N> data;
+
+    constexpr unique_string(const char (&str)[N]) { std::copy_n(str, N, data.begin()); }
+
+    constexpr operator const char*() const { return data.data(); }
+};
+
+// Helper struct template - each unique operation name creates a unique type
+template <unique_string Name>
+struct unique_wrapper_base {
+    std::string name_;
+    std::string py_name_;
+};
+
 // Main binding function - binds a set of C++ function overloads as a callable Python object
 //
 // Usage:
-//   ttnn::bind_function(
-//       mod,
-//       "split",
-//       "ttnn.split",
-//       "Documentation...",
-//       ttnn::overload_t(
-//           nb::overload_cast<const Tensor&, int64_t, int64_t, const std::optional<MemoryConfig>&>(&ttnn::split),
-//           nb::arg("input_tensor"), nb::arg("split_size"), ...),
-//       ttnn::overload_t(
-//           nb::overload_cast<const Tensor&, const SmallVector<int64_t>&, int64_t, const
-//           std::optional<MemoryConfig>&>(&ttnn::split), nb::arg("input_tensor"), nb::arg("split_sizes"), ...)
-//   );
+//   ttnn::bind_function<"split">(mod, doc, ttnn::overload_t(...))
+//   ttnn::bind_function<"some_op", "ttnn.experimental">(mod, doc, ttnn::overload_t(...))
 //
-template <typename... Overloads>
-void bind_function(
-    nb::module_& mod,
-    const char* name,
-    const char* python_fully_qualified_name,
-    const char* doc,
-    Overloads&&... overloads) {
-    // Create a wrapper type for this function
-    struct wrapper_t {
-        std::string name_;
-        std::string py_name_;
-    };
+// The FuncName template parameter uses C++20 unique_string to ensure each operation
+// gets a unique type across all translation units, preventing mangled name collisions.
+// The fully qualified Python name is automatically constructed as Namespace + FuncName.
+// Default namespace is "ttnn."; use "ttnn.experimental." for experimental operations.
+template <unique_string FuncName, unique_string Namespace = unique_string{"ttnn."}, typename... Overloads>
+void bind_function(nb::module_& mod, const char* doc, Overloads&&... overloads) {
+    // Create a unique wrapper type using the operation name
+    // Each operation name creates a distinct type, ensuring uniqueness across TUs
+    using wrapper_t = unique_wrapper_base<FuncName>;
 
-    // Generate class name: "split" -> "split_t"
-    std::string class_name = std::string(name) + "_t";
+    std::string class_name = std::string(FuncName) + "_t";
+    std::string python_fully_qualified_name = std::string(Namespace) + std::string(FuncName);
+
     auto cls = nb::class_<wrapper_t>(mod, class_name.c_str());
     cls.def_prop_ro("name", [](const wrapper_t& self) { return self.name_; });
     cls.def_prop_ro("python_fully_qualified_name", [](const wrapper_t& self) { return self.py_name_; });
@@ -98,20 +112,9 @@ void bind_function(
     (detail::add_call_overload<wrapper_t>(cls, std::forward<Overloads>(overloads)), ...);
 
     // Create instance and bind to module
-    // Store strings by value to avoid lifetime issues with const char* pointers
-    //
-    // CRITICAL: If two bind_function calls have the same template parameters (overloads),
-    // they share the same template instantiation, which means they would share the same
-    // static instance. This causes functions like rms_norm and layer_norm to share the same wrapper_t
-    // instance if they have the same overload signature.
-    //
-    // We use a static map keyed by python_fully_qualified_name to ensure each binding
-    // gets its own unique instance, even when template parameters match.
-    static std::map<std::string, wrapper_t> instances;
-    auto [it, inserted] = instances.emplace(
-        python_fully_qualified_name, wrapper_t{std::string(name), std::string(python_fully_qualified_name)});
-    TT_FATAL(inserted, "Duplicate python_fully_qualified_name detected - each binding must have a unique name");
-    mod.attr(name) = &it->second;
+    // Each unique type (per operation name) has its own static instance
+    static wrapper_t instance{std::string(FuncName), python_fully_qualified_name};
+    mod.attr(FuncName) = &instance;
 }
 
 }  // namespace ttnn
