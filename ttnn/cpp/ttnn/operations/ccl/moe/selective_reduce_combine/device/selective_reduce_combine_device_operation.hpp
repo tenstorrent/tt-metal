@@ -71,6 +71,7 @@ struct SelectiveReduceCombineDeviceOperation {
     struct tensor_args_t {
         const ttnn::Tensor dense_input_tensor;
         const ttnn::Tensor dense_metadata_tensor;
+        const ttnn::Tensor dense_token_maps_tensor;
         const ttnn::Tensor dense_token_counts_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
@@ -137,6 +138,7 @@ namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
     const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     const uint32_t hidden_size,
     const uint32_t batch_size,

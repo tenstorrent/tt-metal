@@ -28,6 +28,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& dense_input_tensor,
                const ttnn::Tensor& dense_metadata_tensor,
+               const ttnn::Tensor& dense_token_maps_tensor,
                const ttnn::Tensor& dense_token_counts_tensor,
                const uint32_t hidden_size,
                const uint32_t batch_size,
@@ -46,6 +47,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
                 return self(
                     dense_input_tensor,
                     dense_metadata_tensor,
+                    dense_token_maps_tensor,
                     dense_token_counts_tensor,
                     hidden_size,
                     batch_size,
@@ -64,6 +66,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             },
             nb::arg("dense_input_tensor").noconvert(),
             nb::arg("dense_metadata_tensor").noconvert(),
+            nb::arg("dense_token_maps_tensor").noconvert(),
             nb::arg("dense_token_counts_tensor").noconvert(),
             nb::arg("hidden_size"),
             nb::arg("batch_size"),
