@@ -1104,7 +1104,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             p_config.name);
     }
 
-    
+
     expanded_tests.reserve(max_iterations);
     for (uint32_t i = 0; i < max_iterations; ++i) {
         ParsedTestConfig iteration_test = p_config;

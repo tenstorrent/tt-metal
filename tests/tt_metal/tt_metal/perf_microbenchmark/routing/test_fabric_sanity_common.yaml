@@ -590,7 +590,7 @@ Tests:
       ntype: unicast_write
       num_packets: 1000
       size: 1024
-      
+
     senders:
       - device: [0, [0, 1]]
 
@@ -610,7 +610,7 @@ Tests:
       ntype: unicast_write
       num_packets: 1000
       size: 1024
-      
+
     senders:
       - device: [0, [0, 1]]
         core: all
@@ -631,7 +631,7 @@ Tests:
       ntype: unicast_write
       num_packets: 1000
       size: 1024
-      
+ 
     senders:
       - device: [0, [0, 1]]
         core: all
