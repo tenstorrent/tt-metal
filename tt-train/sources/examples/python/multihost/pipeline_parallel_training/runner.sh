@@ -7,6 +7,7 @@
 export TT_METAL_HOME="/data/${USER}/tt-metal"
 export PYTHONPATH="${TT_METAL_HOME}:${PYTHONPATH}"
 source ${TT_METAL_HOME}/python_env/bin/activate
+export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 
 CONFIG_FILE="training_configs/training_shakespeare_llama7b_pp_fabric.yaml"
 PP_ROOT="${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training"
