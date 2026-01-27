@@ -1,0 +1,995 @@
+transaction_sizes: [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+num_entries: 185
+entries:
+  - key:
+      pattern: 0
+    latencies: [293, 301, 301, 309, 333, 366, 453, 581, 874, 1454, 2589]
+  - key:
+      same_axis: true
+      pattern: 0
+    latencies: [209, 212, 217, 225, 241, 285, 355, 489, 489, 489, 489]
+  - key:
+      num_transactions: 4
+      pattern: 0
+    latencies: [359, 359, 359, 375, 447, 592, 888, 1448, 2596, 4880, 9448]
+  - key:
+      num_transactions: 4
+      same_axis: true
+      pattern: 0
+    latencies: [273, 284, 281, 291, 361, 503, 785, 1361, 1361, 1361, 1361]
+  - key:
+      num_transactions: 16
+      pattern: 0
+    latencies: [587, 587, 595, 603, 899, 1460, 2595, 4883, 9444, 18612, 36844]
+  - key:
+      num_transactions: 16
+      same_axis: true
+      pattern: 0
+    latencies: [539, 548, 547, 563, 819, 1372, 2515, 4795, 4795, 4795, 4795]
+  - key:
+      num_transactions: 64
+      pattern: 0
+    latencies: [1874, 1874, 1882, 1890, 2674, 4939, 9490, 18594, 36884, 73404, 146508]
+  - key:
+      num_transactions: 64
+      same_axis: true
+      pattern: 0
+    latencies: [1219, 1228, 1226, 1426, 2602, 4844, 9410, 18498, 18498, 18498, 18498]
+  - key:
+      num_transactions: 256
+      pattern: 0
+    latencies: [6674, 6674, 6674, 6690, 9810, 18811, 37042, 73187, 146598, 293358, 584764]
+  - key:
+      num_transactions: 256
+      same_axis: true
+      pattern: 0
+    latencies: [4290, 4300, 4299, 5074, 9738, 18796, 36960, 73384, 73384, 73384, 73384]
+  - key:
+      arch: 1
+      pattern: 0
+    latencies: [373, 372, 374, 382, 390, 405, 437, 500, 637, 908, 1458]
+  - key:
+      num_transactions: 4
+      arch: 1
+      pattern: 0
+    latencies: [460, 460, 469, 470, 474, 500, 643, 899, 1435, 2500, 4637]
+  - key:
+      num_transactions: 16
+      arch: 1
+      pattern: 0
+    latencies: [881, 879, 886, 886, 895, 928, 1473, 2513, 4638, 8891, 17390]
+  - key:
+      num_transactions: 64
+      arch: 1
+      pattern: 0
+    latencies: [2558, 2558, 2568, 2566, 2574, 2593, 4679, 8904, 17391, 34370, 68417]
+  - key:
+      num_transactions: 256
+      arch: 1
+      pattern: 0
+    latencies: [9279, 9278, 9292, 9287, 9295, 9311, 17591, 34504, 68382, 136298, 272742]
+  - key:
+      {}
+    latencies: [296, 303, 312, 311, 341, 374, 457, 639, 898, 1422, 2500]
+  - key:
+      num_transactions: 4
+    latencies: [361, 361, 368, 384, 457, 616, 892, 1425, 2505, 4594, 8892]
+  - key:
+      num_transactions: 16
+    latencies: [626, 633, 640, 642, 891, 1449, 2497, 4612, 8814, 17276, 34494]
+  - key:
+      num_transactions: 64
+    latencies: [1681, 1680, 1691, 1697, 2511, 4616, 8889, 17338, 34481, 67755, 136898]
+  - key:
+      num_transactions: 256
+    latencies: [5906, 5907, 5915, 5922, 8956, 17376, 34480, 68636, 135648, 270613, 546484]
+  - key:
+      arch: 1
+    latencies: [359, 359, 359, 368, 377, 393, 431, 505, 624, 901, 1432]
+  - key:
+      num_transactions: 4
+      arch: 1
+    latencies: [431, 438, 438, 440, 447, 493, 622, 905, 1430, 2480, 4579]
+  - key:
+      num_transactions: 16
+      arch: 1
+    latencies: [707, 716, 717, 716, 721, 902, 1443, 2500, 4610, 8801, 17268]
+  - key:
+      num_transactions: 64
+      arch: 1
+    latencies: [1811, 1819, 1818, 1819, 1825, 2551, 4619, 8835, 17211, 34126, 67856]
+  - key:
+      num_transactions: 256
+      arch: 1
+    latencies: [6229, 6233, 6237, 6235, 6244, 9069, 17370, 34173, 67881, 135293, 270160]
+  - key:
+      memory: 1
+    latencies: [403, 413, 415, 442, 456, 512, 778, 752, 752, 752, 752]
+  - key:
+      num_transactions: 4
+      memory: 1
+    latencies: [564, 467, 499, 547, 587, 751, 1203, 1805, 1805, 1805, 1805]
+  - key:
+      num_transactions: 16
+      memory: 1
+    latencies: [1301, 705, 744, 893, 1268, 1936, 3456, 6338, 6338, 6338, 6338]
+  - key:
+      num_transactions: 64
+      memory: 1
+    latencies: [4475, 1894, 1826, 2086, 3278, 6338, 12264, 24276, 24276, 24276, 24276]
+  - key:
+      num_transactions: 256
+      memory: 1
+    latencies: [16908, 6014, 6031, 6584, 12258, 24282, 47974, 47974, 47974, 47974, 47974]
+  - key:
+      arch: 1
+      memory: 1
+    latencies: [397, 386, 386, 395, 403, 430, 457, 528, 672, 672, 672]
+  - key:
+      num_transactions: 4
+      arch: 1
+      memory: 1
+    latencies: [464, 464, 473, 478, 480, 546, 685, 1270, 1640, 1640, 1640]
+  - key:
+      num_transactions: 16
+      arch: 1
+      memory: 1
+    latencies: [740, 742, 749, 743, 756, 1281, 2762, 5795, 6340, 6340, 6340]
+  - key:
+      num_transactions: 64
+      arch: 1
+      memory: 1
+    latencies: [1847, 1844, 1897, 1851, 2884, 5955, 11371, 23664, 25379, 25379, 25379]
+  - key:
+      num_transactions: 256
+      arch: 1
+      memory: 1
+    latencies: [6255, 6259, 6264, 6289, 12034, 24269, 45921, 45921, 45921, 45921, 45921]
+  - key:
+      num_transactions: 56
+      pattern: 2
+    latencies: [1624, 1624, 1624, 1641, 2088, 3873, 7488, 14960, 29802, 59537, 119041]
+  - key:
+      num_transactions: 224
+      pattern: 2
+    latencies: [5144, 5144, 5152, 5160, 7640, 14985, 29736, 58992, 117946, 238146, 471089]
+  - key:
+      num_transactions: 896
+      pattern: 2
+    latencies: [17240, 17240, 17248, 17272, 29934, 59261, 117576, 235992, 473582, 945827, 1.91908e+06]
+  - key:
+      num_transactions: 3584
+      pattern: 2
+    latencies: [65624, 65624, 65632, 65844, 120294, 240349, 472798, 945474, 1.91924e+06, 3.87568e+06, 7.94065e+06]
+  - key:
+      num_transactions: 14336
+      pattern: 2
+    latencies: [259160, 259160, 259169, 260938, 496532, 972889, 1.9405e+06, 3.87832e+06, 7.94384e+06, 1.61431e+07, 3.25026e+07]
+  - key:
+      num_transactions: 110
+      arch: 1
+      pattern: 2
+    latencies: [3432, 3431, 3432, 3440, 3448, 4015, 7447, 14550, 29000, 58294, 116034]
+  - key:
+      num_transactions: 440
+      arch: 1
+      pattern: 2
+    latencies: [14532, 14533, 14540, 14541, 14547, 15103, 29358, 58165, 116245, 234260, 469589]
+  - key:
+      num_transactions: 1760
+      arch: 1
+      pattern: 2
+    latencies: [60732, 60732, 60740, 60741, 60749, 60782, 117565, 240043, 470506, 936586, 1.85799e+06]
+  - key:
+      num_transactions: 7040
+      arch: 1
+      pattern: 2
+    latencies: [245534, 245534, 245539, 245564, 245594, 245565, 471330, 928873, 1.85622e+06, 3.71679e+06, 7.41144e+06]
+  - key:
+      num_transactions: 28160
+      arch: 1
+      pattern: 2
+    latencies: [984738, 984733, 984743, 984743, 984750, 984766, 1.87613e+06, 3.7208e+06, 7.43668e+06, 1.48985e+07, 2.98361e+07]
+  - key:
+      num_transactions: 3
+      num_subordinates: 4
+      pattern: 3
+    latencies: [347, 348, 355, 364, 378, 461, 668, 1098, 1910, 3465, 6653]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      pattern: 3
+    latencies: [414, 413, 420, 430, 463, 609, 880, 1381, 2435, 4547, 8807]
+  - key:
+      num_transactions: 12
+      num_subordinates: 4
+      pattern: 3
+    latencies: [508, 519, 524, 525, 691, 1096, 1876, 3504, 6659, 12988, 25813]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      pattern: 3
+    latencies: [704, 703, 711, 714, 888, 1412, 2439, 4551, 8819, 17238, 34275]
+  - key:
+      num_transactions: 24
+      num_subordinates: 25
+      pattern: 3
+    latencies: [1053, 1049, 1060, 1070, 1083, 1863, 3461, 6619, 12980, 25546, 51005]
+  - key:
+      num_transactions: 25
+      num_subordinates: 25
+      pattern: 3
+    latencies: [1148, 1150, 1160, 1259, 1183, 2013, 3660, 6937, 13501, 26644, 53198]
+  - key:
+      num_transactions: 48
+      num_subordinates: 4
+      pattern: 3
+    latencies: [1313, 1320, 1320, 1330, 1930, 3481, 6669, 13006, 25813, 50893, 102514]
+  - key:
+      num_transactions: 55
+      pattern: 3
+    latencies: [2176, 2168, 2176, 2188, 2202, 3909, 7568, 14770, 29266, 58100, 116378]
+  - key:
+      num_transactions: 56
+      pattern: 3
+    latencies: [2237, 2234, 2245, 2249, 2267, 4086, 7766, 15114, 29808, 59221, 118605]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      pattern: 3
+    latencies: [1778, 1772, 1779, 1781, 2500, 4577, 8816, 17359, 34222, 68143, 136409]
+  - key:
+      num_transactions: 96
+      num_subordinates: 25
+      pattern: 3
+    latencies: [2760, 2809, 3052, 2776, 3524, 6663, 12980, 25653, 50986, 101445, 203667]
+  - key:
+      num_transactions: 100
+      num_subordinates: 25
+      pattern: 3
+    latencies: [2953, 2953, 2965, 2962, 3718, 6985, 13527, 26738, 53223, 105537, 212719]
+  - key:
+      num_transactions: 192
+      num_subordinates: 4
+      pattern: 3
+    latencies: [4530, 4539, 4536, 4550, 6718, 13055, 25746, 51469, 101792, 202934, 409094]
+  - key:
+      num_transactions: 220
+      pattern: 3
+    latencies: [6178, 6083, 6091, 6094, 7693, 14862, 29335, 58383, 116250, 231682, 466299]
+  - key:
+      num_transactions: 224
+      pattern: 3
+    latencies: [6274, 6275, 6278, 6289, 7863, 15181, 29892, 59369, 118605, 235906, 474545]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      pattern: 3
+    latencies: [6045, 6045, 6044, 6057, 8945, 17390, 34433, 68346, 136473, 271024, 546300]
+  - key:
+      num_transactions: 384
+      num_subordinates: 25
+      pattern: 3
+    latencies: [10538, 9114, 9115, 9122, 13174, 25722, 51076, 101861, 203546, 404400, 817432]
+  - key:
+      num_transactions: 400
+      num_subordinates: 25
+      pattern: 3
+    latencies: [9577, 9574, 9573, 9636, 13736, 26858, 53225, 106511, 211702, 421739, 850621]
+  - key:
+      num_transactions: 768
+      num_subordinates: 4
+      pattern: 3
+    latencies: [17394, 17403, 17400, 17410, 25993, 51270, 102276, 203634, 409679, 809158, 1.6382e+06]
+  - key:
+      num_transactions: 880
+      pattern: 3
+    latencies: [20600, 20611, 20620, 20622, 29815, 58647, 116623, 232972, 465570, 926830, 1.87309e+06]
+  - key:
+      num_transactions: 896
+      pattern: 3
+    latencies: [21188, 21181, 24442, 21193, 30401, 59633, 118749, 237986, 473598, 943094, 1.90686e+06]
+  - key:
+      num_transactions: 1024
+      num_subordinates: 4
+      pattern: 3
+    latencies: [23667, 23143, 23148, 23151, 34738, 69738, 136949, 273621, 544274, 1.08542e+06, 2.18405e+06]
+  - key:
+      num_transactions: 1536
+      num_subordinates: 25
+      pattern: 3
+    latencies: [34490, 34501, 34503, 34506, 51688, 102178, 204166, 409142, 811978, 1.61782e+06, 3.27236e+06]
+  - key:
+      num_transactions: 1600
+      num_subordinates: 25
+      pattern: 3
+    latencies: [36017, 36023, 36021, 36077, 53844, 106405, 212646, 423970, 850230, 1.69265e+06, 3.41237e+06]
+  - key:
+      num_transactions: 3520
+      pattern: 3
+    latencies: [78727, 85790, 78752, 78750, 118072, 233203, 467479, 937832, 1.86054e+06, 3.70211e+06, 7.49832e+06]
+  - key:
+      num_transactions: 3584
+      pattern: 3
+    latencies: [80256, 80374, 80269, 80376, 120276, 237730, 476014, 948120, 1.90231e+06, 3.7919e+06, 7.64035e+06]
+  - key:
+      num_transactions: 6144
+      num_subordinates: 25
+      pattern: 3
+    latencies: [136055, 136064, 136074, 136072, 205316, 407344, 817783, 1.62731e+06, 3.27169e+06, 6.50514e+06, 1.30996e+07]
+  - key:
+      num_transactions: 6400
+      num_subordinates: 25
+      pattern: 3
+    latencies: [141860, 141816, 141862, 141828, 214706, 426227, 852112, 1.70686e+06, 3.38501e+06, 6.74552e+06, 1.36435e+07]
+  - key:
+      num_transactions: 14080
+      pattern: 3
+    latencies: [311239, 311248, 311252, 311253, 470142, 932349, 1.87278e+06, 3.72644e+06, 7.48474e+06, 1.49513e+07, 3.00188e+07]
+  - key:
+      num_transactions: 14336
+      pattern: 3
+    latencies: [317108, 317104, 317111, 317129, 479741, 951713, 1.90844e+06, 3.82271e+06, 7.58105e+06, 1.50824e+07, 3.05509e+07]
+  - key:
+      num_transactions: 3
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [424, 420, 419, 426, 435, 452, 522, 636, 1025, 1830, 3435]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [487, 493, 493, 494, 503, 522, 642, 905, 1449, 2497, 4614]
+  - key:
+      num_transactions: 12
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [574, 575, 575, 583, 589, 651, 1034, 1826, 3403, 6575, 12908]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [813, 814, 816, 822, 832, 937, 1442, 2521, 4592, 8823, 17292]
+  - key:
+      num_transactions: 24
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [1090, 1086, 1083, 1093, 1103, 1124, 1825, 3392, 6569, 12927, 25479]
+  - key:
+      num_transactions: 25
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [1266, 1276, 1273, 1271, 1280, 1296, 2031, 3679, 6954, 13553, 26731]
+  - key:
+      num_transactions: 48
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [1384, 1382, 1383, 1389, 1389, 1890, 3413, 6609, 12901, 25545, 50825]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [1930, 1931, 1929, 1939, 1947, 2578, 4640, 8843, 17330, 34230, 68187]
+  - key:
+      num_transactions: 96
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [3036, 3028, 3025, 3027, 3038, 3491, 6599, 12909, 25523, 50818, 101674]
+  - key:
+      num_transactions: 100
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [3292, 3292, 3293, 3305, 3309, 3778, 7011, 13606, 26635, 53180, 105543]
+  - key:
+      num_transactions: 109
+      arch: 1
+      pattern: 3
+    latencies: [4229, 4242, 4245, 4236, 4240, 4254, 7439, 14564, 28799, 57590, 114802]
+  - key:
+      num_transactions: 110
+      arch: 1
+      pattern: 3
+    latencies: [4417, 4421, 4425, 4416, 4425, 4445, 7671, 14868, 29285, 58160, 116158]
+  - key:
+      num_transactions: 192
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [4740, 4746, 4743, 4742, 4759, 6768, 12991, 25607, 50893, 101564, 203085]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [6396, 6396, 6396, 6403, 6412, 9126, 17395, 34338, 68048, 136009, 271012]
+  - key:
+      num_transactions: 384
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [9669, 9655, 9664, 9659, 9686, 13257, 25669, 50919, 101286, 202448, 404116]
+  - key:
+      num_transactions: 400
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [10202, 10205, 10203, 10211, 10228, 13964, 26892, 53088, 105735, 210827, 422420]
+  - key:
+      num_transactions: 436
+      arch: 1
+      pattern: 3
+    latencies: [13067, 13064, 13064, 13073, 13067, 15004, 29101, 57573, 114965, 229349, 458916]
+  - key:
+      num_transactions: 440
+      arch: 1
+      pattern: 3
+    latencies: [13330, 13334, 13335, 13334, 13334, 15207, 29445, 58301, 115972, 232030, 462553]
+  - key:
+      num_transactions: 768
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [18183, 18182, 18181, 18182, 18199, 26351, 51141, 101775, 202550, 406317, 809446]
+  - key:
+      num_transactions: 1024
+      num_subordinates: 4
+      arch: 1
+      pattern: 3
+    latencies: [24248, 24247, 24246, 24266, 24263, 35366, 68545, 136178, 271641, 541728, 1.08408e+06]
+  - key:
+      num_transactions: 1536
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [36199, 36205, 36207, 36209, 36172, 52432, 101914, 202663, 405204, 808392, 1.62001e+06]
+  - key:
+      num_transactions: 1600
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [37856, 37851, 37853, 37865, 37875, 54783, 106309, 211643, 421607, 844052, 1.68471e+06]
+  - key:
+      num_transactions: 1744
+      arch: 1
+      pattern: 3
+    latencies: [43179, 43181, 43176, 43165, 43165, 59368, 115452, 229860, 458171, 916774, 1.83217e+06]
+  - key:
+      num_transactions: 1760
+      arch: 1
+      pattern: 3
+    latencies: [43727, 43725, 43720, 43716, 43760, 60045, 116787, 231811, 463011, 924695, 1.85315e+06]
+  - key:
+      num_transactions: 6144
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [142381, 142382, 142382, 142389, 142400, 209131, 406770, 811164, 1.61641e+06, 3.23963e+06, 6.46552e+06]
+  - key:
+      num_transactions: 6400
+      num_subordinates: 25
+      arch: 1
+      pattern: 3
+    latencies: [148461, 148464, 148469, 148457, 148467, 218148, 424859, 844478, 1.68904e+06, 3.36970e+06, 6.74305e+06]
+  - key:
+      num_transactions: 6976
+      arch: 1
+      pattern: 3
+    latencies: [163550, 163553, 163559, 163569, 163541, 237272, 461411, 917942, 1.83513e+06, 3.66355e+06, 7.34365e+06]
+  - key:
+      num_transactions: 7040
+      arch: 1
+      pattern: 3
+    latencies: [165216, 165202, 165202, 165262, 165248, 239590, 465447, 928851, 1.84963e+06, 3.70659e+06, 7.39599e+06]
+  - key:
+      num_transactions: 27904
+      arch: 1
+      pattern: 3
+    latencies: [645174, 645172, 645174, 645103, 645132, 948837, 1.84319e+06, 3.67664e+06, 7.32747e+06, 1.46775e+07, 2.93049e+07]
+  - key:
+      num_transactions: 28160
+      arch: 1
+      pattern: 3
+    latencies: [651224, 651243, 651235, 651175, 651198, 957803, 1.86302e+06, 3.70536e+06, 7.41131e+06, 1.47909e+07, 2.95984e+07]
+  - key:
+      num_transactions: 56
+      pattern: 4
+    latencies: [2633, 3117.5, 4624.5, 7901.5, 14726, 30890.5, 63560.5, 125161, 255876, 500724, 1.02375e+06]
+  - key:
+      num_transactions: 224
+      pattern: 4
+    latencies: [8801, 11142.5, 16950.5, 31050, 61201.5, 125273, 253526, 513009, 1.03256e+06, 2.03390e+06, 4.17354e+06]
+  - key:
+      num_transactions: 896
+      pattern: 4
+    latencies: [31777.5, 42594.5, 66819.5, 123019, 250768, 513179, 1.02035e+06, 2.04612e+06, 4.02309e+06, 8.19129e+06, 1.63642e+07]
+  - key:
+      num_transactions: 3584
+      pattern: 4
+    latencies: [124346, 166857, 273206, 492990, 1.01565e+06, 2.03217e+06, 4.082e+06, 8.01091e+06, 1.63841e+07, 3.2724e+07, 6.50934e+07]
+  - key:
+      num_transactions: 14336
+      pattern: 4
+    latencies: [507015, 671185, 1.08911e+06, 2.03105e+06, 4.06958e+06, 8.08828e+06, 1.65917e+07, 3.26166e+07, 6.57869e+07, 1.29974e+08, 2.58790e+08]
+  - key:
+      num_transactions: 110
+      arch: 1
+      pattern: 4
+    latencies: [5412, 6048, 7610.5, 11283.5, 20003.5, 37562.5, 78934.5, 165469, 327934, 670555, 1.30785e+06]
+  - key:
+      num_transactions: 440
+      arch: 1
+      pattern: 4
+    latencies: [18638.5, 20834, 27148, 42927.5, 82137, 164542, 320163, 649129, 1.30914e+06, 2.64987e+06, 5.17926e+06]
+  - key:
+      num_transactions: 1760
+      arch: 1
+      pattern: 4
+    latencies: [66622.5, 77781.5, 109237, 178320, 325953, 665711, 1.31645e+06, 2.74410e+06, 5.30855e+06, 1.05591e+07, 2.13002e+07]
+  - key:
+      num_transactions: 7040
+      arch: 1
+      pattern: 4
+    latencies: [256359, 307771, 421956, 690563, 1.31452e+06, 2.65282e+06, 5.18719e+06, 1.08645e+07, 2.09710e+07, 4.21931e+07, 8.54783e+07]
+  - key:
+      num_transactions: 28160
+      arch: 1
+      pattern: 4
+    latencies: [1.01938e+06, 1.22281e+06, 1.68123e+06, 2.82159e+06, 5.29112e+06, 1.05029e+07, 2.07273e+07, 4.36295e+07, 8.49393e+07, 1.68954e+08, 3.37491e+08]
+  - key:
+      num_transactions: 56
+      num_subordinates: 56
+      pattern: 5
+    latencies: [2497.5, 2648.5, 6713, 20934.5, 37498.5, 76230, 140860, 211596, 657384, 1.26368e+06, 3.16794e+06]
+  - key:
+      num_transactions: 224
+      num_subordinates: 56
+      pattern: 5
+    latencies: [6963.5, 20858, 35317, 78596, 166986, 340497, 702109, 1.36277e+06, 3.81007e+06, 5.41795e+06, 1.08142e+07]
+  - key:
+      num_transactions: 896
+      num_subordinates: 56
+      pattern: 5
+    latencies: [28540.5, 45750.5, 132630, 264649, 735750, 1.48721e+06, 3.26265e+06, 6.12432e+06, 1.22174e+07, 1.92305e+07, 4.03081e+07]
+  - key:
+      num_transactions: 3584
+      num_subordinates: 56
+      pattern: 5
+    latencies: [118441, 269845, 466963, 1.26471e+06, 2.35784e+06, 4.91183e+06, 8.65543e+06, 1.86848e+07, 2.72491e+07, 4.73431e+07, 9.66204e+07]
+  - key:
+      num_transactions: 14336
+      num_subordinates: 56
+      pattern: 5
+    latencies: [549818, 1.05569e+06, 1.84041e+06, 3.51670e+06, 5.82208e+06, 1.39286e+07, 2.23648e+07, 5.55062e+07, 9.38918e+07, 1.77978e+08, 3.44337e+08]
+  - key:
+      num_transactions: 110
+      arch: 1
+      pattern: 5
+    latencies: [5245.5, 5549.5, 16943, 37505.5, 63335, 120442, 291035, 561711, 1.384e+06, 2.56084e+06, 5.80353e+06]
+  - key:
+      num_transactions: 440
+      arch: 1
+      pattern: 5
+    latencies: [30753, 57168, 99446, 175017, 360673, 731350, 1.35014e+06, 2.94547e+06, 5.32583e+06, 1.27929e+07, 2.35967e+07]
+  - key:
+      num_transactions: 1760
+      arch: 1
+      pattern: 5
+    latencies: [91788, 182492, 334700, 557336, 1.02124e+06, 1.95193e+06, 4.42555e+06, 1.02012e+07, 2.83484e+07, 3.99411e+07, 6.96449e+07]
+  - key:
+      num_transactions: 7040
+      arch: 1
+      pattern: 5
+    latencies: [300369, 540863, 997928, 1.99174e+06, 3.79038e+06, 7.15582e+06, 1.48321e+07, 3.24063e+07, 6.72371e+07, 1.21225e+08, 1.80141e+08]
+  - key:
+      num_transactions: 28160
+      arch: 1
+      pattern: 5
+    latencies: [1.25517e+06, 1.80764e+06, 3.50914e+06, 6.25695e+06, 1.21573e+07, 2.58938e+07, 4.87418e+07, 1.07368e+08, 1.8481e+08, 3.73359e+08, 6.49633e+08]
+  - key:
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [568, 571, 576, 586, 608, 650, 730, 881, 1439, 2504, 4629]
+  - key:
+      num_subordinates: 3
+      mechanism: 1
+      pattern: 3
+    latencies: [330, 337, 337, 353, 369, 418, 498, 666, 977, 1637, 2822]
+  - key:
+      num_subordinates: 4
+      mechanism: 1
+      pattern: 3
+    latencies: [326, 336, 334, 352, 366, 410, 502, 671, 973, 1617, 2865]
+  - key:
+      num_subordinates: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [336, 335, 336, 352, 368, 420, 498, 676, 984, 1616, 2822]
+  - key:
+      num_subordinates: 25
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [473, 472, 480, 489, 513, 568, 643, 809, 1433, 2186, 3989]
+  - key:
+      num_subordinates: 67
+      mechanism: 1
+      pattern: 3
+    latencies: [568, 569, 577, 585, 612, 650, 737, 882, 1441, 2500, 4636]
+  - key:
+      num_transactions: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [698, 694, 698, 711, 782, 968, 1275, 1841, 3322, 6239, 12105]
+  - key:
+      num_transactions: 4
+      num_subordinates: 3
+      mechanism: 1
+      pattern: 3
+    latencies: [459, 470, 478, 518, 601, 762, 1040, 1608, 2811, 5242, 10089]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      mechanism: 1
+      pattern: 3
+    latencies: [452, 460, 479, 518, 612, 762, 1049, 1608, 2837, 5325, 10268]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [415, 415, 409, 439, 499, 670, 937, 1499, 2609, 4793, 9230]
+  - key:
+      num_transactions: 4
+      num_subordinates: 25
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [543, 552, 554, 577, 650, 823, 1106, 1698, 2999, 5593, 10802]
+  - key:
+      num_transactions: 4
+      num_subordinates: 67
+      mechanism: 1
+      pattern: 3
+    latencies: [1362, 1371, 1380, 1431, 1508, 1650, 1939, 2498, 4632, 8874, 17385]
+  - key:
+      num_transactions: 16
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [1334, 1337, 1347, 1395, 1717, 2287, 3403, 5570, 10803, 21159, 41982]
+  - key:
+      num_transactions: 16
+      num_subordinates: 3
+      mechanism: 1
+      pattern: 3
+    latencies: [932, 964, 1028, 1170, 1470, 2012, 3097, 5224, 10067, 19713, 39042]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      mechanism: 1
+      pattern: 3
+    latencies: [926, 964, 1031, 1188, 1471, 2058, 3132, 5398, 10221, 20065, 39783]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [680, 681, 679, 696, 964, 1504, 2564, 4710, 9042, 17510, 34784]
+  - key:
+      num_transactions: 16
+      num_subordinates: 25
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [809, 817, 839, 970, 1260, 1847, 2931, 5082, 9828, 19151, 38041]
+  - key:
+      num_transactions: 16
+      num_subordinates: 67
+      mechanism: 1
+      pattern: 3
+    latencies: [4531, 4565, 4627, 4763, 5048, 5607, 6707, 8903, 17401, 34352, 68357]
+  - key:
+      num_transactions: 64
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [3978, 3976, 3979, 4194, 5236, 7535, 11888, 20498, 40691, 80866, 161570]
+  - key:
+      num_transactions: 64
+      num_subordinates: 3
+      mechanism: 1
+      pattern: 3
+    latencies: [2859, 2978, 3242, 3770, 4846, 7008, 11263, 19771, 39114, 77760, 155217]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      mechanism: 1
+      pattern: 3
+    latencies: [2853, 3021, 3237, 3892, 4940, 7179, 11466, 20126, 39838, 79161, 157967]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [1734, 1735, 1735, 1751, 2590, 4704, 8999, 17508, 34511, 68553, 136896]
+  - key:
+      num_transactions: 64
+      num_subordinates: 25
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [1951, 1950, 1999, 2503, 3634, 5824, 10143, 18714, 37022, 73598, 146985]
+  - key:
+      num_transactions: 64
+      num_subordinates: 67
+      mechanism: 1
+      pattern: 3
+    latencies: [17204, 17331, 17586, 18122, 19194, 21359, 25734, 37850, 68430, 136396, 272554]
+  - key:
+      num_transactions: 256
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [14532, 14534, 14545, 15506, 19299, 28551, 45918, 80289, 160305, 318977, 639344]
+  - key:
+      num_transactions: 256
+      num_subordinates: 3
+      mechanism: 1
+      pattern: 3
+    latencies: [10539, 11044, 12069, 14149, 18387, 26895, 43823, 77958, 155289, 309531, 619227]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      mechanism: 1
+      pattern: 3
+    latencies: [10775, 11278, 12070, 14620, 18807, 27488, 44684, 79170, 158096, 315728, 631162]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [5959, 5959, 5959, 5974, 9091, 17567, 34578, 68665, 136864, 271157, 546045]
+  - key:
+      num_transactions: 256
+      num_subordinates: 25
+      linked: true
+      mechanism: 1
+      pattern: 3
+    latencies: [6559, 6560, 6611, 8652, 13183, 21791, 38963, 73218, 146063, 290737, 582404]
+  - key:
+      num_transactions: 256
+      num_subordinates: 67
+      mechanism: 1
+      pattern: 3
+    latencies: [67892, 68402, 69430, 71516, 75835, 84526, 101897, 136490, 272615, 543973, 1.08761e+06]
+  - key:
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [780, 779, 780, 788, 796, 814, 844, 916, 1060, 2077, 3011]
+  - key:
+      num_subordinates: 4
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [397, 395, 404, 404, 413, 431, 468, 542, 676, 981, 1604]
+  - key:
+      num_subordinates: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [395, 397, 404, 405, 412, 431, 469, 532, 668, 981, 1602]
+  - key:
+      num_subordinates: 25
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [493, 499, 502, 500, 508, 534, 564, 636, 780, 1206, 2055]
+  - key:
+      num_subordinates: 25
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [491, 499, 500, 501, 508, 534, 564, 636, 772, 1213, 2047]
+  - key:
+      num_subordinates: 110
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [779, 779, 780, 788, 795, 813, 844, 917, 1060, 1735, 2999]
+  - key:
+      num_transactions: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [1049, 1047, 1049, 1060, 1060, 1096, 1183, 1537, 2146, 3897, 7354]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [520, 516, 534, 545, 577, 644, 786, 1059, 1610, 2806, 5242]
+  - key:
+      num_transactions: 4
+      num_subordinates: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [464, 462, 475, 484, 500, 545, 673, 945, 1497, 2619, 4806]
+  - key:
+      num_transactions: 4
+      num_subordinates: 25
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [902, 906, 912, 949, 962, 1058, 1209, 1576, 2174, 3711, 7028]
+  - key:
+      num_transactions: 4
+      num_subordinates: 25
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [568, 568, 573, 597, 595, 642, 797, 1090, 1673, 2951, 5479]
+  - key:
+      num_transactions: 4
+      num_subordinates: 110
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [1916, 1905, 1915, 1923, 1959, 2033, 2177, 2475, 3010, 5578, 10746]
+  - key:
+      num_transactions: 16
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [2309, 2312, 2316, 2317, 2336, 2536, 3119, 4280, 6454, 12540, 24610]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [985, 1010, 1038, 1094, 1230, 1497, 2035, 3095, 5221, 10083, 19722]
+  - key:
+      num_transactions: 16
+      num_subordinates: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [739, 751, 765, 749, 771, 969, 1498, 2565, 4695, 9001, 17540]
+  - key:
+      num_transactions: 16
+      num_subordinates: 25
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [2514, 2529, 2568, 2640, 2770, 3232, 3910, 4862, 7015, 13792, 26869]
+  - key:
+      num_transactions: 16
+      num_subordinates: 25
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [844, 847, 878, 885, 977, 1248, 1811, 2924, 5076, 9763, 19107]
+  - key:
+      num_transactions: 16
+      num_subordinates: 110
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [6370, 6387, 6420, 6481, 6609, 7641, 7814, 8935, 10725, 21394, 41611]
+  - key:
+      num_transactions: 64
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [7546, 7549, 7551, 7559, 7679, 8462, 10515, 15214, 23766, 47078, 93999]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [2858, 2921, 3048, 3302, 3830, 4871, 6998, 11237, 19749, 39116, 77963]
+  - key:
+      num_transactions: 64
+      num_subordinates: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [1848, 1847, 1856, 1854, 1872, 2587, 4717, 8989, 17458, 34421, 68764]
+  - key:
+      num_transactions: 64
+      num_subordinates: 25
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [8993, 9058, 9189, 9447, 9975, 12000, 14417, 18255, 26876, 53276, 107919]
+  - key:
+      num_transactions: 64
+      num_subordinates: 25
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [1972, 1965, 1968, 2016, 2491, 3701, 5858, 10148, 18682, 36995, 73728]
+  - key:
+      num_transactions: 64
+      num_subordinates: 110
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [24274, 24339, 24479, 24724, 25248, 27107, 28946, 32940, 41640, 83197, 194000]
+  - key:
+      num_transactions: 256
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [28468, 28473, 28484, 28486, 29126, 32306, 40138, 58885, 92931, 185549, 370176]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [10349, 10602, 11120, 12134, 14198, 18390, 26873, 43938, 77685, 155318, 309786]
+  - key:
+      num_transactions: 256
+      num_subordinates: 4
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [6262, 6262, 6272, 6274, 6289, 9108, 17519, 34589, 68451, 136819, 272663]
+  - key:
+      num_transactions: 256
+      num_subordinates: 25
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [34913, 35176, 35687, 36709, 38783, 46564, 55123, 73722, 106159, 212518, 423961]
+  - key:
+      num_transactions: 256
+      num_subordinates: 25
+      linked: true
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [6571, 6577, 6577, 6648, 8637, 13493, 22031, 39283, 73127, 145979, 291258]
+  - key:
+      num_transactions: 256
+      num_subordinates: 110
+      arch: 1
+      mechanism: 1
+      pattern: 3
+    latencies: [95889, 96148, 96657, 97681, 99779, 104705, 113759, 147950, 165105, 330567, 658862]

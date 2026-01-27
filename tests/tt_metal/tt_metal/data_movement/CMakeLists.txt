@@ -25,6 +25,8 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/noc_api_latency/test_noc_api_latency.cpp
 )
 
+add_subdirectory(noc_estimator)
+
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_data_movement)
 

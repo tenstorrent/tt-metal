@@ -86,6 +86,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
     uint32_t packed_subordinate_core_coordinates =
         physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
 
+    // Calculate same-axis: true if src and dst share x or y coordinate
+    bool same_axis = (test_config.master_core_coord.x == test_config.subordinate_core_coord.x) ||
+                     (test_config.master_core_coord.y == test_config.subordinate_core_coord.y);
+
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
         (uint32_t)l1_base_address,
@@ -93,7 +97,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
         (uint32_t)packed_subordinate_core_coordinates,
-        (uint32_t)test_config.num_virtual_channels};
+        (uint32_t)test_config.num_virtual_channels,
+        (uint32_t)same_axis};
 
     // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/";
@@ -317,7 +322,14 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Test ID
     uint32_t test_id = 4;
 
-    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id);
+    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id, CoreCoord(0, 0), CoreCoord(1, 1));
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizesSameAxis) {
+    // Test ID
+    uint32_t test_id = 160;
+
+    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id, CoreCoord(0, 0), CoreCoord(0, 1));
 }
 
 /*
@@ -365,7 +377,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneCustom) {
         get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
-        CoreCoord(0, 1),  // Subordinate Core
+        CoreCoord(1, 1),  // Subordinate Core
         num_of_transactions,
         pages_per_transaction,
         num_virtual_channels);
@@ -376,5 +388,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizes2_0) {
     uint32_t test_id = 158;
 
     unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id, CoreCoord(0, 0), CoreCoord(1, 1), true);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizesSameAxis2_0) {
+    // Test ID
+    uint32_t test_id = 161;
+
+    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id, CoreCoord(0, 0), CoreCoord(0, 1), true);
 }
 }  // namespace tt::tt_metal
