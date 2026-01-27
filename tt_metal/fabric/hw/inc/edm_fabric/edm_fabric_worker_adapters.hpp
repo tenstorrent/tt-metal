@@ -42,6 +42,9 @@ namespace tt::tt_fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
+
+#define OVERLAY_REGISTER_ZERO 0UL
+
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 struct WorkerToFabricEdmSenderImpl {
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
@@ -91,7 +94,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO); // conn->edm_connection_handshake_addr;
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
@@ -108,7 +111,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
             num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(0UL); // get_arg_val<uint32_t>(arg_idx++);
+            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO); // get_arg_val<uint32_t>(arg_idx++);
             arg_idx++;
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
             buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
@@ -183,13 +186,9 @@ struct WorkerToFabricEdmSenderImpl {
                 ? reinterpret_cast<volatile tt_reg_ptr uint32_t*>(from_remote_buffer_free_slots_ptr)
                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
                       get_stream_reg_write_addr(this->worker_credits_stream_id));
-        this->edm_connection_handshake_l1_addr = get_stream_scratch_register_address(0UL);
-        //connected_to_persistent_fabric ? edm_connection_handshake_l1_id : get_stream_scratch_register_address(0UL);
-/*
-        connected_to_persistent_fabric
-            ? edm_connection_handshake_l1_id
-            : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
-*/
+
+        this->edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO);
+        //connected_to_persistent_fabric ? edm_connection_handshake_l1_id : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
         //ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address

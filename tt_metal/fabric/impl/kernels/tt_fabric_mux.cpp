@@ -44,6 +44,11 @@ constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
+
+const uint32_t constexpr USE_OVERLAY_REGISTER = 0UL;
+const uint32_t constexpr USE_L1_ADDRESS = 1UL;
+#define OVERLAY_REGISTER_ZERO 0UL
+
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -79,21 +84,23 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    if constexpr(MemoryOpt < 1U) {
-    
-        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+    if constexpr(MemoryOpt == USE_OVERLAY_REGISTER) {
+        using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
+
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>(
             connection_worker_info_ptr,
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-            reinterpret_cast<volatile uint32_t*>(connection_handshake_address),
+            reinterpret_cast<volatile tt_reg_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<ConnectionLiveSemaphorePtrType>(connection_handshake_address),
             0 /* unused, sender_sync_noc_cmd_buf */,
             tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
         }
     else {
+        using ConnectionLiveSemaphorePtrType = volatile tt_reg_ptr uint32_t*;
 
-        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>(
             connection_worker_info_ptr,
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-            reinterpret_cast<volatile uint32_t* const>(connection_handshake_address),
+            reinterpret_cast<volatile tt_reg_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<ConnectionLiveSemaphorePtrType>(connection_handshake_address),
             0 /* unused, sender_sync_noc_cmd_buf */,
             tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
 
@@ -189,9 +196,7 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    #define OVERLAY_REGISTER_ZERO 0UL
-    
-    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, 0U>(
+    setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, USE_OVERLAY_REGISTER>(
         &full_size_channels[i],
         &full_size_channel_worker_interfaces[0UL],
         full_size_channel_connection_established[0UL],
@@ -203,8 +208,9 @@ void kernel_main() {
         sender_flow_control_address,
         StreamId{channel_stream_ids[0UL]});
 
+    #pragma unroll
     for (uint8_t i = 1UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, 0U>(
+        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, USE_L1_ADDRESS>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
             full_size_channel_connection_established[i],
@@ -217,7 +223,7 @@ void kernel_main() {
             StreamId{channel_stream_ids[i]});
     }
 
-    setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, 0U>(
+    setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, USE_L1_ADDRESS>(
         &header_only_channels[0UL],
         &header_only_channel_worker_interfaces[0UL],
         header_only_channel_connection_established[0UL],
@@ -225,12 +231,13 @@ void kernel_main() {
         sizeof(PACKET_HEADER_TYPE),
         channel_base_address,
         connection_info_address,
-        get_stream_scratch_register_address(0UL), //connection_handshake_address,
+        connection_handshake_address, // get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO),
         sender_flow_control_address,
         StreamId{channel_stream_ids[0UL + NUM_FULL_SIZE_CHANNELS]});
-
+    
+    #pragma unroll
     for (uint8_t i = 1UL; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, 0U>(
+        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, USE_L1_ADDRESS>(
             &header_only_channels[i],
             &header_only_channel_worker_interfaces[i],
             header_only_channel_connection_established[i],

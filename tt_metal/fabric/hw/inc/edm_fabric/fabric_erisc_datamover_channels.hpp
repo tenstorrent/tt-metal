@@ -587,8 +587,14 @@ using SenderEthChannelBuffers = std::conditional_t<
 
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
-template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED, typename ConnectionSemaphorePtrType = volatile tt_reg_ptr uint32_t*>
+template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED, typename ConnectionSemaphorePtrType>
 struct EdmChannelWorkerInterface {
+
+    static_assert(
+        std::is_same_v<ConnectionSemaphorePtrType, volatile uint32_t*> || std::is_same_v<ConnectionSemaphorePtrType, volatile tt_reg_ptr uint32_t*> ||
+            std::is_same_v<ConnectionSemaphorePtrType, volatile tt_l1_ptr uint32_t*>,
+        "ConnectionSemaphorePtrType must be a pointer type"
+    );
 
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
@@ -692,21 +698,22 @@ struct EdmChannelWorkerInterface {
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
     ConnectionSemaphorePtrType connection_live_semaphore;
-    //volatile tt_reg_ptr uint32_t* connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.
 // This implements the interface for channels with a known, fixed NUM_BUFFERS at compile time.
-template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS, typename ConnectionSemaphorePtrType = volatile tt_reg_ptr uint32_t*>
+template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS, typename ConnectionSemaphorePtrType>
 struct StaticSizedSenderChannelWorkerInterface
     : public EdmChannelWorkerInterface<
           WORKER_HANDSHAKE_NOC,
-          StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>
+          StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>,
+          ConnectionSemaphorePtrType
 > {
     using Base = EdmChannelWorkerInterface<
         WORKER_HANDSHAKE_NOC,
-        StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>
+        StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>,
+        ConnectionSemaphorePtrType
     >;
 
     static constexpr uint8_t num_buffers = NUM_BUFFERS;

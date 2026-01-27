@@ -2346,7 +2346,8 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
-    if constexpr (I == 0UL) {
+#define OVERLAY_REGISTER_ZERO 0UL
+    if constexpr (I == OVERLAY_REGISTER_ZERO) {
         using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
         ConnectionLiveSemaphorePtrType connection_live_semaphore_ptr =
             reinterpret_cast<ConnectionLiveSemaphorePtrType>(local_sender_connection_live_semaphore_addresses[I]);
@@ -2368,7 +2369,7 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[I]);
         new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
+            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I], ConnectionLiveSemaphorePtrType>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 connection_live_semaphore_ptr,
