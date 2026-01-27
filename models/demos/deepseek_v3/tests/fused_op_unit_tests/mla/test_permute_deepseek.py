@@ -36,9 +36,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         (
             "q_nope_permute_pre_linear",
-            [1, 32, 16, 192],
+            [32, 1, 16, 128],
             (1, 2, 0, 3),
-            [32, 16, 1, 192],
+            [1, 16, 32, 128],
         ),
         (
             "q_nope_permute_post_linear",
@@ -48,9 +48,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         (
             "q_rope_permute",
-            [1, 32, 16, 64],
-            (1, 0, 2, 3),
             [32, 1, 16, 64],
+            (1, 0, 2, 3),
+            [1, 32, 16, 64],
         ),
         (
             "attn_out_permute_pre_linear",

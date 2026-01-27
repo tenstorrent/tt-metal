@@ -52,19 +52,17 @@ def run_fwd_decode_q_rope_nope_with_trace(
         bias=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-
     # Reshape
     tt_q = ttnn.reshape(
         tt_q,
         (bsz, 1, num_heads_local, qk_head_dim),
     )
-
     tt_q_nope = ttnn.slice(
         tt_q,
         [0, 0, 0, 0],
         [bsz, 1, num_heads_local, qk_nope_head_dim],
     )
-    # 1,32,16,192 L1 interleaved
+    # 32,1,16,192 L1 interleaved
 
     q_rope_slice_config = SliceConfig(
         memory_config=ttnn.create_sharded_memory_config(
@@ -137,7 +135,7 @@ def run_fwd_decode_q_rope_nope_with_trace(
             [0, 0, 0, 0],
             [bsz, 1, num_heads_local, qk_nope_head_dim],
         )
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,192 L1 interleaved
 
         q_rope_slice_config = SliceConfig(
             memory_config=ttnn.create_sharded_memory_config(
@@ -214,7 +212,7 @@ def run_fwd_decode_q_rope_nope_with_trace(
             [0, 0, 0, 0],
             [bsz, 1, num_heads_local, qk_nope_head_dim],
         )
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,192 L1 interleaved
 
         q_rope_slice_config = SliceConfig(
             memory_config=ttnn.create_sharded_memory_config(
@@ -407,7 +405,6 @@ def test_deepseek_v3_mla_fwd_decode_q_rope_nope_trace_mode(
     torch_q_nope = torch_q_nope.permute(0, 2, 1, 3)
     torch_q_rope = torch_q_rope.permute(1, 0, 2, 3)
     rope_tensors = create_rope_tensors(mesh_device, qk_rope_head_dim, bsz)
-    print("torch_q_rope", torch_q_rope.shape)
     # Extract the 2D transformation matrix (first 32x32 block) like in test_rope_deepseek.py
     torch_trans_mat = rope_tensors["torch_trans"]  # [1, 1, batch_size*32, 32] or [1, 1, batch_size, 32]
     torch_trans_mat_2d = torch_trans_mat[:, :, 0:32, :]  # [1, 1, 32, 32]
@@ -417,22 +414,10 @@ def test_deepseek_v3_mla_fwd_decode_q_rope_nope_trace_mode(
     torch_q = torch.cat([torch_q_nope, torch_q_rope], dim=-1)
 
     grid_size = mesh_device.compute_with_storage_grid_size()
-    input_core_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 3),  # 8x4 grid
-            )
-        }
-    )
-    input_shard_shape = [32, 32]
-    input_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=input_shard_shape,
-        core_grid=input_core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    shard_grid = ttnn.num_cores_to_corerangeset(16, grid_size, row_wise=True)
+    shard_spec = ttnn.ShardSpec(shard_grid, [32, 96], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
     input_tensor_mesh = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -444,6 +429,7 @@ def test_deepseek_v3_mla_fwd_decode_q_rope_nope_trace_mode(
             ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, 8)),
         ),
     )
+    input_tensor_mesh = ttnn.to_memory_config(input_tensor_mesh, mem_config)
 
     # Convert weight to ttnn
     q_weight_tensor = ttnn.from_torch(

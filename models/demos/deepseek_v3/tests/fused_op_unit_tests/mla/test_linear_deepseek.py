@@ -32,8 +32,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         (
             "mla_linear_wkv_b1",
-            [1, 16, 32, 192],  # Input shape: [1, num_heads_local, bsz, qk_nope_head_dim]
-            [192, 512],  # Weight shape: qk_nope_head_dim x kv_lora_rank = 192 x 512
+            [1, 16, 32, 128],  # Input shape: [1, num_heads_local, bsz, qk_nope_head_dim]
+            [128, 512],  # Weight shape: qk_nope_head_dim x kv_lora_rank = 128 x 512
             "interleaved",  # L1 interleaved
             "interleaved",  # Output: L1 interleaved
         ),

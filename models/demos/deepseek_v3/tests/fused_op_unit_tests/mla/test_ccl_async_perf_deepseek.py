@@ -36,7 +36,7 @@ def galaxy_type():
     [
         ("wq_kv_a", 10, 28.81),
         ("wq_b", 10, 57.5),
-        ("wkv_b1", 10, 50),
+        ("wkv_b1", 10, 35.63),
         ("wkv_b2", 10, 142),
         ("wo", 10, 259.59),
     ],
@@ -270,6 +270,64 @@ def test_slice_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
+        ("q_nope_slice", 10, 2.43),  # Target based on typical reduce performance
+        ("q_rope_slice", 10, 1.89),
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_slice_q_rope_nope_deepseek_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+    galaxy_type,
+):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    subdir = "deepseek_ccl_perf"
+    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_slice_q_rope_nope.py -k {step_name}"
+    cols = ["DEVICE KERNEL"]
+    op_name = "SliceDeviceOperation"
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_ccl_ops",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    threshold = max(THRESHOLD, perf_target_us * THRESHOLD_PERCENTAGE)
+
+    assert (
+        measured_avg_us < perf_target_us + threshold
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us, the threshold was {threshold} us"
+    assert (
+        measured_avg_us > perf_target_us - threshold
+    ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
+
+
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
         ("q_norm", 10, 7.34),  # Target based on typical reduce performance
         ("kv_norm", 10, 6.68),
     ],
@@ -394,9 +452,9 @@ def test_to_memory_config_deepseek_perf(
         ("kv_rope_permute_pre", 10, 7.6),
         ("kv_rope_permute_post", 10, 1.5),
         ("kvpe_permute", 10, 31),
-        ("q_nope_permute_pre_linear", 10, 106),
-        ("q_nope_permute_post_linear", 10, 23),
-        ("q_rope_permute", 10, 1.7),
+        ("q_nope_permute_pre_linear", 10, 6.20),
+        ("q_nope_permute_post_linear", 10, 22.95),
+        ("q_rope_permute", 10, 1.65),
         ("attn_out_permute_pre_linear", 10, 71),
         ("v_out_permute", 10, 8),
     ],
@@ -687,7 +745,7 @@ def test_paged_update_cache_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_reshape_decode", 10, 39),
+        ("q_reshape_decode", 10, 38.71),
         ("v_out_reshape_decode", 10, 175),
     ],
 )
@@ -1171,8 +1229,8 @@ def test_wkv_b2_sequence_deepseek_perf(
         (
             "fwd_decode_q_rope_nope",
             10,
-            179.46,
-        ),  # Sum: linear(28.81) + all-gather(106) + fast_reduce(7.75) + 3*slices(1.5+1.3+1)
+            184.9,
+        ),  # Sum: linear(57.5) + reshape(39) + slice(2.43+1.89) + permute(6.20) + linear(35.63) + permute(22.95) + permute(1.65) + rotary(4.56) + to_mem(1.18) + concat(7.90)
     ],
 )
 # 33uS slower than sum of unit tests
@@ -1187,19 +1245,19 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     Test performance of the fwd_decode_q_rope_nope sequence from mla1d.py (lines 1234-1295).
 
     This test measures the end-to-end performance of the operation sequence:
-    1. Linear projection (tt_q): 36.93 µs ? 57.5
-    2. Reshape: 38.5 µs ? 39
-    3. Slice tt_q_nope: 2.90 µs ? None
-    4. Slice tt_q_rope: 2.90 µs ? None
-    5. Permute tt_q_nope: 106 µs ? 4.75
-    6. Linear projection (tt_q_nope): 36.93 µs ? 50
-    7. Permute tt_q_nope: 23 µs ? 4.75
-    8. Permute tt_q_rope: 1.7 µs ? 4.75
-    9. Rotary embedding tt_q_rope: 4.56 µs ? 4.5
-    10. To memory config: 2.34 µs ? 1.18
-    11. Concat tt_q_nope and tt_q_rope: 7.26 µs ? 7.90
+    1. Linear projection (tt_q): 57.5 µs(measured single) ? 46.72 (measured here)
+    2. Reshape: 38.71 µs ? 38.57
+    3. Slice tt_q_nope: 2.40 µs ? 2.82
+    4. Slice tt_q_rope: 1.87 µs ? 2.82
+    5. Permute tt_q_nope: 6.20 µs ? 4.75
+    6. Linear projection (tt_q_nope): 35.63 µs ? 46.72
+    7. Permute tt_q_nope: 22.95 µs ? 23.56 (transpose)
+    8. Permute tt_q_rope: 1.65 µs ? 4.75
+    9. Rotary embedding tt_q_rope: 4.56 µs ? 4.56
+    10. To memory config: 1.18 µs ? 2.34
+    11. Concat tt_q_nope and tt_q_rope: 7.90 µs ? 7.26
 
-    Total expected: 146.36 µs
+    Total expected: 184.9 µs
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_fwd_decode_q_rope_nope_deepseek.py -k {step_name}"
@@ -1224,10 +1282,20 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     measured_avg = 0
     measured_std = 0
     for op in results.keys():
-        measured_min += results[op][cols[0]]["MIN"]
-        measured_max += results[op][cols[0]]["MAX"]
-        measured_avg += results[op][cols[0]]["AVG"]
-        measured_std += results[op][cols[0]]["STD"]
+        if op in [
+            "MeshDeviceOperationAdapter<ttnn::operations::data_movement::slice::SliceDeviceOperation>",
+            "MeshDeviceOperationAdapter<ttnn::operations::matmul::MatmulDeviceOperation>",
+            "MeshDeviceOperationAdapter<ttnn::operations::data_movement::PermuteDeviceOperation>",
+        ]:
+            measured_min += 2 * results[op][cols[0]]["MIN"]
+            measured_max += 2 * results[op][cols[0]]["MAX"]
+            measured_avg += 2 * results[op][cols[0]]["AVG"]
+            measured_std += 2 * results[op][cols[0]]["STD"]
+        else:
+            measured_min += 1 * results[op][cols[0]]["MIN"]
+            measured_max += 1 * results[op][cols[0]]["MAX"]
+            measured_avg += 1 * results[op][cols[0]]["AVG"]
+            measured_std += 1 * results[op][cols[0]]["STD"]
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
@@ -1239,7 +1307,7 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_deepseek_wq_kv_a_sequence",
+        run_type=f"tg_deepseek_fwd_decode_q_rope_nope",
         ml_model_name="deepseek-v3-tg",
     )
 
