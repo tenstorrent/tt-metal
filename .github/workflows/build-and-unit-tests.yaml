@@ -115,7 +115,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.enable-watcher && 180 || inputs.timeout }}
+        timeout-minutes: ${{ inputs.enable-watcher && 720 || inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
           GTEST_FILTER="${{inputs.gtest_filter}}"
