@@ -17,12 +17,13 @@ namespace operations::ccl {
 struct ReduceToOneOp {
     struct operation_attributes_t {
         const MeshCoordinate& root_coord;
+        const MeshCoordinate& exit_coord;
         const tt::tt_fabric::Topology topology;
 
         const ttnn::TensorSpec _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, topology); };
+        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "exit_coord", "topology");
+        auto attribute_values() const { return std::forward_as_tuple(root_coord, exit_coord, topology); };
     };
 
     struct tensor_args_t {
@@ -108,6 +109,7 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
     const ReduceToOneOp::tensor_args_t& tensor_args,
     const ReduceToOneOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& exit_coord,
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -120,6 +122,7 @@ ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt);
 }  // namespace prim

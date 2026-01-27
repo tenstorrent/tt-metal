@@ -43,6 +43,7 @@ def test_reduce_to_one(bh_2d_mesh_device):
 
     # Setup - create 2x4 submesh
     num_devices = 8
+    exit_coord = (0, 1)  # b1 is the final root
     root_coord = (1, 1)  # b1 is the final root
 
     topology = ttnn.Topology.Linear
@@ -128,6 +129,7 @@ def test_reduce_to_one(bh_2d_mesh_device):
     output_tensor = ttnn.reduce_to_one(
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
+        exit_coord=ttnn.MeshCoordinate(exit_coord),
         topology=topology,
         intermediate_tensor=intermediate_tensor,
     )

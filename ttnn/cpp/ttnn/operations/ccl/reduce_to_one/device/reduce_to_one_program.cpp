@@ -137,20 +137,22 @@ inline MeshCoordinate get_fabric_destination(
 }
 
 // Get the destination semaphore address based on role
-// - SENDER: increments semaphore_round1 on destination
+// - LEAF: increments semaphore_round1 on destination
 // - ROOT3: increments semaphore_round2 on destination
 // - ROOT2: increments semaphore_round3 on destination
+// - ROOT1: increments semaphore_exit on exit_coord
 inline uint32_t get_destination_semaphore_address(
     uint32_t role,
     const tt::tt_metal::GlobalSemaphore& semaphore_round1,
     const tt::tt_metal::GlobalSemaphore& semaphore_round2,
-    const tt::tt_metal::GlobalSemaphore& semaphore_round3) {
+    const tt::tt_metal::GlobalSemaphore& semaphore_round3,
+    const tt::tt_metal::GlobalSemaphore& semaphore_exit) {
     switch (role) {
         case MESH_LEAF: return semaphore_round1.address();
         case MESH_ROOT3: return semaphore_round2.address();
         case MESH_ROOT2: return semaphore_round3.address();
-        case MESH_ROOT1:
-        default: return 0;  // Root1 doesn't send
+        case MESH_ROOT1: return semaphore_exit.address();
+        default: return 0;
     }
 }
 
@@ -158,6 +160,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const ReduceToOneOp::tensor_args_t& tensor_args,
     const ReduceToOneOp::operation_attributes_t& /*operation_attributes*/,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& exit_coord,
     const MeshCoordinate& device_coordinate,
     std::optional<ttnn::MeshCoordinate>& forward_coord,
     std::optional<ttnn::MeshCoordinate>& backward_coord,
@@ -175,10 +178,11 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     auto semaphore_round1 = semaphores[0];
     auto semaphore_round2 = semaphores[1];
     auto semaphore_round3 = semaphores[2];
+    auto semaphore_exit = semaphores[3];
 
     // Get destination semaphore address for fused atomic inc
     uint32_t dst_sem_addr =
-        get_destination_semaphore_address(role, semaphore_round1, semaphore_round2, semaphore_round3);
+        get_destination_semaphore_address(role, semaphore_round1, semaphore_round2, semaphore_round3, semaphore_exit);
 
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
     const auto& shard_spec = input_tensor.shard_spec().value();
@@ -274,8 +278,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .set_tile_dims(packet_cb, compute_tile);
     CreateCircularBuffer(program, all_cores, cb_packet_config);
 
+    // For ROOT1, use exit_coord as destination; otherwise use normal fabric destination
     MeshCoordinate dest_coord =
-        get_fabric_destination(role, device_coordinate, root_coord, forward_coord, backward_coord);
+        is_mesh_root1 ? exit_coord
+                      : get_fabric_destination(role, device_coordinate, root_coord, forward_coord, backward_coord);
 
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(dest_coord);
@@ -386,12 +392,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                 fabric_rt_args.push_back(worker_sems[c.x][worker_idx]);
             }
 
-            // Append raw fabric connection args (only for non-ROOT1, ROOT1 doesn't send)
-            if (!is_mesh_root1) {
-                uint32_t link_idx = bottom_core_to_link.at(c);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_fabric_node_id, dst_fabric_node_id, link_idx, program, c, fabric_rt_args);
-            }
+            // Append raw fabric connection args - all devices send (ROOT1 sends to exit_coord)
+            uint32_t link_idx = bottom_core_to_link.at(c);
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fabric_node_id, dst_fabric_node_id, link_idx, program, c, fabric_rt_args);
 
             tt::tt_metal::SetRuntimeArgs(program, fabric_writer_kernel, c, fabric_rt_args);
 

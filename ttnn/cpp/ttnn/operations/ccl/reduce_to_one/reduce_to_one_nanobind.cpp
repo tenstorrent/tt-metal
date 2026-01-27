@@ -31,6 +31,7 @@ void bind_reduce_to_one(nb::module_& module) {
         Args:
             input_tensor (ttnn.Tensor): Input tensor to reduce. Must be sharded across 8 cores (2 columns x 4 rows).
             root_coord (MeshCoordinate): Coordinate of the final root device where the result will be stored.
+            exit_coord (MeshCoordinate): Coordinate of the exit node where the final result will be sent.
             topology (Topology): The fabric topology to use for communication.
 
         Keyword Args:
@@ -50,13 +51,15 @@ void bind_reduce_to_one(nb::module_& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const MeshCoordinate& root_coord,
+               const MeshCoordinate& exit_coord,
                const tt::tt_fabric::Topology topology,
                std::optional<ttnn::Tensor>& output_tensor,
                std::optional<ttnn::Tensor>& intermediate_tensor) {
-                return self(input_tensor, root_coord, topology, output_tensor, intermediate_tensor);
+                return self(input_tensor, root_coord, exit_coord, topology, output_tensor, intermediate_tensor);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("root_coord"),
+            nb::arg("exit_coord"),
             nb::arg("topology"),
             nb::kw_only(),
             nb::arg("output_tensor") = nb::none(),
