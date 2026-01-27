@@ -123,7 +123,9 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
-    TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_EXIT_ON_DISPATCH_TIMEOUT,             // Exit application on dispatch timeout with exit code
+    TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE,           // Exit code to use when exiting on dispatch timeout
+    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
@@ -893,6 +895,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
             this->dispatch_timeout_command_to_execute = std::string(value);
             break;
+
+        // TT_METAL_EXIT_ON_DISPATCH_TIMEOUT
+        // Exit application on dispatch timeout with exit code.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_EXIT_ON_DISPATCH_TIMEOUT=1
+        case EnvVarID::TT_METAL_EXIT_ON_DISPATCH_TIMEOUT: {
+            this->exit_on_dispatch_timeout = is_env_enabled(value);
+            break;
+        }
+
+        // TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE
+        // Exit code to use when exiting on dispatch timeout.
+        // Default: 124 (standard timeout exit code)
+        // Usage: export TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE=124
+        case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE: {
+            this->dispatch_timeout_exit_code = std::stoul(value);
+            break;
+        }
 
         // TT_METAL_DISPATCH_PROGRESS_UPDATE_MS
         // Dispatch kernel progress update period in milliseconds.
