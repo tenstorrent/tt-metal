@@ -263,7 +263,7 @@ def main():
         action="store_true",
         help="Use RowParallelLinear (shards input features), default is ColumnParallelLinear",
     )
-    parser.add_argument("-b", "--batch_size", type=int, default=8192, help="Batch size")
+    parser.add_argument("-b", "--batch_size", type=int, default=256, help="Batch size")
     parser.add_argument(
         "--mesh_shape",
         type=str,
