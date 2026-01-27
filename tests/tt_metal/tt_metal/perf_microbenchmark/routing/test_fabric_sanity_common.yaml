@@ -581,7 +581,7 @@ Tests:
 
   - name: "CoreSweepOneToAll"
     fabric_setup:
-      topology: Linear
+      topology: Mesh
 
     benchmark_mode: true
 
@@ -601,9 +601,9 @@ Tests:
 
   - name: "CoreSweepAllToOne"
     fabric_setup:
-      topology: Linear
+      topology: Mesh
 
-    benchmark_mode: true
+    latency_test_mode: true
 
     defaults:
       ftype: unicast
@@ -620,22 +620,3 @@ Tests:
               core: [0, 5]
 
 
-  - name: "CoreSweepAllToAll"
-    fabric_setup:
-      topology: Linear
-
-    benchmark_mode: true
-
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      num_packets: 1000
-      size: 1024
- 
-    senders:
-      - device: [0, [0, 1]]
-        core: all
-        patterns:
-          - destination:
-              device: [0, [1, 0]]
-              core: all

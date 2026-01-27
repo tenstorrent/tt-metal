@@ -1114,9 +1114,9 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         const auto [sender_core_idx, dest_core_idx] = calculate_core_indices(sender_core_sweep_iterations, dest_core_sweep_iterations, i);
 
         // If sender core sweep is active, expand sender to one specific core for this iteration based on calculated idx
-        std::vector<ParsedSenderConfig> expanded_senders;
+        std::vector<ParsedSenderConfig> expanded_senders = p_config.senders;
         if (sender_core_sweep_iterations > 0 && sender_core_idx < all_cores.size()) {
-            expanded_senders = expand_sender_core_sweep(p_config.senders, all_cores, sender_core_idx);
+            expanded_senders = expand_sender_core_sweep(expanded_senders, all_cores, sender_core_idx);
         }
 
         // If destination core sweep is active, expand destination to one specific core for this iteration
