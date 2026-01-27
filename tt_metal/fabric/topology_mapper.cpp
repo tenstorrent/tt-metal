@@ -660,21 +660,23 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         inter_mesh_is_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
 
     // Use the new utility function to perform the multi-mesh mapping
-    auto mapping_results = map_multi_mesh_to_physical(
+    auto mapping_result = map_multi_mesh_to_physical(
         adjacency_map_logical, adjacency_map_physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
-    // Process results and update MappedChipInfo entries
-    for (const auto& [logical_mesh_id, result] : mapping_results) {
-        // If the mapping failed, throw an error
-        TT_FATAL(
-            result.success,
-            "Topology solver failed to find a valid mapping for mesh {}, {}",
-            logical_mesh_id.get(),
-            result.error_message);
+    // If the mapping failed, throw an error
+    TT_FATAL(
+        mapping_result.success, "Topology solver failed to find a valid mapping: {}", mapping_result.error_message);
 
-        // Update MappedChipInfo entries from the result
+    // Group mappings by mesh_id and process each mesh
+    std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id].emplace_back(fabric_node, asic);
+    }
+
+    // Process results and update MappedChipInfo entries for each mesh
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
         const auto& mesh_asic_id_to_mesh_rank = asic_id_to_mesh_rank.at(logical_mesh_id);
-        for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        for (const auto& [fabric_node, asic] : mesh_mappings) {
             auto it = asic_id_to_mapping_.find(asic);
             TT_FATAL(it != asic_id_to_mapping_.end(), "ASIC id {} not found in chip_topology_mapping_", asic);
             MappedChipInfo& info = *it->second;

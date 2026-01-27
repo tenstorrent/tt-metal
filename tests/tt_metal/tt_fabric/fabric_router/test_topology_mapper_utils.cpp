@@ -1007,61 +1007,65 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
     config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
 
     // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
-    const auto results = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
 
-    // Verify results
-    EXPECT_EQ(results.size(), 2u) << "Should have a result for each logical mesh";
+    // Verify overall result succeeded
+    EXPECT_TRUE(result.success) << "Multi-mesh mapping should succeed: " << result.error_message;
 
-    // Both logical meshes should succeed
-    EXPECT_TRUE(results.at(logical_mesh0).success)
-        << "Logical Mesh 0 mapping should succeed: " << results.at(logical_mesh0).error_message;
-    EXPECT_TRUE(results.at(logical_mesh1).success)
-        << "Logical Mesh 1 mapping should succeed: " << results.at(logical_mesh1).error_message;
+    // Verify bidirectional consistency of the overall result
+    verify_bidirectional_consistency(result);
 
-    // Verify Mesh 0 mapping (2x2 logical -> should map to 2x2 physical mesh 1)
-    const auto& result0 = results.at(logical_mesh0);
-    verify_bidirectional_consistency(result0);
-    EXPECT_EQ(result0.fabric_node_to_asic.size(), 4u) << "Logical Mesh 0 should map all 4 nodes";
+    // Group mappings by mesh_id
+    std::map<MeshId, std::map<FabricNodeId, tt::tt_metal::AsicID>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id][fabric_node] = asic;
+    }
 
-    // Verify Mesh 1 mapping (2x2 logical -> should map to 2x2 physical mesh 1 or another suitable mesh)
-    const auto& result1 = results.at(logical_mesh1);
-    verify_bidirectional_consistency(result1);
-    EXPECT_EQ(result1.fabric_node_to_asic.size(), 4u) << "Logical Mesh 1 should map all 4 nodes";
+    // Verify we have mappings for both logical meshes
+    EXPECT_EQ(mappings_by_mesh.size(), 2u) << "Should have mappings for both logical meshes";
+    EXPECT_TRUE(mappings_by_mesh.contains(logical_mesh0)) << "Should have mappings for logical mesh 0";
+    EXPECT_TRUE(mappings_by_mesh.contains(logical_mesh1)) << "Should have mappings for logical mesh 1";
 
-    // Verify connectivity for all successful mappings (rank constraints disabled)
-    for (const auto& [mesh_id, result] : results) {
-        if (result.success) {
-            // Find which physical mesh this logical mesh mapped to
-            MeshId physical_mesh_id = physical_mesh0;  // Default, will be updated
-            if (!result.fabric_node_to_asic.empty()) {
-                const auto& first_asic = result.fabric_node_to_asic.begin()->second;
-                // Determine which physical mesh this ASIC belongs to by checking all physical meshes
-                for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-                    const auto& nodes = adjacency_graph.get_nodes();
-                    if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
-                        physical_mesh_id = pm_id;
-                        break;
-                    }
+    // Verify Mesh 0 mapping (2x2 logical -> should map to 2x2 physical mesh)
+    const auto& mesh0_mappings = mappings_by_mesh.at(logical_mesh0);
+    EXPECT_EQ(mesh0_mappings.size(), 4u) << "Logical Mesh 0 should map all 4 nodes";
+
+    // Verify Mesh 1 mapping (2x2 logical -> should map to 2x2 physical mesh)
+    const auto& mesh1_mappings = mappings_by_mesh.at(logical_mesh1);
+    EXPECT_EQ(mesh1_mappings.size(), 4u) << "Logical Mesh 1 should map all 4 nodes";
+
+    // Verify connectivity for all meshes (rank constraints disabled)
+    for (const auto& [mesh_id, mesh_mappings] : mappings_by_mesh) {
+        // Find which physical mesh this logical mesh mapped to
+        MeshId physical_mesh_id = physical_mesh0;  // Default, will be updated
+        if (!mesh_mappings.empty()) {
+            const auto& first_asic = mesh_mappings.begin()->second;
+            // Determine which physical mesh this ASIC belongs to by checking all physical meshes
+            for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                const auto& nodes = adjacency_graph.get_nodes();
+                if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                    physical_mesh_id = pm_id;
+                    break;
                 }
             }
+        }
 
-            // Verify connectivity is preserved
-            const auto& logical_graph = logical_multi_mesh_graph.mesh_adjacency_graphs_.at(mesh_id);
-            const auto& physical_graph = physical_multi_mesh_graph.mesh_adjacency_graphs_.at(physical_mesh_id);
-            const auto& logical_nodes = logical_graph.get_nodes();
+        // Verify connectivity is preserved
+        const auto& logical_graph = logical_multi_mesh_graph.mesh_adjacency_graphs_.at(mesh_id);
+        const auto& physical_graph = physical_multi_mesh_graph.mesh_adjacency_graphs_.at(physical_mesh_id);
+        const auto& logical_nodes = logical_graph.get_nodes();
 
-            for (const auto& node : logical_nodes) {
-                const auto mapped_asic = result.fabric_node_to_asic.at(node);
-                const auto& logical_neighbors = logical_graph.get_neighbors(node);
-                const auto& physical_neighbors = physical_graph.get_neighbors(mapped_asic);
+        for (const auto& node : logical_nodes) {
+            const auto mapped_asic = mesh_mappings.at(node);
+            const auto& logical_neighbors = logical_graph.get_neighbors(node);
+            const auto& physical_neighbors = physical_graph.get_neighbors(mapped_asic);
 
-                for (const auto& neighbor : logical_neighbors) {
-                    const auto neighbor_asic = result.fabric_node_to_asic.at(neighbor);
-                    EXPECT_TRUE(
-                        std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
-                        physical_neighbors.end())
-                        << "Logical edge not preserved in physical mapping for logical mesh " << mesh_id.get();
-                }
+            for (const auto& neighbor : logical_neighbors) {
+                const auto neighbor_asic = mesh_mappings.at(neighbor);
+                EXPECT_TRUE(
+                    std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
+                    physical_neighbors.end())
+                    << "Logical edge not preserved in physical mapping for logical mesh " << mesh_id.get();
             }
         }
     }
