@@ -51,9 +51,9 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
     factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
-            if scheme == "random" or scheme == "worst_perf":
+            if False:  # scheme == "random" or scheme == "worst_perf":
                 tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
-            elif scheme == "sequential":
+            elif True:  # scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
                 factor += 1
             else:

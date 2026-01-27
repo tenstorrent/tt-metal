@@ -171,8 +171,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     Program program{};
 
     const auto& input_tensor = tensor_args.dense_input_tensor;
-    const auto& metadata_tensor = tensor_args.dense_metadata_tensor;
-    const auto& token_counts_tensor = tensor_args.dense_token_counts_tensor;
+    const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
+    const auto& dense_token_counts_tensor = tensor_args.dense_token_counts_tensor;
 
     const auto& output_tensor = tensor_return_value;
     const auto batch_size = operation_attributes.batch_size;
@@ -204,20 +204,17 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const uint32_t experts_per_device = experts / num_devices;
 
     const auto input_dtype = input_tensor.dtype();
-    const auto& metadata_spec = metadata_tensor.tensor_spec();
+    const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
 
     const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
     const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
-    const uint32_t metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
+    const uint32_t dense_token_maps_page_size_bytes = dense_token_maps_tensor_spec.compute_page_size_bytes();
 
     const auto l1_alignment = hal::get_l1_alignment();
-    const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
-
-    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
+    const auto aligned_dense_token_maps_page_size_bytes = tt::align(dense_token_maps_page_size_bytes, l1_alignment);
 
     // in validate, assert that worker_core_range_set.size() == num_token_parallel_cores*num_data_parallel_cores;
     const auto num_token_parallel_cores = operation_attributes.num_token_parallel_cores;
@@ -242,25 +239,30 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
 
+    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
     constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
                                               .set_page_size(data_cb_id, buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
-    // metadata page buffer
-    constexpr auto metadata_cb_id = tt::CBIndex::c_1;
-    const uint32_t metadata_extra_size_bytes = 8 + 4 * experts_per_device;
-    CircularBufferConfig cb_metadata_config =
+    // dense_token_maps_tensor page buffer
+    constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
+    // stash offset and count value for each local expert in uint32_t
+    const uint32_t dense_token_maps_tensor_extra_size_bytes = 2 * 4 * experts_per_device;
+    const uint32_t aligned_dense_token_maps_buffer_size =
+        tt::align(aligned_dense_token_maps_page_size_bytes + dense_token_maps_tensor_extra_size_bytes, l1_alignment);
+    const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
+    CircularBufferConfig cb_dense_token_maps_config =
         CircularBufferConfig(
-            aligned_metadata_page_size_bytes + metadata_extra_size_bytes, {{metadata_cb_id, metadata_data_format}})
-            .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes + metadata_extra_size_bytes);
+            aligned_dense_token_maps_buffer_size, {{dense_token_maps_cb_id, dense_token_maps_data_format}})
+            .set_page_size(dense_token_maps_cb_id, aligned_dense_token_maps_buffer_size);
 
     // active token counts page buffer
     const auto dram_alignment = hal::get_dram_alignment();
     constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
-    const auto token_counts_element_size = token_counts_tensor.element_size();
-    const auto token_counts_data_format = datatype_to_dataformat_converter(token_counts_tensor.dtype());
+    const auto token_counts_element_size = dense_token_counts_tensor.element_size();
+    const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
     const uint32_t aligned_token_counts_buffer_size =
         tt::align(token_counts_element_size * experts_per_device, dram_alignment);
     CircularBufferConfig cb_token_counts_config =
@@ -269,14 +271,14 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_2;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
     // create circular buffers
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
-    CreateCircularBuffer(program, needed_worker_core_range_set, cb_metadata_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_dense_token_maps_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_counts_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, client_interface_cb_config);
 
@@ -295,18 +297,18 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
-        {"metadata_cb_id", metadata_cb_id},
+        {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"token_counts_cb_id", token_counts_cb_id},
-        {"token_counts_buffer_size_bytes", token_counts_buffer_size_bytes},
+        {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
+        {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
         {"num_local_experts", experts_per_device},
-        {"metadata_entry_size", detail::metadata_entry_size(experts_per_device)},
-        {"metadata_entry_size_bytes", detail::metadata_entry_bytes * detail::metadata_entry_size(experts_per_device)},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
         {"select_experts_k", select_experts_k}};
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dense_token_counts_tensor.buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1,
@@ -329,18 +331,16 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
-        {"metadata_cb_id", metadata_cb_id},
+        {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
         {"packet_header_cb_id", client_interface_cb_id},
-        {"metadata_entry_size", detail::metadata_entry_size(experts_per_device)},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
         {"noc_y_end", end_coord.y},
-        {"select_experts_k", select_experts_k},
-        {"num_local_experts", experts_per_device},
+        {"experts", experts},
         {"global_num_tokens", total_tokens},
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
@@ -395,9 +395,9 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> reader_runtime_args = {
-            metadata_tensor.buffer()->address(),      // dense_metadata_addr
-            token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
-            token_parallel_idx,                       // token_parallel_core_id
+            dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
+            dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
+            token_parallel_idx,                             // token_parallel_core_id
         };
 
         const auto source_token_segment_size_bytes = *(data_parallel_size_iter++);
@@ -476,7 +476,7 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-            reader_runtime_args.at(0) = tensor_args.dense_metadata_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_return_value.buffer()->address();

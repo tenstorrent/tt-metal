@@ -15,6 +15,16 @@ using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
+inline void print_u32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << (uint32_t)*ptr << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
 
 // packet size bytes 4352
 
@@ -42,19 +52,18 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
 }
 
 // output is [token, k, hidden]
-template <uint32_t TokensPerDevice, uint32_t SelectExpertsK>
-inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
+template <uint32_t TokensPerDevice, uint32_t Experts>
+inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t expert_offset) {
     uint32_t t_idx = t % TokensPerDevice;
-    return t_idx*SelectExpertsK + k;
+    return t_idx * Experts + expert_offset;
 }
 }  // namespace detail
 
 void kernel_main() {
-    constexpr uint32_t metadata_cb_id = get_named_compile_time_arg_val("metadata_cb_id");
+    constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
 
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
-    constexpr uint32_t metadata_entry_size = get_named_compile_time_arg_val("metadata_entry_size");
 
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
@@ -64,11 +73,8 @@ void kernel_main() {
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
 
-    constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
-    constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
+    constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
-
-    constexpr int32_t max_tokens_per_core = global_num_tokens / num_token_parallel_cores;
 
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
@@ -109,7 +115,9 @@ void kernel_main() {
     constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
     constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::COLS) ? mesh_rows : mesh_cols;
 
+    constexpr uint32_t num_local_experts = experts / num_devices;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
+    constexpr uint32_t device_expert_offset = linearized_mesh_coord * num_local_experts;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -170,23 +178,18 @@ void kernel_main() {
 
     // tt::data_movement::common::print_bf16_pages(src_data_l1_base_addr,source_expert_block_size_bytes,1 );
 
-    cb_wait_front(metadata_cb_id, 1);
-    const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
-    auto * metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
+    cb_wait_front(dense_token_maps_cb_id, 1);
+    const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
+    auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
-    // stashed these values in metadata
-    const uint32_t metadata_start_idx_offset = metadata_ptr[global_num_tokens * metadata_entry_size];
-    const uint32_t token_end = metadata_ptr[global_num_tokens * metadata_entry_size + 1];
-
-    int32_t edt[num_local_experts];
+    uint32_t token_split_offsets[num_local_experts];
+    uint32_t token_split_counts[num_local_experts];
     for (uint32_t e = 0; e < num_local_experts; ++e) {
-        edt[e] = static_cast<int32_t>(metadata_ptr[global_num_tokens * metadata_entry_size + 2 + e]);
+        token_split_offsets[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + e];
+        token_split_counts[e] = dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + num_local_experts + e];
     }
 
-    DPRINT << " metadata_start_idx_offset: " << metadata_start_idx_offset << " token_end: " << token_end
-           << " edt[0]: " << edt[0] << " edt[1]: " << edt[1] << "\n";
-
-    metadata_ptr += metadata_start_idx_offset * metadata_entry_size;
+    // print_u32_pages(dense_token_maps_l1_addr, num_local_experts*global_num_tokens+4, 1);
 
     auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
     if (sync_args.is_sync_core) {
@@ -205,83 +208,72 @@ void kernel_main() {
     DPRINT << "INIT SEMAPHORE RECEIVED" << "\n";
 
     bool needs_barrier = false;
-    for (uint32_t dt = 0; dt < token_end; ++dt) {
-        for (uint32_t e = 0; e < num_local_experts; ++e) {
-            const uint32_t k = metadata_ptr[e + 1];
-            const uint32_t st = metadata_ptr[0];
+    for (uint32_t e = 0; e < num_local_experts; ++e) {
+        for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
+            const uint32_t st = dense_token_maps_l1_ptr[e * global_num_tokens + token_split_offsets[e] + dt];
 
-            if (k != select_experts_k+1) {
-                if (edt[e] >= 0l && edt[e] < max_tokens_per_core) {
-                    // figure out output page index, noc address.
-                    const uint32_t output_page_idx =
-                        detail::get_output_page_idx<tokens_per_device, select_experts_k>(st, k);
+            // figure out output page index, noc address.
+            const uint32_t output_page_idx =
+                detail::get_output_page_idx<tokens_per_device, experts>(st, device_expert_offset + e);
 
-                    const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
-                                                      edt[e] * source_token_segment_buffer_size_bytes;
+            const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
+                                              dt * source_token_segment_buffer_size_bytes;
 
-                    // tt::data_movement::common::print_bf16_pages(src_data_l1_addr,source_token_segment_size_bytes/2,1
-                    // );
+            // figure out which device to send data to and routing
+            const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
+                linearized_mesh_coord,
+                tokens_per_device,
+                mesh_rows,
+                mesh_cols,
+                replicate_axis>(st);
 
-                    // figure out which device to send data to and routing
-                    const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
+            if (dest_device_idx == linearized_mesh_coord) {
+                const uint64_t output_noc_addr =
+                    get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
+                noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
+                needs_barrier = true;
+                noc_async_writes_flushed();
+            } else {
+                if constexpr (is_1d_topology<topology>()) {
+                    fabric_send_chip_unicast_noc_unicast_1d<
                         linearized_mesh_coord,
-                        tokens_per_device,
+                        topology,
                         mesh_rows,
                         mesh_cols,
-                        replicate_axis>(st);
+                        fabric_max_packet_size_bytes>(
+                        output_addrgen,
+                        fabric_connections,
+                        packet_headers[0],
+                        dest_device_idx,
+                        src_data_l1_addr,
+                        output_page_idx,
+                        source_token_segment_size_bytes,
+                        alignment,
+                        dest_token_segment_offset_bytes);
 
-                    if (dest_device_idx == linearized_mesh_coord) {
-                        const uint64_t output_noc_addr =
-                            get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
-                        noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
-                        needs_barrier = true;
-                        noc_async_writes_flushed();
-                    } else {
-                        if constexpr (is_1d_topology<topology>()) {
-                            fabric_send_chip_unicast_noc_unicast_1d<
-                                linearized_mesh_coord,
-                                topology,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size_bytes>(
-                                output_addrgen,
-                                fabric_connections,
-                                packet_headers[0],
-                                dest_device_idx,
-                                src_data_l1_addr,
-                                output_page_idx,
-                                source_token_segment_size_bytes,
-                                alignment,
-                                dest_token_segment_offset_bytes);
-
-                        } else {
-                            const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
-                            const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                            fabric_send_chip_unicast_noc_unicast<
-                                src_chip_id,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size_bytes>(
-                                output_addrgen,
-                                fabric_connections,
-                                packet_headers[0],
-                                dest_chip_id,
-                                dest_mesh_id,
-                                src_data_l1_addr,
-                                output_page_idx,
-                                source_token_segment_size_bytes,
-                                alignment,
-                                dest_token_segment_offset_bytes);
-                        }
-                    }
+                } else {
+                    const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
+                    const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
+                    fabric_send_chip_unicast_noc_unicast<
+                        src_chip_id,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size_bytes>(
+                        output_addrgen,
+                        fabric_connections,
+                        packet_headers[0],
+                        dest_chip_id,
+                        dest_mesh_id,
+                        src_data_l1_addr,
+                        output_page_idx,
+                        source_token_segment_size_bytes,
+                        alignment,
+                        dest_token_segment_offset_bytes);
                 }
-                ++edt[e];
             }
         }
-
-        metadata_ptr+=metadata_entry_size;
     }
-    cb_pop_front(metadata_cb_id, 1);
+    cb_pop_front(dense_token_maps_cb_id, 1);
 
     if (needs_barrier) {
         noc_async_write_barrier();
