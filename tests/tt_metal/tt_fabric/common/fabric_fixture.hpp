@@ -247,7 +247,7 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::test_utils::is_watcher_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             should_skip_for_watcher_ = true;
             return;
         }
@@ -273,7 +273,7 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::test_utils::is_watcher_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             should_skip_ = true;
             return;
         }
