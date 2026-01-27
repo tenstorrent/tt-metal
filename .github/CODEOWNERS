@@ -334,9 +334,7 @@ models/experimental/grok @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
 models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/codeowner-bypass
 models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
-models/demos/vision/classification/vit/wormhole @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
-models/demos/vision/classification/vit/blackhole @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
-models/demos/vision/classification/vit/common @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
