@@ -43,17 +43,17 @@ void kernel_main() {
     // multiple kernels use this, can be moved to compute_utils.hpp
     constexpr uint32_t fp32_one = 0x3F800000U;  // hexadecimal encoding of 1.0f in uint32_t
 
-    // Common runtime args (same for all cores, set via SetCommonRuntimeArgs)
-    uint32_t common_args_idx = 0;
-    uint32_t beta1 = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t beta2 = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t epsilon = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t step_size = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t inv_sqrt_bc2 = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t one_minus_beta1 = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t one_minus_beta2 = get_common_arg_val<uint32_t>(common_args_idx++);
-    uint32_t decay_factor = get_common_arg_val<uint32_t>(common_args_idx++);
-    [[maybe_unused]] uint32_t seed = get_common_arg_val<uint32_t>(common_args_idx++);
+    // Runtime args (per-core, set via SetRuntimeArgs)
+    uint32_t args_idx = 0;
+    uint32_t beta1 = get_arg_val<uint32_t>(args_idx++);
+    uint32_t beta2 = get_arg_val<uint32_t>(args_idx++);
+    uint32_t epsilon = get_arg_val<uint32_t>(args_idx++);
+    uint32_t step_size = get_arg_val<uint32_t>(args_idx++);
+    uint32_t inv_sqrt_bc2 = get_arg_val<uint32_t>(args_idx++);
+    uint32_t one_minus_beta1 = get_arg_val<uint32_t>(args_idx++);
+    uint32_t one_minus_beta2 = get_arg_val<uint32_t>(args_idx++);
+    uint32_t decay_factor = get_arg_val<uint32_t>(args_idx++);
+    [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(args_idx++);
 
     init_sfpu(cb_param_idx, cb_output_idx);
 #if STOCH_ROUND

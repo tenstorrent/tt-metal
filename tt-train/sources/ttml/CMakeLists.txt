@@ -320,10 +320,8 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_half_precision_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_half_precision_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_full_precision_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_full_precision_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

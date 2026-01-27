@@ -6,19 +6,13 @@
 
 #include <enchantum/enchantum.hpp>
 
-#include "adamw_full_precision_program_factory.hpp"
-#include "adamw_half_precision_program_factory.hpp"
+#include "adamw_program_factory.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
 
 AdamWDeviceOperation::program_factory_t AdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Select program factory based on parameter dtype
-    if (tensor_args.param.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        return AdamWHalfPrecisionProgramFactory{};
-    } else {
-        return AdamWFullPrecisionProgramFactory{};
-    }
+    [[maybe_unused]] const operation_attributes_t& args, [[maybe_unused]] const tensor_args_t& tensor_args) {
+    return AdamWProgramFactory{};
 }
 
 void AdamWDeviceOperation::validate_on_program_cache_hit(
