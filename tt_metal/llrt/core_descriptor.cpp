@@ -143,8 +143,13 @@ const core_descriptor_t& get_core_descriptor_config(
     bool fast_dispatch = tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs[num_hw_cqs].contains(fast_dispatch)) {
-        return config_by_num_cqs[num_hw_cqs].at(fast_dispatch);
+    const auto num_cqs_it = config_by_num_cqs.find(num_hw_cqs);
+    if (num_cqs_it != config_by_num_cqs.end()) {
+        const auto& by_fast_dispatch = num_cqs_it->second;
+        const auto fast_it = by_fast_dispatch.find(fast_dispatch);
+        if (fast_it != by_fast_dispatch.end()) {
+            return fast_it->second;
+        }
     }
 
     YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_config));
