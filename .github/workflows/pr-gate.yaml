@@ -238,7 +238,7 @@ jobs:
             echo "❌ apt install failed or timed out after 10 minutes"
             echo "📊 Dependency diagnostics:"
             dpkg -l | grep -E "(tt-metalium|tt-nn)" || echo "  - No packages installed"
-            apt-cache depends ./pkgs/tt-metalium_*.deb 2>&1 | head -20 || echo "  - Cannot analyze dependencies"
+            dpkg-deb -I ./pkgs/tt-metalium_*.deb 2>&1 | head -20 || echo "  - Cannot inspect tt-metalium package metadata"
             exit 1
           }
           echo "✅ Package installation completed"
