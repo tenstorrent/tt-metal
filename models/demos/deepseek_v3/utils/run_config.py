@@ -101,6 +101,7 @@ def create_run_config(model_config, weight_config, *model_states, cached_ttnn_we
             mb_mesh_device=None,
         ),
         model_states,
+        None,
     )
 
     # The model config and state config are merged first to determine the mesh devices to load the configs on.
@@ -150,6 +151,7 @@ def preload_weights_parallel(
             mb_mesh_device=None,
         ),
         model_states,
+        None,
     )
 
     # The model config and state config are merged first to determine the mesh devices to load the configs on.

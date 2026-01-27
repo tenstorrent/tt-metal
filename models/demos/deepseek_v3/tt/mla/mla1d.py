@@ -782,10 +782,10 @@ class MLA1D(AbstractModule):
             and all(cache.shape == cache_shape for cache in caches)
         )
         if caches is None:
-            # Generate KV cache directly on device to save host memory and time
+            # Generate KV cache
             total_cache_shape = (cache_shape[0] * mesh_device.shape[0], *cache_shape[1:])
-            kvpe_cache = ttnn.zeros(
-                total_cache_shape,
+            kvpe_cache = ttnn.as_tensor(
+                torch.zeros(total_cache_shape, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,

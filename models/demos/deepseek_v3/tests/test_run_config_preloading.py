@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, SavedWeight
-from models.demos.deepseek_v3.utils.run_config import create_run_config, preload_weights_parallel
+from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
+    create_run_config,
+    preload_weights_parallel,
+)
 
 
 def test_preload_weights_parallel_behavior():
@@ -20,11 +24,13 @@ def test_preload_weights_parallel_behavior():
     mock_mesh_device.shape = (1, 1)
 
     # Mock weight and configs
-    weight_path = "dummy/path/weight.bin"
-    saved_weight = SavedWeight(path=Path(weight_path), memory_config=None)
+    weight_path = Path("dummy/path/weight.bin")
+    saved_weight = SavedWeight(path=weight_path, memory_config=None)
 
     model_config = {"layer": FromWeightConfig(mesh_device=mock_mesh_device)}
     weight_config = {"layer": saved_weight}
+    # Provide a dummy model state that contains the mesh device
+    model_state = {MESH_DEVICE_STATE_DICT_KEY: mock_mesh_device}
 
     cached_ttnn_weights = {}
 
@@ -33,7 +39,7 @@ def test_preload_weights_parallel_behavior():
         mock_tensor = MagicMock(spec=ttnn.Tensor)
         mock_load_weight.return_value = mock_tensor
 
-        preload_weights_parallel(model_config, weight_config, cached_ttnn_weights=cached_ttnn_weights)
+        preload_weights_parallel(model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights)
 
         assert weight_path in cached_ttnn_weights
         assert cached_ttnn_weights[weight_path] == mock_tensor
@@ -41,13 +47,15 @@ def test_preload_weights_parallel_behavior():
 
     # 2. Test that weights present in the cache are skipped by the preloader
     with patch("models.demos.deepseek_v3.utils.run_config.load_weight") as mock_load_weight:
-        preload_weights_parallel(model_config, weight_config, cached_ttnn_weights=cached_ttnn_weights)
+        preload_weights_parallel(model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights)
         # Should not be called again because it's already in cache
         mock_load_weight.assert_not_called()
 
     # 3. Test that subsequent create_run_config uses preloaded weights
     with patch("models.demos.deepseek_v3.utils.run_config.load_weight") as mock_load_weight:
-        run_config = create_run_config(model_config, weight_config, cached_ttnn_weights=cached_ttnn_weights)
+        run_config = create_run_config(
+            model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights
+        )
 
         assert run_config["layer"] == mock_tensor
         # verify load_weight was NOT called by create_run_config because it utilized the cache
@@ -61,10 +69,10 @@ def test_preload_weights_parallel_with_multiple_weights():
     mock_mesh_device = MagicMock()
     mock_mesh_device.shape = (1, 1)
 
-    w1_path = "weight1.bin"
-    w2_path = "weight2.bin"
-    sw1 = SavedWeight(path=Path(w1_path), memory_config=None)
-    sw2 = SavedWeight(path=Path(w2_path), memory_config=None)
+    w1_path = Path("weight1.bin")
+    w2_path = Path("weight2.bin")
+    sw1 = SavedWeight(path=w1_path, memory_config=None)
+    sw2 = SavedWeight(path=w2_path, memory_config=None)
 
     model_config = {
         "layers": [
@@ -73,6 +81,7 @@ def test_preload_weights_parallel_with_multiple_weights():
         ]
     }
     weight_config = {"layers": [sw1, sw2]}
+    model_state = {MESH_DEVICE_STATE_DICT_KEY: mock_mesh_device}
 
     cached_ttnn_weights = {}
 
@@ -83,7 +92,7 @@ def test_preload_weights_parallel_with_multiple_weights():
 
         mock_load_weight.side_effect = load_weight_side_effect
 
-        preload_weights_parallel(model_config, weight_config, cached_ttnn_weights=cached_ttnn_weights)
+        preload_weights_parallel(model_config, weight_config, model_state, cached_ttnn_weights=cached_ttnn_weights)
 
         assert w1_path in cached_ttnn_weights
         assert w2_path in cached_ttnn_weights
