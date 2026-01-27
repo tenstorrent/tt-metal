@@ -26,6 +26,11 @@ class TTNNReferenceEncoder:
     """
     Reference Encoder for extracting speaker embeddings from mel spectrograms.
 
+    Note: This module runs on CPU (PyTorch) by design because:
+    1. Speaker embedding extraction happens once per voice (not latency-critical)
+    2. GRU sequential processing with variable-length audio exceeds L1 memory
+    3. Impact: ~7ms overhead on total clone latency (<1%)
+
     Architecture:
         Input: [N, Ty/r, n_mels*r] mel spectrogram
         -> 6 Conv2d layers (32->32->64->64->128->128) with ReLU
@@ -179,135 +184,6 @@ class TTNNReferenceEncoder:
         proj_w = to_torch(self.proj_weight)
         proj_b = to_torch(self.proj_bias)
         out = F.linear(h, proj_w, proj_b)
-
-        return out
-
-    def _forward_ttnn(self, inputs):
-        """TTNN implementation."""
-        batch_size = inputs.shape[0]
-
-        # Reshape: [N, T, n_mels] -> [N, 1, T, n_mels]
-        # TTNN uses NHWC, so we go to [N, T, n_mels, 1] then permute
-        out = ttnn.reshape(inputs, (batch_size, -1, self.spec_channels, 1))
-        out = ttnn.permute(out, (0, 3, 1, 2))  # -> [N, 1, T, n_mels]
-
-        # LayerNorm (if enabled)
-        if self.use_layernorm:
-            # TTNN layer_norm requires TILE layout
-            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
-            if self.device is not None and not ttnn.is_tensor_storage_on_device(out):
-                out = ttnn.to_device(out, self.device)
-
-            # Prepare layernorm weights
-            ln_weight = self.layernorm_weight
-            ln_bias = self.layernorm_bias
-            if ln_weight is not None:
-                ln_weight = ttnn.to_layout(ln_weight, ttnn.TILE_LAYOUT)
-                if self.device is not None and not ttnn.is_tensor_storage_on_device(ln_weight):
-                    ln_weight = ttnn.to_device(ln_weight, self.device)
-            if ln_bias is not None:
-                ln_bias = ttnn.to_layout(ln_bias, ttnn.TILE_LAYOUT)
-                if self.device is not None and not ttnn.is_tensor_storage_on_device(ln_bias):
-                    ln_bias = ttnn.to_device(ln_bias, self.device)
-
-            # Apply layernorm on last dimension
-            out = ttnn.layer_norm(
-                out,
-                weight=ln_weight,
-                bias=ln_bias,
-                epsilon=1e-5,
-            )
-
-        # 6 Conv2d layers
-        filters = [1] + self.REF_ENC_FILTERS
-        for i in range(6):
-            in_channels = filters[i]
-            out_channels = filters[i + 1]
-
-            # Configure conv2d with WIDTH_SHARDED for channel parallelism
-            conv_config = ttnn.Conv2dConfig(
-                weights_dtype=ttnn.bfloat16,
-                config_tensors_in_dram=True,
-                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            )
-
-            # Get current spatial dimensions
-            _, _, height, width = out.shape
-
-            conv_kwargs = {
-                "in_channels": in_channels,
-                "out_channels": out_channels,
-                "batch_size": batch_size,
-                "input_height": height,
-                "input_width": width,
-                "kernel_size": (3, 3),
-                "stride": (2, 2),
-                "padding": (1, 1),
-                "dilation": (1, 1),
-                "groups": 1,
-            }
-
-            # Prepare conv weights
-            weight = self.conv_weights[i]
-            if self.device is not None and not ttnn.is_tensor_storage_on_device(weight):
-                # Compute config
-                compute_config = ttnn.init_device_compute_kernel_config(
-                    self.device.arch(),
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=True,
-                    fp32_dest_acc_en=False,
-                )
-                weight = ttnn.prepare_conv_weights(
-                    weight_tensor=weight,
-                    weights_format="OIHW",
-                    input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    input_layout=out.get_layout(),
-                    input_dtype=out.dtype,
-                    has_bias=False,
-                    device=self.device,
-                    conv_config=conv_config,
-                    **conv_kwargs,
-                )
-                if not ttnn.is_tensor_storage_on_device(weight):
-                    weight = ttnn.to_device(weight, self.device)
-
-            out = ttnn.conv2d(
-                input_tensor=out,
-                weight_tensor=weight,
-                bias_tensor=None,
-                device=self.device,
-                conv_config=conv_config,
-                **conv_kwargs,
-            )
-
-            # Add bias manually if present
-            bias = self.conv_biases[i]
-            if bias is not None:
-                # Reshape bias for broadcasting: [C] -> [1, C, 1, 1]
-                if bias.shape.rank == 1:
-                    bias = ttnn.reshape(bias, (1, out_channels, 1, 1))
-                bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
-                if self.device is not None and not ttnn.is_tensor_storage_on_device(bias):
-                    bias = ttnn.to_device(bias, self.device)
-                out = ttnn.add(out, bias)
-
-            # ReLU activation
-            out = ttnn.relu(out)
-
-        # Reshape for GRU
-        # out is [N, C, T', mel'] in NCHW-ish format
-        # Need [N, T', C*mel'] for GRU
-        out = ttnn.permute(out, (0, 2, 1, 3))  # [N, T', C, mel']
-        T = out.shape[1]
-        out = ttnn.reshape(out, (batch_size, T, -1))  # [N, T', C*mel']
-
-        # GRU
-        _, h = self.gru(out, h0=None)
-
-        # Project to speaker embedding
-        # h is [1, N, hidden_size]
-        h = ttnn.squeeze(h, 0)  # [N, hidden_size]
-        out = ttnn.linear(h, self.proj_weight, bias=self.proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return out
 

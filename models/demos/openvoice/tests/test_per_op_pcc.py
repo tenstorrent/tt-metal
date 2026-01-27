@@ -105,14 +105,14 @@ class TestConv1DOperation:
             y_torch = F.conv1d(x_torch, weight_torch, bias_torch, padding=padding)
 
             # TTNN implementation
-            from models.demos.openvoice.functional.operations import ttnn_conv1d_functional
+            from models.demos.openvoice.tt.modules.conv1d import ttnn_conv1d
 
             x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
             w_ttnn = ttnn.from_torch(weight_torch, dtype=ttnn.bfloat16, device=device)
             b_ttnn = ttnn.from_torch(bias_torch, dtype=ttnn.bfloat16, device=device)
 
-            y_ttnn = ttnn_conv1d_functional(x_ttnn, w_ttnn, b_ttnn,
-                                            padding=padding, device=device)
+            y_ttnn = ttnn_conv1d(x_ttnn, w_ttnn, b_ttnn,
+                                 padding=padding, device=device)
 
             # Validate
             assert_with_pcc(y_torch, y_ttnn, pcc_threshold=0.95, name="Conv1D basic")
@@ -136,14 +136,14 @@ class TestConv1DOperation:
             y_torch = F.conv1d(x_torch, weight_torch, padding=padding, dilation=dilation)
 
             # TTNN implementation
-            from models.demos.openvoice.functional.operations import ttnn_conv1d_functional
+            from models.demos.openvoice.tt.modules.conv1d import ttnn_conv1d
 
             x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
             w_ttnn = ttnn.from_torch(weight_torch, dtype=ttnn.bfloat16, device=device)
 
-            y_ttnn = ttnn_conv1d_functional(x_ttnn, w_ttnn, None,
-                                            padding=padding, dilation=dilation,
-                                            device=device)
+            y_ttnn = ttnn_conv1d(x_ttnn, w_ttnn, None,
+                                 padding=padding, dilation=dilation,
+                                 device=device)
 
             assert_with_pcc(y_torch, y_ttnn, pcc_threshold=0.95, name="Conv1D dilated")
 
@@ -263,11 +263,11 @@ class TestActivationOperations:
             s_act = torch.sigmoid(x_torch[:, n_channels:, :])
             y_torch = t_act * s_act
 
-            # TTNN
-            from models.demos.openvoice.functional.operations import ttnn_gated_activation_functional
-
+            # TTNN - use native ops for gated activation
             x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
-            y_ttnn = ttnn_gated_activation_functional(x_ttnn, n_channels, use_ttnn=True)
+            t_act = ttnn.tanh(x_ttnn[:, :n_channels, :])
+            s_act = ttnn.sigmoid(x_ttnn[:, n_channels:, :])
+            y_ttnn = ttnn.multiply(t_act, s_act)
 
             assert_with_pcc(y_torch, y_ttnn, pcc_threshold=0.95, name="GatedActivation")
 
@@ -430,8 +430,8 @@ class TestWaveNetBlock:
             skip = res_skip[:, C:, :]
             y_torch = x_torch + res
 
-            # TTNN via functional ops
-            from models.demos.openvoice.functional.operations import ttnn_conv1d_functional
+            # TTNN implementation
+            from models.demos.openvoice.tt.modules.conv1d import ttnn_conv1d
 
             x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
             in_w_ttnn = ttnn.from_torch(in_weight, dtype=ttnn.bfloat16, device=device)
@@ -439,14 +439,14 @@ class TestWaveNetBlock:
             res_w_ttnn = ttnn.from_torch(res_weight, dtype=ttnn.bfloat16, device=device)
             res_b_ttnn = ttnn.from_torch(res_bias, dtype=ttnn.bfloat16, device=device)
 
-            x_in_ttnn = ttnn_conv1d_functional(x_ttnn, in_w_ttnn, in_b_ttnn,
-                                               padding=padding, dilation=dilation,
-                                               device=device)
+            x_in_ttnn = ttnn_conv1d(x_ttnn, in_w_ttnn, in_b_ttnn,
+                                    padding=padding, dilation=dilation,
+                                    device=device)
             t_act_ttnn = ttnn.tanh(x_in_ttnn[:, :C, :])
             s_act_ttnn = ttnn.sigmoid(x_in_ttnn[:, C:, :])
             acts_ttnn = ttnn.multiply(t_act_ttnn, s_act_ttnn)
-            res_skip_ttnn = ttnn_conv1d_functional(acts_ttnn, res_w_ttnn, res_b_ttnn,
-                                                   device=device)
+            res_skip_ttnn = ttnn_conv1d(acts_ttnn, res_w_ttnn, res_b_ttnn,
+                                        device=device)
             res_ttnn = res_skip_ttnn[:, :C, :]
             y_ttnn = ttnn.add(x_ttnn, res_ttnn)
 

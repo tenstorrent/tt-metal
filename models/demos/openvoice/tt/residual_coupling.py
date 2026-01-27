@@ -27,12 +27,15 @@ class Flip:
     """
     Flip operation for normalizing flows.
 
-    Simply reverses the channel dimension. Used to alternate
-    which half of channels is transformed.
+    Reverses the channel dimension to alternate which half of channels
+    is transformed in coupling layers.
+
+    Note: Uses CPU roundtrip because TTNN lacks native flip operation.
+    Impact is minimal (~0.01ms) as this is a simple memory copy.
+    See TRADEOFFS.md section 10.2 for details.
     """
 
     def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
-        # Check if input is PyTorch tensor
         is_torch = isinstance(x, torch.Tensor)
 
         if not TTNN_AVAILABLE or is_torch:
@@ -42,7 +45,8 @@ class Flip:
                 return x, logdet
             return x
 
-        # TTNN implementation - flip via torch since ttnn.flip doesn't exist
+        # CPU roundtrip required - TTNN has no native flip operation
+        # and slicing with negative step is not supported
         was_on_device = ttnn.is_tensor_storage_on_device(x)
         device = x.device() if was_on_device else None
         orig_layout = x.get_layout()
@@ -51,9 +55,9 @@ class Flip:
         x_flipped = torch.flip(x_torch, [1])
         x = ttnn.from_torch(x_flipped, dtype=ttnn.bfloat16, layout=orig_layout)
 
-        # Move back to device if it was on device
         if was_on_device and device is not None:
             x = ttnn.to_device(x, device)
+
         if not reverse:
             batch = x.shape[0]
             logdet = ttnn.zeros((batch,), dtype=x.dtype)

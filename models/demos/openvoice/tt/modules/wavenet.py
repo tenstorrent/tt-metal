@@ -209,8 +209,6 @@ class WaveNetModule:
 
     def _forward_ttnn(self, x, x_mask, g):
         """TTNN implementation."""
-        if g is not None:
-
         output = ttnn.zeros_like(x)
 
         # Process conditioning

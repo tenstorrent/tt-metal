@@ -65,8 +65,6 @@ def ttnn_conv1d(
     # HiFi-GAN uses kernel=16, stride=8 which exceeds L1 buffer limits
     # Use stride >= 2 as the trigger - large upsampling operations cause L1 issues
     large_stride_op = stride >= 2
-    if large_stride_op:
-        print(f"[conv_transpose1d] Forcing PyTorch fallback for large stride (stride={stride})")
 
     if not TTNN_AVAILABLE or is_torch or large_stride_op:
         # Convert TTNN tensors to PyTorch if needed
@@ -275,8 +273,6 @@ def ttnn_conv_transpose1d(
     # HiFi-GAN uses kernel=16, stride=8 which exceeds L1 buffer limits
     # Use stride >= 2 as the trigger - large upsampling operations cause L1 issues
     large_stride_op = stride >= 2
-    if large_stride_op:
-        print(f"[conv_transpose1d] Forcing PyTorch fallback for large stride (stride={stride})")
 
     if not TTNN_AVAILABLE or is_torch or large_stride_op:
         # Convert TTNN tensors to PyTorch if needed

@@ -195,7 +195,7 @@ class TestResidualCouplingModule:
 
     def test_residual_coupling_pcc(self, device, model_weights):
         """Test ResidualCouplingBlock TTNN vs PyTorch PCC."""
-        from models.demos.openvoice.tt.residual_coupling import TTNNResidualCouplingBlocks
+        from models.demos.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock
 
         # Model config
         channels = 192
@@ -207,7 +207,7 @@ class TestResidualCouplingModule:
         gin_channels = 256
 
         # Create module
-        flow = TTNNResidualCouplingBlocks.from_state_dict(
+        flow = TTNNResidualCouplingBlock.from_state_dict(
             model_weights,
             prefix="flow",
             channels=channels,
@@ -240,9 +240,9 @@ class TestResidualCouplingModule:
 
     def test_residual_coupling_reverse(self, device, model_weights):
         """Test ResidualCoupling reverse (generation) direction."""
-        from models.demos.openvoice.tt.residual_coupling import TTNNResidualCouplingBlocks
+        from models.demos.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock
 
-        flow = TTNNResidualCouplingBlocks.from_state_dict(
+        flow = TTNNResidualCouplingBlock.from_state_dict(
             model_weights, prefix="flow",
             channels=192, hidden_channels=192, kernel_size=5,
             dilation_rate=1, n_layers=4, n_flows=4, gin_channels=256,
@@ -281,25 +281,26 @@ class TestGeneratorModule:
 
         # Model config (HiFi-GAN V2)
         initial_channel = 512
+        resblock = "1"  # HiFi-GAN V2 uses ResBlock type 1
         resblock_kernel_sizes = [3, 7, 11]
         resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
         upsample_rates = [8, 8, 2, 2]
         upsample_initial_channel = 512
         upsample_kernel_sizes = [16, 16, 4, 4]
         gin_channels = 256
-        inter_channels = 192
+        inter_channels = 192  # Used for test input shape
 
         generator = TTNNGenerator.from_state_dict(
             model_weights,
             prefix="dec",
             initial_channel=initial_channel,
+            resblock=resblock,
             resblock_kernel_sizes=resblock_kernel_sizes,
             resblock_dilation_sizes=resblock_dilation_sizes,
             upsample_rates=upsample_rates,
             upsample_initial_channel=upsample_initial_channel,
             upsample_kernel_sizes=upsample_kernel_sizes,
             gin_channels=gin_channels,
-            inter_channels=inter_channels,
             device=device,
         )
 
@@ -388,10 +389,10 @@ class TestEndToEndPCC:
 
         Pipeline: mel -> PosteriorEncoder -> Flow -> Generator -> audio
         """
-        from models.demos.openvoice.tt.synthesizer import TTNNSynthesizer
+        from models.demos.openvoice.tt.synthesizer import TTNNSynthesizerTrn
 
         # Create synthesizer
-        synth = TTNNSynthesizer.from_state_dict(
+        synth = TTNNSynthesizerTrn.from_state_dict(
             model_weights,
             device=device,
         )

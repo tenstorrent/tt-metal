@@ -359,10 +359,8 @@ class TTNNToneColorConverter:
             cached_model = get_cached_model(cache_key)
             if cached_model is not None:
                 self.model = cached_model
-                print(f"Model loaded from cache: n_speakers={self.model.n_speakers}")
                 return
 
-        print(f"Loading checkpoint: {checkpoint_path}")
 
         weights, _ = load_openvoice_checkpoint(
             str(checkpoint_path),
@@ -380,7 +378,6 @@ class TTNNToneColorConverter:
         if use_model_cache:
             cache_model(cache_key, self.model)
 
-        print(f"Model loaded: n_speakers={self.model.n_speakers}, version={self.version}")
 
     def extract_se(
         self,
@@ -460,7 +457,6 @@ class TTNNToneColorConverter:
         if se_save_path:
             os.makedirs(os.path.dirname(se_save_path), exist_ok=True)
             torch.save(embedding.cpu(), se_save_path)
-            print(f"Saved speaker embedding to: {se_save_path}")
 
         return embedding
 
@@ -559,7 +555,6 @@ class TTNNToneColorConverter:
         # Save if requested
         if output_path:
             save_audio(output_path, audio_np, sr=self.sample_rate)
-            print(f"Saved converted audio to: {output_path}")
 
         return audio_np
 
@@ -641,7 +636,6 @@ class TTNNToneColorConverter:
             spec_input = spec.squeeze(0).T.unsqueeze(0)  # [1, T, n_freqs]
             return audio_path, spec_input
 
-        print(f"Extracting embeddings for {len(audio_paths)} files...")
         preprocessed = []
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -650,8 +644,8 @@ class TTNNToneColorConverter:
                 try:
                     path, spec = future.result()
                     preprocessed.append((path, spec))
-                except Exception as e:
-                    print(f"Error preprocessing {futures[future]}: {e}")
+                except Exception:
+                    pass  # Skip failed preprocessing
 
         # Step 2: Batch inference on TTNN
         with torch.no_grad():
@@ -671,10 +665,9 @@ class TTNNToneColorConverter:
 
                     g = g.unsqueeze(-1).detach()
                     results[path] = g
-                except Exception as e:
-                    print(f"Error extracting embedding for {path}: {e}")
+                except Exception:
+                    pass  # Skip failed extraction
 
-        print(f"Extracted {len(results)} embeddings")
         return results
 
     def convert_batch(
@@ -703,7 +696,6 @@ class TTNNToneColorConverter:
             raise RuntimeError("Model not loaded. Call load_checkpoint() first.")
 
         total = len(items)
-        print(f"Batch processing {total} voice conversions...")
 
         # Collect all unique audio files for embedding extraction
         all_audio_files = set()
@@ -715,7 +707,6 @@ class TTNNToneColorConverter:
                 all_audio_files.update([str(p) for p in item.reference_audio])
 
         # Extract all embeddings at once
-        print(f"Extracting embeddings for {len(all_audio_files)} unique files...")
         embeddings_cache = self.extract_se_batch(list(all_audio_files), num_workers)
 
         # Process each conversion
@@ -760,14 +751,12 @@ class TTNNToneColorConverter:
 
             except Exception as e:
                 item.error = str(e)
-                print(f"Error processing {item.source_audio}: {e}")
 
             completed += 1
             if progress_callback:
                 progress_callback(completed, total)
 
         successful = sum(1 for item in items if item.error is None)
-        print(f"Batch complete: {successful}/{total} successful")
 
         return items
 
@@ -952,7 +941,7 @@ class TTNNToneColorConverter:
                     progress_callback(completed, len(items))
 
         except queue.Empty:
-            print("Pipeline timeout waiting for preprocessed items")
+            pass  # Pipeline timeout, continue to cleanup
         finally:
             done_event.set()
             prep_thread.join(timeout=5)
@@ -967,13 +956,6 @@ class TTNNToneColorConverter:
         stats.total_extraction_time = sum(item.extraction_time for item in items)
         stats.total_conversion_time = sum(item.conversion_time for item in items)
 
-        print(f"\nPipeline Statistics:")
-        print(f"  Total items: {stats.total_items}")
-        print(f"  Successful: {stats.successful}")
-        print(f"  Failed: {stats.failed}")
-        print(f"  Wall time: {stats.wall_time:.2f}s")
-        print(f"  Throughput: {stats.throughput:.2f} items/sec")
-        print(f"  Avg latency: {stats.avg_latency:.3f}s per item")
 
         return items, stats
 

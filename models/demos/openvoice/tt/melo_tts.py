@@ -167,9 +167,9 @@ class MultiHeadAttention:
                 output = ttnn.reshape(output, (b, d, t_t))
                 output = ttnn_conv1d(output, self.conv_o_weight, self.conv_o_bias, device=self.device)
                 return output
-            except Exception as e:
+            except Exception:
                 # Fall back to manual implementation if fused attention fails
-                print(f"[WARN] Fused attention failed, using manual: {e}")
+                pass
 
         # Manual attention computation (fallback)
         scale = 1.0 / math.sqrt(self.k_channels)

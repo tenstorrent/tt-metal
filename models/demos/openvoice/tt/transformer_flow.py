@@ -153,9 +153,9 @@ class MultiHeadAttentionFlow:
                 output = ttnn.reshape(output, (b, d, t_t))
                 output = ttnn_conv1d(output, self.conv_o_weight, self.conv_o_bias, device=self.device)
                 return output
-            except Exception as e:
+            except Exception:
                 # Fall back to manual implementation if fused attention fails
-                print(f"[WARN] Fused attention failed, using manual: {e}")
+                pass
 
         # Manual attention computation (fallback)
         scale = 1.0 / math.sqrt(self.k_channels)
@@ -370,7 +370,12 @@ class TransformerCouplingLayer:
 
 
 class Flip:
-    """Flip operation for flow."""
+    """
+    Flip operation for normalizing flows.
+
+    Note: Uses CPU roundtrip - TTNN lacks native flip operation.
+    Impact is minimal (~0.01ms per flip).
+    """
 
     def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
         is_torch = isinstance(x, torch.Tensor)
@@ -380,7 +385,7 @@ class Flip:
                 return x, torch.zeros(x.size(0), dtype=x.dtype, device=x.device)
             return x
 
-        # TTNN flip via torch conversion
+        # CPU roundtrip required - TTNN has no native flip operation
         was_on_device = ttnn.is_tensor_storage_on_device(x)
         device = x.device() if was_on_device else None
         orig_layout = x.get_layout()

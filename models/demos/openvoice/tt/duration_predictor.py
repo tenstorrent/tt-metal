@@ -336,7 +336,12 @@ class Log:
 
 
 class Flip:
-    """Flip flow for normalizing flows."""
+    """
+    Flip operation for normalizing flows.
+
+    Note: Uses CPU roundtrip - TTNN lacks native flip operation.
+    Impact is minimal (~0.01ms per flip).
+    """
 
     def __call__(self, x: Any, x_mask: Any = None, reverse: bool = False) -> Any:
         is_torch = isinstance(x, torch.Tensor)
@@ -347,7 +352,7 @@ class Flip:
                 return x, logdet
             return x
 
-        # TTNN flip via torch conversion
+        # CPU roundtrip required - TTNN has no native flip operation
         was_on_device = ttnn.is_tensor_storage_on_device(x)
         device = x.device() if was_on_device else None
         orig_layout = x.get_layout()

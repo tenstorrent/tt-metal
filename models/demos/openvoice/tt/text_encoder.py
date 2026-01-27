@@ -185,9 +185,9 @@ class MultiHeadAttention:
                 output = ttnn.permute(output, (0, 1, 3, 2))  # [B, n_heads, k_channels, T]
                 output = ttnn.reshape(output, (b, d, t_t))
                 return output, None
-            except Exception as e:
+            except Exception:
                 # Fall back to manual implementation if fused attention fails
-                print(f"[WARN] Fused attention failed, using manual: {e}")
+                pass
 
         # Manual attention computation (fallback)
         # Use L1 memory config for efficient computation

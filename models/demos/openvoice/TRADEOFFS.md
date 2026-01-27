@@ -24,9 +24,7 @@ This document details all design decisions, tradeoffs, tuning parameters, and kn
 # Output: [B, 1, L', C] → [B, C, L']
 ```
 
-**Note**: Two Conv1D implementations exist:
-- `modules/conv1d.py`: Uses `ttnn.conv2d()` - used by main model components
-- `functional/operations.py`: PyTorch fallback for simpler/test cases
+**Implementation**: `modules/conv1d.py` uses `ttnn.conv2d()` for all Conv1D operations.
 
 **Impact**: ~5% overhead, negligible for overall performance.
 
@@ -125,6 +123,42 @@ acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels)
 ```
 
 **Impact**: Reduces kernel launches by ~15%, improves memory bandwidth utilization.
+
+---
+
+### 1.6 Weight Loading Strategy
+
+**Decision**: Use custom `from_state_dict()` methods instead of `ttnn.model_preprocessing.preprocess_model_parameters`.
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| ✅ Custom from_state_dict() | Weight norm fusion, per-module control | Non-standard pattern |
+| ❌ preprocess_model_parameters | Standard TTNN pattern | Requires weight norm pre-processing |
+
+**Why Custom Loading**:
+
+1. **Weight Normalization Fusion**: OpenVoice uses weight normalization (`weight_g`, `weight_v` parameters) throughout. Our `remove_weight_norm_from_state_dict()` fuses these into standard weights before loading. The standard `preprocess_model_parameters` doesn't handle this automatically.
+
+2. **Per-Module Device Control**: Some modules (Reference Encoder, ConvTranspose) run on CPU by design. Custom loading allows explicit control over which weights go to device vs. stay on host.
+
+3. **Checkpoint Format Compatibility**: OpenVoice checkpoints have a specific structure with nested `model` keys that requires custom extraction.
+
+**Implementation** (`utils/weight_loader.py`):
+```python
+# 1. Load checkpoint and fuse weight normalization
+state_dict = remove_weight_norm_from_state_dict(checkpoint['model'])
+
+# 2. Each module extracts its weights via from_state_dict()
+encoder = TTNNPosteriorEncoder.from_state_dict(state_dict, prefix="enc_q", ...)
+decoder = TTNNGenerator.from_state_dict(state_dict, prefix="dec", ...)
+```
+
+**Future Migration Path**: If migrating to `preprocess_model_parameters` is desired:
+1. Create a `custom_preprocessor` that calls `remove_weight_norm_from_state_dict()`
+2. Modify module classes to accept `parameters` object with attribute access
+3. Handle CPU-only modules (Reference Encoder) with separate loading
+
+**Impact**: Custom loading adds ~50 lines of code but provides necessary flexibility for weight norm fusion and device placement.
 
 ---
 
@@ -553,12 +587,20 @@ ttnn::prim::UnaryDeviceOperation                     | 64         | 3,210
 
 | Operation | Reason for Fallback | Impact |
 |-----------|---------------------|--------|
-| ConvTranspose1d (stride≥2) | Stability - large kernel/stride combinations | 4 ops, <1% of time |
-| GRU | Sequence length exceeds practical limits | Reference encoder only |
+| Flip (channel reverse) | TTNN has no native flip op | ~16 ops, <0.1% of time |
+| ConvTranspose1d (stride≥2) | L1 memory constraints with large kernels | 4 ops, <1% of time |
+| GRU | Sequence length exceeds L1 limits | Reference encoder only |
 
-**Note**: These fallbacks are design decisions for stability. TTNN supports these ops,
-but the specific configurations used in HiFi-GAN (kernel=16, stride=8) were more
-reliable with PyTorch during our testing. The impact is minimal (<1% of execution time).
+**Flip Operation Details**:
+- Used in normalizing flows to alternate which channel half is transformed
+- TTNN lacks `ttnn.flip()` - slicing with negative step not supported
+- CPU roundtrip is fast (~0.01ms per flip) due to simple memory copy
+- Affects: `ResidualCouplingBlock`, `TransformerCouplingBlock`, `StochasticDurationPredictor`
+
+**ConvTranspose1d Details**:
+- HiFi-GAN upsampling uses kernel=16, stride=8 which exceeds L1 buffer limits
+- Fallback triggered by `stride >= 2` in `modules/conv1d.py`
+- TTNN supports conv_transpose2d but these specific configs cause L1 issues
 
 ### 10.3 Profiler "Missing Device Data" Explanation
 
