@@ -4,6 +4,7 @@
 
 from loguru import logger
 import pytest
+from models.common.utility_functions import nearest_32
 
 import torch
 
@@ -700,5 +701,19 @@ def test_tensor_to(device, shape, layout):
     else:
         pt_tensor = torch.rand(torch.Size(shape), requires_grad=False).bfloat16()
 
+    initial_shape = pt_tensor.shape  # store initial shape
+
     output_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(layout)  # should not throw
+    result_shape = output_tensor.padded_shape  # store result shape
+
+    # Layout verification
     assert output_tensor.layout == layout
+    # Padding verification: shape comparison
+    if ttnn.TILE_LAYOUT == layout:
+        if 4 == len(initial_shape):
+            assert result_shape[-2] == nearest_32(initial_shape[-2])
+            assert result_shape[-1] == nearest_32(initial_shape[-1])
+        else:
+            assert result_shape[0] == 32
+    else:
+        assert result_shape == initial_shape
