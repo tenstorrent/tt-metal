@@ -220,22 +220,26 @@ class TtYOLOv7Matmul:
     def _prepare_weights_and_bias(self, device):
         """Prepare weights and bias tensors for computation."""
         if not self._weights_processed:
-            # Convert weights to tiled layout
-            self.weights = ttnn.convert_conv_weight_tensor_to_tiled_layout(
-                self.weights,
-                self.weights.shape[1] // self.tile_size,
-                self.weights.shape[0] // self.tile_size,
-                output_dtype=ttnn.bfloat16,
-            )
+            # Convert weights to tiled layout first
+            self.weights = ttnn.to_layout(self.weights, ttnn.TILE_LAYOUT)
             self.weights = ttnn.to_dtype(self.weights, self.weight_dtype)
             self.weights = ttnn.to_device(self.weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # For 4D tensors in TILE_LAYOUT [out_features, in_features, 1, 1],
+            # transpose dims 0 and 1 to get [in_features, out_features, 1, 1]
+            self.weights = ttnn.permute(self.weights, (1, 0, 2, 3))
+            # Reshape to 2D for ttnn.linear: [in_features, out_features]
+            in_features = self.weights.shape[0]
+            out_features = self.weights.shape[1]
+            self.weights = ttnn.reshape(self.weights, (in_features, out_features))
             self._weights_processed = True
 
-        if not self._bias_processed:
+        if not self._bias_processed and self.bias is not None:
             # Convert bias to tiled layout
             self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT)
             self.bias = ttnn.to_dtype(self.bias, self.bias_dtype)
             self.bias = ttnn.to_device(self.bias, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Reshape bias to [1, 1, 1, out_features] for broadcasting
+            self.bias = ttnn.reshape(self.bias, (1, 1, 1, self.out_features))
             self._bias_processed = True
 
     def _create_compute_config(self, device):
@@ -287,14 +291,19 @@ class TtYOLOv7Matmul:
     def _calculate_shard_shapes(self, input_tensor):
         """Calculate shard shapes based on memory config type and input tensor."""
         batch_size, _, nhw, input_channels = input_tensor.shape
+        # Use self.out_features which was set from original weight shape before processing
         output_channels = self.out_features
 
         if self.memory_config_type == "height_sharded":
             # Height sharded: shard along height dimension
             num_cores = self._create_shard_grid().num_cores()
             shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
-            input_shard_shape = [shard_height, input_channels]
-            output_shard_shape = [shard_height, output_channels]
+            # For height sharding, width must be padded to tile size (32)
+            # Input channels are already aligned from TILE_LAYOUT
+            input_shard_width = (input_channels + 31) // 32 * 32
+            output_shard_width = (output_channels + 31) // 32 * 32
+            input_shard_shape = [shard_height, input_shard_width]
+            output_shard_shape = [shard_height, output_shard_width]
 
         elif self.memory_config_type == "block_sharded":
             # Block sharded: shard along both height and width dimensions
@@ -333,16 +342,24 @@ class TtYOLOv7Matmul:
     def _calculate_per_core_values(self, input_tensor):
         """Calculate per_core_M and per_core_N values based on tensor dimensions and grid size."""
         batch_size, _, nhw, input_channels = input_tensor.shape
+        # Use self.out_features which was set from original weight shape before processing
         output_channels = self.out_features
         grid_h, grid_w = self.compute_grid_size
 
         if self.memory_config_type == "height_sharded":
             # For 1D height sharded, only M dimension is distributed
             num_cores = self._create_shard_grid().num_cores()
+            if num_cores == 0:
+                raise ValueError("num_cores cannot be 0 for height sharded memory config")
             per_core_M = (nhw + 32 * num_cores - 1) // (32 * num_cores)
-            per_core_N = output_channels // 32
+            # Ensure output_channels is divisible by 32 (tile size)
+            if output_channels == 0:
+                raise ValueError("output_channels cannot be 0")
+            per_core_N = (output_channels + 31) // 32
         else:  # For DRAM and block sharded
             # Both M and N dimensions can be distributed
+            if grid_h == 0 or grid_w == 0:
+                raise ValueError(f"grid_h ({grid_h}) and grid_w ({grid_w}) cannot be 0")
             per_core_M = (nhw + 32 * grid_h - 1) // (32 * grid_h)
             per_core_N = (output_channels + 32 * grid_w - 1) // (32 * grid_w)
 
@@ -395,21 +412,42 @@ class TtYOLOv7Matmul:
         # Pad input tensor if needed
         input_tensor = self._pad_input_tensor(input_tensor, device)
 
+        # Check if input is batched (more than 3 dimensions means batched in ttnn.linear)
+        # ttnn.linear doesn't support bias with batched inputs
+        is_batched_input = len(input_tensor.shape) > 3
+
         # Perform linear operation
         linear_args = {
             "input_tensor_a": input_tensor,
             "input_tensor_b": self.weights,
-            "bias": self.bias,
             "program_config": matmul_config,
             "dtype": self.output_dtype,
             "compute_kernel_config": compute_config,
         }
 
+        # Only pass bias if input is not batched
+        if not is_batched_input and self.bias is not None:
+            linear_args["bias"] = self.bias
+
         # Add memory_config only if not DRAM (for DRAM, let ttnn decide)
-        if self.memory_config_type != "dram":
+        # For height_sharded, let ttnn.linear determine output config to avoid shape mismatches
+        if self.memory_config_type != "dram" and self.memory_config_type != "height_sharded":
             linear_args["memory_config"] = output_memory_config
 
         output_tensor = ttnn.linear(**linear_args)
+
+        # Apply bias separately if input was batched and bias exists
+        if is_batched_input and self.bias is not None:
+            # Convert to interleaved for bias addition (sharded add with broadcast not supported)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+            # Bias is already on device from _prepare_weights_and_bias
+            output_tensor = ttnn.add(output_tensor, self.bias)
+            # Reshard back to expected config if needed
+            if self.memory_config_type == "height_sharded":
+                output_tensor = ttnn.interleaved_to_sharded(output_tensor, output_memory_config)
+        # Reshard to expected output config if we didn't specify it
+        elif self.memory_config_type == "height_sharded":
+            output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
 
         output_tensor = output_tensor[:, :, : -self.pad_input, :] if self.pad_input > 0 else output_tensor
 
@@ -438,10 +476,13 @@ def sharded_concat(
     max_cores = 0
     max_id = 0
     for i, tensor in enumerate(input_tensors):
-        cores = tensor.memory_config().shard_spec.grid.num_cores()
-        if cores > max_cores:
-            max_cores = cores
-            max_id = i
+        # Check if tensor is sharded and has shard_spec
+        mem_config = tensor.memory_config()
+        if hasattr(mem_config, "shard_spec") and mem_config.shard_spec is not None:
+            cores = mem_config.shard_spec.grid.num_cores()
+            if cores > max_cores:
+                max_cores = cores
+                max_id = i
     id = max_id
 
     shard_grid = input_tensors[id].memory_config().shard_spec.grid
