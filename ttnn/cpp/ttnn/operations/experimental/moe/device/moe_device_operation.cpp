@@ -17,7 +17,13 @@ void MoEDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        tensor_args.input_tensor.logical_shape().rank() >= 2,
+        "Input tensor must be at least rank 2, got {}",
+        tensor_args.input_tensor.logical_shape().rank());
+    TT_FATAL(args.num_experts >= 1, "Number of experts must be at least 1, got {}", args.num_experts);
+}
 
 MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -27,7 +33,7 @@ MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs
 }
 
 MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the preallocated output tensor (already sharded with correct memory config)
     return tensor_args.output_tensor;
 }

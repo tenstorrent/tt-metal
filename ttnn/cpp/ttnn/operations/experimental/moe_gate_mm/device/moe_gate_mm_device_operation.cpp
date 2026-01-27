@@ -17,7 +17,13 @@ void MoEGateMMDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEGateMMDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        tensor_args.input_tensor.logical_shape().rank() >= 2,
+        "Input tensor must be at least rank 2, got {}",
+        tensor_args.input_tensor.logical_shape().rank());
+    TT_FATAL(args.layer_id >= 0, "Layer ID must be non-negative, got {}", args.layer_id);
+}
 
 MoEGateMMDeviceOperation::spec_return_value_t MoEGateMMDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -27,7 +33,7 @@ MoEGateMMDeviceOperation::spec_return_value_t MoEGateMMDeviceOperation::compute_
 }
 
 MoEGateMMDeviceOperation::tensor_return_value_t MoEGateMMDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the preallocated output tensor (already sharded with correct memory config)
     return tensor_args.output_tensor;
 }
