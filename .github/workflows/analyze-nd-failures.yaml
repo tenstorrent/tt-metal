@@ -52,7 +52,7 @@ jobs:
           echo "Using calculated start date: $START_DATE"
 
       - name: Run analyze nd failures
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@ebanerjee/removing-duplicates
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
