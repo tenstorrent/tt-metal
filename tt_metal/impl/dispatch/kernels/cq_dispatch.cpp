@@ -860,7 +860,6 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
 
-    uint32_t writes = 0;
     CQDispatchWritePackedLargeUnicastSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeUnicastSubCmd*)l1_cache;
 
     while (count != 0) {
@@ -875,41 +874,26 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
             // Normal unicast write
             dst_addr += local_write_offset;
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            constexpr uint32_t num_dests = 1;  // Unicast only
             
             while (length != 0) {
                 // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-                if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
-                    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
-                        // Block completion - account for all writes issued for this block before moving to next
-                        noc_nonposted_writes_num_issued[noc_index] += writes;
-                        writes = 0;
-                    });
-                }
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+                
                 // Transfer size is min(remaining_length, data_available_in_cb)
-                uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
                 uint32_t xfer_size = (length > available_data) ? available_data : length;
                 
                 noc_async_write(data_ptr, get_noc_addr_helper(dst_noc, dst_addr), xfer_size);
                 
-                writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);
                 length -= xfer_size;
                 data_ptr += xfer_size;
                 dst_addr += xfer_size;
             }
-            
-            noc_nonposted_writes_num_issued[noc_index] += writes;
-            writes = 0;
         } else {
             // Discard: skip data without issuing NOC write
             uint32_t remaining_length = length;
             while (remaining_length != 0) {
-                if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
-                    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
-                        // No writes issued for discard
-                    });
-                }
-                uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+                
                 uint32_t skip_size = (remaining_length > available_data) ? available_data : remaining_length;
                 
                 data_ptr += skip_size;
