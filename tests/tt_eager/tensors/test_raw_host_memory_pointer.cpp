@@ -114,8 +114,7 @@ void test_raw_host_memory_pointer() {
 
     {
         auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-        tt::tt_metal::tensor_impl::copy_to_host(
-            c_dev.device()->mesh_command_queue(), c_dev, dst_host_buffer.view_bytes().data());
+        tt::tt_metal::copy_to_host(c_dev.device()->mesh_command_queue(), c_dev, dst_host_buffer.view_bytes().data());
     }
 
     // Check that cpu tensor has correct data
@@ -132,7 +131,7 @@ void test_raw_host_memory_pointer() {
     // data
     std::unique_ptr<std::byte[]> storage_of_alternative_tensor_for_printing(
         new std::byte[shape.volume() * sizeof(bfloat16)]);
-    tt::tt_metal::tensor_impl::copy_to_host(
+    tt::tt_metal::copy_to_host(
         c_dev.device()->mesh_command_queue(), c_dev, storage_of_alternative_tensor_for_printing.get());
 
     HostBuffer alternative_tensor_for_printing_buffer(
@@ -164,14 +163,12 @@ void test_raw_host_memory_pointer() {
 
     Tensor d_dev = a_dev;
     auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
-    tt::tt_metal::tensor_impl::copy_to_device(
-        d_dev.device()->mesh_command_queue(), d_cpu_buffer.view_bytes().data(), d_dev);
+    tt::tt_metal::copy_to_device(d_dev.device()->mesh_command_queue(), d_cpu_buffer.view_bytes().data(), d_dev);
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
     auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
-    tt::tt_metal::tensor_impl::copy_to_host(
-        e_dev.device()->mesh_command_queue(), e_dev, dst_host_buffer.view_bytes().data());
+    tt::tt_metal::copy_to_host(e_dev.device()->mesh_command_queue(), e_dev, dst_host_buffer.view_bytes().data());
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
