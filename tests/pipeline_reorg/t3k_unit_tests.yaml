@@ -147,7 +147,7 @@
   sku: wh_llmbox
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
-  timeout: 20
+  timeout: 10
   model-name: qwen3_vl
 
 - name: t3k_gemma3-small_tests
