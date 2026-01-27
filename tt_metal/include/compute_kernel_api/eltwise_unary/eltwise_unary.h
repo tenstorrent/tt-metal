@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -14,12 +15,14 @@
 
 namespace ckernel {
 
-ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
+ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 
@@ -28,6 +31,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 }
 
-ALWI void init_sfpu(uint32_t icb, uint32_t ocb) { unary_op_init_common(icb, ocb); }
+ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    unary_op_init_common(icb, ocb, call_line);
+}
 
 }  // namespace ckernel

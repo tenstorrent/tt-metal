@@ -106,7 +106,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
+               const std::optional<const ttnn::Tensor>& bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,

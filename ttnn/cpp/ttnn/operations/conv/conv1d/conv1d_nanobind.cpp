@@ -75,7 +75,7 @@ void bind_conv1d(nb::module_& mod) {
                uint32_t dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
+               const std::optional<const ttnn::Tensor>& bias_tensor,
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,

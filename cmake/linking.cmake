@@ -203,7 +203,19 @@ endif()
 #===============================================================================
 # LINKER MISC CONFIGURATION
 #===============================================================================
-add_link_options($<$<CONFIG:Debug,RelWithDebInfo>:-Wl,--gdb-index>)
+# Check if linker supports --gdb-index for faster debugging
+check_linker_flag(
+    CXX
+    "-Wl,--gdb-index"
+    LINKER_SUPPORTS_GDB_INDEX
+)
+
+if(LINKER_SUPPORTS_GDB_INDEX)
+    message(STATUS "Linker supports --gdb-index, enabling for Debug builds")
+    add_link_options($<$<CONFIG:Debug,RelWithDebInfo>:-Wl,--gdb-index>)
+else()
+    message(STATUS "Linker does not support --gdb-index, skipping")
+endif()
 
 #===============================================================================
 # LTO (LINK TIME OPTIMIZATION) CONFIGURATION

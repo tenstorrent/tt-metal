@@ -119,12 +119,14 @@ void LatencyTestManager::setup_latency_test_mode(const TestConfig& config) {
         config.performance_test_mode == PerformanceTestMode::LATENCY,
         "setup_latency_test_mode called when latency test mode is not enabled");
 
-    // Validate that latency tests don't use multiple iterations
-    TT_FATAL(
-        config.iteration_number == 1 || config.iteration_number == 0,
-        "Latency tests do not support multiple iterations. Use num_packets in the test config instead to "
-        "collect multiple samples. Got {} iterations.",
-        config.iteration_number);
+    // Validate that latency tests don't use multiple iterations unless from a sequential pattern
+    if (!config.from_sequential_pattern) {
+        TT_FATAL(
+            config.iteration_number == 1 || config.iteration_number == 0,
+            "Latency tests do not support multiple iterations. Use num_packets in the test config instead to "
+            "collect multiple samples. Got {} iterations.",
+            config.iteration_number);
+    }
 
     // Validate latency test structure
     TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
@@ -156,6 +158,7 @@ void LatencyTestManager::setup_latency_test_workers(
     const auto& dest = pattern.destination.value();
 
     // Use default core if not specified (latency tests typically use a fixed core)
+    // TODO: Implement core sweep for sequential_neighbor_exchange
     CoreCoord sender_core = sender.core.value_or(CoreCoord{0, 0});
     CoreCoord receiver_core = dest.core.value_or(CoreCoord{0, 0});
     FabricNodeId sender_device_id = sender.device;
@@ -452,7 +455,7 @@ void LatencyTestManager::report_latency_results(
 
     // Populate LatencyResult structure for CSV export
     LatencyResult latency_result;
-    latency_result.test_name = config.name;
+    latency_result.test_name = config.parametrized_name;
 
     // Extract ftype and ntype from first sender's first pattern
     const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);

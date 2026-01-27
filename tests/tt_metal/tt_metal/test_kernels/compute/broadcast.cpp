@@ -11,8 +11,7 @@
 #define BCAST_ROW_IDX 0
 #endif
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifndef BCAST_OP_INIT
@@ -56,4 +55,3 @@ void MAIN {
     cb16.push_back(onetile);
     cb1.pop_front(onetile);
 }
-}  // namespace NAMESPACE

@@ -76,9 +76,28 @@ def test_mcast(device, width, mcast_core, mcast_receivers, mcast_grid, noc):
     """Test TTNN mcast operation from single core to multiple cores"""
     # Truncate number of columns to 11 for P100 for testing
     if mcast_core.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating mcast_core.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         mcast_core = ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, mcast_core.y)
+    if mcast_grid.end.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating mcast_grid.end.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         mcast_grid = ttnn.CoreRange(
             mcast_grid.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, mcast_grid.end.y)
+        )
+        mcast_receivers = ttnn.CoreRangeSet(
+            {
+                (
+                    cr
+                    if cr.end.x < device.compute_with_storage_grid_size().x
+                    else ttnn.CoreRange(
+                        cr.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, cr.end.y)
+                    )
+                )
+                for cr in mcast_receivers.ranges()
+            }
         )
 
     # Tensor dimensions

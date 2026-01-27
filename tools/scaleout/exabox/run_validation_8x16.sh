@@ -37,7 +37,7 @@ for i in {1..50}; do
         echo ""
 
         echo "Running tt-smi -glx_reset..."
-        mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo tt-smi -glx_reset
+        mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
         sleep 5
 
         echo ""

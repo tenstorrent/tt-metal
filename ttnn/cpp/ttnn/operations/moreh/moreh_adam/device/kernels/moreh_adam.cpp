@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 #ifdef FP32_DEST_ACC_EN
 #define WITH_FP32_DEST_ACC(x) x
@@ -160,8 +160,8 @@ void MAIN {
         copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
         copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
         copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
-        max_tile_init();
-        max_tile(dst0, dst1);
+        binary_max_tile_init();
+        binary_max_tile(dst0, dst1, dst0);
         tile_regs_commit();
 
         tile_regs_wait();

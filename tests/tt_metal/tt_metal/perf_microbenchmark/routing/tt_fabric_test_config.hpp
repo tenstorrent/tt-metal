@@ -124,6 +124,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
     {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
+    {"sequential_neighbor_exchange", HighLevelTrafficPattern::SequentialNeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 
@@ -165,6 +166,26 @@ void append_with_separator(std::string& target, std::string_view separator, cons
 }
 
 }  // namespace detail
+
+inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern){
+    switch(pattern){
+    case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
+    case HighLevelTrafficPattern::SequentialAllToAll:
+        return true;
+    case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOneRandom: [[fallthrough]];
+    case HighLevelTrafficPattern::FullDeviceRandomPairing: [[fallthrough]];
+    case HighLevelTrafficPattern::UnidirectionalLinear: [[fallthrough]];
+    case HighLevelTrafficPattern::FullRing: [[fallthrough]];
+    case HighLevelTrafficPattern::HalfRing: [[fallthrough]];
+    case HighLevelTrafficPattern::AllDevicesUniformPattern: [[fallthrough]];
+    case HighLevelTrafficPattern::NeighborExchange: [[fallthrough]];
+    default: return false;
+    }
+}
+
 
 // Helper function to resolve DeviceIdentifier to FabricNodeId
 inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id, const IDeviceInfoProvider& provider) {
@@ -438,6 +459,9 @@ private:
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+
+    void expand_sequential_neighbor_exchange(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);

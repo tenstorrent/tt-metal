@@ -76,7 +76,7 @@ void bind_reduction_ema_operation(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const float& alpha,
-               std::optional<Tensor> optional_out,
+               const std::optional<Tensor>& optional_out,
                const std::optional<CoreGrid>& core_grid,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) -> Tensor {

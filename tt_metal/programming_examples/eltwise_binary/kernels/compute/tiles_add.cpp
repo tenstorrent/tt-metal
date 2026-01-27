@@ -8,8 +8,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // We are going to read from these two circular buffers
@@ -57,4 +56,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

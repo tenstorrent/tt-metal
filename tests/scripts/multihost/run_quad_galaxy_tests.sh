@@ -39,6 +39,7 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     local RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     local HOSTS="g05glx01,g05glx02"
     local RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+    mkdir -p logs
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
@@ -54,6 +55,7 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     local MESH_DEVICE="DUAL"
 
     local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
+    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
@@ -66,14 +68,39 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_DUAL" ; fail+=$?
 
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_TEACHER_FORCED" ; fail+=$?
+
     if [[ $fail -ne 0 ]]; then
         exit 1
     fi
 }
 
+run_quad_galaxy_deepseekv3_unit_tests() {
+    fail=0
+
+    local RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+    local MPI_ARGS_BASE="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+    local MPI_ARGS="--host g05glx04,g05glx03,g05glx02,g05glx01 ${MPI_ARGS_BASE}"
+
+    local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
+    local MESH_DEVICE="QUAD"
+    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/unit"
+
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "$MPI_ARGS" \
+        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
 
 run_quad_galaxy_tests() {
   run_quad_galaxy_unit_tests
+  run_quad_galaxy_deepseekv3_unit_tests
   run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
 }
 

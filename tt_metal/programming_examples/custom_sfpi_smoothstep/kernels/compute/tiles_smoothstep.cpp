@@ -60,8 +60,7 @@ inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, flo
         smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // Input circular buffer for tiles
@@ -101,4 +100,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

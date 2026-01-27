@@ -637,11 +637,13 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
     TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
 }
 
-std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const { return std::nullopt; }
+std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
+    return default_allocator_->get_lowest_occupied_l1_address(0);
+}
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
-    return std::nullopt;
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
 CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {

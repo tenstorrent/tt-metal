@@ -1059,21 +1059,71 @@ def test_threshold(device):
 
 
 def test_tril(device):
-    # Create a tensor with random values
-    tensor = ttnn.rand([2, 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Create a 4x4 tensor with values from 1 to 16
+    tensor = ttnn.from_torch(
+        torch.arange(1, 17, dtype=torch.bfloat16).reshape(4, 4),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
-    # Extract lower triangular part
-    output = ttnn.tril(tensor, diagonal=0)
-    logger.info(f"Lower triangular: {output}")
+    output_diag_0 = ttnn.tril(tensor, diagonal=0)
+    logger.info(f"Lower triangular (diagonal=0): {output_diag_0}")
+    # Result:
+    # [[ 1,  0,  0,  0],
+    #  [ 5,  6,  0,  0],
+    #  [ 9, 10, 11,  0],
+    #  [13, 14, 15, 16]]
+
+    output_diag_1 = ttnn.tril(tensor, diagonal=1)
+    logger.info(f"Lower triangular (diagonal=1): {output_diag_1}")
+    # Result:
+    # [[ 1,  2,  0,  0],
+    #  [ 5,  6,  7,  0],
+    #  [ 9, 10, 11, 12],
+    #  [13, 14, 15, 16]]
+
+    output_diag_neg1 = ttnn.tril(tensor, diagonal=-1)
+    logger.info(f"Lower triangular (diagonal=-1): {output_diag_neg1}")
+    # Result:
+    # [[ 0,  0,  0,  0],
+    #  [ 5,  0,  0,  0],
+    #  [ 9, 10,  0,  0],
+    #  [13, 14, 15,  0]]
 
 
 def test_triu(device):
-    # Create a tensor with random values
-    tensor = ttnn.rand([2, 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Create a 4x4 tensor with values from 1 to 16
+    tensor = ttnn.from_torch(
+        torch.arange(1, 17, dtype=torch.bfloat16).reshape(4, 4),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
-    # Extract upper triangular part
-    output = ttnn.triu(tensor, diagonal=0)
-    logger.info(f"Upper triangular: {output}")
+    output_diag_0 = ttnn.triu(tensor, diagonal=0)
+    logger.info(f"Upper triangular (diagonal=0): {output_diag_0}")
+    # Result:
+    # [[ 1,  2,  3,  4],
+    #  [ 0,  6,  7,  8],
+    #  [ 0,  0, 11, 12],
+    #  [ 0,  0,  0, 16]]
+
+    output_diag_1 = ttnn.triu(tensor, diagonal=1)
+    logger.info(f"Upper triangular (diagonal=1): {output_diag_1}")
+    # Result:
+    # [[ 0,  2,  3,  4],
+    #  [ 0,  0,  7,  8],
+    #  [ 0,  0,  0, 12],
+    #  [ 0,  0,  0,  0]]
+
+    output_diag_neg1 = ttnn.triu(tensor, diagonal=-1)
+    logger.info(f"Upper triangular (diagonal=-1): {output_diag_neg1}")
+    # Result:
+    # [[ 1,  2,  3,  4],
+    #  [ 5,  6,  7,  8],
+    #  [ 0, 10, 11, 12],
+    #  [ 0,  0, 15, 16]]
 
 
 def test_round(device):

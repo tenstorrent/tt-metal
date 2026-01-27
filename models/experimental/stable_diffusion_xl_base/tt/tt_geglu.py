@@ -37,7 +37,6 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
-        # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,

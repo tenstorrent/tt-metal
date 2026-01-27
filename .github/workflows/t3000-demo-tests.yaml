@@ -28,6 +28,7 @@ on:
           - qwen3
           - qwen25
           - qwen25_vl
+          - qwen3_vl
           - gemma3
           - wan22
           - mochi

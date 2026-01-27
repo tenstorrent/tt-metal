@@ -133,6 +133,19 @@ run_t3000_qwen25_vl_tests() {
   fi
 }
 
+run_t3000_qwen3_vl_tests() {
+  # install qwen3_vl requirements
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen3-VL-32B
+  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
+}
+
 run_t3000_qwen3_tests() {
   # Record the start time
   fail=0
@@ -421,12 +434,18 @@ run_t3000_gpt_oss_tests() {
   uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 20B accuracy tests completed"
+
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
+
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 120B accuracy tests completed"
 
   # Record the end time
   end_time=$(date +%s)

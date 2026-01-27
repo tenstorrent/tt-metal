@@ -28,7 +28,7 @@ void bind_nlp_concat_heads_decode(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const uint32_t num_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(input_tensor, num_heads, memory_config, optional_output_tensor, sub_core_grids);
             },

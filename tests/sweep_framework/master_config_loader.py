@@ -21,6 +21,7 @@ from pathlib import Path
 from .operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
+
 # Get the base directory dynamically - import from model_tracer
 try:
     # Try direct import (if model_tracer is in PYTHONPATH or same parent)
@@ -728,6 +729,13 @@ class MasterConfigLoader:
                     f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
                 )
                 return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
+            elif self._matches_operation(operation_name, "paged_fused_update_cache"):
+                print(
+                    f"🔧 Detected paged_fused_update_cache operation (4 tensors + additional parameters) - using operation-specific extractor"
+                )
+                return self._get_paged_fused_update_cache_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
 
@@ -3733,6 +3741,278 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting scaled_dot_product_attention parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_paged_fused_update_cache_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for paged_fused_update_cache operation with 4 tensors + additional parameters"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+            seen_input_signatures = set() if deduplicate_inputs else None
+
+            for config_idx, (config, source, machine_info) in enumerate(configs):
+                try:
+                    # Extract 4 tensor configs (cache1, input1, cache2, input2)
+                    tensor_configs = []
+                    for arg in config:
+                        tensor_config = self.extract_tensor_config(arg)
+                        if tensor_config:
+                            tensor_configs.append(tensor_config)
+                            if len(tensor_configs) >= 4:
+                                break
+
+                    if len(tensor_configs) < 4:
+                        failed_configs += 1
+                        continue
+
+                    # Extract additional parameters
+                    # arg4: update_idxs (vector<uint32_t>)
+                    # arg5: update_idxs_tensor (optional Tensor)
+                    # arg6: share_cache (optional<bool>)
+                    # arg7: page_table (optional Tensor)
+                    # arg8: batch_offset (uint32_t)
+
+                    update_idxs = []
+                    update_idxs_tensor_config = None
+                    share_cache = None
+                    page_table_config = None
+                    batch_offset = 0
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            # arg4: update_idxs vector
+                            if "arg4" in arg:
+                                val = arg["arg4"]
+                                if isinstance(val, list):
+                                    update_idxs = val
+
+                            # arg5: update_idxs_tensor
+                            if "arg5" in arg:
+                                val = arg["arg5"]
+                                if isinstance(val, dict) and "Tensor" in val:
+                                    # Extract tensor config for arg5
+                                    update_idxs_tensor_config = self.extract_tensor_config(arg)
+
+                            # arg6: share_cache
+                            if "arg6" in arg:
+                                val = arg["arg6"]
+                                if val != "nullopt" and isinstance(val, (bool, int, str)):
+                                    try:
+                                        share_cache = bool(int(val)) if isinstance(val, (int, str)) else val
+                                    except:
+                                        pass
+
+                            # arg7: page_table
+                            if "arg7" in arg:
+                                val = arg["arg7"]
+                                if isinstance(val, dict) and "Tensor" in val:
+                                    # Extract tensor config for arg7
+                                    page_table_config = self.extract_tensor_config(arg)
+
+                            # arg8: batch_offset
+                            if "arg8" in arg:
+                                val = arg["arg8"]
+                                if isinstance(val, (int, str)) and val != "nullopt":
+                                    try:
+                                        batch_offset = int(val)
+                                    except:
+                                        pass
+
+                    # Build config dict with all 4 tensor inputs + additional params
+                    config_dict = {
+                        "input_shape": {
+                            "input_a": tensor_configs[0].shape,  # cache_tensor1
+                            "input_b": tensor_configs[1].shape,  # input_tensor1
+                            "input_c": tensor_configs[2].shape,  # cache_tensor2
+                            "input_d": tensor_configs[3].shape,  # input_tensor2
+                        },
+                        "input_a_dtype": self.parse_dtype(tensor_configs[0].dtype),
+                        "input_a_layout": self.parse_layout(tensor_configs[0].layout),
+                        "input_a_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),
+                        "input_b_dtype": self.parse_dtype(tensor_configs[1].dtype),
+                        "input_b_layout": self.parse_layout(tensor_configs[1].layout),
+                        "input_b_memory_config": self.parse_memory_config(
+                            tensor_configs[1].memory_config, tensor_configs[1].shape
+                        ),
+                        "input_c_dtype": self.parse_dtype(tensor_configs[2].dtype),
+                        "input_c_layout": self.parse_layout(tensor_configs[2].layout),
+                        "input_c_memory_config": self.parse_memory_config(
+                            tensor_configs[2].memory_config, tensor_configs[2].shape
+                        ),
+                        "input_d_dtype": self.parse_dtype(tensor_configs[3].dtype),
+                        "input_d_layout": self.parse_layout(tensor_configs[3].layout),
+                        "input_d_memory_config": self.parse_memory_config(
+                            tensor_configs[3].memory_config, tensor_configs[3].shape
+                        ),
+                        "output_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),
+                        "update_idxs": update_idxs,
+                        "batch_offset": batch_offset,
+                        "traced_source": source,
+                        "traced_machine_info": machine_info,
+                    }
+
+                    # Add optional tensor parameters if present
+                    if update_idxs_tensor_config:
+                        config_dict["update_idxs_tensor"] = {
+                            "shape": update_idxs_tensor_config.shape,
+                            "dtype": self.parse_dtype(update_idxs_tensor_config.dtype),
+                            "layout": ttnn.ROW_MAJOR_LAYOUT,  # update_idxs_tensor must be ROW_MAJOR per C++ validation
+                            "memory_config": self.parse_memory_config(
+                                update_idxs_tensor_config.memory_config, update_idxs_tensor_config.shape
+                            ),
+                        }
+
+                    if page_table_config:
+                        config_dict["page_table"] = {
+                            "shape": page_table_config.shape,
+                            "dtype": self.parse_dtype(page_table_config.dtype),
+                            "layout": ttnn.ROW_MAJOR_LAYOUT,  # page_table must be ROW_MAJOR per C++ validation
+                            "memory_config": self.parse_memory_config(
+                                page_table_config.memory_config, page_table_config.shape
+                            ),
+                        }
+
+                    if share_cache is not None:
+                        config_dict["share_cache"] = share_cache
+
+                    if deduplicate_inputs:
+                        import hashlib
+
+                        input_sig = hashlib.md5(
+                            str(
+                                (
+                                    tuple(tensor_configs[i].shape for i in range(4)),
+                                    tuple(config_dict[f"input_{chr(97+i)}_dtype"] for i in range(4)),
+                                    update_idxs,
+                                    batch_offset,
+                                )
+                            ).encode()
+                        ).hexdigest()
+                        if input_sig in seen_input_signatures:
+                            continue
+                        seen_input_signatures.add(input_sig)
+
+                    paired_configs.append(config_dict)
+                except Exception as e:
+                    failed_configs += 1
+                    print(f"⚠️ Failed to parse config {config_idx}: {e}")
+                    continue
+
+            if paired_configs:
+                if all_cases:
+                    # Generate all combinations
+                    print("Generating all combinations...")
+                    # Implementation similar to other operations
+                    # For now, use exact configs
+                    pass
+
+                # Collect parameters
+                input_shapes = []
+                input_a_dtypes, input_a_layouts, input_a_memory_configs = [], [], []
+                input_b_dtypes, input_b_layouts, input_b_memory_configs = [], [], []
+                input_c_dtypes, input_c_layouts, input_c_memory_configs = [], [], []
+                input_d_dtypes, input_d_layouts, input_d_memory_configs = [], [], []
+                output_memory_configs = []
+                update_idxs_list = []
+                update_idxs_tensor_list = []
+                page_table_list = []
+                share_cache_list = []
+                batch_offset_list = []
+                traced_source_list, traced_machine_info_list = [], []
+
+                for cfg in paired_configs:
+                    input_shapes.append(cfg["input_shape"])
+                    input_a_dtypes.append(cfg["input_a_dtype"])
+                    input_a_layouts.append(cfg["input_a_layout"])
+                    input_a_memory_configs.append(cfg["input_a_memory_config"])
+                    input_b_dtypes.append(cfg["input_b_dtype"])
+                    input_b_layouts.append(cfg["input_b_layout"])
+                    input_b_memory_configs.append(cfg["input_b_memory_config"])
+                    input_c_dtypes.append(cfg["input_c_dtype"])
+                    input_c_layouts.append(cfg["input_c_layout"])
+                    input_c_memory_configs.append(cfg["input_c_memory_config"])
+                    input_d_dtypes.append(cfg["input_d_dtype"])
+                    input_d_layouts.append(cfg["input_d_layout"])
+                    input_d_memory_configs.append(cfg["input_d_memory_config"])
+                    output_memory_configs.append(cfg["output_memory_config"])
+                    update_idxs_list.append(cfg.get("update_idxs", []))
+                    update_idxs_tensor_list.append(cfg.get("update_idxs_tensor", None))
+                    page_table_list.append(cfg.get("page_table", None))
+                    share_cache_list.append(cfg.get("share_cache", None))
+                    batch_offset_list.append(cfg.get("batch_offset", 0))
+                    traced_source_list.append(cfg["traced_source"])
+                    traced_machine_info_list.append(cfg["traced_machine_info"])
+
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "input_b_dtype",
+                    "input_b_layout",
+                    "input_b_memory_config",
+                    "input_c_dtype",
+                    "input_c_layout",
+                    "input_c_memory_config",
+                    "input_d_dtype",
+                    "input_d_layout",
+                    "input_d_memory_config",
+                    "output_memory_config",
+                    "update_idxs",
+                    "update_idxs_tensor",
+                    "page_table",
+                    "share_cache",
+                    "batch_offset",
+                    "traced_source",
+                    "traced_machine_info",
+                ]
+
+                exact_configs = list(
+                    zip(
+                        input_shapes,
+                        input_a_dtypes,
+                        input_a_layouts,
+                        input_a_memory_configs,
+                        input_b_dtypes,
+                        input_b_layouts,
+                        input_b_memory_configs,
+                        input_c_dtypes,
+                        input_c_layouts,
+                        input_c_memory_configs,
+                        input_d_dtypes,
+                        input_d_layouts,
+                        input_d_memory_configs,
+                        output_memory_configs,
+                        update_idxs_list,
+                        update_idxs_tensor_list,
+                        page_table_list,
+                        share_cache_list,
+                        batch_offset_list,
+                        traced_source_list,
+                        traced_machine_info_list,
+                    )
+                )
+
+                param_key = ",".join(param_names)
+                result = {param_key: exact_configs}
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name}")
+                print(f"   📊 Will generate {len(input_shapes)} test vectors")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+                return result
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting paged_fused_update_cache parameters: {e}")
             import traceback
 
             traceback.print_exc()

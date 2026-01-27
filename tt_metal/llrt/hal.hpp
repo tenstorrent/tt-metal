@@ -313,6 +313,8 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t operand_start_stream_{};
+    bool has_stream_registers_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
@@ -381,6 +383,8 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    bool has_stream_registers() const { return has_stream_registers_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

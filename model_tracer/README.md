@@ -42,6 +42,13 @@ The following models have been traced and their configurations are available in 
 |-------|---------|---------------------------------|
 | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen3-32B | Large language model | `HF_MODEL=Qwen/Qwen3-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+
+**BH (p150b) Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|----------------------------------|
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |
 
 **WH Galaxy (32 cards):**
 

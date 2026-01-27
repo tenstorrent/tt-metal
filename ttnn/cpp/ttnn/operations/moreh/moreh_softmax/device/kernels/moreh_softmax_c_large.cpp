@@ -7,7 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -45,8 +45,8 @@ void MAIN {
                 copy_tile_init_with_dt(cb_max);
                 copy_tile(cb_max, 0, dst1);
 
-                max_tile_init();
-                max_tile(dst0, dst1);
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
                 tile_regs_commit();
 
                 cb_pop_front(cb_max, onetile);

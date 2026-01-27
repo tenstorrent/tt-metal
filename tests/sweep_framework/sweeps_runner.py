@@ -591,6 +591,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),

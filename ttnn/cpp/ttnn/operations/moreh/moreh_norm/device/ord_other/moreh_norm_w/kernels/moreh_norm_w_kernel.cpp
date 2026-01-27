@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -115,8 +115,8 @@ void MAIN {
                 copy_tile_init_with_dt(cb_cal);
                 copy_tile(cb_cal, 0, dst1);
 
-                max_tile_init();
-                max_tile(dst0, dst1);
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
 #endif
                 tile_regs_commit();
 
