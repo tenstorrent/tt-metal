@@ -13,7 +13,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
