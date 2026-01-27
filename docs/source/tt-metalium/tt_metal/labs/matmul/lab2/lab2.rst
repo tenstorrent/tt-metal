@@ -753,7 +753,11 @@ Steps
    Compare the firmware time of the data reuse implementation against the basic multi core implementation
    with equivalent core grid sizes from Exercise 1.
 
-#. Repeat the previous steps for ``K_block_tiles = 5``.
+#. Create a plot showing the relationship between speedup and the number of cores used.
+   The speedup should be expressed relative to the performance of the single core implementation from Lab 1.
+   Compare this plot to the one from Exercise 1.
+
+#. Repeat the previous two steps for ``K_block_tiles = 5``.
 
 
 **Important Note**
