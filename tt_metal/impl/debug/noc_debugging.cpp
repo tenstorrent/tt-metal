@@ -4,6 +4,7 @@
 
 #include "noc_debugging.hpp"
 
+#include <map>
 #include <type_traits>
 
 #include <fmt/base.h>
@@ -29,6 +30,19 @@ inline bool wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
+NOCDebugIssueType get_unflushed_issue_type(const NOCDebugState::PendingWriteInfo& info) {
+    if (info.is_semaphore && info.is_mcast) {
+        return NOCDebugIssueType::UNFLUSHED_SEMAPHORE_MCAST_AT_END;
+    }
+    if (info.is_semaphore) {
+        return NOCDebugIssueType::UNFLUSHED_SEMAPHORE_AT_END;
+    }
+    if (info.is_mcast) {
+        return NOCDebugIssueType::UNFLUSHED_WRITE_MCAST_AT_END;
+    }
+    return NOCDebugIssueType::UNFLUSHED_WRITE_AT_END;
+}
+
 }  // namespace detail
 
 NOCDebugState::CoreDebugState& NOCDebugState::get_state(tt_cxy_pair core) { return cores[core]; }
@@ -40,13 +54,15 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     uint8_t noc_id = event.noc;
     uint32_t src_addr = event.src_addr;
     bool posted = event.posted;
+    bool is_semaphore = event.is_semaphore;
+    bool is_mcast = event.is_mcast;
     std::string problem_type;
 
     // Multiple writes from the same source address without a barrier in between
     // Source data potentially overwritten before being flushed
-    if (posted && state.posted_writes_not_flushed[noc_id].contains(src_addr)) {
+    if (posted && state.posted_writes_pending[noc_id].contains(src_addr)) {
         problem_type = "multiple posted writes from the same source address without a barrier in between";
-    } else if (!posted && state.nonposted_writes_not_flushed[noc_id].contains(src_addr)) {
+    } else if (!posted && state.nonposted_writes_pending[noc_id].contains(src_addr)) {
         problem_type = "multiple non-posted writes from the same source address without a barrier in between";
     }
 
@@ -69,21 +85,26 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     }
 
     if (!problem_type.empty()) {
-        state.issue[processor_id].set_issue(NOCDebugIssueType::WRITE_FLUSH_BARRIER);
-        log_warning(
-            tt::LogMetal,
-            "{}, sent {}. Missing write barrier or flush on NOC{}? ",
-            detail::format_core_info(core, processor_id),
-            problem_type,
-            noc_id);
+        // Classify write type for more detailed error reporting
+        NOCDebugIssueType issue_type;
+        if (is_semaphore && is_mcast) {
+            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST;
+        } else if (is_semaphore) {
+            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE;
+        } else if (is_mcast) {
+            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_MCAST;
+        } else {
+            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER;
+        }
+        state.issue[processor_id].set_issue(issue_type);
     }
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].insert(src_addr);
+        state.posted_writes_pending[noc_id][src_addr] = {processor_id, is_semaphore, is_mcast};
         state.posted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_posted_writes[noc_id] = true;
     } else {
-        state.nonposted_writes_not_flushed[noc_id].insert(src_addr);
+        state.nonposted_writes_pending[noc_id][src_addr] = {processor_id, is_semaphore, is_mcast};
         state.nonposted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_nonposted_writes[noc_id] = true;
     }
@@ -116,12 +137,6 @@ void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64
 
     if (!problem_type.empty()) {
         state.issue[processor_id].set_issue(NOCDebugIssueType::READ_BARRIER);
-        log_warning(
-            tt::LogMetal,
-            "{}, sent {}. Missing read barrier on NOC{}? ",
-            detail::format_core_info(core, processor_id),
-            problem_type,
-            noc_id);
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -147,9 +162,9 @@ void NOCDebugState::handle_write_barrier_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].clear();
+        state.posted_writes_pending[noc_id].clear();
     } else {
-        state.nonposted_writes_not_flushed[noc_id].clear();
+        state.nonposted_writes_pending[noc_id].clear();
     }
 }
 
@@ -160,14 +175,30 @@ void NOCDebugState::handle_write_flush_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].clear();
+        state.posted_writes_pending[noc_id].clear();
     } else {
-        state.nonposted_writes_not_flushed[noc_id].clear();
+        state.nonposted_writes_pending[noc_id].clear();
     }
 }
 
 void NOCDebugState::update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp) {
     cores[core].latest_risc_timestamp[processor_id] = timestamp;
+}
+
+void NOCDebugState::finish_cores() {
+    std::unique_lock<std::mutex> lock{cores_mutex};
+
+    for (auto& [core, state] : cores) {
+        for (size_t noc_id = 0; noc_id < CoreDebugState::MAX_NOCS; ++noc_id) {
+            // Set issues for the specific processor that initiated each pending write
+            for (const auto& [addr, info] : state.posted_writes_pending[noc_id]) {
+                state.issue[info.processor_id].set_issue(detail::get_unflushed_issue_type(info));
+            }
+            for (const auto& [addr, info] : state.nonposted_writes_pending[noc_id]) {
+                state.issue[info.processor_id].set_issue(detail::get_unflushed_issue_type(info));
+            }
+        }
+    }
 }
 
 NOCDebugIssue NOCDebugState::get_issues(tt_cxy_pair core, int processor_id) const {
@@ -179,6 +210,139 @@ NOCDebugIssue NOCDebugState::get_issues(tt_cxy_pair core, int processor_id) cons
 void NOCDebugState::reset_state() {
     std::unique_lock<std::mutex> lock{cores_mutex};
     cores.clear();
+}
+
+std::string_view NOCDebugState::get_issue_description(NOCDebugIssueType issue_type) {
+    switch (issue_type) {
+        case NOCDebugIssueType::WRITE_FLUSH_BARRIER: [[fallthrough]];
+        case NOCDebugIssueType::UNFLUSHED_WRITE_AT_END: return "write";
+        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_MCAST: [[fallthrough]];
+        case NOCDebugIssueType::UNFLUSHED_WRITE_MCAST_AT_END: return "write mcast";
+        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE: [[fallthrough]];
+        case NOCDebugIssueType::UNFLUSHED_SEMAPHORE_AT_END: return "semaphore";
+        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST: [[fallthrough]];
+        case NOCDebugIssueType::UNFLUSHED_SEMAPHORE_MCAST_AT_END: return "semaphore mcast";
+        case NOCDebugIssueType::READ_BARRIER: return "read";
+        default: return "unknown";
+    }
+}
+
+void NOCDebugState::print_aggregated_errors() const {
+    std::unique_lock<std::mutex> lock{cores_mutex};
+
+    // Collect issues by category, grouped by core
+    struct CoreIssues {
+        std::vector<std::string> write_barrier_issues;
+        std::vector<std::string> unflushed_write_issues;  // at end of kernel
+        bool has_read_barrier = false;
+    };
+    std::map<std::string, CoreIssues> issues_by_core;
+
+    // Issue type ranges for categorization
+    constexpr auto WRITE_BARRIER_START = NOCDebugIssueType::WRITE_FLUSH_BARRIER;
+    constexpr auto WRITE_BARRIER_END = NOCDebugIssueType::READ_BARRIER;
+    constexpr auto UNFLUSHED_WRITE_START = NOCDebugIssueType::UNFLUSHED_WRITE_AT_END;
+    constexpr auto UNFLUSHED_WRITE_END = NOCDebugIssueType::COUNT;
+
+    for (const auto& [core, state] : cores) {
+        for (size_t proc = 0; proc < CoreDebugState::MAX_PROCESSORS; ++proc) {
+            const auto& issue = state.issue[proc];
+            if (!issue.any_issue()) {
+                continue;
+            }
+
+            std::string core_key = fmt::format("Device {} ({},{}) Processor {}", core.chip, core.x, core.y, proc);
+            CoreIssues& core_issues = issues_by_core[core_key];
+
+            // Collect write barrier issues (during execution)
+            for (size_t i = static_cast<size_t>(WRITE_BARRIER_START); i < static_cast<size_t>(WRITE_BARRIER_END); ++i) {
+                auto issue_type = static_cast<NOCDebugIssueType>(i);
+                if (issue.has_issue(issue_type)) {
+                    core_issues.write_barrier_issues.push_back(std::string(get_issue_description(issue_type)));
+                }
+            }
+
+            // Check read barrier (during execution)
+            if (issue.has_issue(NOCDebugIssueType::READ_BARRIER)) {
+                core_issues.has_read_barrier = true;
+            }
+
+            // Collect unflushed write issues (at kernel end)
+            for (size_t i = static_cast<size_t>(UNFLUSHED_WRITE_START); i < static_cast<size_t>(UNFLUSHED_WRITE_END);
+                 ++i) {
+                auto issue_type = static_cast<NOCDebugIssueType>(i);
+                if (issue.has_issue(issue_type)) {
+                    core_issues.unflushed_write_issues.push_back(std::string(get_issue_description(issue_type)));
+                }
+            }
+        }
+    }
+
+    if (issues_by_core.empty()) {
+        return;
+    }
+
+    log_error(tt::LogMetal, "========== NOC Debug Summary ==========");
+
+    // Print write barrier issues (during execution)
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.write_barrier_issues.empty()) {
+            log_error(tt::LogMetal, "Missing write barrier/flush (same src addr written multiple times):");
+            break;
+        }
+    }
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.write_barrier_issues.empty()) {
+            std::string issues_str;
+            for (size_t i = 0; i < core_issues.write_barrier_issues.size(); ++i) {
+                if (i > 0) {
+                    issues_str += ", ";
+                }
+                issues_str += core_issues.write_barrier_issues[i];
+            }
+            log_error(tt::LogMetal, "  {} [{}]", core_key, issues_str);
+        }
+    }
+
+    // Print read barrier issues (during execution)
+    bool has_read_barrier = false;
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (core_issues.has_read_barrier) {
+            has_read_barrier = true;
+            break;
+        }
+    }
+    if (has_read_barrier) {
+        log_error(tt::LogMetal, "Missing read barrier (same dst addr read multiple times):");
+        for (const auto& [core_key, core_issues] : issues_by_core) {
+            if (core_issues.has_read_barrier) {
+                log_error(tt::LogMetal, "  {}", core_key);
+            }
+        }
+    }
+
+    // Print unflushed writes at kernel end
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_write_issues.empty()) {
+            log_error(tt::LogMetal, "Unflushed async writes at kernel end (missing noc_async_write_barrier):");
+            break;
+        }
+    }
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_write_issues.empty()) {
+            std::string issues_str;
+            for (size_t i = 0; i < core_issues.unflushed_write_issues.size(); ++i) {
+                if (i > 0) {
+                    issues_str += ", ";
+                }
+                issues_str += core_issues.unflushed_write_issues[i];
+            }
+            log_error(tt::LogMetal, "  {} [{}]", core_key, issues_str);
+        }
+    }
+
+    log_error(tt::LogMetal, "========================================");
+    log_error(tt::LogMetal, "");
 }
 
 void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor_id, const NOCDebugEvent& event) {
