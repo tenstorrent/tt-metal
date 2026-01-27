@@ -1047,6 +1047,11 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
+def is_watcher_enabled():
+    watcher = os.environ.get("TT_METAL_WATCHER")
+    return watcher is not None and watcher != ""
+
+
 def is_slow_dispatch():
     return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
@@ -1061,6 +1066,10 @@ def skip_for_blackhole(reason_str="not a blackhole test"):
 
 def skip_for_wormhole_b0(reason_str="not a wormhole test"):
     return ti_skip(is_wormhole_b0(), reason=reason_str)
+
+
+def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
+    return ti_skip(is_watcher_enabled(), reason=reason_str)
 
 
 def run_for_blackhole(reason_str="only runs for Blackhole"):
