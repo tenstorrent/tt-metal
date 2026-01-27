@@ -47,7 +47,6 @@ class Buffer;
 class Program;
 class SubDevice;
 
-class HWCommandQueue;
 class SystemMemoryManager;
 struct TraceBuffer;
 struct TraceDescriptor;
@@ -157,9 +156,6 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-
-    // If cq_id is not provided, the current command queue is returned from the current thread
-    virtual HWCommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;

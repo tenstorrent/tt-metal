@@ -1029,11 +1029,6 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-HWCommandQueue& MeshDeviceImpl::command_queue(std::optional<uint8_t> cq_id) {
-    TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->command_queue(cq_id);
-}
-
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
@@ -1419,7 +1414,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
-HWCommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) { return pimpl_->command_queue(cq_id); }
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);

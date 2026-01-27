@@ -860,7 +860,7 @@ void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_clo
         }
 
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
-            auto& cq = dev->command_queue(cq_id);
+            auto& cq = dynamic_cast<Device*>(dev)->command_queue(cq_id);
             cq.terminate();
         }
     }
