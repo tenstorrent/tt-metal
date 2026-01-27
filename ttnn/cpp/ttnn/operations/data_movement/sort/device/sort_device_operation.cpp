@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort_device_operation.hpp"
+#include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -80,6 +81,11 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
 
     TT_FATAL(tensor_args.input_tensor.layout() == Layout::TILE, "The input must be in tiled format");
+
+    TT_FATAL(
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 || tensor_args.input_tensor.dtype() == DataType::UINT16,
+        "Input tensor data type must be BFLOAT16 or UINT16, got {}",
+        tensor_args.input_tensor.dtype());
 
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
