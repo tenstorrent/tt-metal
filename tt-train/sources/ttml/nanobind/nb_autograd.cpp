@@ -6,7 +6,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
-#include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -30,14 +29,12 @@ using namespace ttml::autograd;
 
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<GradMode>(m);
-    ttml::nanobind::util::export_enum<InitMode>(m);
     ttml::nanobind::util::export_enum<PreferredPrecision>(m);
 
     nb::class_<AutoContext>(m, "AutoContext");
     nb::class_<AutocastTensor>(m, "AutocastTensor");
     nb::class_<Graph>(m, "Graph");
     nb::class_<GraphNode>(m, "GraphNode");
-    nb::class_<NodeId>(m, "NodeId");
     nb::class_<Tensor>(m, "Tensor");
 }
 
@@ -96,11 +93,7 @@ void py_module(nb::module_& m) {
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
         py_tensor.def("get_rank", &Tensor::get_rank, "Get rank");
         py_tensor.def(
-            "backward",
-            &Tensor::backward,
-            nb::arg("retain_graph"),
-            "Call gradient function on graph nodes in reverse",
-            nb::call_guard<nb::gil_scoped_release>());
+            "backward", &Tensor::backward, nb::arg("retain_graph"), "Call gradient function on graph nodes in reverse");
 
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
@@ -215,20 +208,12 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
         py_auto_context.def(
             "add_backward_node",
-            [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
-                // Handle empty list case where nanobind can't infer element type
-                std::vector<NodeId> links;
-                if (links_obj.has_value() && nb::len(*links_obj) > 0) {
-                    links = nb::cast<std::vector<NodeId>>(*links_obj);
-                }
-                return self.add_backward_node(std::move(grad_function), links);
-            },
+            &AutoContext::add_backward_node,
             nb::arg("grad_function"),
             nb::arg("links"),
             "Add backward graph node");
         py_auto_context.def("reset_graph", &AutoContext::reset_graph, "Reset graph");
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"), "Set gradient mode");
-        py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(
             "open_device",
             [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
@@ -301,18 +286,6 @@ void py_module(nb::module_& m) {
         py_auto_context.def(
             "get_socket_manager", &AutoContext::get_socket_manager, nb::rv_policy::reference, "Get socket manager");
     }
-
-    // Module-level create_tensor functions for creating autograd tensors
-    m.def(
-        "create_tensor",
-        [](const tt::tt_metal::Tensor& value, bool requires_grad) -> TensorPtr {
-            return create_tensor(value, requires_grad);
-        },
-        nb::arg("value"),
-        nb::arg("requires_grad") = true,
-        "Create an autograd Tensor from a tt::tt_metal::Tensor");
-
-    m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
 }
 
 }  // namespace ttml::nanobind::autograd

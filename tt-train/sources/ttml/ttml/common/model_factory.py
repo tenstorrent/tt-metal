@@ -151,7 +151,6 @@ class TransformerModelFactory:
 
     def _create_qwen3(self):
         qcfg = ttml.models.qwen3.Qwen3Config()
-        tc = self.transformer_config
         qcfg.num_heads = int(self.transformer_config.num_heads)
         qcfg.num_groups = int(self.transformer_config.num_groups)
         qcfg.embedding_dim = int(self.transformer_config.embedding_dim)
