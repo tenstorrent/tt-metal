@@ -22,6 +22,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
@@ -45,6 +46,8 @@ def read_ring_buffer(
     """Read watcher ring buffer for the core. Returns None if ring buffer is empty or unreadable."""
     try:
         fw_path = dispatcher_data.get_cached_core_data(location, risc_name).firmware_path
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         return None
 
