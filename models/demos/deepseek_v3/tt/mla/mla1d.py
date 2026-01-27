@@ -25,7 +25,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     PermuteConfig,
     ReshardConfig,
-    SavedWeight,
     SliceConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -34,7 +33,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
-    shard_and_save,
     sub_state_dicts,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -46,6 +44,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -89,7 +88,6 @@ class MLA1D(AbstractModule):
         linear_weight_configs = {  # TODO: add dequant
             ttnn_name: {
                 "input_tensor_b": cls._convert_weight(
-                    output_path / f"{ttnn_name}.input_tensor_b",
                     dequantize(
                         get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
                         get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
@@ -127,7 +125,6 @@ class MLA1D(AbstractModule):
         fused_weight_configs = {
             "wq_kv_a": {
                 "input_tensor_b": cls._convert_weight(
-                    output_path / "wq_kv_a.input_tensor_b",
                     wq_kv_a_weight,
                     (0, -2),  # Shard along input dim
                     mesh_device,
@@ -157,33 +154,27 @@ class MLA1D(AbstractModule):
             **linear_weight_configs,
             **fused_weight_configs,
             "wkv_b1": {
-                "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
-                ),
+                "input_tensor_b": cls._convert_weight(torch_weights_k, (0, -3), mesh_device),
             },
             "wkv_b2": {
-                "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, None), mesh_device
-                ),
+                "input_tensor_b": cls._convert_weight(torch_weights_v, (0, None), mesh_device),
             },
         }
 
     @classmethod
     def _convert_weight(
         cls,
-        path: Path,
         torch_metaweight: torch.Tensor,
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
-    ) -> SavedWeight:
-        return shard_and_save(
-            path,
-            torch_metaweight.transpose(-2, -1),
+    ) -> WeightSpec:
+        return WeightSpec(
+            torch_tensor=torch_metaweight,
             shard_dims=dims,
-            mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocessor=lambda t: t.transpose(-2, -1),
         )
 
     @classmethod

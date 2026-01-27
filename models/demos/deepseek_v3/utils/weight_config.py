@@ -253,6 +253,7 @@ def get_weight_config(
 
     # Convert any WeightSpec objects to SavedWeight
     weight_config = convert_weight_specs_in_config(weight_spec_config, weight_cache_path, mesh_device)
+    del weight_spec_config
 
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)

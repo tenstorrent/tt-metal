@@ -78,6 +78,10 @@ def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
             # Dequantize using the scale
             dequantized_tensor = dequantize(tensor, scale_tensor, hf_config.quantization_config["weight_block_size"])
             dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+            # Free intermediate tensors to reduce memory pressure
+            # Note: The original tensor might be from LazyStateDict (mmap), so we don't delete it
+            # But we can free the dequantized intermediate if it's a copy
+            del dequantized_tensor
         else:
             dequantized_state_dict[name] = tensor.to(dtype)
 
