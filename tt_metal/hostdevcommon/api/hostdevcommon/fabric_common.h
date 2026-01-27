@@ -492,18 +492,19 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
-enum RouterCommand : std::uint32_t {
-    RUN = 0, // ACTIVATE
+enum class RouterCommand : std::uint32_t {
+    // The main state where messages and credits are forwarded
+    RUN = 0, 
 
-    //
+    // The router enters the pause state, which is the "hub" transitionary state to other states.
+    // When paused, no messages/credits are processed by the router
     PAUSE = 1,
 
-    //
-    STOP = 2,
-
-    //
+    // The router accepts messages but drops them instead of forwarding them. 
+    // The pipe to /dev/null of TT-Fabric
     DRAIN = 3,
 
+    // Commands the router to make one link retrain attempt
     RETRAIN = 4
 };
 

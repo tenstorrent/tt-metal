@@ -25,7 +25,7 @@ constexpr uint32_t WORKER_TEARDOWN = 1;
 
 void kernel_main() {
     // Extract compile-time args
-    constexpr uint32_t source_buffer_address = get_compile_time_arg_val(0);
+    [[maybe_unused]] constexpr uint32_t source_buffer_address = get_compile_time_arg_val(0);
     constexpr uint32_t packet_payload_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t teardown_signal_address = get_compile_time_arg_val(2);
     constexpr uint32_t virt_noc_x = get_compile_time_arg_val(3);
@@ -35,7 +35,7 @@ void kernel_main() {
     // Extract runtime args
     size_t arg_idx = 0;
     uint32_t dest_chip_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t dest_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] uint32_t dest_mesh_id = get_arg_val<uint32_t>(arg_idx++);
 
     // Build individual fabric connection from runtime args and open it
     auto fabric_connection =

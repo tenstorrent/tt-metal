@@ -2017,7 +2017,7 @@ void run_retrain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile t
     }
 
     // PAUSED is the only legal output state
-    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterStateCommon::PAUSED);
+    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
 };
 
 // Input State(s): PAUSED
@@ -2028,7 +2028,7 @@ void run_drain_step(tt_l1_ptr RouterStateManager* state_manager_l1, volatile tt:
     while (reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::DRAIN && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
     }
 
-    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterStateCommon::PAUSED);
+    ASSERT(reinterpret_cast<tt_l1_ptr RouterStateManager*>(state_manager_l1)->command == RouterCommand::PAUSE);
 };
 
 
@@ -2417,9 +2417,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             switch (reinterpret_cast<volatile tt_l1_ptr RouterStateManager*>(state_manager_l1)->command) {
                 case RouterCommand::RUN:
-                    if constexpr (MY_ERISC_ID == 0) {
-                        state_manager_l1->state = RouterStateCommon::RUNNING;
-                    }
+                    state_manager_l1->state = RouterStateCommon::RUNNING;
                     execute_main_loop();
                     break;
                 case RouterCommand::PAUSE:

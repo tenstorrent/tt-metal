@@ -17,7 +17,7 @@ FabricCommandInterface::FabricCommandInterface([[maybe_unused]] ControlPlane& co
 void FabricCommandInterface::pause_routers(const ControlPlane& control_plane) const {
     // FR-4: Issue PAUSE command to all active routers
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const auto router_cmd_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
@@ -40,7 +40,7 @@ void FabricCommandInterface::pause_routers(const ControlPlane& control_plane) co
 void FabricCommandInterface::resume_routers(const ControlPlane& control_plane) const {
     // FR-4: Issue RUN command to all active routers
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const auto router_cmd_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
@@ -65,7 +65,7 @@ bool FabricCommandInterface::all_routers_in_state(
     RouterStateCommon expected_state) const {
     // FR-5: Check if all routers are in specified state
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const auto router_state_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);
@@ -147,7 +147,7 @@ bool FabricCommandInterface::wait_for_state(
                     tt_cxy_pair(physical_chip_id, eth_core),
                     router_state_addr);
 
-                log_info(LogTest, "Router state: {} (fabric_node_id: {}, channel_id: {})", state, fabric_node_id.mesh_id, fabric_node_id.chip_id, channel_id);
+                log_debug(LogTest, "Router state: {} (fabric_node_id: (m={}, c={}), channel_id: {})", state, fabric_node_id.mesh_id, fabric_node_id.chip_id, channel_id);
             }
             return false;
         }
@@ -163,7 +163,7 @@ RouterStateCommon FabricCommandInterface::get_router_state(
     chan_id_t channel_id) const {
     // FR-5: Query state of specific router
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const auto router_state_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);

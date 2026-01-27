@@ -54,19 +54,15 @@ TelemetryMap capture_telemetry(MeshId mesh_id, size_t num_devices) {
     for (size_t device_idx = 0; device_idx < num_devices; ++device_idx) {
         FabricNodeId node_id(mesh_id, static_cast<uint32_t>(device_idx));
 
-        try {
-            // Call the fabric telemetry reader API directly
-            auto samples = tt::tt_fabric::read_fabric_telemetry(node_id);
+        // Call the fabric telemetry reader API directly
+        auto samples = tt::tt_fabric::read_fabric_telemetry(node_id);
 
-            for (const auto& sample : samples) {
-                if (sample.snapshot.dynamic_info.has_value()) {
-                    const auto& dyn = sample.snapshot.dynamic_info.value();
-                    uint64_t key = make_channel_key(sample.fabric_node_id, sample.channel_id);
-                    snapshot[key] = dyn.tx_bandwidth.words_sent + dyn.rx_bandwidth.words_sent;
-                }
+        for (const auto& sample : samples) {
+            if (sample.snapshot.dynamic_info.has_value()) {
+                const auto& dyn = sample.snapshot.dynamic_info.value();
+                uint64_t key = make_channel_key(sample.fabric_node_id, sample.channel_id);
+                snapshot[key] = dyn.tx_bandwidth.words_sent + dyn.rx_bandwidth.words_sent;
             }
-        } catch (const std::exception&) {
-            // Ignore - some nodes may not have active telemetry
         }
     }
     return snapshot;
@@ -141,9 +137,7 @@ protected:
                  mesh_device_->id(), worker_core.x, worker_core.y);
     }
 
-
-protected:
-    WorkerMemoryLayout memory_layout_;
+    WorkerMemoryLayout memory_layout_{};
     std::shared_ptr<tt_metal::Program> program_;
     std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device_;
 };

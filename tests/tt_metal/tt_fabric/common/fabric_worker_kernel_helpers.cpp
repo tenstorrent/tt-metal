@@ -26,7 +26,7 @@ constexpr uint32_t SOURCE_BUFFER_SIZE = 0x1000;  // 4KB for source buffer
 WorkerMemoryLayout allocate_worker_memory(
     [[maybe_unused]] const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
 
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     // Get the unreserved L1 base address for Tensix cores from HAL
     uint32_t l1_unreserved_base = hal.get_dev_addr(
@@ -35,7 +35,7 @@ WorkerMemoryLayout allocate_worker_memory(
     // Get L1 alignment requirement
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
-    WorkerMemoryLayout layout;
+    WorkerMemoryLayout layout{};
 
     // Source buffer: starts at unreserved base, aligned
     layout.source_buffer_address = tt::align(l1_unreserved_base, l1_alignment);
@@ -67,7 +67,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     CoreCoord remote_logical_core(0, 0);
 
     // Get remote buffer address from HAL (use unreserved L1 space on remote core)
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t remote_buffer_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
 
