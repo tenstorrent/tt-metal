@@ -388,7 +388,7 @@ def decode_forward(
     output_all_reduced = ttnn.all_reduce(
         output,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=memory_config,
     )
