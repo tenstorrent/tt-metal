@@ -415,14 +415,14 @@ class DeepseekGenerator:
         assert hasattr(self, "mesh_device") and self.mesh_device is not None
         assert hasattr(self, "batch_size_per_row") and self.batch_size_per_row is not None
         assert hasattr(self, "hf_config") and self.hf_config is not None
-        self.page_tables_tt = tuple(
-            MLA2D.create_page_table(
-                paged_config=self.paged_config,
-                mesh_device=self.mesh_device,
-                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
-            )
-            for _ in range(self.hf_config.num_hidden_layers)
+
+        # Allocate once and reuse across all layers to save memory and startup time
+        single_page_table = MLA2D.create_page_table(
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
         )
+        self.page_tables_tt = tuple(single_page_table for _ in range(self.hf_config.num_hidden_layers))
         return self.page_tables_tt
 
     def _decode_step(
@@ -650,7 +650,8 @@ class DeepseekGenerator:
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
                 for gen_idx in range(decode_steps):
-                    logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
+                    if gen_idx % 20 == 0 or gen_idx == decode_steps - 1:
+                        logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
                     logits = self.decode_forward(
                         next_tokens,
@@ -865,7 +866,7 @@ class DeepseekGenerator:
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
         logger.info(f"Rope tensors done")
 
-        # TODO: Fix this for vLLM
+        # TODO: Fix this for vLLM - page_tables should be passed as input to the trace or updated dynamically
         self._trace_output = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
@@ -941,9 +942,10 @@ class DeepseekGenerator:
             profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
             profiler.end(f"trace_execution_{gen_idx}")
-            logger.info(
-                f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
-            )
+            if gen_idx % 20 == 0 or gen_idx == 127:  # Log periodically or for benchmarking steps
+                logger.info(
+                    f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
+                )
             assert self._trace_output is not None
             logits = ttnn.to_torch(
                 self._trace_output,
@@ -1048,7 +1050,7 @@ class DeepseekGenerator:
         )
 
         num_layers = self.hf_config.num_hidden_layers
-        return tuple(ttnn.clone(page_table_tt) for _ in range(num_layers))
+        return tuple(page_table_tt for _ in range(num_layers))
 
     def _convert_vllm_page_table_for_batch(self, page_table: torch.Tensor) -> tuple[ttnn.Tensor, ...]:
         """
