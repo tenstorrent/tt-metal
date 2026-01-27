@@ -173,8 +173,18 @@ Op2DSliceConfig determine_slice_config(
     const uint32_t output_sliced_dim =
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
+    uint32_t slice_rounding_value = 1;
+    uint32_t max_num_slices = 0;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        slice_rounding_value = (return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT)
+                                   ? tt::constants::TILE_HEIGHT
+                                   : tt::constants::TILE_WIDTH;
+        max_num_slices = tt::div_up(output_sliced_dim, slice_rounding_value);
+    } else {
+        max_num_slices = (output_sliced_dim > 1) ? (output_sliced_dim - 1) : 1;
+    }
     bool found_valid_config = false;
-    while (current_num_slices <= ((output_sliced_dim + 1) / 2)) {
+    while (current_num_slices <= max_num_slices) {
         return_slice_config.num_slices = current_num_slices;
         uint32_t l1_usage = compute_L1_usage_for_slice_config(
             input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
@@ -201,12 +211,10 @@ Op2DSliceConfig determine_slice_config(
         const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
         return_slice_config.num_slices = std::min(return_slice_config.num_slices, max_slices);
     }
-    if (auto_slice_type && current_num_slices > ((output_sliced_dim - 1) / 2) &&
-        output_layout == tt::tt_metal::Layout::TILE &&
+    if (auto_slice_type && current_num_slices > max_num_slices &&
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-        // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
-        // TILE_HEIGHT constraint.
-        //  In this case, we switch to height slicing and try again.
+        // Could not find a suitable number of slices for width slicing.
+        // In this case, we switch to height slicing and try again.
         return determine_slice_config(
             op_slice_attr,
             input_shape,
@@ -262,7 +270,12 @@ void run_sliced_op(
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
-    uint32_t max_num_slices = tt::div_up(output_sliced_dim, slice_rounding_value);
+    uint32_t max_num_slices = 0;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        max_num_slices = tt::div_up(output_sliced_dim, slice_rounding_value);
+    } else {
+        max_num_slices = (output_sliced_dim > 1) ? (output_sliced_dim - 1) : 1;
+    }
     if (max_num_slices == 1) {
         log_debug(
             tt::LogOp,
@@ -273,7 +286,11 @@ void run_sliced_op(
             output_layout,
             dram_slice_config.slice_type);
     }
-    dram_slice_config.num_slices = std::min(dram_slice_config.num_slices, max_num_slices);
+    TT_FATAL(
+        dram_slice_config.num_slices <= max_num_slices,
+        "Number of slices ({}) exceeds the maximum allowed ({}) for the given output dimension and alignment.",
+        dram_slice_config.num_slices,
+        max_num_slices);
 
     if (dram_slice_config.num_slices == 1) {
         for (auto& this_output_tensor : output_tensors) {
