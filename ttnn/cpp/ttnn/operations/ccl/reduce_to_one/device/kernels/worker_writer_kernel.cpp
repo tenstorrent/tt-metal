@@ -4,11 +4,15 @@
 ///
 // Worker writer kernel: non-bottom cores (rows 0,1,2) assemble packets and send to bottom core via NOC.
 //
+// CB convention (unified across all roles):
+//   - source_cb: LEAF uses local_cb (input), others use output_cb (compute output)
+//
 // Workers:
-// 1. Allocate packet header from PacketHeaderPool
-// 2. Set up header with fused write+atomic_inc (data + semaphore increment)
-// 3. Copy (header, payload) to bottom core's packet buffer slot
-// 4. Signal arrival to bottom core
+// 1. Wait for data in source_cb
+// 2. Allocate packet header from PacketHeaderPool
+// 3. Set up header with fused write+atomic_inc (data + semaphore increment)
+// 4. Copy (header, payload) to bottom core's packet buffer slot
+// 5. Signal arrival to bottom core
 //
 // Early exits for ROOT1 device (output is in-place, no sending needed).
 
@@ -26,12 +30,16 @@ void kernel_main() {
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
     constexpr uint32_t source_cb = get_compile_time_arg_val(1);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);  // Total payload size
     constexpr uint32_t packet_cb = get_compile_time_arg_val(4);  // CB index for worker packets
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     // ROOT1 doesn't send - early exit
     if constexpr (device_role == MESH_ROOT1) {
+        // tt_l1_ptr routing_l1_info_t* routing_table =
+        // reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        // uint16_t my_chip_id = routing_table->my_device_id;
+        // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
         return;
     }
 
@@ -54,8 +62,8 @@ void kernel_main() {
     // Workers write to bottom core's packet_cb at this address
     const uint32_t packet_buffer_addr = get_write_ptr(packet_cb);
 
-    // Payload size
-    const uint32_t payload_size = page_bytes * num_tiles;
+    // Payload size is already the total (passed as payload_size_bytes from host)
+    const uint32_t payload_size = payload_size_bytes;
 
     // Allocate and set up packet header
     auto route_id = PacketHeaderPool::allocate_header_n(1);
@@ -80,8 +88,18 @@ void kernel_main() {
     uint64_t header_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, header_dest_addr);
     uint64_t payload_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, payload_dest_addr);
 
+    // Debug: print destination semaphore info
+    // DPRINT << "worker dst_sem: noc_x=" << my_noc_x << " noc_y=" << my_noc_y
+    //        << " sem_addr=" << dst_sem_addr << " l1_addr=" << dst_l1_addr << ENDL();
+
     // Wait for data in source CB
     cb_wait_front(source_cb, num_tiles);
+    // DPRINT << "worker writer wait done " << source_cb <<ENDL();
+    // tt_l1_ptr routing_l1_info_t* routing_table =
+    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    // uint16_t my_chip_id = routing_table->my_device_id;
+    // DPRINT << "worker writer wait done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
+
     uint32_t data_addr = get_read_ptr(source_cb);
 
     // Send header to bottom core
@@ -101,4 +119,9 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+    // tt_l1_ptr routing_l1_info_t* routing_table =
+    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    // uint16_t my_chip_id = routing_table->my_device_id;
+    // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
 }
