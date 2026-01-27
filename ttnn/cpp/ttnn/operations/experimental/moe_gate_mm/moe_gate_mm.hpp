@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/base_types.hpp>
