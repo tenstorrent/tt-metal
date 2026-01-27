@@ -714,7 +714,7 @@ class DispatchPackedWriteLargeUnicastTestFixture : public DispatchPackedWriteTes
         const CoreCoord& worker_coord,
         bool is_discard) {
         CQDispatchWritePackedLargeUnicastSubCmd sub_cmd{};
-        
+
         if (is_discard) {
             // Use sentinel value to discard data
             sub_cmd.noc_xy_addr = 0;  // Unused for discard
@@ -748,7 +748,7 @@ protected:
 
             TransactionBatch transaction_batch =
                 generate_packed_large_unicast_transactions(remaining_bytes, max_transactions, l1_alignment);
-            
+
             if (transaction_batch.sizes.empty()) {
                 break;
             }
@@ -758,11 +758,12 @@ protected:
 
             for (const uint32_t xfer_size_bytes : transaction_batch.sizes) {
                 // Randomly select a worker core for this transaction
-                const CoreCoord& worker_core = worker_cores[payload_generator_->get_rand<size_t>(0, worker_cores.size() - 1)];
-                
+                const CoreCoord& worker_core =
+                    worker_cores[payload_generator_->get_rand<size_t>(0, worker_cores.size() - 1)];
+
                 // Randomly decide if this transaction should be discarded (20% chance)
                 bool is_discard = payload_generator_->get_rand<int>(0, 4) == 0;
-                
+
                 uint32_t addr = 0;
                 if (!is_discard) {
                     addr = device_data.get_result_data_addr(worker_core);
@@ -772,11 +773,13 @@ protected:
                 build_sub_cmd(sub_cmds, xfer_size_bytes, addr, worker_core, is_discard);
 
                 // Generate payload
-                std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(worker_core, xfer_size_bytes);
+                std::vector<uint32_t> payload =
+                    payload_generator_->generate_payload_with_core(worker_core, xfer_size_bytes);
 
                 // Update expected data model only for non-discarded writes
                 if (!is_discard) {
-                    DeviceDataUpdater::update_packed_large_unicast_write(payload, device_data, worker_core, l1_alignment);
+                    DeviceDataUpdater::update_packed_large_unicast_write(
+                        payload, device_data, worker_core, l1_alignment);
                 }
 
                 payloads.push_back(std::move(payload));

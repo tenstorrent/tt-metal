@@ -866,24 +866,24 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
         uint32_t dst_addr = sub_cmd_ptr->addr;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
-        
+
         // Check if this is a discard transaction
         bool is_discard = (dst_addr == CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD);
-        
+
         if (!is_discard) {
             // Normal unicast write
             dst_addr += local_write_offset;
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            
+
             while (length != 0) {
                 // More data needs to be written, but we've exhausted the CB. Acquire more pages.
                 uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
-                
+
                 // Transfer size is min(remaining_length, data_available_in_cb)
                 uint32_t xfer_size = (length > available_data) ? available_data : length;
-                
+
                 noc_async_write(data_ptr, get_noc_addr_helper(dst_noc, dst_addr), xfer_size);
-                
+
                 length -= xfer_size;
                 data_ptr += xfer_size;
                 dst_addr += xfer_size;
@@ -893,9 +893,9 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
             uint32_t remaining_length = length;
             while (remaining_length != 0) {
                 uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
-                
+
                 uint32_t skip_size = (remaining_length > available_data) ? available_data : remaining_length;
-                
+
                 data_ptr += skip_size;
                 remaining_length -= skip_size;
             }

@@ -1148,14 +1148,12 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_unicast_inte
     };
     uint32_t sub_cmd_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
     CQDispatchCmd* write_packed_large_unicast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sub_cmd_size);
-    char* write_packed_large_unicast_sub_cmds_dst =
-        (char*)write_packed_large_unicast_cmd_dst + sizeof(CQDispatchCmd);
+    char* write_packed_large_unicast_sub_cmds_dst = (char*)write_packed_large_unicast_cmd_dst + sizeof(CQDispatchCmd);
 
     if constexpr (hugepage_write) {
         alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_large_unicast_cmd{};
         initialize_write_packed_large_unicast_cmd(&write_packed_large_unicast_cmd);
-        this->memcpy(
-            write_packed_large_unicast_cmd_dst, &write_packed_large_unicast_cmd, sizeof(CQDispatchCmd));
+        this->memcpy(write_packed_large_unicast_cmd_dst, &write_packed_large_unicast_cmd, sizeof(CQDispatchCmd));
     } else {
         initialize_write_packed_large_unicast_cmd(write_packed_large_unicast_cmd_dst);
     }
