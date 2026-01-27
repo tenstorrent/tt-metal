@@ -324,9 +324,13 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> nb::list {
             auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
-            return std::vector<uint32_t>(result.cbegin(), result.cend());
+            nb::list py_list;
+            for (auto val : result) {
+                py_list.append(val);
+            }
+            return py_list;
         },
         nb::arg("unpadded_shape"),
         R"doc(

@@ -85,21 +85,58 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
             "Beta must be BF16 or FLOAT32.");
         TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
 
-        auto check_layout = [&](const Tensor& t, const std::string& name) {
+        auto check_weight_bias_shape = [&](const Tensor& t, const std::string& name) {
+            const auto& shape = t.padded_shape();
+            const uint32_t ndims = shape.rank();
+
+            // Weight/bias must have 1-input rank dimensions
+            TT_FATAL(
+                ndims >= 1 && ndims <= a.padded_shape().rank(),
+                "{} must have 1-{} dimensions, got: {}",
+                name,
+                a.padded_shape().rank(),
+                ndims);
+
             if (t.layout() == Layout::TILE) {
-                TT_FATAL(t.padded_shape()[-2] == TILE_HEIGHT, "{} height must be TILE_HEIGHT (32)", name);
-                TT_FATAL(t.padded_shape()[-1] == a.padded_shape()[-1], "{} hidden dimension must match input.", name);
+                // For TILE layout: last dim must match input hidden dim
+                TT_FATAL(
+                    shape[-1] == a.padded_shape()[-1],
+                    "{} hidden dimension must match input. Got {} vs {}",
+                    name,
+                    shape[-1],
+                    a.padded_shape()[-1]);
+                // Second-to-last dim must be TILE_HEIGHT (32)
+                TT_FATAL(shape[-2] == TILE_HEIGHT, "{} height must be TILE_HEIGHT (32), got: {}", name, shape[-2]);
             } else {
                 TT_FATAL(t.layout() == Layout::ROW_MAJOR, "{} must be TILE or ROW_MAJOR", name);
                 TT_FATAL(
-                    t.padded_shape()[-1] == TILE_WIDTH &&
-                        t.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH,
+                    shape[-1] == TILE_WIDTH && t.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH,
                     "{} dimensions must align with input.",
                     name);
             }
+
+            // Check batch dimension (dim[-3]) if it exists
+            if (ndims >= 3) {
+                bool is_batched = shape[-3] > 1;
+                TT_FATAL(
+                    shape[-3] == 1 || shape[-3] == a.padded_shape()[-3],
+                    "{} batch dimension (dim[-3]) must be 1 or match input batch ({}), got: {}",
+                    name,
+                    a.padded_shape()[-3],
+                    shape[-3]);
+
+                // Batch broadcasting only supported for TILE layout
+                if (is_batched) {
+                    TT_FATAL(
+                        t.layout() == Layout::TILE,
+                        "{} with batch dimension > 1 must use TILE layout. ROW_MAJOR layout does not support batch "
+                        "broadcasting.",
+                        name);
+                }
+            }
         };
-        check_layout(gamma_tensor, "Gamma");
-        check_layout(beta_tensor, "Beta");
+        check_weight_bias_shape(gamma_tensor, "Gamma");
+        check_weight_bias_shape(beta_tensor, "Beta");
     } else {
         TT_FATAL(!beta.has_value(), "Beta must not be provided without gamma.");
     }
