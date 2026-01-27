@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# TT-Metalium Stable API Headers
+target_sources(
+    tt_metal
+    PUBLIC
+        FILE_SET api
+        FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/allocator.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/base_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/bfloat16.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/bfloat4.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/bfloat8.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/buffer_distribution_spec.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/buffer_page_mapping.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/buffer_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer_config.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer_constants.h
+            ${CMAKE_CURRENT_SOURCE_DIR}/cluster.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/constants.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/data_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/device.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_core_common.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/distributed.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/distributed_context.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/event.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/global_circular_buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/global_semaphore.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/graph_tracking.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/hal.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/hal_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/host_api.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/host_buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernel_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/math.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/maybe_remote.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/memory_pin.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/memory_reporter.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_config.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_coord.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace_id.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/profiler_optional_metadata.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/profiler_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/program.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/program_cache.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/program_descriptors.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/queue_id.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime_args_data.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/shape.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/shape_base.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/sub_device.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/sub_device_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tensor_accessor_args.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tile.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tilize_utils.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tt_align.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal_profiler.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/vector_aligned.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/work_split.hpp
+)
+
+# Load experimental API headers from subdirectory
+add_subdirectory(experimental)
