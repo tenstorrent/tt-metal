@@ -816,12 +816,12 @@ CoreConfig YamlConfigParser::parse_core_coord(const YAML::Node& node) {
     if (node.IsSequence()) {
         TT_FATAL(node.size() == 2, "Expected core coordinates to be a sequence of [x, y]");
         return tt::tt_metal::CoreCoord(parse_scalar<size_t>(node[0]), parse_scalar<size_t>(node[1]));
-    } 
+    }
     if (node.IsScalar()) {
         std::string field = parse_scalar<std::string>(node);
         TT_FATAL(field == "all", "Core field was not provided as a coordinate, thus must be string option 'all' to indicate core sweep. Instead got string: '{}'", field);
         return field;
-    } 
+    }
 
     TT_THROW("Expected core coordinates to be a sequence of [x, y], or 'all'.");
 }
