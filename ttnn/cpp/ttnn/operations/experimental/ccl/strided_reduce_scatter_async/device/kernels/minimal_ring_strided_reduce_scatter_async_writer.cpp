@@ -17,6 +17,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "strided_ring_reduce_scatter_common.hpp"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;

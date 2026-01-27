@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <utility>
 #include "api/debug/dprint.h"
+#include "strided_ring_reduce_scatter_common.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -175,6 +176,8 @@ void kernel_main() {
                         // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         // DPRINT << "direction_offset: " << direction_offset << ENDL();
+                        // uint32_t effective_chunk_width_in_tiles = get_effective_chunk_width_in_tiles(chunk_idx,
+                        // chunk_width, slice_Wt);
 
                         cb_reserve_back(cb_in0, tile_granularity);
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
