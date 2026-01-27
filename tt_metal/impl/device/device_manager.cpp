@@ -930,7 +930,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         }
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
-        // Wrap in try-catch so that device close continues even if dispatch cores timeout.
+        // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
         try {
@@ -938,7 +938,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         } catch (const std::exception& e) {
             log_warning(
                 LogMetal,
-                "Device {}: Timeout waiting for dispatch cores to finish during device close. "
+                "Device {}: Exception waiting for dispatch cores to finish during device close. "
                 "Continuing with device cleanup. Error: {}",
                 dev_id,
                 e.what());
