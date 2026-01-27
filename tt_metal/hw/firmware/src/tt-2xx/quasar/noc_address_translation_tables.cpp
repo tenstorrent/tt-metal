@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #include "noc_address_translation_tables.hpp"
 #include "noc_address_translation_table_a_reg.h"
@@ -16,6 +17,7 @@
 
 #endif
 
+// Enable or disable address translation and dynamic routing features
 void noc_address_translation_table_en(bool en_address_translation, bool en_dynamic_routing) {
     NOC_ADDRESS_TRANSLATION_TABLE_ENABLE_TABLES_reg_u ctrl;
     ctrl.f.en_address_translation = en_address_translation;
@@ -25,6 +27,7 @@ void noc_address_translation_table_en(bool en_address_translation, bool en_dynam
         ctrl.val);
 }
 
+// Read current status of address translation and dynamic routing enablement
 void noc_address_translation_table_en_read(bool& en_address_translation, bool& en_dynamic_routing) {
     NOC_ADDRESS_TRANSLATION_TABLE_ENABLE_TABLES_reg_u ctrl;
     ctrl.val = NOC_READ_REG(
@@ -33,6 +36,7 @@ void noc_address_translation_table_en_read(bool& en_address_translation, bool& e
     en_dynamic_routing = ctrl.f.en_dynamic_routing;
 }
 
+// Configure clock gating settings for power management with hysteresis control
 void noc_address_translation_table_clk_gating(bool clk_gating_enable, uint32_t clk_gating_hysteresis) {
     NOC_ADDRESS_TRANSLATION_TABLE_CLK_GATING_reg_u ctrl;
     ctrl.f.clk_gating_enable = clk_gating_enable;
@@ -42,6 +46,7 @@ void noc_address_translation_table_clk_gating(bool clk_gating_enable, uint32_t c
         ctrl.val);
 }
 
+// Read current clock gating configuration settings
 void noc_address_translation_table_clk_gating_read(bool& clk_gating_enable, uint32_t& clk_gating_hysteresis) {
     NOC_ADDRESS_TRANSLATION_TABLE_CLK_GATING_reg_u ctrl;
     ctrl.val = NOC_READ_REG(
@@ -50,6 +55,7 @@ void noc_address_translation_table_clk_gating_read(bool& clk_gating_enable, uint
     clk_gating_hysteresis = ctrl.f.clk_gating_hysteresis;
 }
 
+// Configure address translation mask table entry for address matching and endpoint mapping
 void noc_address_translation_table_mask_table_entry(
     uint32_t entry, uint32_t mask, uint64_t compare, uint32_t ep_id_idx, uint32_t ep_id_size, uint32_t table_offset) {
     mask = 64 - mask;
@@ -87,6 +93,7 @@ void noc_address_translation_table_mask_table_entry(
         val);
 }
 
+// Read address translation mask table entry configuration
 void noc_address_translation_table_mask_table_entry_read(
     uint32_t entry,
     uint32_t& mask,
@@ -123,6 +130,7 @@ void noc_address_translation_table_mask_table_entry_read(
     compare = ((uint64_t)val_high << 32) | val_low;
 }
 
+// Configure address translation mask table entry with address rebasing capability
 void noc_address_translation_table_mask_table_entry_rebase(
     uint32_t entry,
     uint32_t mask,
@@ -184,6 +192,7 @@ void noc_address_translation_table_mask_table_entry_rebase(
         val);
 }
 
+// Read address translation mask table entry with rebase configuration
 void noc_address_translation_table_mask_table_entry_rebase_read(
     uint32_t entry,
     uint32_t& mask,
@@ -237,6 +246,7 @@ void noc_address_translation_table_mask_table_entry_rebase_read(
     base = ((uint64_t)val_high << 32) | val_low;
 }
 
+// Configure routing table entry with match pattern and 32-element routing array
 void noc_address_translation_table_routing_table_entry(uint32_t entry, uint32_t compare, uint32_t routing[]) {
     NOC_WRITE_REG(
         NOC_ADDRESS_TRANSLATION_TABLE_A_REG_MAP_BASE_ADDR +
@@ -254,6 +264,7 @@ void noc_address_translation_table_routing_table_entry(uint32_t entry, uint32_t 
     }
 }
 
+// Read routing table entry configuration including match pattern and routing array
 void noc_address_translation_table_routing_table_entry_read(uint32_t entry, uint32_t& compare, uint32_t routing[]) {
     compare = NOC_READ_REG(
         NOC_ADDRESS_TRANSLATION_TABLE_A_REG_MAP_BASE_ADDR +
@@ -269,6 +280,7 @@ void noc_address_translation_table_routing_table_entry_read(uint32_t entry, uint
     }
 }
 
+// Map logical endpoint ID to physical NOC coordinates (x, y)
 void noc_address_translation_table_endpoint_table_entry(uint32_t entry, uint32_t x, uint32_t y) {
     NOC_ADDRESS_TRANSLATION_TABLE_ENDPOINT_TABLE_ENTRY_reg_u ctrl;
     ctrl.f.x = x;
@@ -279,6 +291,7 @@ void noc_address_translation_table_endpoint_table_entry(uint32_t entry, uint32_t
         ctrl.val);
 }
 
+// Read endpoint table entry to get physical coordinates for logical endpoint
 void noc_address_translation_table_endpoint_table_entry_read(uint32_t entry, uint32_t& x, uint32_t& y) {
     NOC_ADDRESS_TRANSLATION_TABLE_ENDPOINT_TABLE_ENTRY_reg_u ctrl;
     ctrl.val = NOC_READ_REG(
