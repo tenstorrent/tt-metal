@@ -439,17 +439,6 @@ void kernel_main() {
 #ifdef USE_MUX
                 uint32_t device_iter = (k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter)) /
                                        (K_num_blocks / num_devices);  // which device this k_block is coming from
-                bool is_receiving_core_remote =
-                    in0_core_order_index >= (in0_core_order_size - remote_block_core_order_size);
-                bool is_receiving_core_local = false;
-                if (!use_backward) {
-                    is_receiving_core_local =
-                        (in0_core_order_index >= (in0_core_order_size - local_block_core_order_size));
-                } else {
-                    is_receiving_core_local =
-                        ((in0_core_order_index >= (in0_core_order_size - local_block_core_order_size * 2)) &&
-                         (in0_core_order_index < (in0_core_order_size - local_block_core_order_size)));
-                }
                 k_block = compute_actual_k_block(
                     k_block_iter,
                     K_num_blocks,
@@ -459,11 +448,8 @@ void kernel_main() {
                     k_forward,
                     n_block_iter == 0,
                     use_backward ? out_ready_sem_backward_addr_ptr : out_ready_sem_forward_addr_ptr,
-                    use_backward ? out_ready_sem_injector_noc_addr_backward_in_pkt
-                                 : out_ready_sem_injector_noc_addr_forward_in_pkt,
                     use_backward ? sem_target_backward : sem_target_forward,
                     is_injector_core,
-                    (device_iter > 2) ? is_receiving_core_remote : is_receiving_core_local,
                     use_backward ? slices_received_backward : slices_received_forward,
                     (device_iter > 2) ? remote_block_core_order_size : local_block_core_order_size);
 #endif
