@@ -16,6 +16,7 @@ struct ExecuteSelectiveReduceCombine {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& dense_input_tensor,
         const ttnn::Tensor& dense_metadata_tensor,
+        const ttnn::Tensor& dense_token_maps_tensor,
         const ttnn::Tensor& dense_token_counts_tensor,
         uint32_t hidden_size,
         uint32_t batch_size,
