@@ -64,7 +64,7 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
         auto tensor = tensor_ptr->get_value();
         auto params_in_tensor = tensor.logical_volume();
         if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
-            auto tp_size = ttml::autograd::ctx().get_parallelism_context()->get_tp_size();
+            auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
             num_params += params_in_tensor * tp_size;
         } else {
             num_params += params_in_tensor;
@@ -468,12 +468,12 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                auto pctx = ttml::autograd::ctx().get_parallelism_context();
+                const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
 
-                if (pctx->is_ddp_enabled()) {
+                if (pctx.is_ddp_enabled()) {
                     // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
                     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
-                        *device, /*dim=*/0, /*cluster_axis=*/pctx->get_ddp_axis());
+                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -519,7 +519,7 @@ int main(int argc, char **argv) {
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
                 const auto coef =
-                    (device_config.enable_tp ? ttml::autograd::ctx().get_parallelism_context()->get_tp_size() : 1U) *
+                    (device_config.enable_tp ? ttml::autograd::ctx().get_parallelism_context().get_tp_size() : 1U) *
                     32U;
                 arg.vocab_size = (arg.vocab_size + coef - 1) / coef * coef;
             } else {
@@ -646,7 +646,7 @@ int main(int argc, char **argv) {
     }
 
     if (device_config.enable_ddp) {
-        auto dp_size = ttml::autograd::ctx().get_parallelism_context()->get_ddp_size();
+        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_ddp_size();
         if (training_config.batch_size % dp_size != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",

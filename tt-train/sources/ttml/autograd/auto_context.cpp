@@ -145,18 +145,18 @@ ParallelismContext::ParallelismContext(
         m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
     }
 }
-[[nodiscard]] std::shared_ptr<const ParallelismContext> AutoContext::get_parallelism_context() {
+[[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
     if (!m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is not initialized.");
     }
-    return m_parallelism_context;
+    return *m_parallelism_context;
 }
 
 void AutoContext::initialize_parallelism_context(bool enable_ddp, bool enable_tp) {
     if (m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
-    m_parallelism_context = std::make_shared<ParallelismContext>(get_device(), enable_ddp, enable_tp);
+    m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), enable_ddp, enable_tp);
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {

@@ -82,9 +82,9 @@ int main(int argc, char** argv) {
     ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/false);
 
     // Get parallelism parameters from context
-    auto pctx = ttml::autograd::ctx().get_parallelism_context();
-    const auto dp_axis = pctx->get_ddp_axis();
-    const auto dp_size = pctx->get_ddp_size();
+    const auto& pctx = ttml::autograd::ctx().get_parallelism_context();
+    const auto dp_axis = pctx.get_ddp_axis();
+    const auto dp_size = pctx.get_ddp_size();
 
     fmt::print("DDP enabled: {} devices, dp_axis: {}\n", dp_size, dp_axis.value_or(0));
 

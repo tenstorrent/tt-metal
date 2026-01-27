@@ -98,11 +98,11 @@ int main(int argc, char** argv) {
     ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/true);
 
     // Get parallelism parameters from context
-    auto pctx = ttml::autograd::ctx().get_parallelism_context();
-    auto dp_axis = pctx->get_ddp_axis();
-    auto tp_axis = pctx->get_tp_axis();
-    const uint32_t dp_size = pctx->get_ddp_size();
-    const uint32_t tp_size = pctx->get_tp_size();
+    const auto& pctx = ttml::autograd::ctx().get_parallelism_context();
+    auto dp_axis = pctx.get_ddp_axis();
+    auto tp_axis = pctx.get_tp_axis();
+    const uint32_t dp_size = pctx.get_ddp_size();
+    const uint32_t tp_size = pctx.get_tp_size();
 
     TT_FATAL(num_features % tp_size == 0, "num_features must be divisible by tp_size (going to be sharded)");
     TT_FATAL(num_targets % tp_size == 0, "num_targets must be divisible by tp_size (going to be sharded)");

@@ -306,7 +306,7 @@ void py_module(nb::module_& m) {
             "Initialize parallelism context with DDP and TP settings");
         py_auto_context.def(
             "get_parallelism_context",
-            [](AutoContext& self) -> const ParallelismContext* { return self.get_parallelism_context().get(); },
+            [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
             nb::rv_policy::reference,
             "Get parallelism context");
     }

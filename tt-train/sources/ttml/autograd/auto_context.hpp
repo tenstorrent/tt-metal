@@ -103,7 +103,7 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
-    [[nodiscard]] std::shared_ptr<const ParallelismContext> get_parallelism_context();
+    [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
 
     void initialize_parallelism_context(bool enable_ddp, bool enable_tp);
 
@@ -125,7 +125,7 @@ private:
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
-    std::shared_ptr<const ParallelismContext> m_parallelism_context;
+    std::unique_ptr<ParallelismContext> m_parallelism_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };
