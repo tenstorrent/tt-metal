@@ -431,7 +431,13 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
+            ttnn::softmax,
+            device,
+            input_spec,
+            dim_arg,
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // compute_kernel_config
+            true);         // numeric_stable
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported

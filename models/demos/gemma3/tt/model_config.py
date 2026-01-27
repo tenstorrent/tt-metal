@@ -877,9 +877,7 @@ class ModelArgs(TTModelArgs):
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
-        model_specific_ceil_warmup_lengths = {
-            # e.g. "gemma-3-4b": 4096
-        }
+        model_specific_ceil_warmup_lengths = {"gemma-3-4b": 65536}
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
         if max_seq_len_to_warmup > self.capped_warmup_seq_len:
