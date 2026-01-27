@@ -733,3 +733,112 @@ inline void mcast_sender_read_col_and_send(
         read_tiles_by_col(cb_idx, addr_gen, tile_start, num_tiles, tile_bytes, col_stride, block_size);
     }
 }
+
+/**
+ * Complete sender-side multicast operation for batched column reads with padding support.
+ * Reads multiple columns from DRAM (strided access), multicasts all at once, then pushes to local CB.
+ * This reduces mcast synchronization overhead by batching multiple columns per mcast.
+ *
+ * CB layout: [col0_tile0..col0_tile(num_rows-1), col1_tile0..., ...] (column-major within batch)
+ * This matches what the compute kernel expects for batched W2 processing.
+ *
+ * @tparam AddrGen Address generator type
+ * @param cb_idx Circular buffer index
+ * @param addr_gen Address generator for DRAM reads
+ * @param first_col_start Starting tile index of first column (row 0, col 0 of block)
+ * @param tiles_per_col Number of tiles per column (always block_size for consistent CB layout)
+ * @param num_cols Number of columns to batch (always block_size for consistent CB layout)
+ * @param valid_tiles_per_col Actual valid tiles per column (may be < tiles_per_col for edge k_blocks)
+ * @param valid_num_cols Actual valid columns (may be < num_cols for edge c_blocks)
+ * @param col_stride Stride between tiles in same column (width of matrix in tiles)
+ * @param tile_bytes Bytes per tile
+ * @param sender_sem_ptr Sender semaphore pointer
+ * @param receiver_sem_ptr Receiver semaphore pointer (local)
+ * @param receiver_sem_addr Receiver semaphore L1 address
+ * @param noc_start_x NOC start X coordinate
+ * @param noc_start_y NOC start Y coordinate
+ * @param noc_end_x NOC end X coordinate
+ * @param noc_end_y NOC end Y coordinate
+ * @param num_dests Number of receiver cores (0 = single-core, no multicast)
+ */
+template <typename AddrGen>
+inline void mcast_sender_read_batched_cols_and_send(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t first_col_start,
+    const uint32_t tiles_per_col,
+    const uint32_t num_cols,
+    const uint32_t valid_tiles_per_col,
+    const uint32_t valid_num_cols,
+    const uint32_t col_stride,
+    const uint32_t tile_bytes,
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests) {
+    // Total tiles to read and push (num_cols × tiles_per_col)
+    // Always block_size × block_size for consistent CB layout
+    const uint32_t total_tiles = tiles_per_col * num_cols;
+
+    // Reserve space for all columns at once
+    cb_reserve_back(cb_idx, total_tiles);
+    const uint32_t l1_write_addr = get_write_ptr(cb_idx);
+
+    if (num_dests > 0) {
+        // Multicast path with batched columns
+        // 1. Wait for receivers to be ready (ONCE for all columns)
+        mcast_sender_wait_for_receivers(sender_sem_ptr, num_dests);
+
+        // 2. Read all columns from DRAM into CB with padding
+        // CB layout: column-major [col0_row0, col0_row1, ..., col1_row0, ...]
+        // For edge blocks, clamp indices to valid range (re-read last valid tile/col)
+        uint32_t l1_addr = l1_write_addr;
+        for (uint32_t col = 0; col < num_cols; ++col) {
+            // Clamp column index to valid range for padding
+            const uint32_t actual_col = (col < valid_num_cols) ? col : (valid_num_cols - 1);
+            for (uint32_t row = 0; row < tiles_per_col; ++row) {
+                // Clamp row index to valid range for padding
+                const uint32_t actual_row = (row < valid_tiles_per_col) ? row : (valid_tiles_per_col - 1);
+                // Tile index: first_col_start + actual_col + actual_row * col_stride
+                const uint32_t tile_idx = first_col_start + actual_col + actual_row * col_stride;
+                const uint64_t noc_addr = addr_gen.get_noc_addr(tile_idx);
+                noc_async_read(noc_addr, l1_addr, tile_bytes);
+                l1_addr += tile_bytes;
+            }
+        }
+        noc_async_read_barrier();  // BARRIER: wait for all DRAM reads
+
+        // 3. Multicast all tiles at once
+        {
+            const uint64_t multicast_noc_addr =
+                get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_write_addr);
+            noc_async_write_multicast(l1_write_addr, multicast_noc_addr, total_tiles * tile_bytes, num_dests);
+        }
+
+        // 4. Signal receivers and barrier
+        mcast_sender_signal_receivers(
+            receiver_sem_ptr, receiver_sem_addr, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
+
+        // 5. Push all tiles to CB for local compute
+        cb_push_back(cb_idx, total_tiles);
+    } else {
+        // Single-core path: read all columns directly with padding
+        uint32_t l1_addr = l1_write_addr;
+        for (uint32_t col = 0; col < num_cols; ++col) {
+            const uint32_t actual_col = (col < valid_num_cols) ? col : (valid_num_cols - 1);
+            for (uint32_t row = 0; row < tiles_per_col; ++row) {
+                const uint32_t actual_row = (row < valid_tiles_per_col) ? row : (valid_tiles_per_col - 1);
+                const uint32_t tile_idx = first_col_start + actual_col + actual_row * col_stride;
+                const uint64_t noc_addr = addr_gen.get_noc_addr(tile_idx);
+                noc_async_read(noc_addr, l1_addr, tile_bytes);
+                l1_addr += tile_bytes;
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, total_tiles);
+    }
+}
