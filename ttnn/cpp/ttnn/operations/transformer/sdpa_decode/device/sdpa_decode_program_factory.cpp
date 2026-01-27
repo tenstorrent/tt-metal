@@ -829,6 +829,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
+        (uint32_t)use_mla,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 

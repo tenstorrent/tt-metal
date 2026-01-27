@@ -37,8 +37,9 @@ void kernel_main() {
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
+    constexpr bool use_mla = get_compile_time_arg_val(26) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<27>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
