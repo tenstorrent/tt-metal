@@ -70,7 +70,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
 
-#ifdef ROW_OF_M_FITS_IN_L1
     // ================== Loop structure with W1/W2/W3 multicast (flash-attention) ==================
     // Flash-attention optimization: for r in rows:
     //     # Phase A: Compute XW1[r, :] and XW3[r, :] - read X[r, p_block] only once!
@@ -167,143 +166,37 @@ void kernel_main() {
         // No reading required to compute M[r, :]
 
         // ---- Phase C: Use M[r, :] for all c_blocks ----
+        // Batched W2 multicast: read block_size columns × block_size rows at once
+        // This reduces mcast sync overhead from 4× per k_block to 1× per k_block
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                for (uint32_t c = 0; c < c_block_size; ++c) {
-                    const uint32_t c_global = c_block_start + c;
-                    uint32_t w2_tile_start = k_block_start * Wt + c_global;
-                    mcast_sender_read_col_and_send(
-                        cb_w2_idx,
-                        w2_address_generator,
-                        w2_tile_start,
-                        k_block_size,
-                        tile_bytes,
-                        Wt,
-                        block_size,
-                        mcast_sender_sem_ptr,
-                        mcast_receiver_sem_ptr,
-                        mcast_receiver_semaphore_addr,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        mcast_num_dests);
-                }
+                // Batched mcast W2: read block_size columns × block_size rows, padding edge blocks
+                // W2 is [K, C] = [hidden_Wt, Wt] tiles, stored row-major
+                // We need columns c_block_start..c_block_start+block_size, rows k_block_start..k_block_start+block_size
+                const uint32_t w2_first_col_start = k_block_start * Wt + c_block_start;
+                mcast_sender_read_batched_cols_and_send(
+                    cb_w2_idx,
+                    w2_address_generator,
+                    w2_first_col_start,
+                    block_size,    // tiles_per_col (always full block)
+                    block_size,    // num_cols (always full block)
+                    k_block_size,  // valid_tiles_per_col (actual valid rows, may be < block_size)
+                    c_block_size,  // valid_num_cols (actual valid cols, may be < block_size)
+                    Wt,            // col_stride (width of W2 matrix)
+                    tile_bytes,
+                    mcast_sender_sem_ptr,
+                    mcast_receiver_sem_ptr,
+                    mcast_receiver_semaphore_addr,
+                    mcast_dest_noc_start_x,
+                    mcast_dest_noc_start_y,
+                    mcast_dest_noc_end_x,
+                    mcast_dest_noc_end_y,
+                    mcast_num_dests);
             }
         }
     }
-
-#else
-    // ================== Loop structure with W1/W2/W3 multicast (non-flash-attention) ==================
-    // Standard approach: for r in rows:
-    //     for c_block in c_blocks:              # Process output columns in blocks
-    //        for k_block in k_blocks:           # Process hidden dimension in blocks
-    //          for k in k_block:                # For each element in k_block
-    //            for p_block in p_blocks:       # Accumulate across input dimension
-    //              [SENDER] read X[r, p_block] from DRAM
-    //              [SENDER] read W1[p_block, k] from DRAM
-    //              [SENDER] wait for all receivers ready
-    //              [SENDER] multicast W1[p_block, k] to receivers
-    //              [SENDER] signal data ready to receivers
-    //              [SENDER] read W3[p_block, k] from DRAM
-    //              [SENDER] wait for all receivers ready
-    //              [SENDER] multicast W3[p_block, k] to receivers
-    //              [SENDER] signal data ready to receivers
-    //          for c in c_block:                # For each column in c_block
-    //            [SENDER] read W2[k_block, c] from DRAM
-    //            [SENDER] wait for all receivers ready
-    //            [SENDER] multicast W2[k_block, c] to receivers
-    //            [SENDER] signal data ready to receivers
-    // ============================================================================
-    for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
-        for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
-            const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
-
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : (hidden_Wt - k_block_start);
-
-                // STEP A: Stream X + W1 for all k in this k_block
-                for (uint32_t k = 0; k < k_block_size; ++k) {
-                    const uint32_t w1_block_offset = k_block_start + k;
-
-                    for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-                        const uint32_t p_block_size =
-                            (p_block_start + block_size <= Wt) ? block_size : (Wt - p_block_start);
-
-                        // Read X[r, p_block] - for padding rows, read last valid row
-                        const uint32_t x_row = (r < end_row) ? r : (end_row - 1);
-                        const uint32_t x_tile_start = x_row * Wt + p_block_start;
-                        read_tiles_by_row(
-                            cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
-
-                        // Read W1[p_block, k] and multicast
-                        const uint32_t w1_tile_start = p_block_start * hidden_Wt + w1_block_offset;
-                        mcast_sender_read_col_and_send(
-                            cb_w1_idx,
-                            w1_address_generator,
-                            w1_tile_start,
-                            p_block_size,
-                            tile_bytes,
-                            hidden_Wt,
-                            block_size,
-                            mcast_sender_sem_ptr,
-                            mcast_receiver_sem_ptr,
-                            mcast_receiver_semaphore_addr,
-                            mcast_dest_noc_start_x,
-                            mcast_dest_noc_start_y,
-                            mcast_dest_noc_end_x,
-                            mcast_dest_noc_end_y,
-                            mcast_num_dests);
-
-                        // Read W3[p_block, k] and multicast
-                        const uint32_t w3_tile_start = p_block_start * hidden_Wt + w1_block_offset;
-                        mcast_sender_read_col_and_send(
-                            cb_w3_idx,
-                            w3_address_generator,
-                            w3_tile_start,
-                            p_block_size,
-                            tile_bytes,
-                            hidden_Wt,
-                            block_size,
-                            mcast_sender_sem_ptr,
-                            mcast_receiver_sem_ptr,
-                            mcast_receiver_semaphore_addr,
-                            mcast_dest_noc_start_x,
-                            mcast_dest_noc_start_y,
-                            mcast_dest_noc_end_x,
-                            mcast_dest_noc_end_y,
-                            mcast_num_dests);
-                    }
-                }
-
-                // STEP B: Stream W2[k_block, c] for all c in c_block and multicast
-                for (uint32_t c = 0; c < c_block_size; ++c) {
-                    const uint32_t c_global = c_block_start + c;
-                    const uint32_t w2_tile_start = k_block_start * Wt + c_global;
-                    mcast_sender_read_col_and_send(
-                        cb_w2_idx,
-                        w2_address_generator,
-                        w2_tile_start,
-                        k_block_size,
-                        tile_bytes,
-                        Wt,
-                        block_size,
-                        mcast_sender_sem_ptr,
-                        mcast_receiver_sem_ptr,
-                        mcast_receiver_semaphore_addr,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        mcast_num_dests);
-                }
-            }
-        }
-    }
-#endif  // ROW_OF_M_FITS_IN_L1
 }

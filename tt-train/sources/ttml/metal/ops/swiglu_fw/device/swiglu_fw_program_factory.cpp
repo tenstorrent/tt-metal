@@ -22,8 +22,6 @@ constexpr auto kReaderW1ReceiverKernelPath =
 
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel.cpp";
-constexpr auto kComputeKernelMfitsL1Path =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel_m_fits_l1.cpp";
 
 // Reader buffer indices (sender kernel has W1/W2/W3, receiver gets all weights via multicast)
 constexpr uint32_t kInputBufferIdx = 0;
@@ -48,8 +46,6 @@ constexpr auto kMCbIndex = tt::CBIndex::c_8;           // keeps track of M[r, k]
 constexpr auto kYPartialCbIndex = tt::CBIndex::c_9;    // keeps track of partial Y[r, c]
 // CB with output data
 constexpr auto kYCbIndex = tt::CBIndex::c_10;  // keeps track of final Y[r, c]
-constexpr uint32_t kNumXW1Tiles = 2U;
-constexpr uint32_t kNumXW3Tiles = 2U;
 
 const std::string kRowOfMFitsInL1DefineKey = "ROW_OF_M_FITS_IN_L1";
 
@@ -218,10 +214,10 @@ bool row_of_m_fits_in_l1_check(
 
     // Memory for input CBs (always needed regardless of algorithm)
     const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
-    const uint64_t w1_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w1
-    // W2 uses batched mcast which needs larger CB; use conservative estimate
+    // W1/W2/W3 use batched mcast which needs larger CB (2 × block_size^2 tiles)
+    const uint64_t w1_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w1
     const uint64_t w2_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2
-    const uint64_t w3_memory = twice_block_size * bfloat16_single_tile_size_bytes;                // cb_w3
+    const uint64_t w3_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w3
 
     // Memory for output CBs (always needed regardless of algorithm)
     const uint64_t y_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_y_partial
@@ -272,6 +268,32 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // Get the num_inner and hidden_num_inner
     uint32_t num_inner = input.logical_shape()[-1];
     uint32_t hidden_num_inner = w1.logical_shape()[-1];
+
+    // Validate weight shapes for fused SwiGLU:
+    // Expected layout: W1[embed, hidden], W3[embed, hidden], W2[hidden, embed]
+    // This is TRANSPOSED compared to standard LinearLayer which stores [out, in]
+    const auto& w1_shape = w1.logical_shape();
+    const auto& w2_shape = w2.logical_shape();
+    const auto& w3_shape = w3.logical_shape();
+
+    TT_FATAL(
+        w1_shape[-2] == num_inner,
+        "W1 shape mismatch: W1[-2]={} must equal input[-1]={}. "
+        "Fused SwiGLU expects transposed weights [embed, hidden], not [hidden, embed].",
+        w1_shape[-2],
+        num_inner);
+    TT_FATAL(
+        w3_shape[-2] == num_inner && w3_shape[-1] == hidden_num_inner,
+        "W3 shape mismatch: W3={} must match W1={}. Both should be [embed, hidden].",
+        w3_shape,
+        w1_shape);
+    TT_FATAL(
+        w2_shape[-2] == hidden_num_inner && w2_shape[-1] == num_inner,
+        "W2 shape mismatch: W2[-2]={}, W2[-1]={} must be [hidden={}, embed={}].",
+        w2_shape[-2],
+        w2_shape[-1],
+        hidden_num_inner,
+        num_inner);
 
     // Get the hidden dimension // 32
     uint32_t hidden_Wt = hidden_num_inner / tt::constants::TILE_WIDTH;
@@ -337,25 +359,45 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    // Check if row of M fits in L1 to determine CB sizing strategy
+    // Check if row of M fits in L1 - required for the optimized algorithm.
+    // The M-fits-L1 algorithm caches XW1[r,:], XW3[r,:], and M[r,:] in L1 for flash-attention
+    // optimization. This requires approximately 3 × hidden_Wt × tile_bytes of L1.
+    //
+    // L1 threshold analysis (Wormhole B0, ~1.46 MB available L1):
+    //   Max hidden_dim ≈ 6,848 elements (214 tiles)
+    //
+    // With tensor parallelism (TP), hidden_dim is sharded across devices:
+    //   - Llama-7B  (hidden=11008): fits with TP≥2
+    //   - Llama-13B (hidden=13824): fits with TP≥4
+    //   - Llama-70B (hidden=28672): fits with TP≥8
+    //   - Llama-405B (hidden=53248): fits with TP≥8
+    //
+    // In all practical distributed training scenarios, M will fit in L1.
+    // If this limit is exceeded, consider using composite ops (matmul + silu + mul + matmul)
+    // as a fallback, though this would be ~2x slower.
     const bool row_of_m_fits_in_l1 =
         row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
 
-    // W1/W3 CB size depends on algorithm path:
-    // - M-fits-L1: use batched mcast (block_size rows × block_size tiles per batch)
-    //   Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
-    // - Non-M-fits-L1: use column-by-column mcast (block_size tiles per mcast)
-    //   Double-buffering: 2 × block_size = 8 tiles
-    const uint32_t w1_w3_cb_tiles = row_of_m_fits_in_l1 ? (2U * block_size * block_size) : twice_block_size;
+    TT_FATAL(
+        row_of_m_fits_in_l1,
+        "SwiGLU fused kernel requires M row to fit in L1. hidden_dim={} tiles ({} elements) exceeds L1 capacity. "
+        "For large models, use tensor parallelism (TP) to shard hidden_dim across devices. "
+        "Alternatively, use composite ops: matmul(silu(matmul(x,w1)) * matmul(x,w3), w2).",
+        hidden_Wt,
+        hidden_Wt * 32);
 
-    // CB sizing based on whether row of M fits in L1
-    const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1U) / block_size) *
-                                                             block_size   // Round up to nearest block_size
-                                                       : kNumXW1Tiles;    // Use small buffer for slow algorithm
-    const uint32_t num_tiles_xw3 = row_of_m_fits_in_l1 ? num_tiles_xw1    // Same as XW1
-                                                       : kNumXW3Tiles;    // Use small buffer for slow algorithm
-    const uint32_t num_tiles_m = row_of_m_fits_in_l1 ? num_tiles_xw1      // Full row when fits in L1
-                                                     : twice_block_size;  // Just twice_block_size for slow algorithm
+    // W1/W3 CB size: use batched mcast (block_size rows × block_size tiles per batch)
+    // Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
+    const uint32_t w1_w3_cb_tiles = 2U * block_size * block_size;
+
+    // W2 CB size: use batched mcast (block_size cols × block_size tiles per batch)
+    // Same size as W1/W3 for consistency
+    const uint32_t w2_cb_tiles = 2U * block_size * block_size;
+
+    // CB sizing for M-fits-L1 algorithm (full row caching)
+    const uint32_t num_tiles_xw1 = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
+    const uint32_t num_tiles_xw3 = num_tiles_xw1;
+    const uint32_t num_tiles_m = num_tiles_xw1;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
@@ -370,19 +412,17 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // W1/W3 CBs use larger size when batching is enabled for reduced mcast overhead
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
         program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
+    // W2 CB uses same batched size as W1/W3 for reduced mcast overhead
     [[maybe_unused]] auto cb_w2 = create_circular_buffer(
-        program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, w2_cb_tiles);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
         program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
-    // Partial CBs are only needed when row of M fits in L1 (with flash-attention optimization)
-    if (row_of_m_fits_in_l1) {
-        // Partial CBs need to store the same amount as the final XW1/XW3 results during accumulation
-        [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
-            program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
-        [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
-            program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
-    }
-    // XW1, XW3, and M CBs use conditional sizing
+    // Partial CBs for flash-attention optimization (accumulate XW1/XW3 across p_blocks)
+    [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
+        program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
+    [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
+        program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
+    // XW1, XW3, and M CBs for full row caching
     [[maybe_unused]] auto cb_x_w1 = create_circular_buffer(
         program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
     [[maybe_unused]] auto cb_x_w3 = create_circular_buffer(
@@ -427,10 +467,9 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         "SwiGLU buffer must be in DRAM. SwiGLU buffer of type {}",
         enchantum::to_string(swiglu_buffer->buffer_type()));
 
+    // M-fits-L1 algorithm uses flash-attention optimization with full row caching
     std::map<std::string, std::string> defines;
-    if (row_of_m_fits_in_l1) {
-        defines[kRowOfMFitsInL1DefineKey] = "1";
-    }
+    defines[kRowOfMFitsInL1DefineKey] = "1";
 
     // -------------------------------------------------------------------------
     // 3.1) Split cores into leftmost column (senders) and rest (receivers)
@@ -506,11 +545,6 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // 4) Create compute kernels for swiglu_fw
     // -------------------------------------------------------------------------
 
-    // Compute kernels for SwiGLUForward are implemented in two variants:
-    // - Standard kernel (swiglu_fw_kernel.cpp): used when row of M does not fit in L1
-    // - Optimized kernel (swiglu_fw_kernel_m_fits_l1.cpp): used when row of M fits in L1
-    const std::string& kComputeKernelToUse = row_of_m_fits_in_l1 ? kComputeKernelMfitsL1Path : kComputeKernelPath;
-
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
@@ -520,7 +554,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     };
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelToUse, /*fp32_dest_acc_en=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -532,7 +566,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         };
 
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelToUse, /*fp32_dest_acc_en=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
 
     // -------------------------------------------------------------------------
