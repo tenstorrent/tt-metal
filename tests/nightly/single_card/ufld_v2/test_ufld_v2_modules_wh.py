@@ -1,1 +1,1 @@
-../../../../models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py
+../../../../models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py

@@ -21,7 +21,7 @@
 
 ## November 3, 2025
 
-### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/multimodal/gemma3)
 - Integrated Gemma 3 with vLLM V1 in the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
 ## October 15, 2025
@@ -31,7 +31,7 @@
 
 ## September 29, 2025
 
-### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/multimodal/gemma3)
 - Added support for multi-image prompts.
 - Added support for sliding window attention in local attention layers.
 
@@ -47,12 +47,12 @@
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
 - Added support for windowed SDPA in the vision attention module.
 
-### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
 - Added support for batch data parallel on any number of devices.
 
 ## September 8, 2025
 
-### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/multimodal/gemma3)
 - Added support for Gemma 3-4B on N150/N300 and Gemma 3-27B on Wormhole QuietBox to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
 
 ### [Phi-3-Mini-128k](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
@@ -122,7 +122,7 @@
 - Moved and renamed `models/demos/llama3` to [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) which is a commonized library for running LLMs similar to the Llama3 family.
 - Added support for hybrid data / tensor parallelism to the models that are part of [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
 
-### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
 - Added support for the Whisper (distil-large-v3) model on N150.
 
 ## March 10, 2025
