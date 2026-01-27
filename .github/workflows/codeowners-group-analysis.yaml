@@ -2318,6 +2318,7 @@ jobs:
           # Check if we have any owners to ping
           if [ -n "$SELECTED_OWNERS" ]; then
             # Get full names for selected owners and build ping message
+            # NOTE: Do NOT use GitHub mention syntax [@username] as it subscribes users to the PR
             PING_MESSAGE="Hi"
             IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
             OWNER_COUNT=${#SELECTED_ARRAY[@]}
@@ -2331,9 +2332,9 @@ jobs:
                                "$USER_API" 2>/dev/null)
                 USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                  PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
+                  PING_MESSAGE="$PING_MESSAGE $USER_NAME (@$owner)"
                 else
-                  PING_MESSAGE="$PING_MESSAGE [@$owner]"
+                  PING_MESSAGE="$PING_MESSAGE (@$owner)"
                 fi
 
                 # Add comma if not the last owner
@@ -2357,7 +2358,7 @@ jobs:
               fi
             fi
 
-            PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+            PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN) needs your approval/review to merge this."
 
             if [ "$PING_OWNERS" = "true" ]; then
               # Create new ping comment
@@ -2386,6 +2387,7 @@ jobs:
 
               if [ "$HTTP_STATUS" = "201" ]; then
                 echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
+                echo "📋 Pinged users: $SELECTED_OWNERS"
               else
                 echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
                 echo "Response body: $RESPONSE_BODY"
@@ -2792,6 +2794,8 @@ jobs:
             if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
               SLACK_TS=$(echo "$SLACK_RESPONSE" | jq -r '.ts')
               echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
+              echo "📋 Notified users: $SELECTED_OWNERS"
+              echo "📋 Notified groups: $SELECTED_SLACK_GROUPS"
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"

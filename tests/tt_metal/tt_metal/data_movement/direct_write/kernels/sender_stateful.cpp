@@ -140,5 +140,5 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Same destination", same_destination);
     DeviceTimestampedData("Same value", same_value);
-    DeviceTimestampedData("NOC Index", noc_id);
+    DeviceTimestampedData("NoC Index", noc_id);
 }
