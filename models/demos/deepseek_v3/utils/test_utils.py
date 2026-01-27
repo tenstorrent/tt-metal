@@ -407,13 +407,12 @@ def run_reference_with_attention(
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
+                legacy_cache = current_cache.to_legacy_cache()
                 if layer_idx is not None:
-                    cache_tensor = current_cache.key_cache[layer_idx]
-                    current_cache_length = cache_tensor.shape[2]
+                    cache_tensor = legacy_cache[layer_idx][0]
                 else:
-                    legacy_cache = current_cache.to_legacy_cache()
-                    first_layer_cache = legacy_cache[0][0]
-                    current_cache_length = first_layer_cache.shape[2] if first_layer_cache.numel() > 0 else 0
+                    cache_tensor = legacy_cache[0][0]
+                current_cache_length = cache_tensor.shape[2] if cache_tensor.numel() > 0 else 0
 
                 kv_seq_len = current_cache_length + chunk_size_actual
                 mask_bytes = batch_size * chunk_size_actual * kv_seq_len * bytes_per_elem

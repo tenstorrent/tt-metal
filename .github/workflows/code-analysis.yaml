@@ -2,7 +2,8 @@ name: "Code analysis"
 
 on:
   schedule:
-    - cron: "0 2 * * 2,4,6" # Static analysis: 6 PM PST Mon/Wed/Fri (2 AM UTC Tue/Thu/Sat)
+    # Run daily at 6 PM PST (2 AM UTC next day)
+    - cron: "0 2 * * *"
   workflow_call:
     inputs:
       distro:
@@ -33,7 +34,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 15)"
+        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -67,7 +68,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 15)"
+        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -387,6 +388,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Authenticate first (required for all gh commands)
+          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
+            echo "::error::COPILOT_OAUTH_TOKEN secret not set. \
+              Run 'gh auth login' locally, then 'gh auth token' and add as secret."
+            exit 1
+          fi
+          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
+
           # Check for issues
           if [ ! -f "/tmp/codechecker_issues.json" ]; then
             echo "No issues found"
@@ -404,16 +413,19 @@ jobs:
           echo "Found $ISSUE_COUNT issues"
           echo "has-issues=true" >> "$GITHUB_OUTPUT"
 
-          # Authenticate with OAuth token (required for agent-task)
-          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
-            echo "::error::COPILOT_OAUTH_TOKEN secret not set. Run 'gh auth login' locally, then 'gh auth token' and add as secret."
-            exit 1
+          # Check for existing open Copilot PRs to avoid duplicates
+          OPEN_COPILOT_PRS=$(gh pr list --repo "${{ github.repository }}" \
+            --state open --label "copilot-autofix" --json number --jq 'length' 2>/dev/null || echo "0")
+          if [ "$OPEN_COPILOT_PRS" -gt 0 ]; then
+            echo "⏭️ Skipping: $OPEN_COPILOT_PRS open Copilot PR(s) already exist"
+            echo "Review and merge existing PRs before creating new ones."
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
 
-          # Build prompt
+          # Build prompt - default to 1 issue for focused, quality fixes
           LIMIT="${{ inputs.copilot-max-fixes }}"
-          LIMIT="${LIMIT:-15}"
+          LIMIT="${LIMIT:-1}"  # Default: 1 issue per run
 
           {
             echo "Fix these Clang Static Analyzer issues:"
@@ -442,6 +454,10 @@ jobs:
           if [ -n "$PR_NUMBER" ]; then
             echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
             echo "pr-created=true" >> "$GITHUB_OUTPUT"
+            # Add label to track Copilot PRs and prevent duplicates
+            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" --add-label "copilot-autofix" || true
+            # Mark PR as ready for review (not draft) so CI runs automatically
+            gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
             gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "/codeowners ping" || true
           else
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
