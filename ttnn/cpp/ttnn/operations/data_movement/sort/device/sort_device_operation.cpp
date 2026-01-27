@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-static constexpr uint32_t SORT_WT_THRESHOLD = 64;
+constexpr uint32_t SORT_WT_THRESHOLD = 64;
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {

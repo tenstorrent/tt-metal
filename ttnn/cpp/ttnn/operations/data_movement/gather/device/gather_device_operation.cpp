@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-static constexpr uint32_t GATHER_WT_THRESHOLD = 60;
+constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
