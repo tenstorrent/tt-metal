@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-artifact:
+  build-artifact-1:
+    name: Build Artifact 1 (Original Commit)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -14,15 +15,27 @@ jobs:
       build-wheel: true
       tracy: true
       version: "22.04"
-      skip-tt-train: false
 
-  ttnn-ccache-test:
-    needs: build-artifact
-    name: TTNN CCache Cross-Commit Test (test cache across git commits)
+  build-artifact-2:
+    name: Build Artifact 2 (Modified Commit)
+    needs: build-artifact-1
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+
+  ttnn-ccache-test-run1:
+    needs: build-artifact-1
+    name: TTNN CCache Test - Run 1 (Build Artifact 1)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ needs.build-artifact-1.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
@@ -51,7 +64,7 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
 
       - name: Create ccache tmpdir
@@ -63,11 +76,11 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: Setup Job
+      - name: Setup Job (Build 1 - Original Commit)
         uses: ./docker-job/.github/actions/setup-job
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ needs.build-artifact-1.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact-1.outputs.wheel-artifact-name }}
 
       - name: Initial ccache setup
         run: |
@@ -184,61 +197,83 @@ jobs:
             echo "Total keys in Redis after TTNN Run 1: ${TOTAL_KEYS}"
           fi
 
-      - name: Create dummy commit for Run 2
+  ttnn-ccache-test-run2:
+    needs: [build-artifact-2, ttnn-ccache-test-run1]
+    name: TTNN CCache Test - Run 2 (Build Artifact 2)
+    runs-on: tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: ${{ needs.build-artifact-2.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        ARCH_NAME: wormhole_b0
+        CCACHE_TEMPDIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          echo "========================================="
-          echo "=== Creating dummy commit to test cross-commit cache behavior ===="
-          echo "========================================="
-          echo "Original commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/ttnn_original_commit.txt
-          echo ""
-          echo "Creating dummy commit to change git hash..."
-          echo "# Dummy change for ccache cross-commit test - $(date)" >> dummy_file_for_ccache_test.txt
-          git add dummy_file_for_ccache_test.txt
-          git -c user.name="CCache Test" -c user.email="ccache-test@tenstorrent.com" commit -m "[temp] Dummy commit for ccache cross-commit test"
-          echo "New commit: $(git rev-parse --short=10 HEAD)"
-          echo "Testing if different commit affects ccache keys..."
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
 
-      - name: Build after dummy commit
-        run: |
-          echo "=========================================="
-          echo "=== Building project after dummy commit ===="
-          echo "=========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Building to test if commit affects build cache..."
-          echo ""
-          echo "=== Build ccache stats before build ===="
-          ccache -s
-          echo ""
-          ./build_metal.sh --build-all
-          echo ""
-          echo "=== Build ccache stats after build ===="
-          ccache -s
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup Build 2 artifacts before Run 2
+        uses: ./docker-job/.github/actions/setup-job
+        with:
+          build-artifact-name: ${{ needs.build-artifact-2.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact-2.outputs.wheel-artifact-name }}
 
       - name: Clear kernel caches for Run 2
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing TTNN RUN 2: Clear kernel caches after dummy commit ===="
-          echo "========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
+          echo "=== Preparing TTNN RUN 2: Clear kernel caches before testing with different build artifact ===="
+          echo "=========================================="
+          echo "Current build artifact: build-artifact-2"
           echo ""
-          echo "Clearing kernel binaries to force recompilation (testing if commit affects cache)"
+          echo "Clearing kernel binaries to force recompilation (testing if different build affects cache)"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo "Kernel binaries cleared, ccache intact"
           echo ""
-          echo "=== Current ccache stats before Run 2 (different commit) ===="
+          echo "=== Current ccache stats before Run 2 (different build artifact) ===="
           ccache -s
 
-      - name: Run TTNN tests (Second run - different commit)
+      - name: Run TTNN tests (Second run - different build artifact)
         timeout-minutes: 30
         env:
           CCACHE_DEBUG: "true"
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run2.log
         run: |
-          echo "=== Running TTNN unit tests (RUN 2 - different commit, testing if commit affects cache) ===="
+          echo "=== Running TTNN unit tests (RUN 2 - different build artifact, testing if build differences affect cache) ===="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_second_run.log
 
       - name: Capture kernel hashes after Run 2 and compare
@@ -260,14 +295,10 @@ jobs:
           env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run2_env.txt
           echo ""
           echo "=== Comparing Run 1 vs Run 2 ===="
-          echo "--- Git commits (should be different) ---"
-          echo "Run 1 commit: $(cat /tmp/ttnn_run1_git_commit.txt | cut -c1-10)"
-          echo "Run 2 commit: $(cat /tmp/ttnn_run2_git_commit.txt | cut -c1-10)"
-          if ! diff -u /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt; then
-            echo "✅ Git commits are different as expected (testing cross-commit behavior)"
-          else
-            echo "❌ ERROR: Git commits should be different!"
-          fi
+          echo "--- Build artifacts (using different builds) ---"
+          echo "Run 1 build: build-artifact-1"
+          echo "Run 2 build: build-artifact-2"
+          echo "Testing if different build artifacts affect ccache keys..."
           echo ""
           echo "--- Build environment ---"
           if diff -u /tmp/ttnn_run1_env.txt /tmp/ttnn_run2_env.txt; then
@@ -313,48 +344,83 @@ jobs:
             echo "ℹ️  No cache activity detected"
           fi
 
-      - name: Return to original commit for Run 3
+  ttnn-ccache-test-run3:
+    needs: [build-artifact-1, ttnn-ccache-test-run2]
+    name: TTNN CCache Test - Run 3 (Back to Build Artifact 1)
+    runs-on: tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: ${{ needs.build-artifact-1.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        ARCH_NAME: wormhole_b0
+        CCACHE_TEMPDIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup Build 1 artifacts again before Run 3
+        uses: ./docker-job/.github/actions/setup-job
+        with:
+          build-artifact-name: ${{ needs.build-artifact-1.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact-1.outputs.wheel-artifact-name }}
+
+      - name: Clear kernel caches for Run 3
         run: |
           echo ""
           echo "========================================="
-          echo "=== Preparing TTNN RUN 3: Return to original commit ===="
+          echo "=== Preparing TTNN RUN 3: Return to Build 1 artifacts ===="
           echo "========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Returning to original commit to test cross-commit cache hits"
-          git checkout $(cat /tmp/ttnn_original_commit.txt)
-          echo "Back to original commit: $(git rev-parse --short=10 HEAD)"
+          echo "Current build artifact: build-artifact-1 (same as Run 1)"
+          echo "Testing if returning to same build restores cache hits"
           echo ""
           echo "Clearing kernel binaries for third test"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
-          echo "=== Current ccache stats before Run 3 (back to original commit) ===="
+          echo "=== Current ccache stats before Run 3 (back to build-artifact-1) ===="
           ccache -s
 
-      - name: Build after returning to original commit
-        run: |
-          echo "=========================================="
-          echo "=== Building project after returning to original commit ===="
-          echo "=========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Building to test if returning to original commit restores build cache..."
-          echo ""
-          echo "=== Build ccache stats before build ===="
-          ccache -s
-          echo ""
-          ./build_metal.sh --build-all
-          echo ""
-          echo "=== Build ccache stats after build ===="
-          ccache -s
-
-      - name: Run TTNN tests (Third run - back to original commit)
+      - name: Run TTNN tests (Third run - back to build artifact 1)
         timeout-minutes: 30
         env:
           CCACHE_DEBUG: "true"
           CCACHE_LOGFILE: /tmp/ttnn_ccache_run3.log
         run: |
-          echo "=== Running TTNN unit tests (RUN 3 - back to original commit, should hit cache from Run 1) ===="
+          echo "=== Running TTNN unit tests (RUN 3 - back to build-artifact-1, should hit cache from Run 1) ===="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_third_run.log
 
       - name: Capture kernel hashes after Run 3 and final comparison
@@ -506,388 +572,3 @@ jobs:
         with:
           path: /work/generated/test_reports/
           prefix: "ttnn_test_reports_"
-
-  tt-train-ccache-test:
-    needs: build-artifact
-    name: tt-train CCache Cross-Commit Test (test cache across git commits)
-    runs-on: tt-ubuntu-2204-N150-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      env:
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        CCACHE_TEMPDIR: /tmp/ccache
-        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
-        TT_METAL_LOGGER_LEVEL: Debug
-        TT_METAL_LOGGER_TYPES: BuildKernels
-        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: Check Redis credentials
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-
-      - name: Create ccache tmpdir
-        run: mkdir -p /tmp/ccache
-
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-
-      - name: Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-
-      - name: Initial ccache setup
-        run: |
-          echo "========================================="
-          echo "=== Initial ccache configuration ===="
-          echo "========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/tt_train_commit.txt
-          echo ""
-          echo "=== RUN 1: Initial ccache configuration ====="
-          ccache --show-config | head -40
-          echo ""
-          echo "=== Redis Remote Storage Configuration ==="
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
-          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
-          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
-          echo ""
-          echo "=== Redis Connection Details ==="
-          ccache --show-config | grep -i redis || echo "No Redis config found"
-          ccache --show-config | grep -E "(remote_storage|remote_only|redis)" || true
-          echo ""
-          echo "=== Git commit info ==="
-          echo "Git commit: $(git rev-parse HEAD)"
-          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
-          echo ""
-          echo "=== Zeroing ccache stats ==="
-          ccache -z
-          echo "=== Initial ccache stats ==="
-          ccache -s
-
-      - name: Clear kernel caches to force fresh compilation
-        run: |
-          echo "=== Clearing all kernel caches to force JIT compilation ==="
-          rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
-          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-          echo "Kernel caches cleared"
-
-      - name: Run tt-train tests (First run)
-        timeout-minutes: 30
-        run: |
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          echo "=== Running tt-train tests (RUN 1) ==="
-          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
-
-      - name: Analyze ccache debug logs (Run 1)
-        run: |
-          echo "=== RUN 1: Analyzing ccache debug log ==="
-          if [ -f /tmp/ccache_run1.log ]; then
-            echo "Log file size: $(wc -l /tmp/ccache_run1.log | awk '{print $1}') lines"
-            echo ""
-            echo "=== Sample cache operations (first 30 lines) ==="
-            head -30 /tmp/ccache_run1.log
-            echo ""
-            echo "=== Checking for cache key patterns ==="
-            grep -E "(Hash|Result key|Storing|Writing)" /tmp/ccache_run1.log | head -20 || echo "No hash patterns found"
-            echo ""
-            echo "=== Checking for remote storage operations ==="
-            grep -iE "(redis|remote)" /tmp/ccache_run1.log | head -20 || echo "No remote storage operations logged"
-            echo ""
-            echo "=== Checking for any errors ==="
-            grep -iE "(error|failed|warning)" /tmp/ccache_run1.log | head -10 || echo "No errors found"
-          else
-            echo "⚠️  WARNING: ccache debug log not found at /tmp/ccache_run1.log"
-            echo "CCACHE_DEBUG and CCACHE_LOGFILE may not be working"
-          fi
-
-      - name: Analyze ccache and kernel cache locations (Run 1)
-        run: |
-          echo "=== RUN 1: ccache statistics after test ==="
-          ccache -s
-          echo ""
-          echo "=== Redis Remote Storage Stats ==="
-          echo "Remote storage is $(ccache --show-config | grep remote_storage | awk '{print $3}')"
-          echo "Remote only mode: ${CCACHE_REMOTE_ONLY:-not set}"
-          echo ""
-          echo "=== Detailed ccache stats with remote storage info ==="
-          ccache -s | grep -E "(cache hit|cache miss|remote|local|files|size)" || ccache -s
-          echo ""
-          echo "=== Redis Key Inspection ==="
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
-
-          if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
-            echo "Connecting to Redis at ${REDIS_HOST}:${REDIS_PORT}..."
-
-            # Install redis-cli if needed
-            if ! command -v redis-cli &> /dev/null; then
-              echo "Installing redis-cli..."
-              apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
-            fi
-
-            GIT_HASH=$(git rev-parse --short=10 HEAD)
-            echo "Git hash: $GIT_HASH"
-
-            # Count total keys in Redis
-            TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
-            echo "Total keys in Redis after Run 1: ${TOTAL_KEYS}"
-
-            # Sample some keys
-            if [ "$TOTAL_KEYS" -gt 0 ]; then
-              echo "Sample Redis keys (first 20):"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 20 2>/dev/null | head -20 || echo "Could not fetch keys"
-
-              # Check key structure
-              echo ""
-              echo "Inspecting key structure (first key):"
-              FIRST_KEY=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 1 2>/dev/null | head -1)
-              if [ -n "$FIRST_KEY" ]; then
-                echo "Key: $FIRST_KEY"
-                redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" TYPE "$FIRST_KEY" 2>/dev/null || true
-              fi
-            else
-              echo "⚠️  WARNING: Redis appears empty after Run 1 - ccache may not be writing to Redis!"
-            fi
-          else
-            echo "Redis credentials not available"
-          fi
-          echo ""
-          echo "=== Kernel cache locations ==="
-          echo "Checking ~/.cache/tt-metal-cache/:"
-          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
-          echo ""
-          echo "Checking /tmp/tt-metal-cache/:"
-          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
-          echo ""
-          echo "=== Disk usage of kernel caches ==="
-          du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
-          du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
-          echo ""
-          echo "=== Local ccache directory (should be minimal with REMOTE_ONLY) ==="
-          du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
-          ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
-
-      - name: Create dummy commit for Run 2
-        run: |
-          echo "========================================="
-          echo "=== Creating dummy commit to test cross-commit cache behavior ===="
-          echo "========================================="
-          echo "Original commit: $(git rev-parse --short=10 HEAD)"
-          git rev-parse HEAD > /tmp/tt_train_original_commit.txt
-          echo ""
-          echo "Creating dummy commit to change git hash..."
-          echo "# Dummy change for tt-train ccache cross-commit test - $(date)" >> dummy_file_for_tt_train_ccache_test.txt
-          git add dummy_file_for_tt_train_ccache_test.txt
-          git -c user.name="CCache Test" -c user.email="ccache-test@tenstorrent.com" commit -m "[temp] Dummy commit for tt-train ccache cross-commit test"
-          echo "New commit: $(git rev-parse --short=10 HEAD)"
-          echo "Testing if different commit affects ccache keys..."
-
-      - name: Build after dummy commit
-        run: |
-          echo "=========================================="
-          echo "=== Building project after dummy commit ===="
-          echo "=========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Building to test if commit affects build cache..."
-          echo ""
-          echo "=== Build ccache stats before build ===="
-          ccache -s
-          echo ""
-          ./build_metal.sh --build-all
-          echo ""
-          echo "=== Build ccache stats after build ===="
-          ccache -s
-
-      - name: Clear kernel caches for Run 2
-        run: |
-          echo ""
-          echo "========================================="
-          echo "=== Preparing tt-train RUN 2: Clear kernel caches after dummy commit ===="
-          echo "========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo ""
-          echo "=== RUN 2: ccache configuration ==="
-          ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
-          echo ""
-          echo "=== Redis Remote Storage Configuration ==="
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
-          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
-          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
-          echo ""
-          echo "Clearing kernel binaries to force recompilation (testing if commit affects cache)"
-          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-          echo "Kernel binaries cleared, ccache intact"
-          echo ""
-          echo "=== Current ccache stats before Run 2 (different commit) ====="
-          ccache -s
-
-
-      - name: Run tt-train tests (Second run - different commit)
-        timeout-minutes: 30
-        run: |
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          echo "=== Running tt-train tests (RUN 2 - different commit, testing if commit affects cache) ===="
-          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_second_run.log
-
-      - name: Analyze ccache after Run 2
-        run: |
-          echo "=== tt-train RUN 2: ccache statistics after test ==="
-          ccache -s
-          echo ""
-          STATS=$(ccache -s)
-          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
-          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
-          TOTAL=$((CACHE_HITS + CACHE_MISS))
-
-          echo "=== Cache Hit Analysis ==="
-          if [ "$TOTAL" -gt 0 ]; then
-            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
-            echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS} hits / ${TOTAL} total)"
-
-            if [ "$CACHE_HITS" -eq 0 ]; then
-              echo "🔴 ZERO CACHE HITS - ccache not working for tt-train tests!"
-            elif [ "$HIT_RATE" -gt 70 ]; then
-              echo "✅ Good cache hit rate!"
-            else
-              echo "⚠️  Lower than expected cache hit rate"
-            fi
-          else
-            echo "ℹ️  No cache activity detected"
-          fi
-
-      - name: Return to original commit for Run 3
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "=== Preparing tt-train RUN 3: Return to original commit ===="
-          echo "=========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Returning to original commit to test cross-commit cache hits"
-          git checkout $(cat /tmp/tt_train_original_commit.txt)
-          echo "Back to original commit: $(git rev-parse --short=10 HEAD)"
-          echo ""
-          echo "Clearing kernel binaries for third test"
-          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-          echo ""
-          echo "=== Current ccache stats before Run 3 (back to original commit) ===="
-          ccache -s
-
-      - name: Build after returning to original commit
-        run: |
-          echo "=========================================="
-          echo "=== Building project after returning to original commit ===="
-          echo "=========================================="
-          echo "Current commit: $(git rev-parse --short=10 HEAD)"
-          echo "Building to test if returning to original commit restores build cache..."
-          echo ""
-          echo "=== Build ccache stats before build ===="
-          ccache -s
-          echo ""
-          ./build_metal.sh --build-all
-          echo ""
-          echo "=== Build ccache stats after build ===="
-          ccache -s
-
-      - name: Run tt-train tests (Third run - back to original commit)
-        timeout-minutes: 30
-        run: |
-          cd /work/build/tt-train
-          echo "=== Running tt-train tests (RUN 3 - back to original commit, should hit cache from Run 1) ===="
-          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_third_run.log
-
-      - name: Analyze final ccache stats
-        run: |
-          echo "=== tt-train RUN 3: Final ccache statistics ==="
-          ccache -s
-
-      - name: Publish ccache summary
-        run: |
-          echo '## CCache tt-train Tests Results' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks ccache behavior for tt-train tests across different git commits using Redis as the remote storage backend. Tests if cache keys include git commit hash and whether cross-commit cache hits are possible.' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-
-          STATS=$(ccache -s)
-          echo '### Final CCache Stats (tt-train Run 3)' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$STATS" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
-          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
-          TOTAL=$((CACHE_HITS + CACHE_MISS))
-
-          if [ "$TOTAL" -gt 0 ]; then
-            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
-            echo "- Cache hits: ${CACHE_HITS}" >> $GITHUB_STEP_SUMMARY
-            echo "- Cache misses: ${CACHE_MISS}" >> $GITHUB_STEP_SUMMARY
-            echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
-            echo '' >> $GITHUB_STEP_SUMMARY
-
-            if [ "$HIT_RATE" -lt 30 ]; then
-              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for tt-train tests with Redis.' >> $GITHUB_STEP_SUMMARY
-            elif [ "$HIT_RATE" -lt 70 ]; then
-              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring with Redis backend.' >> $GITHUB_STEP_SUMMARY
-            else
-              echo '🟢 **GOOD**: High cache hit rate indicates ccache with Redis is working well for tt-train tests.' >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo '⚪ **NO DATA**: No cache activity detected. Redis remote storage may not be configured properly.' >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload tt-train debug logs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: tt-train-ccache-debug-logs-${{ github.run_id }}
-          path: |
-            /tmp/tt_train_first_run.log
-            /tmp/tt_train_second_run.log
-            /tmp/tt_train_third_run.log
-          retention-days: 14
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS
-
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: /work/build/tt-train/generated/test_reports/
-          prefix: "tt_train_test_reports_"
