@@ -26,8 +26,7 @@ struct WorkerMemoryLayout {
 };
 
 // Allocate L1 memory for worker kernel buffers
-WorkerMemoryLayout allocate_worker_memory(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device);
+WorkerMemoryLayout allocate_worker_memory();
 
 // Create program with traffic generator kernel
 // FR-2: Launch worker kernel

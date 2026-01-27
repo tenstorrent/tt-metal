@@ -23,8 +23,7 @@ constexpr uint32_t PACKET_PAYLOAD_SIZE_DEFAULT = 256;
 // Memory region sizes
 constexpr uint32_t SOURCE_BUFFER_SIZE = 0x1000;  // 4KB for source buffer
 
-WorkerMemoryLayout allocate_worker_memory(
-    [[maybe_unused]] const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
+WorkerMemoryLayout allocate_worker_memory() {
 
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
@@ -35,17 +34,11 @@ WorkerMemoryLayout allocate_worker_memory(
     // Get L1 alignment requirement
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
-    WorkerMemoryLayout layout{};
+    WorkerMemoryLayout layout = {
+        .source_buffer_address = tt::align(l1_unreserved_base, l1_alignment), 
+        .teardown_signal_address = tt::align(layout.source_buffer_address + SOURCE_BUFFER_SIZE, l1_alignment),
+        .packet_payload_size_bytes = PACKET_PAYLOAD_SIZE_DEFAULT};
 
-    // Source buffer: starts at unreserved base, aligned
-    layout.source_buffer_address = tt::align(l1_unreserved_base, l1_alignment);
-
-    // Teardown signal mailbox: placed after source buffer, aligned
-    layout.teardown_signal_address = tt::align(
-        layout.source_buffer_address + SOURCE_BUFFER_SIZE, l1_alignment);
-
-    // Default packet payload size
-    layout.packet_payload_size_bytes = PACKET_PAYLOAD_SIZE_DEFAULT;
 
     return layout;
 }
@@ -59,9 +52,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     auto program = std::make_shared<tt_metal::Program>();
 
     // Get source fabric node ID from the mesh device (use first device at coord 0,0)
-    // tt_metal::distributed::MeshCoordinate src_coord(0, 0);
-    FabricNodeId src_fabric_node(MeshId{0}, 0);  // mesh_id=0, device_id=0
-    // FabricNodeId src_fabric_node = device->get_fabric_node_id(src_coord);
+    FabricNodeId src_fabric_node(MeshId{0}, 0);
 
     // Target core on remote chip for traffic destination
     CoreCoord remote_logical_core(0, 0);

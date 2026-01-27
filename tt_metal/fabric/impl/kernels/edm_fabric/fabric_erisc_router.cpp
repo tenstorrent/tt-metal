@@ -2037,10 +2037,6 @@ void execute_pause_command(tt_l1_ptr RouterStateManager* state_manager_l1, volat
         // Master erisc will handle the pause command but we need to make sure the other erisc is in its wait loop
         // before we proceed. This coordination is not implemented yet. When mainlined, it will be integrated here.
 
-        //
-        // Wait for other eriscs will go here
-        //
-
         bool keep_running_pause = true;
         while (keep_running_pause && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             state_manager_l1->state = RouterStateCommon::PAUSED;
