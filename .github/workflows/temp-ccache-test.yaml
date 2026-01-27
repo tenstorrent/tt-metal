@@ -69,13 +69,13 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=false"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "=== Redis Configuration ==="
           echo "REDIS_USER: ${{ vars.REDIS_USER }}"
           echo "REDIS_HOST: ${{ vars.REDIS_HOST }}"
           echo "REDIS_PORT: ${{ vars.REDIS_PORT }}"
-          echo "REDIS_IS_READONLY: ${{ vars.REDIS_IS_READONLY }}"
+          echo "REDIS_IS_READONLY: false (hardcoded)"
           echo "Using database: 1 (for kernel cache testing)"
 
       - name: Create ccache tmpdir
@@ -247,13 +247,13 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=false"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "=== Redis Configuration ==="
           echo "REDIS_USER: ${{ vars.REDIS_USER }}"
           echo "REDIS_HOST: ${{ vars.REDIS_HOST }}"
           echo "REDIS_PORT: ${{ vars.REDIS_PORT }}"
-          echo "REDIS_IS_READONLY: ${{ vars.REDIS_IS_READONLY }}"
+          echo "REDIS_IS_READONLY: false (hardcoded)"
           echo "Using database: 1 (for kernel cache testing)"
 
       - name: Create ccache tmpdir
@@ -469,13 +469,13 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}/1|read-only=false"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "=== Redis Configuration ==="
           echo "REDIS_USER: ${{ vars.REDIS_USER }}"
           echo "REDIS_HOST: ${{ vars.REDIS_HOST }}"
           echo "REDIS_PORT: ${{ vars.REDIS_PORT }}"
-          echo "REDIS_IS_READONLY: ${{ vars.REDIS_IS_READONLY }}"
+          echo "REDIS_IS_READONLY: false (hardcoded)"
           echo "Using database: 1 (for kernel cache testing)"
 
       - name: Create ccache tmpdir
