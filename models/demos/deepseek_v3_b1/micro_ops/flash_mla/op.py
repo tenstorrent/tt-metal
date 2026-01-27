@@ -38,6 +38,32 @@ def float_to_uint32(val: float) -> int:
     return struct.unpack("I", struct.pack("f", val))[0]
 
 
+def get_noc_max_page_size() -> int:
+    """Get NOC max page size for Blackhole architecture."""
+    return 16384
+
+
+def get_max_page_size_and_num_pages(noc_max_page_size: int, num_tiles: int, tile_size: int) -> tuple:
+    """
+    Calculate optimal page size and number of pages for NOC transfers.
+
+    Returns (page_size, num_pages) where:
+    - page_size is the largest multiple of tile_size that fits in NOC max
+    - num_pages is total_size / page_size
+    """
+    total_size = num_tiles * tile_size
+
+    # Calculate page size as largest multiple of tile_size that fits
+    page_size = (noc_max_page_size // tile_size) * tile_size
+
+    # Ensure total_size is divisible by page_size
+    while total_size % page_size != 0 and page_size >= tile_size:
+        page_size -= tile_size
+
+    num_pages = total_size // page_size
+    return page_size, num_pages
+
+
 # =============================================================================
 # Hard-coded S block definitions for SDPA compute grid
 # NOTE: These layouts are optimal ONLY for NOC0. NOC1 has different optimal
@@ -491,8 +517,15 @@ class FlashMLADecode:
         # Intermediate output tiles (C++ line 427)
         intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_head - 1)
 
+        # =========================================================================
+        # DRAM Streaming Optimization: Calculate page size for K chunk reads
+        # =========================================================================
+        # K chunk tiles: Sk_chunk_t * DHt tiles per chunk
+        k_chunk_tiles = Sk_chunk_t * DHt
+        noc_max_page_size = get_noc_max_page_size()
+        k_page_size, k_num_pages = get_max_page_size_and_num_pages(noc_max_page_size, k_chunk_tiles, k_tile_size)
+
         # Index stick size for position tensor (C++ lines 429-445)
-        use_cur_pos_tensor = True
         index_stick_size = B * 4  # int32 = 4 bytes per element
         index_stick_size = ((index_stick_size + 31) // 32) * 32  # Align to 32 bytes
 
@@ -561,6 +594,10 @@ class FlashMLADecode:
             q_chunk_size_bytes,  # 18
             num_mcast_dests,  # 19: multicast destinations (7 = 8 cores per S block - 1 sender)
             2,  # 20: mcast_semaphore_id (semaphore for KV cache multicast)
+            k_page_size,  # 21: page size for DRAM streaming reads
+            k_num_pages,  # 22: number of pages per K chunk
+            k_tile_size,  # 23: K tile size in bytes
+            3,  # 24: brisc_ncrisc_sync_semaphore_id (for DRAM/mcast overlap)
         ]
         # TensorAccessorArgs for K, V (KV cache - can be interleaved or height-sharded), and pos tensor
         reader_compile_time_args.extend(get_tensor_accessor_args(kv_cache_tensor))  # K
@@ -589,6 +626,11 @@ class FlashMLADecode:
             max_dynamic_chunk_size,  # 15
             B,  # 16: q_heads_parallel_factor = num Q shards (maps cur_batch to actual batch)
             Q_TILE_HEIGHT,  # 17: Q tile height for tiny tile support
+            # Multicast args for DRAM/mcast overlap
+            DHt,  # 18: head dim in tiles
+            num_mcast_dests,  # 19: multicast destinations (7 = 8 cores per S block - 1 sender)
+            2,  # 20: mcast_semaphore_id (semaphore for KV cache multicast to receivers)
+            3,  # 21: brisc_ncrisc_sync_semaphore_id (semaphore for BRISC->NCRISC sync)
         ]
 
         # Compute compile time args (simplified)
@@ -905,6 +947,7 @@ class FlashMLADecode:
             ttnn.SemaphoreDescriptor(0, ttnn.CoreType.WORKER, core_grid, 0),  # reducer_semaphore
             ttnn.SemaphoreDescriptor(1, ttnn.CoreType.WORKER, core_grid, 0),  # output_semaphore
             ttnn.SemaphoreDescriptor(2, ttnn.CoreType.WORKER, core_grid, 0),  # mcast_semaphore for KV cache
+            ttnn.SemaphoreDescriptor(3, ttnn.CoreType.WORKER, core_grid, 0),  # brisc_ncrisc_sync for DRAM/mcast overlap
         ]
 
         # =========================================================================
@@ -950,6 +993,11 @@ class FlashMLADecode:
             # Get multicast coordinates for this core's S block (physical NOC coords)
             mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, _ = s_block_mcast_coords[s_block_idx]
 
+            # Virtual channel for DRAM streaming (only used by mcast senders)
+            # Each S block reads from its optimal DRAM bank - use bank_id & 0x3 for vc
+            s_block_dram_bank = grid.BLOCKS[s_block_idx][1]
+            vc = s_block_dram_bank & 0x3
+
             # Reader runtime args (simplified)
             reader_runtime_args = [
                 q_addr,
@@ -968,6 +1016,7 @@ class FlashMLADecode:
                 mcast_start_y,
                 mcast_end_x,
                 mcast_end_y,
+                vc,  # Virtual channel for DRAM streaming
             ]
             reader_runtime_args.extend(output_core_physical_xs)
             reader_runtime_args.extend(output_core_physical_ys)
@@ -981,6 +1030,12 @@ class FlashMLADecode:
                 cur_batch,
                 core_num_in_reduce,
                 cur_pos,
+                # Multicast args for DRAM/mcast overlap
+                1 if is_mcast_sender else 0,
+                mcast_start_x,
+                mcast_start_y,
+                mcast_end_x,
+                mcast_end_y,
             ]
             writer_runtime_args.extend(reduce_core_physical_xs)
             writer_runtime_args.extend(reduce_core_physical_ys)
@@ -1004,12 +1059,13 @@ class FlashMLADecode:
         # Add runtime args for idle cores
         for core in core_group_idle:
             # Idle cores get zero/placeholder runtime args
-            # 12 base args + 4 mcast coords = 16 args before output core lists
-            idle_reader_runtime_args = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            # 12 base args + 4 mcast coords + 1 vc = 17 args before output core lists
+            idle_reader_runtime_args = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             idle_reader_runtime_args.extend([0] * len(output_core_physical_xs))
             idle_reader_runtime_args.extend([0] * len(output_core_physical_ys))
 
-            idle_writer_runtime_args = [0, 0, 0, 0, 0, 0, 0]
+            # 7 base args + 5 mcast args = 12 args before reducer core lists
+            idle_writer_runtime_args = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             idle_writer_runtime_args.extend([0] * len(reduce_core_physical_xs))
             idle_writer_runtime_args.extend([0] * len(reduce_core_physical_ys))
 

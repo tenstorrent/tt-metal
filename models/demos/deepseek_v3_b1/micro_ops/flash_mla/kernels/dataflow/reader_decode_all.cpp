@@ -49,9 +49,13 @@ void kernel_main() {
     constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
     constexpr uint32_t mcast_semaphore_id = get_compile_time_arg_val(20);
+    constexpr uint32_t k_page_size = get_compile_time_arg_val(21);                     // Page size for DRAM streaming
+    constexpr uint32_t k_num_pages = get_compile_time_arg_val(22);                     // Number of pages per K chunk
+    constexpr uint32_t k_tile_size_ct = get_compile_time_arg_val(23);                  // K tile size in bytes
+    constexpr uint32_t brisc_ncrisc_sync_semaphore_id = get_compile_time_arg_val(24);  // BRISC->NCRISC sync
 
     // TensorAccessorArgs for K and V (KV cache in DRAM), and pos tensor
-    constexpr auto k_args = TensorAccessorArgs<21>();  // After compile-time args
+    constexpr auto k_args = TensorAccessorArgs<25>();  // After compile-time args (24 + 1 new arg)
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto pos_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
 
@@ -73,6 +77,7 @@ void kernel_main() {
     const uint32_t mcast_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_end_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t vc = get_arg_val<uint32_t>(arg_idx++);  // Virtual channel for DRAM streaming
 
     // idle core
     if (q_addr == 0) {
@@ -171,16 +176,31 @@ void kernel_main() {
     // Number of chunks per batch = max_seq_len / k_chunk_size = St / Sk_chunk_t
     constexpr uint32_t num_chunks_per_batch = St / Sk_chunk_t;
 
-    // Set up multicast addresses and semaphore
-    const uint64_t mcast_noc_addr = get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+    // DRAM streaming optimization: set NOC state once at kernel start
+    // All chunks processed by this S block are on the same DRAM bank (round-robin distribution)
+    // so the NOC coordinates (high bits) are the same for all reads
+    if constexpr (k_args.is_sharded) {
+        if (is_mcast_sender) {
+            // Get first shard address to extract NOC coordinates
+            const uint32_t kv_batch_init = (cur_batch / q_heads_parallel_factor) % Bkv;
+            const uint32_t first_shard_id = kv_batch_init * num_chunks_per_batch + k_chunk_start;
+            uint64_t first_shard_noc_addr = get_shard_noc_addr_helper(k_reader, first_shard_id);
+            noc_async_read_one_packet_set_state<true>(first_shard_noc_addr, k_page_size, vc);
+        }
+    }
+
+    // Set up multicast semaphore (receiver waits on this, sender handled by NCRISC writer)
     const uint32_t mcast_semaphore_addr = get_semaphore(mcast_semaphore_id);
     volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_semaphore_addr);
 
-    // Sender: set local semaphore to valid once (will be multicast each iteration)
-    if (is_mcast_sender) {
-        noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
-    }
+    // Set up BRISC->NCRISC sync semaphore (sender only - signals NCRISC when DRAM read is done)
+    const uint32_t brisc_ncrisc_sync_l1_addr = get_semaphore(brisc_ncrisc_sync_semaphore_id);
+    const uint64_t brisc_ncrisc_sync_noc_addr = get_noc_addr(brisc_ncrisc_sync_l1_addr);
+
+    // Use the word after the sync semaphore to communicate K buffer address from BRISC to NCRISC
+    volatile tt_l1_ptr uint32_t* k_addr_for_ncrisc_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_l1_addr + 4);
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -201,18 +221,24 @@ void kernel_main() {
                 const uint32_t k_chunk_bytes = k_chunk_tiles * k_tile_bytes;
 
                 if (is_mcast_sender) {
-                    // Sender: read from DRAM
+                    // Sender: read from DRAM (NCRISC will handle multicast)
                     if constexpr (k_args.is_sharded) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
+                        uint64_t k_src_noc_addr;
                         {
                             DeviceZoneScopedN("mcast-sender-tensor-accessor");
                             const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
-                            uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
-                            uint32_t dram_x = NOC_UNICAST_ADDR_X(k_src_noc_addr);
-                            uint32_t dram_y = NOC_UNICAST_ADDR_Y(k_src_noc_addr);
-                            DPRINT << "shard_id=" << shard_id << " -> DRAM(" << dram_x << "," << dram_y << ")"
-                                   << ENDL();
-                            noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_bytes);
+                            k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+                        }
+
+                        // Page-based reads using pre-configured NOC state (set at kernel init)
+                        // Extract low 32 bits of NOC address as base local address
+                        uint32_t src_addr_lo = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
+                        uint32_t dst_addr = k_write_ptr;
+                        for (uint32_t page = 0; page < k_num_pages; ++page) {
+                            noc_async_read_one_packet_with_state(src_addr_lo, dst_addr, vc);
+                            src_addr_lo += k_page_size;
+                            dst_addr += k_page_size;
                         }
                         noc_async_read_barrier();
                     } else {
@@ -230,26 +256,24 @@ void kernel_main() {
                         noc_async_read_barrier();
                     }
 
-                    // Multicast K data to other cores in the S block
-                    {
-                        DeviceZoneScopedN("mcast-sender-multicast");
-                        // Multicast to other cores (sender already has data from DRAM read, no loopback needed)
-                        uint64_t mcast_dest_addr = mcast_noc_addr | k_write_ptr;
-                        noc_async_write_multicast(k_write_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, true);
+                    // Store K buffer address for NCRISC before pushing
+                    // (after push, the write_ptr advances, so we save it first)
+                    *k_addr_for_ncrisc_ptr = k_write_ptr;
 
-                        // Signal receivers that data is ready via multicast semaphore
-                        uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
-                        noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests);
-                        noc_async_write_barrier();
-                    }
+                    // Push K to CB
+                    cb_push_back(cb_k_in, k_chunk_tiles);
+
+                    // Signal NCRISC that DRAM read is complete and address is ready
+                    noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
                 } else {
-                    // Receiver: wait for multicast data from sender
+                    // Receiver: wait for multicast data from sender (sent by NCRISC writer)
                     DeviceZoneScopedN("mcast-receiver-wait");
                     noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                     noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);
-                }
 
-                cb_push_back(cb_k_in, k_chunk_tiles);
+                    // Push to CB after receiving multicast
+                    cb_push_back(cb_k_in, k_chunk_tiles);
+                }
             }
 
             // Read V chunk from K's L1 buffer (MLA reuses K for V)

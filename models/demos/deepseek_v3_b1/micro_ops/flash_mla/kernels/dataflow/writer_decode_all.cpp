@@ -248,6 +248,11 @@ void kernel_main() {
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(15);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(16);
     constexpr uint32_t q_tile_height = get_compile_time_arg_val(17);  // Q tile height for tiny tile support
+    // Multicast args for DRAM/mcast overlap
+    constexpr uint32_t DHt = get_compile_time_arg_val(18);              // head dim in tiles
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);  // multicast destinations
+    constexpr uint32_t mcast_semaphore_id = get_compile_time_arg_val(20);
+    constexpr uint32_t brisc_ncrisc_sync_semaphore_id = get_compile_time_arg_val(21);
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -257,6 +262,12 @@ void kernel_main() {
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+    // Multicast args for DRAM/mcast overlap
+    const bool is_mcast_sender = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t mcast_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_start_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_end_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_end_y = get_arg_val<uint32_t>(arg_idx++);
 
     // idle core
     if (out_addr == 0) {
@@ -330,6 +341,65 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    // =========================================================================
+    // KV Cache Multicast (NCRISC - overlapped with BRISC DRAM reads)
+    // Sender only: wait for BRISC to complete DRAM read, then multicast to receivers
+    // =========================================================================
+    if (is_mcast_sender) {
+        constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+        constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
+        uint32_t k_chunk_tiles = Sk_chunk_t_dynamic * DHt;
+        uint32_t k_chunk_bytes = k_chunk_tiles * k_tile_bytes;
+
+        // Set up semaphores
+        const uint32_t mcast_semaphore_addr = get_semaphore(mcast_semaphore_id);
+        volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_semaphore_addr);
+        const uint32_t brisc_ncrisc_sync_addr = get_semaphore(brisc_ncrisc_sync_semaphore_id);
+        volatile tt_l1_ptr uint32_t* brisc_ncrisc_sync_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_addr);
+
+        // Use the word after the sync semaphore to read K buffer address from BRISC
+        volatile tt_l1_ptr uint32_t* k_addr_from_brisc_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_addr + 4);
+
+        // Set up multicast addresses
+        const uint64_t mcast_noc_addr =
+            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+
+        // Set local mcast semaphore to valid (will be multicast each iteration)
+        noc_semaphore_set(mcast_semaphore_ptr, 1);  // MCAST_VALID = 1
+
+        // Multicast loop for each K chunk
+        uint32_t sync_count = 0;
+        for (uint32_t cur_head = cur_head_group * num_heads_per_core;
+             cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
+             ++cur_head) {
+            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+                DeviceZoneScopedN("ncrisc-mcast-sender");
+
+                // Wait for BRISC to signal DRAM read is complete and address is ready
+                ++sync_count;
+                noc_semaphore_wait(brisc_ncrisc_sync_ptr, sync_count);
+
+                // Read K buffer address from shared L1 (written by BRISC before signaling)
+                uint32_t k_read_ptr = *k_addr_from_brisc_ptr;
+
+                // Multicast K data to other cores in the S block
+                // Must use NOC_0 for multicast due to grid wrapping requirements
+                constexpr uint8_t MCAST_NOC = 0;  // NOC_0
+                uint64_t mcast_dest_addr = mcast_noc_addr | k_read_ptr;
+                noc_async_write_multicast(
+                    k_read_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, false, MCAST_NOC);
+
+                // Signal receivers that data is ready via multicast semaphore
+                uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
+                noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests, false, MCAST_NOC);
+                noc_async_write_barrier();
+            }
+        }
+    }
 
     if (is_worker) {
         DeviceZoneScopedN("writer-worker");
