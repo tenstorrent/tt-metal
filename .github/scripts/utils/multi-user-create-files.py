@@ -4,7 +4,7 @@ import argparse
 import shutil
 
 
-def multi_user_containers(num_containers, image):
+def multi_user_containers(num_containers, image, chips_per_container, mesh_descriptor, container_prefix):
     services = {}
 
     user_id = os.environ.get("UID") or os.getuid()
@@ -14,11 +14,11 @@ def multi_user_containers(num_containers, image):
     for i in range(0, num_containers):
         devices = []
 
-        for n in range(0, 8):
-            dev_num = (i) * 8 + n
+        for n in range(0, chips_per_container):
+            dev_num = i * chips_per_container + n
             devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
 
-        service_name = f"tray-{i}"
+        service_name = f"{container_prefix}-{i}"
         services[service_name] = {
             "image": image,
             "stdin_open": True,
@@ -38,8 +38,8 @@ def multi_user_containers(num_containers, image):
                 "TTNN_RUNTIME_ARTIFACTS": f"/app/tt-metal/.ttnn_runtime_artifacts_{i}",
                 "LD_LIBRARY_PATH": "/app/tt-metal/build/lib",
                 "PYTHONPATH": "/app/tt-metal",
-                "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto",
-                "TT_MULTI_USER_GALAXY": f"/app/tt-metal/.multi-user-galaxy-docker-files/tray-{i}.txt",
+                "TT_MESH_GRAPH_DESC_PATH": f"/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/{mesh_descriptor}",
+                "TT_MULTI_USER_GALAXY": f"/app/tt-metal/.multi-user-galaxy-docker-files/{service_name}.txt",
             },
             "devices": devices,
         }
@@ -55,9 +55,24 @@ def multi_user_containers(num_containers, image):
 parser = argparse.ArgumentParser(description="Generate multi-user container YAML and hostfile.")
 parser.add_argument("--num-containers", type=int, default=4, help="Number of containers to create")
 parser.add_argument("--image", type=str, required=True, help="Docker image to use for containers")
+parser.add_argument("--chips-per-container", type=int, default=8, help="Number of chips per container (default: 8)")
+parser.add_argument(
+    "--mesh-descriptor",
+    type=str,
+    required=True,
+    help="Mesh graph descriptor file name",
+)
+parser.add_argument(
+    "--container-prefix",
+    type=str,
+    default="container",
+    help="Prefix for container names (default: container)",
+)
 args = parser.parse_args()
 
-services = multi_user_containers(args.num_containers, args.image)
+services = multi_user_containers(
+    args.num_containers, args.image, args.chips_per_container, args.mesh_descriptor, args.container_prefix
+)
 
 data = {"services": services}
 
