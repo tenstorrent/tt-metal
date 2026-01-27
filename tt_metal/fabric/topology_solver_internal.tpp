@@ -1222,24 +1222,44 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
 
-    // Always build bidirectional mappings, even if validation fails
-    // This allows users to see the closest/best mapping found for debugging
-    size_t mapped_count = 0;
-    for (size_t i = 0; i < mapping.size(); ++i) {
-        if (mapping[i] != -1) {
-            size_t global_idx = static_cast<size_t>(mapping[i]);
-            const TargetNode& target_node = graph_data.target_nodes[i];
-            const GlobalNode& global_node = graph_data.global_nodes[global_idx];
-
-            result.target_to_global[target_node] = global_node;
-            result.global_to_target.emplace(global_node, target_node);
-            mapped_count++;
-        }
-    }
-
-    // Validate mapping and collect detailed error messages
+    // Validate mapping first to determine if it's valid
+    // Only count nodes as "mapped" if the mapping is valid
     std::vector<std::string> validation_warnings;
     bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings, quiet_mode);
+
+    // Build bidirectional mappings - only if validation passes, or save partial mapping for debugging
+    size_t mapped_count = 0;
+    if (valid) {
+        // Valid mapping - count all mapped nodes
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                mapped_count++;
+            }
+        }
+    } else {
+        // Invalid mapping - only count nodes that are part of a valid partial mapping
+        // For now, if validation fails, we don't count any nodes as successfully mapped
+        // This is because the mapping is invalid and shouldn't be used
+        // Still save the mapping for debugging purposes, but don't count it as "mapped"
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                // Save for debugging, but don't count as successfully mapped
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                // mapped_count stays 0 - invalid mappings don't count as "mapped"
+            }
+        }
+    }
 
     if (!valid) {
         result.success = false;

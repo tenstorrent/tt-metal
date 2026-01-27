@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -357,17 +358,16 @@ private:
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
      * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
      *
-     * @param mesh_id Mesh ID
-     * @param adjacency_map_physical Physical adjacency maps for each mesh
-     * @param adjacency_map_logical Logical adjacency maps for each mesh
-     * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
+     * @param adjacency_map_physical Multi-mesh physical adjacency graph
+     * @param adjacency_map_logical Multi-mesh logical adjacency graph
+     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+     * @param fabric_node_id_to_mesh_rank Mapping of mesh IDs to fabric node IDs to mesh host ranks
      */
     void populate_fabric_node_id_to_asic_id_mappings(
-        MeshId mesh_id,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
-        const AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
-        const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
+        const tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& adjacency_map_physical,
+        const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& adjacency_map_logical,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank);
 
     /**
      * @brief Broadcast chip info to hosts
@@ -437,9 +437,11 @@ private:
      */
     void verify_topology_mapping() const;
 
-    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
+    void print_logical_adjacency_map(
+        const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const;
 
-    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
+    void print_physical_adjacency_map(
+        const tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const;
 };
 
 }  // namespace tt::tt_fabric
