@@ -10,6 +10,9 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t reduce_core_id = get_named_compile_time_arg_val("reduce_core_id");
+    constexpr uint32_t reduce_core_physical_x = get_named_compile_time_arg_val("reduce_core_physical_x");
+    constexpr uint32_t reduce_core_physical_y = get_named_compile_time_arg_val("reduce_core_physical_y");
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -22,14 +25,16 @@ void MAIN {
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_2;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    constexpr uint32_t num_w_tiles_h = 224;
-    constexpr uint32_t num_out_tiles_h = 1;
+    constexpr uint32_t num_w_tiles_h = 20;
+    constexpr uint32_t num_w_tiles_w = 8;
 
     //-------------------------------------------------------------------------
     // W reading constants
@@ -37,7 +42,7 @@ void MAIN {
     constexpr uint32_t w_txns_per_block = 8;
     constexpr uint32_t w_tiles_per_txn = noc_packet_size / 2048;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    constexpr uint32_t w_num_blocks = num_w_tiles_h / w_tiles_per_block;
+    constexpr uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -52,7 +57,7 @@ void MAIN {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul: input @ weight -> output
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
+    mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/8, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //-------------------------------------------------------------------------
     // Compute: input @ weight -> output
@@ -63,8 +68,8 @@ void MAIN {
     for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
-            // Perform matmul: 1 input tile @ 1 weight tile
+        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; tile_id += num_w_tiles_w) {
+            // Perform matmul: 1 input tile @ 8 weight tiles
             matmul_block(
                 cb_s2c_in,
                 cb_r2c_w,
@@ -72,20 +77,25 @@ void MAIN {
                 /*in1_index=*/tile_id,
                 /*idst=*/0,
                 /*transpose=*/false,
-                /*ct_dim=*/1,
+                /*ct_dim=*/8,
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
+
     tile_regs_commit();
 
     tile_regs_wait();
 
     // Pack output tile
-    pack_tile(0, cb_s2c_out);
+    pack_tile_block(0, cb_s2c_out, 8);
 
     tile_regs_release();
+
+    // Signal to DM1 that we have finished
+    cb_reserve_back(cb_c2w_rdy, 1);
+    cb_push_back(cb_c2w_rdy, 1);
 
     // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w, w_tiles_per_block);
