@@ -94,24 +94,7 @@ struct Rope {
 
     private:
         void impl(const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
-            constexpr uint32_t Ht = 1;
-            constexpr uint32_t Wt = CTArgs::Wt;
-
-            for (uint32_t ht = 0; ht < Ht; ht++) {
-                cb_reserve_back(args.in_cb, Wt);
-                cb_push_back(args.in_cb, Wt);
-            }
-
-            cb_reserve_back(args.trans_mat_cb, 1);
-            cb_push_back(args.trans_mat_cb, 1);
-
-            cb_reserve_back(args.sin_cb, Wt);
-            cb_push_back(args.sin_cb, Wt);
-
-            cb_reserve_back(args.cos_cb, Wt);
-            cb_push_back(args.cos_cb, Wt);
-#elif defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = 1;
 
