@@ -269,14 +269,7 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_TERNARY
-            // Split ternary reading across two NoCs for load balancing:
-            // - Non-output-writer (in0 when M>N, in1 when M<N) reads ternary_a
-            // - Output-writer (in1 when M>N, in0 when M<N) reads ternary_b
             if constexpr (!is_output_writer) {
-                // Read ternary_a on this NoC
-                // cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
-                // uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
-
                 read_ternary_blocks_sync_v1<M_block_tiles, N_block_tiles>(
                     ternary_a_reader,
                     ternary_b_reader,
@@ -288,8 +281,6 @@ void kernel_main() {
                     m_tile_end,
                     n_tile,
                     n_tile_end);
-
-                // cb_push_back(cb_id_ternary_b, out_block_num_tiles);
             }
 #endif  // FUSE_TERNARY
 
