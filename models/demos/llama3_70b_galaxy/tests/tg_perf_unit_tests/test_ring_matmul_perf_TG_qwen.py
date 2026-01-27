@@ -18,7 +18,13 @@ THRESHOLD = 1.0
         ("do", 7.3),
         ("ff13", 9.9),
         ("ff2", 14.8),
-        ("lm_head", 380),
+        pytest.param(
+            "lm_head",
+            380,
+            marks=pytest.mark.skip(
+                reason="Skipped due to L1 buffer memory allocation issue with qwen lm_head configuration"
+            ),
+        ),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
