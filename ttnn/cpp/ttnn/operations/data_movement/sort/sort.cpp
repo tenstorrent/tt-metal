@@ -111,11 +111,14 @@ std::vector<Tensor> post_sort_transform_tensor(
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
-
     // Reshape back to original rank if needed
-    if (orig_rank < 4) {
+    if (orig_rank < 4 && orig_rank > 1) {
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
+    } else if (orig_rank == 1) {
+        const ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
+        result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
     } else if (orig_rank > 4) {
         ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
