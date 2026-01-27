@@ -14,13 +14,15 @@
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
+#include "api/tt-metalium/experimental/host_api.hpp"
+#include "context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "program/program_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include "llrt.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -69,7 +71,8 @@ struct KernelSource {
 
 class Kernel : public JitBuildSettings {
 public:
-    using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+    using Config =
+        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::quasar::QuasarDataMovementConfig>;
 
     ~Kernel() override = default;
 
@@ -320,5 +323,61 @@ private:
 
     std::string config_hash() const override;
 };
+
+namespace experimental::quasar {
+class QuasarDataMovementKernel : public Kernel {
+public:
+    QuasarDataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarDataMovementConfig& config,
+        const std::set<DataMovementProcessor>& dm_cores) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        dm_cores_(dm_cores.begin(), dm_cores.end()) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarDataMovementKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_processors_per_cluster == dm_cores.size(),
+            "Number of processors per cluster specified in config must match number of DM cores per cluster that have "
+            "been reserved");
+        TT_FATAL(std::is_sorted(dm_cores_.begin(), dm_cores_.end()), "DM cores must be ordered");
+    }
+
+    ~QuasarDataMovementKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const QuasarDataMovementConfig config_;
+    const std::vector<DataMovementProcessor> dm_cores_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+}  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal

@@ -367,7 +367,8 @@ def test_llama_model_inference(
                 if run_ref_pt:
                     pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
             else:
-                tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
+                # tt_out_tok is a tuple of (tt_out_tok, tt_log_probs)
+                tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok[0])[0]
                 tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
                 tt_out_tok = ttnn.to_torch(
                     tt_out_tok_cpu,

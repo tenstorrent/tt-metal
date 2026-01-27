@@ -13,7 +13,6 @@
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_log.h"
-#include "llk_math_eltwise_unary_sfpu_max.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"

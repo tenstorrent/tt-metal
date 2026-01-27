@@ -19,7 +19,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "compute_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
 
@@ -280,7 +280,6 @@ void MAIN {
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
-                bool add_causal_mask_fusion = false;
                 bool add_sliding_window_mask_fusion = false;
 #endif
 
@@ -291,7 +290,7 @@ void MAIN {
                     mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
                 }
 
-                cb_matmul_blocks(
+                matmul_blocks(
                     cb_q_in,
                     cb_k_in,
                     cb_qk_im,
@@ -360,12 +359,8 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace_reduce<
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    scale_fp32,
-                    vector_mode,
-                    cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 // Reconfig register DF
@@ -379,7 +374,7 @@ void MAIN {
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
-                cb_matmul_blocks(
+                matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
                     cb_out_mm,
@@ -412,7 +407,7 @@ void MAIN {
                     pack_reconfig_data_format(cb_exp_max_diff);
 
                     /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
 
                     /* PREV_SUM *= EXP_MAX_DIFF */
@@ -421,7 +416,8 @@ void MAIN {
                     /* OUT_ACC *= EXP_MAX_DIFF */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
                     pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
+                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
 
                     /* CUR_SUM += PREV_SUM */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);
@@ -491,8 +487,8 @@ void MAIN {
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
-                    mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
@@ -517,31 +513,31 @@ void MAIN {
                 max_block<vector_mode>(cb_attention_sink, cb_prev_max, cb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
                 mul_block_inplace(cb_cur_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32, vector_mode>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                 cb_pop_front(cb_cur_max, Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
                 add_block_inplace<true>(cb_cur_sum, cb_exp_max_diff_2, Sq_chunk_t);
 
                 // O -> O * exp(m - m_new)
-                mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
             }
 
             reconfig_data_format(cb_cur_sum, cb_cur_sum);
             pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
+            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
             /* OUT_ACC *= CUR_SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
             pack_reconfig_data_format(cb_out_accumulate_im);
 
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_cur_sum);
             pack_reconfig_data_format(cb_out_final);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
