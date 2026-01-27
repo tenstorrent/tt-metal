@@ -21,8 +21,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    float dropout_probability = 0.0F,
-    bool fp32_dest_acc_en = true);
+    float dropout_probability = 0.0F);
 
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,

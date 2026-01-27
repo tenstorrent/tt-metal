@@ -15,8 +15,8 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices for gradients
-    constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;    // Output: grad_K
-    constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;  // Output: grad_V
+    constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;    // Output: grad_K
+    constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;  // Output: grad_V
 
     // Get compile-time arguments
     constexpr uint32_t kWt = get_compile_time_arg_val(0);              // key/value width in tiles
