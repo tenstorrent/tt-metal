@@ -34,43 +34,31 @@ class TorchTTNNTensor(torch.Tensor):
         return self.elem.shape if self.elem is not None else tuple(int(i) for i in self.ttnn_tensor.shape)
 
     def __mul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mul.Tensor, None, (self, other), {}
-        )
+        return torch.mul(self, other)
 
     def __rmul__(self, other):
         return self.__mul__(other)
 
     def __sub__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.sub.Tensor, None, (self, other), {}
-        )
+        return torch.sub(self, other)
 
     def __rsub__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.sub.Tensor, None, (other, self), {}
-        )
+        return torch.sub(other, self)
 
     def __add__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.add.Tensor, None, (self, other), {}
-        )
+        return torch.add(self, other)
 
     def __radd__(self, other):
-        return self.__add__(other)
+        return torch.add(other, self)
 
     def __abs__(self):
-        raise RuntimeError("Absolute value is not yet implemented for TTNN tensors.")
+        return torch.abs(self)
 
     def __matmul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mm.default, None, (self, other), {}
-        )
+        return torch.matmul(self, other)
 
     def __rmatmul__(self, other):
-        return get_tensor_run_implementation().torch_dispatch(
-            TorchTTNNTensor, torch.ops.aten.mm.default, None, (other, self), {}
-        )
+        return torch.matmul(other, self)
 
     def bool(self):
         if self.ttnn_tensor is not None:
