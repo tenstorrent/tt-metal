@@ -292,7 +292,6 @@ models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeo
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
-models/demos/resblock @esmalTT @TT-BrianLiu @tt-aho @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
@@ -307,6 +306,7 @@ models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
+models/demos/qwen3_vl @ssanjayTT @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
