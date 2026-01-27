@@ -11,8 +11,7 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(1);
 
@@ -115,4 +114,3 @@ void MAIN {
         cbout1.push_back(ublock_size_tiles);
     }
 }
-}  // namespace NAMESPACE

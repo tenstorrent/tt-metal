@@ -108,8 +108,7 @@ inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0)
     MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // We are going to read from these two circular buffers
@@ -150,4 +149,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE
