@@ -281,7 +281,7 @@ void kernel_main() {
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                             uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
+                            uint32_t direction_offset = direction ? chunk_width / 2 : 0;
 
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
