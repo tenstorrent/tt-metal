@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>

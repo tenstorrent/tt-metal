@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/types.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
