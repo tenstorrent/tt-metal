@@ -145,6 +145,22 @@ class DeepseekGenerator:
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
         self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
 
+        # Debug logging for investigation runs (opt-in via env var)
+        self.debug_investigation = os.environ.get("TT_DEBUG_INVESTIGATION") == "1"
+        if self.debug_investigation:
+            self._debug_prefill_seen = {}
+            self._debug_decode_logged = False
+            self._debug_decode_negative_logged = False
+            logger.info(
+                "[INV] DeepseekGenerator init: mesh_shape={} dp_factor={} batch_size_per_row={} batch_size={} paged_block_size={} max_num_blocks={}",
+                mesh_shape,
+                self.dp_factor,
+                self.batch_size_per_row,
+                self.batch_size,
+                self.paged_config.block_size if self.paged_config is not None else None,
+                self.paged_config.max_num_blocks if self.paged_config is not None else None,
+            )
+
         self.random_weights = random_weights
         self.single_layer = single_layer
 
@@ -467,6 +483,28 @@ class DeepseekGenerator:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             dtype=ttnn.int32,
         )
+        if self.debug_investigation:
+            pos_t = positions if isinstance(positions, torch.Tensor) else torch.as_tensor(positions)
+            pos_min = int(pos_t.min().item()) if pos_t.numel() else 0
+            pos_max = int(pos_t.max().item()) if pos_t.numel() else 0
+            if not self._debug_decode_logged:
+                self._debug_decode_logged = True
+                logger.info(
+                    "[INV] decode_step: tokens_shape={} positions[min,max]=({},{}) batch_size_per_row={} page_table_shape={}",
+                    tuple(tokens_step.shape),
+                    pos_min,
+                    pos_max,
+                    batch_size_per_row,
+                    None if page_table is None else tuple(page_table.shape),
+                )
+            if pos_min < 0 and not self._debug_decode_negative_logged:
+                self._debug_decode_negative_logged = True
+                logger.warning(
+                    "[INV] decode_step: negative positions detected positions[min,max]=({},{}) tokens_shape={}",
+                    pos_min,
+                    pos_max,
+                    tuple(tokens_step.shape),
+                )
 
         if page_table is not None:
             page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
@@ -1035,6 +1073,38 @@ class DeepseekGenerator:
 
         # Extract the user's block table row
         idx = local_user_id if local_user_id is not None else user_id
+        if self.debug_investigation:
+            debug_max = int(os.environ.get("TT_DEBUG_INVESTIGATION_MAX", "64"))
+            local_user_idx = user_id % batch_per_shard
+            col_idx_guess = user_id // batch_per_shard
+            local_user_idx_from_local = local_user_id % batch_per_shard if local_user_id is not None else None
+            col_idx_from_local = local_user_id // batch_per_shard if local_user_id is not None else None
+            key = (local_user_idx, col_idx_guess)
+            prev_user = self._debug_prefill_seen.get(key)
+            if prev_user is not None and prev_user != user_id:
+                logger.warning(
+                    "[INV] page_table collision: key={} prev_user_id={} new_user_id={} local_user_id={} batch_per_shard={}",
+                    key,
+                    prev_user,
+                    user_id,
+                    local_user_id,
+                    batch_per_shard,
+                )
+            else:
+                self._debug_prefill_seen[key] = user_id
+            if len(self._debug_prefill_seen) <= debug_max:
+                logger.info(
+                    "[INV] page_table map: user_id={} local_user_id={} batch_per_shard={} blocks_per_user={} local_user_idx={} col_idx_guess={} local_user_idx_from_local={} col_idx_from_local={} page_table_shape={}",
+                    user_id,
+                    local_user_id,
+                    batch_per_shard,
+                    blocks_per_user,
+                    local_user_idx,
+                    col_idx_guess,
+                    local_user_idx_from_local,
+                    col_idx_from_local,
+                    tuple(page_table.shape),
+                )
         user_blocks = page_table[
             idx, : min(blocks_per_user, page_table.shape[1])
         ].clone()  # [max_num_blocks_per_req] or less

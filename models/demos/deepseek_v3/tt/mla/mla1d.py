@@ -4,10 +4,12 @@
 
 
 import math
+import os
 from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -1007,6 +1009,22 @@ class MLA1D(AbstractModule):
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+        if os.environ.get("TT_DEBUG_INVESTIGATION") == "1":
+            debug_max = int(os.environ.get("TT_DEBUG_INVESTIGATION_MAX", "64"))
+            debug_count = getattr(cls, "_debug_prefill_count", 0)
+            if debug_count < debug_max:
+                logger.info(
+                    "[INV] MLA1D prefill: batch_idx={} row_idx={} batch_size_per_dp_shard={} local_batch_idx={} col_idx={} users_per_row={} mesh_shape={} page_table_shape={}",
+                    batch_idx,
+                    row_idx,
+                    batch_size_per_dp_shard,
+                    local_batch_idx,
+                    col_idx,
+                    USERS_PER_ROW,
+                    mesh_shape,
+                    page_table.shape,
+                )
+            setattr(cls, "_debug_prefill_count", debug_count + 1)
 
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,

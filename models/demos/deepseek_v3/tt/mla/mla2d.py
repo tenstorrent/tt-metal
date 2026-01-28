@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -193,6 +195,20 @@ class MLA2D(MLA1D):
         Returns:
             Output tensor after MLP computation
         """
+
+        if os.environ.get("TT_DEBUG_INVESTIGATION") == "1":
+            debug_max = int(os.environ.get("TT_DEBUG_INVESTIGATION_MAX", "64"))
+            debug_count = getattr(cls, "_debug_prefill_count", 0)
+            if debug_count < debug_max:
+                logger.info(
+                    "[INV] MLA2D prefill: batch_idx={} batch_idx_mod={} row_idx={} users_per_row={} mesh_shape={}",
+                    batch_idx,
+                    batch_idx % USERS_PER_ROW,
+                    batch_idx // USERS_PER_ROW,
+                    USERS_PER_ROW,
+                    cfg["mla1d"]["mesh_shape"],
+                )
+            setattr(cls, "_debug_prefill_count", debug_count + 1)
 
         scale = 1 / cfg["mla1d"]["mesh_shape"][0]
 

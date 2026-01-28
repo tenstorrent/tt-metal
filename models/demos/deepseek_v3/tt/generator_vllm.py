@@ -109,9 +109,40 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             ((max_prompt_len + pad_block_size - 1) // pad_block_size) * pad_block_size if max_prompt_len > 0 else 0
         )
         num_of_users = tokens.shape[0]
+        if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_prefill_logged"):
+            self._debug_prefill_logged = True
+            lens_t = lengths if isinstance(lengths, torch.Tensor) else torch.as_tensor(lengths)
+            lens_min = int(lens_t.min().item()) if lens_t.numel() else 0
+            lens_max = int(lens_t.max().item()) if lens_t.numel() else 0
+            empty_summary = None
+            stride_guess = None
+            if empty_slots is not None and len(empty_slots) > 0:
+                empty_summary = {
+                    "len": len(empty_slots),
+                    "min": int(min(empty_slots)),
+                    "max": int(max(empty_slots)),
+                    "head": [int(x) for x in empty_slots[: min(16, len(empty_slots))]],
+                }
+                # Guess stride by detecting first discontinuity
+                for i in range(1, len(empty_slots)):
+                    if empty_slots[i] != empty_slots[i - 1] + 1:
+                        stride_guess = int(empty_slots[i])
+                        break
+            logger.info(
+                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} stride_guess={} page_table_shape={}",
+                tuple(tokens.shape),
+                num_of_users,
+                lens_min,
+                lens_max,
+                empty_summary,
+                stride_guess,
+                None if page_table is None else tuple(page_table.shape),
+            )
         last_logits = []
         for i in range(num_of_users):
             user_id = empty_slots[i] if empty_slots is not None else i
+            if getattr(self, "debug_investigation", False) and i < 8:
+                logger.info("[INV] prefill map: local_user_id={} user_id={}", i, int(user_id))
             prompt_len = int(lengths[i])
             if prompt_len == 0:
                 last_logits.append(
@@ -138,6 +169,19 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_decode_forward_logged"):
+            self._debug_decode_forward_logged = True
+            positions = kwargs.get("start_pos", None)
+            pos_t = positions if isinstance(positions, torch.Tensor) else torch.as_tensor(positions)
+            pos_min = int(pos_t.min().item()) if pos_t.numel() else 0
+            pos_max = int(pos_t.max().item()) if pos_t.numel() else 0
+            logger.info(
+                "[INV] decode_forward: tokens_shape={} positions[min,max]=({},{}) page_table_shape={}",
+                tuple(kwargs["tokens"].shape),
+                pos_min,
+                pos_max,
+                None if page_table is None else tuple(page_table.shape),
+            )
         if page_table is not None and not hasattr(self, "_validated_vllm_decode"):
             self._validate_vllm_decode_inputs(kwargs["tokens"], kwargs["start_pos"], page_table)
             self._validated_vllm_decode = True
@@ -163,6 +207,15 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         assert (
             num_layers == self.hf_config.num_hidden_layers
         ), f"Number of layers {num_layers} does not match the number of layers in the model {self.hf_config.num_hidden_layers}"
+        if getattr(self, "debug_investigation", False):
+            logger.info(
+                "[INV] allocate_kv_cache: kv_cache_shape={} dtype={} num_layers={} paged_block_size={} max_num_blocks={}",
+                kv_cache_shape,
+                dtype,
+                num_layers,
+                None if self.paged_config is None else self.paged_config.block_size,
+                None if self.paged_config is None else self.paged_config.max_num_blocks,
+            )
         if not hasattr(self, "_validated_vllm_kv_cache"):
             self._validate_vllm_kv_cache(kv_cache_shape, dtype, num_layers)
             self._validated_vllm_kv_cache = True
