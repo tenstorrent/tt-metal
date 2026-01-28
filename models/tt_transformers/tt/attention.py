@@ -544,15 +544,13 @@ class Attention(LightweightModule):
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
-        # xqkv_fused shape: [1, 1, 32, 768]
-
         ###
         # Reshape and rotary embeddings
         ###
         (
-            q_heads_pre_rot_1BQD,  # shape: [1, 1, 4, 128]
-            k_heads_pre_rot_1BKD,  # shape: [1, 1, 1, 128]
-            v_heads_1BKD,  # shape: [1, 1, 1, 128]
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            v_heads_1BKD,
         ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,

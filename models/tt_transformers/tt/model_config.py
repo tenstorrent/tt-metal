@@ -653,7 +653,7 @@ class ModelArgs:
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
         # We currently disable this fusion of ops for vision-capable or multimodal models
-        self.use_qk_fused = False  # not self.is_multimodal and self.prefetcher is None
+        self.use_qk_fused = not self.is_multimodal and self.prefetcher is None
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
