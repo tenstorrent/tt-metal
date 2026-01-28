@@ -73,6 +73,7 @@ struct OpConfig {
         LE,
         HYPOT,
         WHERE,
+        EQ,
     };
 
     template <class EnumT>
