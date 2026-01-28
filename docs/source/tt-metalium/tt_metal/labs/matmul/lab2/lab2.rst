@@ -661,11 +661,15 @@ Follow these steps to complete the exercise:
 
    The tile size is ``32x32`` on all Tenstorrent architectures, as of the time of this writing.
    Given the matrix sizes above, the number of tiles in the ``K`` dimension is ``Kt = 320 / 32 = 10``.
-   Given this, the only non-trivial choices for ``K_block_tiles`` we will explore in this
-   lab are ``2`` and ``5``. Start by setting this parameter to ``2``.
+   Given this, valid values for ``K_block_tiles`` are ``1``, ``2``, ``5``, or ``10``.
+   The impact of this parameter on performance is often small, particularly for small matrix sizes,
+   and may be overwhelmed by other factors.
+   Set ``K_block_tiles`` to ``2`` to demonstrate that your code works with a non-trivial value
+   of this parameter.
 
-   Note: Should the tile size change in the future, the value of ``K_block_tiles``
-   suitable for this lab may need to be adjusted accordingly.
+   Note: Should the tile size be different on the architecture you are working with,
+   the value of ``K_block_tiles`` may need to be adjusted accordingly.
+   To be on the safe side, add an assert to check that ``K_block_tiles`` divides ``Kt`` evenly.
 
 #. Make the core grid parameterizable, then determine appropriate values for the other
    blocking variables, based on the core grid size and the matrix sizes.
@@ -762,8 +766,6 @@ Follow these steps to complete the exercise:
 #. Create a plot showing the relationship between speedup and the number of cores used.
    The speedup should be expressed relative to the performance of the single core implementation from Lab 1.
    Compare this plot to the one from Exercise 1.
-
-#. Repeat the previous two steps for ``K_block_tiles = 5``.
 
 
 **Important Note**
