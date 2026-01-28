@@ -38,8 +38,10 @@ struct ReduceToOneOp {
     struct ReduceToOne {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle send_reader_kernel_id;
-            tt::tt_metal::KernelHandle send_writer_kernel_id;
+            tt::tt_metal::KernelHandle send_worker_writer_kernel_id;  // worker_writer for non-bottom cores
+            tt::tt_metal::KernelHandle send_fabric_writer_kernel_id;  // fabric_writer for bottom cores
             std::vector<CoreCoord> cores;
+            std::vector<CoreCoord> bottom_cores;
 
             tt::tt_metal::KernelHandle root1_reader_kernel_id;
             tt::tt_metal::KernelHandle root1_writer_kernel_id;
@@ -52,9 +54,9 @@ struct ReduceToOneOp {
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
 
             bool is_mesh_leaf_device;
-            bool is_root_device;
+            bool is_mesh_root3_device;
             bool is_mesh_root2_device;
-            bool is_col_root_device;
+            bool is_mesh_root1_device;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
