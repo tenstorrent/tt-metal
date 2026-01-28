@@ -244,9 +244,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_b.dtype(),
                 input_tensors[i].dtype());
         }
-    } else {
-        TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
     }
+
+    // else {
+    //     TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
+    // }
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();

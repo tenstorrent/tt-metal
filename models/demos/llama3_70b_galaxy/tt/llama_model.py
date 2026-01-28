@@ -689,8 +689,9 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode" and self.use_prefetcher:
-            ttnn.deallocate(garbage_tensor)
+        if mode == "decode":
+            if self.use_prefetcher:
+                ttnn.deallocate(garbage_tensor)
 
             # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
