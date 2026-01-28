@@ -15,8 +15,13 @@ import torch
 from loguru import logger
 from tqdm import tqdm
 
-from models.demos.t3000.llama2_70b.demo.demo import build_generator, construct_arg, get_sampling_func, initialize_inputs
-from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from models.demos.nlp.llms.llama2_70b.demo.demo import (
+    build_generator,
+    construct_arg,
+    get_sampling_func,
+    initialize_inputs,
+)
+from models.demos.nlp.llms.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
 
 @dataclass
@@ -80,7 +85,7 @@ def main(args, eval_data_args):
         max_batch_size,
     )
 
-    base_path = "models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/"
+    base_path = "models/demos/nlp/llms/llama2_70b/scripts/llama_perplexity_runs/"
     os.makedirs(base_path, exist_ok=True)
 
     # Get current timestamp

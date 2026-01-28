@@ -9,7 +9,7 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -2697,7 +2697,7 @@ class TtModelArgs:
         """Create and return a Tokenizer instance based on the checkpoint type."""
         if self.checkpoint_type == CheckpointType.Meta:
             # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+            from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
             return Tokenizer(self.tokenizer_path)
         else:

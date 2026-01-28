@@ -5,8 +5,8 @@
 from typing import List
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
-from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.demos.nlp.llms.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
+from models.demos.nlp.llms.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 

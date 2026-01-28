@@ -6,7 +6,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.llama2_70b.tt.llama_common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
+from models.demos.nlp.llms.llama2_70b.tt.llama_common import (
+    gather_cos_sin,
+    get_rot_transformation_mat,
+    precompute_freqs,
+)
 from ttnn import ReplicateTensorToMesh
 
 

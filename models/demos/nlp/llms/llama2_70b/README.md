@@ -17,7 +17,7 @@ Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 
 2. Repack the weights:
     ```bash
-    python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
+    python models/demos/nlp/llms/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
     ```
     Note: Use `5` for `chunk_size`.
 
@@ -38,7 +38,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     export LLAMA2_CACHE_PATH=<weight_cache_dir>
     export TIKTOKEN_CACHE_DIR=""
 
-    pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
+    pip install -r models/demos/nlp/llms/llama2_70b/reference/llama/requirements.txt
 
     # Example:
     # export LLAMA2_CKPT_DIR="/home/llama-data-repacked/llama-2-70b/"
@@ -54,7 +54,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
     ```bash
     # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama2]
+    pytest -svv models/demos/nlp/llms/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama2]
     ```
 
 ## Testing
@@ -65,7 +65,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
     - This performance test runs with sequence length 128 and batch size 32.
     ```bash
-    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama2]
+    pytest -svv models/demos/nlp/llms/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama2]
     ```
 
 ## Details
