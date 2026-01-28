@@ -13,8 +13,8 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import ttnn
 from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_11.tt.model_config import (
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
     skip_unsupported_config,
@@ -353,7 +353,7 @@ def run_bert_question_and_answering_inference(
 @pytest.mark.parametrize("batch", (7, 8, 12), ids=["batch_7", "batch_8", "batch_12"])
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
-    (("models/demos/metal_BERT_large_11/demo/input_data.json", 1),),
+    (("models/demos/nlp/encoder/metal_BERT_large_11/demo/input_data.json", 1),),
 )
 def test_demo(
     batch,

@@ -8,7 +8,7 @@ import ttnn
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 """
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.model_config import get_model_config
 model_config = get_model_config(12, ttnn.CoreGrid(y=8, x=12), "BFLOAT8_B-SHARDED")
 for key, value in model_config.items():
     print(f"{key}: {value}")

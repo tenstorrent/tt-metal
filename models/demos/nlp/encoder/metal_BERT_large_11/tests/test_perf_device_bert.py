@@ -12,7 +12,7 @@ def run_bert_perf(batch_size, test, expected_perf):
     subdir = "bert"
     num_iterations = 4
     margin = 0.03
-    command = f"pytest models/demos/metal_BERT_large_11/tests/test_bert.py::test_bert[{test}]"
+    command = f"pytest models/demos/nlp/encoder/metal_BERT_large_11/tests/test_bert.py::test_bert[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
