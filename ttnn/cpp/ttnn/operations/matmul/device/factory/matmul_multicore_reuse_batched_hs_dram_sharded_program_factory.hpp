@@ -11,6 +11,7 @@ namespace ttnn::prim {
 
 struct MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory {
     struct shared_variables_t {
+        std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
         std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
         std::vector<CoreCoord> all_worker_cores_ordered;
         tt::tt_metal::CBHandle cb_src2{};

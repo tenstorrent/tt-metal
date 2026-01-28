@@ -492,6 +492,7 @@ create_program_batch_sharded(
     // Build a set of worker cores for fast lookup
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<uint32_t> bank_ids;  // Track bank_ids for vc calculation
 
@@ -550,6 +551,7 @@ create_program_batch_sharded(
             in0_buffer->address(),            // L1 address of in0 shard on storage core
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_reader_runtime_args);
+        reader_kernel_ids.push_back(mm_kernel_in0_reader_id);
 
         // in1 writer runtime args
         std::vector<uint32_t> in1_writer_runtime_args = {
@@ -575,7 +577,7 @@ create_program_batch_sharded(
     return {
         std::move(program),
         MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::shared_variables_t{
-            writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard}};
+            reader_kernel_ids, writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard}};
 }
 
 }  // namespace reuse_batched_hs_dram_sharded_optimized_helpers
@@ -781,10 +783,18 @@ void MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::override_runtime_ar
         UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output_reshard, *dst_buffer);
 
         const auto& all_worker_cores_ordered = shared_variables.all_worker_cores_ordered;
+        const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
         const auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
 
         for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
             auto core = all_worker_cores_ordered[i];
+
+            // Update reader kernel runtime args - arg[3] is the L1 address of in0 shard
+            auto reader_kernel_id = reader_kernel_ids[i];
+            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            reader_runtime_args[3] = src_buffer_a->address();
+
+            // Update writer kernel runtime args
             auto writer_kernel_id = writer_kernel_ids[i];
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             writer_runtime_args[1] = src_buffer_b->address();
@@ -793,6 +803,7 @@ void MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::override_runtime_ar
             } else {
                 writer_runtime_args[2] = 0;
             }
+            writer_runtime_args[7] = dst_buffer->address();  // L1 address of output shard on storage core
         }
     }
 }
