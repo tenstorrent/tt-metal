@@ -1135,11 +1135,9 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
             CoreCoord dram_noc_coord;
-            if (!bank_id_to_dram_view_[device_id].empty()) {
-                dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
-            } else {
-                dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
-            }
+            // Always use cached bank_id_to_dram_view since we populate it above
+            dram_noc_coord =
+                soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
             if (dram_is_virtualized) {
                 noc_x = dram_noc_coord.x;
                 noc_y = dram_noc_coord.y;
