@@ -422,6 +422,11 @@ void kernel_main() {
         }
     }
 
+#ifdef SKIP_REDUCTION_DEBUG
+    // DEBUG: Skip worker/reducer to isolate DRAM streaming + multicast
+    return;
+#endif
+
     if (is_worker) {
         DeviceZoneScopedN("writer-worker");
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
