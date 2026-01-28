@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen3_vl.tt.patch_merger import PatchMerger
+from models.demos.nlp.llms.qwen3_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen3_vl.tt.patch_merger import PatchMerger
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -27,7 +27,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 )
 @pytest.mark.parametrize(
     "rows",
-    (14308,),  # from 3B test image
+    (14336,),  # from 3B test image
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -40,10 +40,10 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
 
     # Create reference model with correct dimensions
-    reference_model = model_args.reference_patch_merger()
+    reference_model = model_args.reference_deepstack_merger()
 
     state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
-    state_dict_prefix = model_args.get_state_dict_prefix("PatchMerger")
+    state_dict_prefix = model_args.get_state_dict_prefix("DeepstackMerger", deepstack_merger_num=0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     tt_model = PatchMerger(
@@ -51,8 +51,9 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
         args=model_args,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
-        weight_cache_path=None,  # Don't cache random weights
+        weight_cache_path=None,
         dtype=dtype,
+        postshuffle_norm=True,
     )
 
     # Input shape should match context_dim
@@ -72,7 +73,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run PatchMerger")
+    logger.info("Run DeepstackMerger")
     tt_output = tt_model(tt_input)
 
     tt_output_torch = ttnn.to_torch(
@@ -89,8 +90,8 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info("PatchMerger Passed!")
+        logger.info("DeepstackMerger Passed!")
     else:
-        logger.warning("PatchMerger Failed!")
+        logger.warning("DeepstackMerger Failed!")
 
-    assert passing, f"PatchMerger output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"DeepstackMerger output does not meet PCC requirement {pcc_required}: {pcc_message}."

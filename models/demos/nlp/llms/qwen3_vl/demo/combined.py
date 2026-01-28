@@ -15,8 +15,8 @@ from transformers import AutoProcessor
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
-from models.demos.qwen3_vl.tt.model import DropInVisionTransformer
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen3_vl.tt.model import DropInVisionTransformer
+from models.demos.nlp.llms.qwen3_vl.tt.model_config import VisionModelArgs
 
 
 @torch.no_grad()

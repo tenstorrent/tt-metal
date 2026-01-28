@@ -540,7 +540,7 @@ run_t3000_qwen25_vl_unit_tests() {
 
 run_t3000_qwen3_vl_unit_tests() {
   # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen3_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -549,7 +549,7 @@ run_t3000_qwen3_vl_unit_tests() {
   tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
 
   # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen3_vl/tests/ --ignore=models/demos/nlp/llms/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llms/qwen3_vl/tests/conftest.py
 }
 
 run_t3000_deepseek_tests() {

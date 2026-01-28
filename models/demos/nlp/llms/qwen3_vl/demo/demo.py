@@ -13,16 +13,16 @@ from transformers import AutoProcessor
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import (
+from models.demos.nlp.llms.qwen3_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
     multimodal_rope_from_hf,
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.demos.qwen3_vl.tt.generator import Generator
-from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen3_vl.tt.generator import Generator
+from models.demos.nlp.llms.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
+from models.demos.nlp.llms.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import SamplingParams
@@ -103,7 +103,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/qwen3_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -116,7 +116,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompts
-            "models/demos/qwen3_vl/demo/sample_prompts/multi_prompts_32.json",
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -129,7 +129,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
-            "models/demos/qwen3_vl/demo/sample_prompts/test_bert_score.json",
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/test_bert_score.json",
             True,  # instruct mode
             2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -142,7 +142,7 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
-            "models/demos/qwen3_vl/demo/sample_prompts/text_only.json",
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -155,7 +155,7 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
-            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
@@ -168,7 +168,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
-            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             32768,  # max_seq_len, allow for image tokens
@@ -181,7 +181,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
-            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             65536,  # max_seq_len, allow for image tokens
@@ -194,7 +194,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
-            "models/demos/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             131072,  # max_seq_len, allow for image tokens
@@ -315,7 +315,7 @@ def test_demo(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/demos/qwen3_vl/demo/output"
+        output_directory = "models/demos/nlp/llms/qwen3_vl/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -841,7 +841,7 @@ def load_inputs(input_file, batch_size):
 
 def load_expected_text(model_name):
     if "Qwen3-VL-32B" in model_name:
-        input_file = "models/demos/qwen3_vl/demo/sample_prompts/expected_text_32B.txt"
+        input_file = "models/demos/nlp/llms/qwen3_vl/demo/sample_prompts/expected_text_32B.txt"
     else:
         raise ValueError(f"Model {model_name} not supported")
 
