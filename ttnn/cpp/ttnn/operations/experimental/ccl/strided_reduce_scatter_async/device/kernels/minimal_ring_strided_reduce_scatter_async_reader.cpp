@@ -119,11 +119,6 @@ void kernel_main() {
 
     uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
-    if (effective_worker_id == 1) {
-        effective_worker_id = 2;
-    } else if (effective_worker_id == 2) {
-        effective_worker_id = 1;
-    }
 
     const uint32_t last_mm_core_idx = 0;
 

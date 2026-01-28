@@ -231,12 +231,6 @@ void kernel_main() {
 
         const uint32_t last_mm_core_idx = 0;
 
-        if (effective_worker_id == 1) {
-            effective_worker_id = 2;
-        } else if (effective_worker_id == 2) {
-            effective_worker_id = 1;
-        }
-
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
 
