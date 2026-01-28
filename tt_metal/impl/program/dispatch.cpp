@@ -28,6 +28,7 @@
 #include <variant>
 #include <vector>
 #include <random>
+#include <fmt/core.h>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
@@ -538,6 +539,20 @@ void generate_runtime_args_cmds(
             offset_idx,
             no_stride,
             write_offset_index);
+        
+        fmt::println(stderr, "[DISPATCH] Runtime Args: type={}, num_sub_cmds={}, L1_addr=0x{:x}, data_size={} bytes, payload_size={} bytes, stride={}", 
+            unicast ? "UNICAST" : "MULTICAST", 
+            num_packed_cmds, 
+            l1_arg_base_addr, 
+            max_runtime_args_len * sizeof(uint32_t),
+            rt_payload_sizeB,
+            no_stride ? "none" : "yes");
+        for (uint32_t i = offset_idx; i < offset_idx + (no_stride ? 1 : num_packed_cmds); ++i) {
+            if (i < sub_cmds.size()) {
+                fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}", i, sub_cmds[i].noc_xy_addr);
+            }
+        }
+        
         TT_ASSERT(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
@@ -1029,10 +1044,11 @@ public:
         for (const auto& cmds : unicast_semaphore_cmds) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
+                uint32_t sem_addr = cmds.dst + program.get_program_config(index).sem_offset;
                 device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
                     num_sub_cmds_in_cmd,
-                    cmds.dst + program.get_program_config(index).sem_offset,
+                    sem_addr,
                     cmds.size,
                     unicast_sem_payload_sizeB,
                     cmds.sub_cmds,
@@ -1041,6 +1057,14 @@ public:
                     curr_sub_cmd_idx,
                     false,
                     DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                
+                fmt::println(stderr, "[DISPATCH] Semaphores (UNICAST/ETH): num_sub_cmds={}, L1_addr=0x{:x}, sem_size={} bytes, payload_size={} bytes", 
+                    num_sub_cmds_in_cmd, sem_addr, cmds.size, unicast_sem_payload_sizeB);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd && (curr_sub_cmd_idx + i) < cmds.sub_cmds.size(); ++i) {
+                    fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}", 
+                        curr_sub_cmd_idx + i, cmds.sub_cmds[curr_sub_cmd_idx + i].noc_xy_addr);
+                }
+                
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (const auto& data_and_size : cmds.data) {
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_SEMAPHORE, data_and_size.second);
@@ -1331,6 +1355,9 @@ public:
                 kernel_bins_unicast_cmd.data(),
                 kernel_bins_unicast_cmd.size_bytes(),
                 kernel_bins_unicast_cmd.size_bytes());
+            
+            fmt::println(stderr, "[DISPATCH] Kernel Binary (UNICAST): size={} bytes", 
+                kernel_bins_unicast_cmd.size_bytes());
         }
         uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
         for (const KernelBinsCmds& kernel_bins_cmd : kernel_bins_cmds) {
@@ -1341,6 +1368,14 @@ public:
                 kernel_bins_cmd.dispatch_subcmds,
                 0,
                 DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE);
+            
+            fmt::println(stderr, "[DISPATCH] Kernel Binaries (MULTICAST): num_sub_cmds={}, total_aligned_size={} bytes", 
+                kernel_bins_cmd.dispatch_subcmds.size(), kernel_bins_cmd.data_aligned_sizeB);
+            for (size_t j = 0; j < kernel_bins_cmd.dispatch_subcmds.size(); ++j) {
+                const auto& subcmd = kernel_bins_cmd.dispatch_subcmds[j];
+                fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}, L1_addr=0x{:x}, size={} bytes, num_mcast_dests={}", 
+                    j, subcmd.noc_xy_addr, subcmd.addr, subcmd.length_minus1 + 1, subcmd.num_mcast_dests);
+            }
             if (using_prefetcher_cache) {
                 const auto& prefetch_subcmds = kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayRingbufferSubCmd>();
                 device_command_sequence.add_prefetch_relay_ringbuffer(prefetch_subcmds.size(), prefetch_subcmds);
@@ -1479,6 +1514,18 @@ public:
                 &data_collection_location,
                 0,
                 DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+            
+            uint32_t total_data_size = 0;
+            for (const auto& span : batched_data) {
+                total_data_size += span.size();
+            }
+            fmt::println(stderr, "[DISPATCH] Batched Transfer (CBs/Sems/CRTAs): num_sub_cmds={}, total_data_size={} bytes", 
+                batched_dispatch_subcmds[i].size(), total_data_size);
+            for (size_t j = 0; j < batched_dispatch_subcmds[i].size(); ++j) {
+                const auto& subcmd = batched_dispatch_subcmds[i][j];
+                fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}, L1_addr=0x{:x}, size={} bytes, num_mcast_dests={}", 
+                    j, subcmd.noc_xy_addr, subcmd.addr, subcmd.length_minus1 + 1, subcmd.num_mcast_dests);
+            }
 
             last_end = cmd_data.front().start;
             size_t j = 0;
@@ -1653,6 +1700,15 @@ public:
                     multicast_cmds.data,
                     constants.packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
+                
+                fmt::println(stderr, "[DISPATCH] Launch Message (MULTICAST): num_sub_cmds={}, L1_addr=0x{:x} (unresolved), msg_size={} bytes, payload_size={} bytes", 
+                    num_sub_cmds_in_cmd, unresolved_launch_msg_addr, aligned_launch_msg_sizeB, multicast_launch_msg_payload_sizeB);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd && (curr_sub_cmd_idx + i) < multicast_cmds.sub_cmds.size(); ++i) {
+                    const auto& subcmd = multicast_cmds.sub_cmds[curr_sub_cmd_idx + i];
+                    fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}, num_mcast_dests={}", 
+                        curr_sub_cmd_idx + i, subcmd.noc_xy_addr, subcmd.num_mcast_dests);
+                }
+                
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.launch_msg_write_packed_cmd_ptrs.push_back(
                     &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
@@ -1686,6 +1742,14 @@ public:
                     unicast_cmds.data,
                     constants.packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
+                
+                fmt::println(stderr, "[DISPATCH] Launch Message (UNICAST): num_sub_cmds={}, L1_addr=0x{:x} (unresolved), msg_size={} bytes, payload_size={} bytes", 
+                    num_sub_cmds_in_cmd, unresolved_launch_msg_addr, aligned_launch_msg_sizeB, unicast_launch_msg_payload_sizeB);
+                for (uint32_t i = 0; i < num_sub_cmds_in_cmd && (curr_sub_cmd_idx + i) < unicast_cmds.sub_cmds.size(); ++i) {
+                    fmt::println(stderr, "  [DISPATCH]   sub_cmd[{}]: noc_xy_addr=0x{:x}", 
+                        curr_sub_cmd_idx + i, unicast_cmds.sub_cmds[curr_sub_cmd_idx + i].noc_xy_addr);
+                }
+                
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
                     &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
@@ -1792,6 +1856,14 @@ public:
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);
+        
+        fmt::println(stderr, "[DISPATCH] Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, stream_idx={}", 
+            dispatcher_for_go_signal == DispatcherSelect::DISPATCH_MASTER ? "MASTER" : "SUBORDINATE",
+            sub_device_index,
+            num_noc_unicast_txns,
+            noc_data_start_idx,
+            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).get_dispatch_stream_index(sub_device_index));
+        
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
                                ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
@@ -1805,6 +1877,10 @@ void assemble_device_commands(
     IDevice* device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
+    fmt::println(stderr, "\n[DISPATCH] ========== Assembling Device Commands for Program ID {} ==========", program.get_id());
+    fmt::println(stderr, "[DISPATCH] Device: {}, SubDevice: {}, Prefetcher Cache: {}", 
+        device->id(), *sub_device_id, use_prefetcher_cache ? "enabled" : "disabled");
+    
     CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
@@ -1895,6 +1971,27 @@ void assemble_device_commands(
     TT_ASSERT(
         program_command_sequence.go_msg_command_sequence.size_bytes() ==
         program_command_sequence.go_msg_command_sequence.write_offset_bytes());
+    
+    fmt::println(stderr, "[DISPATCH] ---------- Command Sequence Summary ----------");
+    fmt::println(stderr, "[DISPATCH] Preamble:                 {} bytes", program_command_sequence.preamble_command_sequence.size_bytes());
+    fmt::println(stderr, "[DISPATCH] Runtime Args Commands:    {} commands", program_command_sequence.runtime_args_command_sequences.size());
+    uint32_t total_rta_size = 0;
+    for (const auto& cmd : program_command_sequence.runtime_args_command_sequences) {
+        total_rta_size += cmd.size_bytes();
+    }
+    fmt::println(stderr, "[DISPATCH] Runtime Args Total Size:  {} bytes", total_rta_size);
+    fmt::println(stderr, "[DISPATCH] Program Config Buffer:    {} bytes", program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+    fmt::println(stderr, "[DISPATCH] Program Binary:           {} bytes", program_command_sequence.program_binary_command_sequence.size_bytes());
+    fmt::println(stderr, "[DISPATCH] Launch Message:           {} bytes", program_command_sequence.launch_msg_command_sequence.size_bytes());
+    fmt::println(stderr, "[DISPATCH] Go Signal:                {} bytes", program_command_sequence.go_msg_command_sequence.size_bytes());
+    uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() +
+                          total_rta_size +
+                          program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
+                          program_command_sequence.program_binary_command_sequence.size_bytes() +
+                          program_command_sequence.launch_msg_command_sequence.size_bytes() +
+                          program_command_sequence.go_msg_command_sequence.size_bytes();
+    fmt::println(stderr, "[DISPATCH] TOTAL SIZE:               {} bytes", total_size);
+    fmt::println(stderr, "[DISPATCH] ========== End Device Commands Assembly ==========\n");
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
@@ -2346,63 +2443,78 @@ void write_program_command_sequence(
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
+    fmt::println(stderr, "\n[DISPATCH] ========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
+    fmt::println(stderr, "[DISPATCH] Stall First: {}, Stall Before Program: {}, Send Binary: {}", 
+        stall_first, stall_before_program, send_binary);
+    
     // Check if it's possible to write all commands in a single fetch queue entry
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+    
+    fmt::println(stderr, "[DISPATCH] One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
         manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
     }
     uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
-    auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
+    auto write_data_to_cq = [&, write_count = 0](void* data, uint32_t size_bytes, const char* desc) mutable {
         if (!size_bytes) {
             return;
         }
 
         if (one_shot) {
             // Already reserved. Write only. Defer push back until all commands are written
+            fmt::println(stderr, "[DISPATCH]   Writing {} ({} bytes) to CQ at offset 0x{:x}", desc, size_bytes, one_shot_write_ptr);
             manager.cq_write(data, size_bytes, one_shot_write_ptr);
             one_shot_write_ptr += size_bytes;
         } else {
+            uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            fmt::println(stderr, "[DISPATCH]   Writing {} ({} bytes) to CQ at offset 0x{:x}", desc, size_bytes, write_ptr);
             manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+            manager.cq_write(data, size_bytes, write_ptr);
             manager.issue_queue_push_back(size_bytes, command_queue_id);
             manager.fetch_queue_reserve_back(command_queue_id);
             manager.fetch_queue_write(size_bytes, command_queue_id);
         }
+        write_count++;
     };
 
     // Write the preamble
     write_data_to_cq(
         program_command_sequence.preamble_command_sequence.data(),
-        program_command_sequence.preamble_command_sequence.size_bytes());
+        program_command_sequence.preamble_command_sequence.size_bytes(),
+        "Preamble");
 
     const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     if (stall_first) {
         // Must stall before writing kernel config data
         write_data_to_cq(
             program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes(),
+            "Stall (first)");
     }
 
     // TODO: We can pack multiple RT args into one fetch q entry
-    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-        write_data_to_cq(cmds.data(), cmds.size_bytes());
+    for (size_t i = 0; i < program_command_sequence.runtime_args_command_sequences.size(); ++i) {
+        const auto& cmds = program_command_sequence.runtime_args_command_sequences[i];
+        write_data_to_cq(cmds.data(), cmds.size_bytes(), fmt::format("Runtime Args [{}]", i).c_str());
     }
 
     // Write the program config buffer
     write_data_to_cq(
         program_command_sequence.program_config_buffer_command_sequence.data(),
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+        program_command_sequence.program_config_buffer_command_sequence.size_bytes(),
+        "Program Config Buffer");
 
     // Need to stall before writing the program binary?
     if (stall_before_program) {
         // Didn't stall before kernel config data, stall before remaining commands
         write_data_to_cq(
             program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes(),
+            "Stall (before program)");
     }
 
     if (send_binary) {
@@ -2410,28 +2522,34 @@ void write_program_command_sequence(
         if (program_command_sequence.prefetcher_cache_used) {
             write_data_to_cq(
                 program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
+                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes(),
+                "Binary Setup (Prefetcher Cache)");
         }
         write_data_to_cq(
             program_command_sequence.program_binary_command_sequence.data(),
-            program_command_sequence.program_binary_command_sequence.size_bytes());
+            program_command_sequence.program_binary_command_sequence.size_bytes(),
+            "Program Binary");
     }
 
     // Write the launch message
     write_data_to_cq(
         program_command_sequence.launch_msg_command_sequence.data(),
-        program_command_sequence.launch_msg_command_sequence.size_bytes());
+        program_command_sequence.launch_msg_command_sequence.size_bytes(),
+        "Launch Message");
 
     // Write the go signal
     write_data_to_cq(
         program_command_sequence.go_msg_command_sequence.data(),
-        program_command_sequence.go_msg_command_sequence.size_bytes());
+        program_command_sequence.go_msg_command_sequence.size_bytes(),
+        "Go Signal");
 
     if (one_shot) {
         manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
+    
+    fmt::println(stderr, "[DISPATCH] ========== Finished Writing Program Command Sequence ==========\n");
 }
 
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
