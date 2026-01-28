@@ -13,6 +13,7 @@
 
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include "api/alignment.h"
 #include "internal/risc_attribs.h"
@@ -203,20 +204,28 @@ struct OutboundReceiverChannelPointers {
     uint32_t remote_receiver_channel_address_last;
     uint32_t num_free_slots;
 
+    // Completion tracking - shared across all sender channels to this receiver channel
+    volatile uint32_t* completions_received_counter_ptr;
+    uint32_t completions_received_and_processed;
+
     FORCE_INLINE void init() {
         this->slot_size_bytes = 0U;
         this->remote_receiver_channel_address_base = 0U;
         this->remote_receiver_channel_address_ptr = 0U;
         this->remote_receiver_channel_address_last = 0U;
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->completions_received_counter_ptr = nullptr;
+        this->completions_received_and_processed = 0;
     }
 
-    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes) {
+    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes, volatile uint32_t* completion_counter_ptr = nullptr) {
         this->slot_size_bytes = slot_size_bytes;
         this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->completions_received_counter_ptr = completion_counter_ptr;
+        this->completions_received_and_processed = 0;
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
@@ -227,6 +236,18 @@ struct OutboundReceiverChannelPointers {
         if(is_last_buffer) {
             remote_receiver_channel_address_ptr = remote_receiver_channel_address_base;
         }
+    }
+
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        uint32_t received = *completions_received_counter_ptr;
+        uint32_t unprocessed = received - completions_received_and_processed;
+        return unprocessed;
+    }
+
+    FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
+        completions_received_and_processed += num_completions;
     }
 };
 

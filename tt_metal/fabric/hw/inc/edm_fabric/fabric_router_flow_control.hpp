@@ -36,11 +36,11 @@ static_assert(
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
-        completion_counters_base_l1_ptr(
-            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
+        completion_counter_l1_ptr(
+            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address) + receiver_channel_index),
         ack_counters_base_l1_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
-        completion_counters({}),
-        ack_counters({}) {
+        ack_counters({}),
+        completion_counter(0) {
 
         // DPRINT << "RECV_INIT: rx_ch=" << (uint32_t)receiver_channel_index
         //        << " local_compl_base=" << HEX() << local_receiver_completion_counters_base_address
@@ -49,147 +49,143 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         //        << " tx_bytes=" << total_number_of_receiver_to_sender_credit_num_bytes << ENDL();
 
         // Initialize unpacked completion counters (local and L1)
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            completion_counters[i] = 0;
-            completion_counters_base_l1_ptr[i] = 0;  // Initialize L1 memory!
-        }
+        // With first-level acks, completions are per receiver channel, not per sender channel
+        *completion_counter_l1_ptr = 0;  // Initialize L1 memory!
         // Initialize packed ack counters (local and L1)
         for (size_t i = 0; i < ACK_PACKED_WORDS; i++) {
             ack_counters[i] = 0;
             ack_counters_base_l1_ptr[i] = 0;  // Initialize L1 memory!
         }
     }
-
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        // Increment unpacked local counter (fast local memory, handles wraparound)
-        uint32_t old_val = completion_counters[src_id];
-        completion_counters[src_id]++;
-        uint32_t base_addr = (uint32_t)completion_counters_base_l1_ptr;
-        uint32_t offset = src_id * sizeof(uint32_t);
-        uint32_t write_addr = (uint32_t)&completion_counters_base_l1_ptr[src_id];
-        // DPRINT << "RECV_COMPL: ch=" << (uint32_t)src_id
-        //        << " counter[" << (uint32_t)src_id << "]=" << old_val << "->" << completion_counters[src_id]
-        //        << " L1_base=" << HEX() << base_addr
-        //        << " offset=" << HEX() << offset
-        //        << " write_addr=" << HEX() << write_addr
-        //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
-        completion_counters_base_l1_ptr[src_id] = completion_counters[src_id];
-        update_sender_side_credits();
-    }
-
-    // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id, int packed_count = 1) {
-        if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-            static_assert(NUM_SENDER_CHANNELS <= 8, "NUM_SENDER_CHANNELS must be less than or equal to 8");
-
-            // Ack counters use 8-bit credits (4 per word), always byte-aligned
-            // Increment the specific channel using byte accessors
-            constexpr size_t CREDITS_PER_WORD = 4;
-
-            if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
-                // ≤4 channels: single word, direct byte access
-                uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[0]);
-                uint8_t old_val = bytes[src_id];
-                bytes[src_id] += static_cast<uint8_t>(packed_count);
-                uint8_t new_val = bytes[src_id];
-                uint32_t ack_base = (uint32_t)ack_counters_base_l1_ptr;
-                uint32_t ack_write = (uint32_t)&ack_counters_base_l1_ptr[0];
-                // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)new_val
-                //        << " packed_word0=" << HEX() << ack_counters[0]
-                //        << " L1_base=" << HEX() << ack_base
-                //        << " write_addr=" << HEX() << ack_write
-                //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
-                ack_counters_base_l1_ptr[0] = ack_counters[0];
-            } else {
-                // 5-8 channels: span 2 words, use branch to select word
-                if (src_id < CREDITS_PER_WORD) {
-                    // First word (channels 0-3)
+    
+        FORCE_INLINE void send_completion_credit() {
+            // Increment completion counter for this receiver channel (shared by all senders in this VC)
+            // This represents free buffer space on the receiver side
+            uint32_t old_val = completion_counter;
+            completion_counter++;
+            // DPRINT << "RECV_COMPL: rx_ch=" << (uint32_t)receiver_channel_index
+            //        << " completion_counter=" << old_val << "->" << completion_counter
+            //        << " L1_ptr=" << HEX() << (uint32_t)completion_counter_l1_ptr
+            //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
+            *completion_counter_l1_ptr = completion_counter;
+            update_sender_side_credits();
+        }
+    
+        // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
+        FORCE_INLINE void send_ack_credit(uint8_t src_id, int packed_count = 1) {
+            if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+                static_assert(NUM_SENDER_CHANNELS <= 8, "NUM_SENDER_CHANNELS must be less than or equal to 8");
+    
+                // Ack counters use 8-bit credits (4 per word), always byte-aligned
+                // Increment the specific channel using byte accessors
+                constexpr size_t CREDITS_PER_WORD = 4;
+    
+                if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
+                    // ≤4 channels: single word, direct byte access
                     uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[0]);
                     uint8_t old_val = bytes[src_id];
                     bytes[src_id] += static_cast<uint8_t>(packed_count);
+                    uint8_t new_val = bytes[src_id];
+                    uint32_t ack_base = (uint32_t)ack_counters_base_l1_ptr;
+                    uint32_t ack_write = (uint32_t)&ack_counters_base_l1_ptr[0];
                     // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                    //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id]
+                    //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)new_val
                     //        << " packed_word0=" << HEX() << ack_counters[0]
-                    //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[0] << ENDL();
+                    //        << " L1_base=" << HEX() << ack_base
+                    //        << " write_addr=" << HEX() << ack_write
+                    //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
                 } else {
-                    // Second word (channels 4-7)
-                    uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[1]);
-                    uint8_t old_val = bytes[src_id - CREDITS_PER_WORD];
-                    bytes[src_id - CREDITS_PER_WORD] += static_cast<uint8_t>(packed_count);
-                    // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                    //        << " byte[" << (uint32_t)(src_id - CREDITS_PER_WORD) << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id - CREDITS_PER_WORD]
-                    //        << " packed_word1=" << HEX() << ack_counters[1]
-                    //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[1] << ENDL();
-                    ack_counters_base_l1_ptr[1] = ack_counters[1];
+                    // 5-8 channels: span 2 words, use branch to select word
+                    if (src_id < CREDITS_PER_WORD) {
+                        // First word (channels 0-3)
+                        uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[0]);
+                        uint8_t old_val = bytes[src_id];
+                        bytes[src_id] += static_cast<uint8_t>(packed_count);
+                        // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
+                        //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id]
+                        //        << " packed_word0=" << HEX() << ack_counters[0]
+                        //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[0] << ENDL();
+                        ack_counters_base_l1_ptr[0] = ack_counters[0];
+                    } else {
+                        // Second word (channels 4-7)
+                        uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[1]);
+                        uint8_t old_val = bytes[src_id - CREDITS_PER_WORD];
+                        bytes[src_id - CREDITS_PER_WORD] += static_cast<uint8_t>(packed_count);
+                        // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
+                        //        << " byte[" << (uint32_t)(src_id - CREDITS_PER_WORD) << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id - CREDITS_PER_WORD]
+                        //        << " packed_word1=" << HEX() << ack_counters[1]
+                        //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[1] << ENDL();
+                        ack_counters_base_l1_ptr[1] = ack_counters[1];
+                    }
                 }
-            }
-
-            update_sender_side_credits();
-        } else {
-            ack_counters[src_id] += packed_count;
-            ack_counters_base_l1_ptr[src_id] = ack_counters[src_id];
-            update_sender_side_credits();
-        }
-    }
-
-    // Send packed ACK credits - add packed value directly (formats must match!)
-    // Used for batch ACK sending when first-level ACK is enabled
-    // ASSUMES: Sender->receiver and receiver->sender use SAME packing format (8-bit on BH)
-    template<bool wait_for_txq, typename PackedValueType>
-    FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
-        if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-            // Both formats use 8-bit byte-aligned packing on BH, so we can add directly
-            constexpr size_t CREDITS_PER_WORD = 4;
-
-            if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
-                // ≤4 channels: single word
-                uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
-                uint32_t old_counter = ack_counters[0];
-                ack_counters[0] += packed_val;
-                ack_counters_base_l1_ptr[0] = ack_counters[0];
-                // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
-                //        << " old=" << old_counter
-                //        << " new=" << ack_counters[0]
-                //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
+    
+                update_sender_side_credits();
             } else {
-                // 5-8 channels: two words
-                uint64_t packed_val = packed_value.get();
-                uint32_t lower_word = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
-                uint32_t old_lower = ack_counters[0];
-                ack_counters[0] += lower_word;
-                ack_counters_base_l1_ptr[0] = ack_counters[0];
-
-                uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
-                uint32_t old_upper = ack_counters[1];
-                ack_counters[1] += upper_word;
-                ack_counters_base_l1_ptr[1] = ack_counters[1];
-                // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
-                //        << " lower: old=" << old_lower << " new=" << ack_counters[0]
-                //        << " upper: old=" << old_upper << " new=" << ack_counters[1]
-                //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
+                ack_counters[src_id] += packed_count;
+                ack_counters_base_l1_ptr[src_id] = ack_counters[src_id];
+                update_sender_side_credits();
             }
-
-            // Wait for eth queue if requested (safer but slower)
-            if constexpr (wait_for_txq) {
-                while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
-            }
-            update_sender_side_credits();
         }
-    }
-
-    volatile uint32_t* tt_l1_ptr completion_counters_base_l1_ptr;
-    volatile uint32_t* tt_l1_ptr ack_counters_base_l1_ptr;
-
-    // Completion counters: unpacked, one per channel (fast local memory)
-    std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
-
-    // Ack counters: packed storage (4 credits per word, matching original behavior)
-    // 1 word for ≤4 channels, 2 words for 5-8 channels
-    static constexpr size_t ACK_PACKED_WORDS = (NUM_SENDER_CHANNELS + 3) / 4;
-    std::array<uint32_t, ACK_PACKED_WORDS> ack_counters;
-
+    
+        // Send packed ACK credits - add packed value directly (formats must match!)
+        // Used for batch ACK sending when first-level ACK is enabled
+        // ASSUMES: Sender->receiver and receiver->sender use SAME packing format (8-bit on BH)
+        template<bool wait_for_txq, typename PackedValueType>
+        FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
+            if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+                // Both formats use 8-bit byte-aligned packing on BH, so we can add directly
+                constexpr size_t CREDITS_PER_WORD = 4;
+    
+                if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
+                    // ≤4 channels: single word
+                    uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
+                    uint32_t old_counter = ack_counters[0];
+                    ack_counters[0] += packed_val;
+                    ack_counters_base_l1_ptr[0] = ack_counters[0];
+                    // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
+                    //        << " old=" << old_counter
+                    //        << " new=" << ack_counters[0]
+                    //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
+                } else {
+                    // 5-8 channels: two words
+                    uint64_t packed_val = packed_value.get();
+                    uint32_t lower_word = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
+                    uint32_t old_lower = ack_counters[0];
+                    ack_counters[0] += lower_word;
+                    ack_counters_base_l1_ptr[0] = ack_counters[0];
+    
+                    uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
+                    uint32_t old_upper = ack_counters[1];
+                    ack_counters[1] += upper_word;
+                    ack_counters_base_l1_ptr[1] = ack_counters[1];
+                    // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
+                    //        << " lower: old=" << old_lower << " new=" << ack_counters[0]
+                    //        << " upper: old=" << old_upper << " new=" << ack_counters[1]
+                    //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
+                }
+    
+                // Wait for eth queue if requested (safer but slower)
+                
+                if constexpr (wait_for_txq) {
+                    while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
+                }
+                update_sender_side_credits();
+            }
+        }
+    
+        volatile uint32_t* tt_l1_ptr completion_counter_l1_ptr;
+        volatile uint32_t* tt_l1_ptr ack_counters_base_l1_ptr;
+    
+        // Ack counters: packed storage (4 credits per word, matching original behavior)
+        // 1 word for ≤4 channels, 2 words for 5-8 channels
+        static constexpr size_t ACK_PACKED_WORDS = (NUM_SENDER_CHANNELS + 3) / 4;
+        std::array<uint32_t, ACK_PACKED_WORDS> ack_counters;
+        
+        // Completion counters: unpacked, one per receiver channel (fast local memory)
+        // With first-level acks enabled, completions are tied to receiver channels not sender channels
+        uint32_t completion_counter;
+    
 private:
     FORCE_INLINE void update_sender_side_credits() const {
         internal_::eth_send_packet_bytes_unsafe(
@@ -217,9 +213,9 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         }
     }
 
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        uint32_t stream_id = sender_channel_packets_completed_stream_ids[src_id];
-        WATCHER_RING_BUFFER_PUSH(0xFCC00000 | (src_id << 16) | stream_id);
+    FORCE_INLINE void send_completion_credit() {
+        uint32_t stream_id = sender_channel_packets_completed_stream_ids[0];
+        WATCHER_RING_BUFFER_PUSH(0xFCC00000 | (0 << 16) | stream_id);
         // DPRINT << "RECV_COMPL_STREAM: ch=" << (uint32_t)src_id
         //        << " stream_id=" << stream_id
         //        << " remote_update +1" << ENDL();
@@ -310,19 +306,12 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
 }
 struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
-    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
+    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t receiver_channel_index) :
         acks_received_counter_ptr(
             reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),  // Packed: all channels read same address
-        completions_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) + sender_channel_index),  // Unpacked: each channel has own offset
-        acks_received_and_processed(0),
-        completions_received_and_processed(0) {
-
-        // DPRINT << "SEND_INIT: tx_ch=" << (uint32_t)sender_channel_index
-        //        << " remote_ack_addr=" << HEX() << to_sender_remote_ack_counters_base_address
-        //        << " remote_compl_addr=" << HEX() << to_sender_remote_completion_counters_base_address
-        //        << " ack_ptr=" << HEX() << (uint32_t)acks_received_counter_ptr
-        //        << " compl_ptr=" << HEX() << (uint32_t)completions_received_counter_ptr << ENDL();
+        acks_received_and_processed(0) {
+        // Note: Completion tracking is now in OutboundReceiverChannelPointers (per-receiver-channel)
+        // instead of here (per-sender-channel) since completions are shared across all senders to same receiver
     }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
@@ -337,15 +326,6 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         uint8_t processed = static_cast<uint8_t>(acks_received_and_processed >> byte_shift);
         uint8_t diff = received - processed;  // uint8_t subtraction wraps correctly
         uint32_t result = static_cast<uint32_t>(diff) << byte_shift;
-        // if (diff > 0) {
-        //     DPRINT << "SEND_GET_ACK: ch=" << (uint32_t)sender_channel_index
-        //            << " L1_addr=" << HEX() << (uint32_t)acks_received_counter_ptr
-        //            << " raw_packed=" << HEX() << raw_value
-        //            << " byte[" << (uint32_t)sender_channel_index << "]=" << DEC() << (uint32_t)received
-        //            << " local_proc=" << (uint32_t)processed
-        //            << " new_acks=" << (uint32_t)diff
-        //            << " packed_result=" << HEX() << result << ENDL();
-        // }
         return result;  // Return in packed position
     }
 
@@ -384,33 +364,10 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         }
     }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
-    FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        uint32_t received = *completions_received_counter_ptr;
-        uint32_t unprocessed = received - completions_received_and_processed;
-        if (unprocessed > 0) {
-            // DPRINT << "SEND_GET_COMPL: ch=" << (uint32_t)sender_channel_index
-            //        << " L1_addr=" << HEX() << (uint32_t)completions_received_counter_ptr
-            //        << " counter[" << (uint32_t)sender_channel_index << "]=" << received
-            //        << " local_proc=" << completions_received_and_processed
-            //        << " new_compls=" << unprocessed << ENDL();
-        }
-        return unprocessed;
-    }
-
-    FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
-        uint32_t old_val = completions_received_and_processed;
-        completions_received_and_processed += num_completions;
-        // DPRINT << "SEND_PROC_COMPL: old=" << old_val
-        //        << " delta=" << num_completions
-        //        << " new=" << completions_received_and_processed << ENDL();
-    }
+    // Completion methods removed - now in OutboundReceiverChannelPointers
 
     volatile uint32_t* acks_received_counter_ptr;
-    volatile uint32_t* completions_received_counter_ptr;
     uint32_t acks_received_and_processed = 0;
-    uint32_t completions_received_and_processed = 0;
 };
 
 template <bool enable_first_level_ack>
@@ -449,7 +406,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         uint32_t completions = get_ptr_val(to_sender_packets_completed_stream);
         // if (completions > 0) {
@@ -502,7 +459,9 @@ struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
         -> std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
         std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> flow_controllers;
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            new (&flow_controllers[i]) SenderChannelFromReceiverCounterBasedCreditsReceiver(i);
+            // Map sender channel to receiver channel (VC0 or VC1)
+            size_t receiver_channel = (i < ACTUAL_VC0_SENDER_CHANNELS) ? VC0_RECEIVER_CHANNEL : VC1_RECEIVER_CHANNEL;
+            new (&flow_controllers[i]) SenderChannelFromReceiverCounterBasedCreditsReceiver(receiver_channel);
         }
         return flow_controllers;
     }
@@ -532,12 +491,12 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
 // MUST CHECK !is_eth_txq_busy() before calling
 template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_completion_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
     }
-    receiver_channel_response_credit_sender.send_completion_credit(src_id);
+    receiver_channel_response_credit_sender.send_completion_credit();
 }
 
 template <bool CHECK_BUSY>
