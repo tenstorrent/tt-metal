@@ -113,8 +113,7 @@ void matmul_blocks(
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
@@ -231,4 +230,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

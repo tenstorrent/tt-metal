@@ -20,8 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 
 // SPLIT REDUCE across Cores
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t is_mcast_sender = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -679,4 +678,3 @@ void MAIN {
     untilize_uninit(cb_untilize_in);
 #endif
 }
-}  // namespace NAMESPACE
