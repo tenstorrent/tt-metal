@@ -1472,10 +1472,6 @@ class WanEncoder:
                 x_BTHWC_chunk, logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
 
-            # Channels first
-            # out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            # Trim padding on output channels
-            # out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
             if output_BTHWC is None:
                 output_BTHWC = out_BTHWC
             else:
@@ -1487,7 +1483,7 @@ class WanEncoder:
         # Channels second
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
         # Trim padding on output channels
-        output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]
+        output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean
         self.clear_cache()
         return (output_BCTHW, new_logical_h)
 

@@ -17,6 +17,7 @@ from ....models.vae.vae_wan2_1 import (
     WanDecoder3d,
     WanDecoder,
     WanEncoder3D,
+    WanEncoder,
     WanCausalConv3d,
     WanResidualBlock,
     WanMidBlock,
@@ -1478,8 +1479,8 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         )
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+
         # Trim padding on output channels
-        # DEBUG: REMOVING
         out_channels = torch_output.shape[1]
         logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
         tt_output_torch = tt_output_torch[:, :out_channels]
@@ -1547,8 +1548,8 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 @pytest.mark.parametrize(
     ("B, C, H, W"),
     [
-        (1, 16, 60, 104),  # 480p, 10 frames
-        (1, 16, 90, 160),  # 720p, 10 frames
+        (1, 3, 480, 832),  # 480p, 10 frames
+        (1, 3, 720, 1280),  # 720p, 10 frames
     ],
     ids=[
         "480p",
@@ -1596,7 +1597,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     attn_scales = []
     temperal_downsample = [False, True, True]
     dropout = 0.0
-    out_channels = 3
+    in_channels = out_channels = 3
     is_residual = False
 
     if real_weights:
@@ -1604,6 +1605,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     else:
         torch_model = TorchAutoencoderKLWan(
             base_dim=base_dim,
+            in_channels=in_channels,
             z_dim=z_dim,
             dim_mult=dim_mult,
             num_res_blocks=num_res_blocks,
@@ -1620,14 +1622,14 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
     )
-    tt_model = WanDecoder(
+    tt_model = WanEncoder(
         base_dim=base_dim,
+        in_channels=in_channels,
         z_dim=z_dim,
         dim_mult=dim_mult,
         num_res_blocks=num_res_blocks,
         attn_scales=attn_scales,
         temperal_downsample=temperal_downsample,
-        out_channels=out_channels,
         is_residual=is_residual,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
@@ -1638,7 +1640,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
     tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
+    tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor * 8)
     if logical_h != tt_input_tensor.shape[2]:
         logger.info(f"padding from {logical_h} to {tt_input_tensor.shape[2]}")
     tt_input_tensor = bf16_tensor_2dshard(
@@ -1666,10 +1668,10 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         logger.info(f"running torch model")
         start = time.time()
         with torch.no_grad():
-            torch_output = torch_model.decode(
+            torch_output = torch_model.encode(
                 torch_input_tensor,
                 return_dict=False,
-            )[0]
+            )[0].mode()
         logger.info(f"torch time taken: {time.time() - start}")
         logger.info(f"torch output shape: {torch_output.shape}")
 
@@ -1680,6 +1682,6 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
+        assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
