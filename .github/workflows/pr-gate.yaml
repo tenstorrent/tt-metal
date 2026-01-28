@@ -1,4 +1,4 @@
-tname: PR Gate
+name: PR Gate
 # This pipeline is the minimum bar a PR must pass before it can be merged.
 # It is intended to be fast and lightweight to trigger automatically on every
 # change in every PR and provide quick feedback without overloading the CI.
