@@ -1,0 +1,8 @@
+﻿ttnn.std\_hw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.std_hw:
+
+.. autooperation:: ttnn.std_hw
