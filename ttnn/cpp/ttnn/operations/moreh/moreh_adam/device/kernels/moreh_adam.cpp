@@ -18,8 +18,7 @@
 #define WITH_FP32_DEST_ACC(x)
 #endif
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
@@ -283,5 +282,4 @@ void MAIN {
 
     cb_pop_front(cb_scalar_args, 5);
     cb_pop_front(cb_one, onetile);
-}  // void MAIN
-}  // namespace NAMESPACE
+}

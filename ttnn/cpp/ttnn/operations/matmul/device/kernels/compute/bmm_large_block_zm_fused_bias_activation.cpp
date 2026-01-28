@@ -21,8 +21,6 @@
 // when making any changes to this file.
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
-namespace NAMESPACE {
-
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  *
@@ -137,7 +135,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-void MAIN {
+void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
@@ -499,4 +497,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

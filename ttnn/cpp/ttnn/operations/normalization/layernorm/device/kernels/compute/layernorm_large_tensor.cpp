@@ -24,9 +24,7 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -361,4 +359,3 @@ void MAIN {
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
-}  // namespace NAMESPACE

@@ -10,8 +10,6 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 
-namespace NAMESPACE {
-
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
@@ -109,7 +107,7 @@ FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) 
     cb_push_back(cb, count);
 }
 
-void MAIN {
+void kernel_main() {
     // Runtime arguments
     const uint32_t work_per_core = get_arg_val<uint32_t>(0);
 
@@ -372,5 +370,3 @@ void MAIN {
         transpose_and_pack(result_prep_ind_cb_index, output_ind_cb_index, output_tiles);
     }  // core_loop loop
 }
-
-}  // namespace NAMESPACE

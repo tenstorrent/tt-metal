@@ -21,9 +21,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
@@ -212,4 +210,3 @@ void MAIN {
 
     cb_pop_front(cb_eps, 1);
 }
-}  // namespace NAMESPACE

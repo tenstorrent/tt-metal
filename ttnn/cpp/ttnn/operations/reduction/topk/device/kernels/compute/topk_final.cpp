@@ -13,8 +13,6 @@
 
 #include <cstdint>
 
-namespace NAMESPACE {
-
 /**
  * TopK Multicore Compute Kernel Implementation - Final Aggregation Phase
  *
@@ -44,7 +42,7 @@ namespace NAMESPACE {
  * - Final output is the globally optimal TopK result
  */
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -152,4 +150,3 @@ void MAIN {
         transpose_and_pack(index_transposed_cb_index, output_ind_cb_index, Kt, Wt);
     }  // ht loop
 }
-}  // namespace NAMESPACE

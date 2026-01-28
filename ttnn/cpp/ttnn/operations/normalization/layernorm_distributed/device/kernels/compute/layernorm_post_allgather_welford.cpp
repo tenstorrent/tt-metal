@@ -25,8 +25,6 @@
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
 
-
-namespace NAMESPACE {
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
 
@@ -105,7 +103,7 @@ struct beta_optional_node {
     };
 };
 
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
@@ -172,4 +170,3 @@ void MAIN {
 
     cb_pop_front(cb_eps, 1);
 }
-}  // namespace NAMESPACE

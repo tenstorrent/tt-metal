@@ -7,8 +7,6 @@
 
 #include <cstdint>
 
-namespace NAMESPACE {
-
 ALWI void batchnorm_bcast_tiles(
     uint32_t cb_bcast,
     uint32_t cb_other,
@@ -123,7 +121,7 @@ ALWI void batchnorm_bcast_tiles(
     }
 }
 
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -191,4 +189,3 @@ void MAIN {
 
     cb_pop_front(cb_eps, onetile);
 }
-}  // namespace NAMESPACE

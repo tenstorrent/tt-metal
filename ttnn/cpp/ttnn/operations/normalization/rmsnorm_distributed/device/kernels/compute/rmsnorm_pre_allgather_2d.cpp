@@ -27,8 +27,7 @@ ALWI void REL() {
     tile_regs_release();
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t blk = get_compile_time_arg_val(2);
@@ -140,4 +139,3 @@ void MAIN {
         cb_pop_front(cb_x2_merge, num_cores_y);
     }
 }
-}  // namespace NAMESPACE

@@ -23,8 +23,7 @@
 #include "compute_kernel_api/welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     /*
      * Definitions
      * block_h: This the length of the row we wish to processes in terms of tiles
@@ -559,4 +558,3 @@ void MAIN {
         cb_pop_front(cb_gamma, per_core_N);
     }
 }
-}  // namespace NAMESPACE

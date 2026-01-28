@@ -19,8 +19,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "api/debug/dprint_pages.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(1);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(2);
@@ -101,4 +100,3 @@ void MAIN {
     }
     cb_pop_front(reduce_scalar_cb, onetile);
 }
-}  // namespace NAMESPACE
