@@ -30,9 +30,9 @@ from loguru import logger
 from ...parallel.manager import CCLManager
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
-from ...utils.cache import get_and_create_cache_path, cache_dict_exists, save_cache_dict, load_cache_dict
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
+from ...utils import cache
 
 
 EXAMPLE_DOC_STRING = """
@@ -128,11 +128,11 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         parallel_config,
         vae_parallel_config,
         num_links,
-        use_cache,
         boundary_ratio: Optional[float] = None,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        is_fsdp: bool = True,
     ):
         super().__init__()
 
@@ -148,6 +148,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="scheduler", trust_remote_code=True
         )
+        self.scheduler.set_shift(3.0)
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
         )
@@ -167,9 +168,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
-        self.use_cache = use_cache
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
+        self.is_fsdp = is_fsdp
         if not self.dynamic_load:
             self._load_transformer1()
             self._load_transformer2()
@@ -215,29 +216,17 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
+            is_fsdp=self.is_fsdp,
             model_type="i2v",
         )
-
-        if self.use_cache:
-            cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-                subfolder="transformer",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                dtype="bf16",
-            )
-            # create cache if it doesn't exist
-            if not cache_dict_exists(cache_path):
-                logger.info(
-                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                )
-                self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
-                save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
-            else:
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                self.transformer.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
+        if not cache.initialize_from_cache(
+            self.transformer,
+            self.torch_transformer.state_dict(),
+            "Wan2.2-I2V-A14B-Diffusers",
+            "transformer",
+            self.parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
             logger.info("Loading transformer weights from PyTorch state dict")
             self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
 
@@ -258,29 +247,17 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
+            is_fsdp=self.is_fsdp,
             model_type="i2v",
         )
-
-        if self.use_cache:
-            cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-                subfolder="transformer_2",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                dtype="bf16",
-            )
-            # create cache if it doesn't exist
-            if not cache_dict_exists(cache_path):
-                logger.info(
-                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                )
-                self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
-                save_cache_dict(self.transformer_2.to_cached_state_dict(cache_path), cache_path)
-            else:
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                self.transformer_2.from_cached_state_dict(load_cache_dict(cache_path))
-        else:
+        if not cache.initialize_from_cache(
+            self.transformer_2,
+            self.torch_transformer_2.state_dict(),
+            "Wan2.2-I2V-A14B-Diffusers",
+            "transformer_2",
+            self.parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
             logger.info("Loading transformer weights from PyTorch state dict")
             self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
 
@@ -593,8 +570,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             batch_size,
             num_channels_latents,
             num_latent_frames,
-            # int(height) // self.vae_scale_factor_spatial,
-            58,
+            int(height) // self.vae_scale_factor_spatial,
+            # 58,
             int(width) // self.vae_scale_factor_spatial,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -817,7 +794,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
-        y = self.prepare_image(image).unsqueeze(0)
+        y = torch.load("mask_w_cond.pt")
+        # y = self.prepare_image(image).unsqueeze(0)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
