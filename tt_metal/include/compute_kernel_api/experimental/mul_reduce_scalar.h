@@ -7,11 +7,11 @@
 #include "compute_kernel_api/eltwise_binary.h"
 
 #ifdef TRISC_MATH
-#include "llk_math_mul_reduce_scalar_api.h"
-#include "sfpu/ckernel_sfpu_mul_reduce_scalar.h"
+#include "experimental/llk_math_mul_reduce_scalar_api.h"
+#include "sfpu/experimental/ckernel_sfpu_mul_reduce_scalar.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_mul_reduce_scalar_api.h"
+#include "experimental/llk_unpack_mul_reduce_scalar_api.h"
 #endif
 
 namespace ckernel {
@@ -76,7 +76,7 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
-    MATH((llk_math_mul_reduce_scalar_reduce_init<reduce_type, ReduceDim::REDUCE_COL, DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
 
     // Step 4: Prepare data for first tile's scalar reduction
     // Move dest[0] (first multiply result) to srcA
@@ -100,23 +100,13 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
             MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         }
         // Perform column reduction, accumulating into dest[0]
-        MATH((llk_math_mul_reduce_scalar_column<
-              reduce_type,
-              ReduceDim::REDUCE_COL,
-              DST_ACCUM_MODE,
-              MATH_FIDELITY,
-              false,
-              false>(0)));
+        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0)));
     }
 
     // Step 7: Perform final scalar reduction
-    MATH((llk_math_mul_reduce_scalar_final<
-          reduce_type,
-          ReduceDim::REDUCE_SCALAR,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          false,
-          false>(0)));
+    MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
+
+    // Step 8: Clear data valid flags
     MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
 }
 
