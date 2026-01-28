@@ -4,7 +4,6 @@
 
 #include <cstdint>
 
-#include "../../../../../../../../../tt_metal/hw/inc/api/debug/dprint.h"
 #include "compute_kernel_api/reduce.h"
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
