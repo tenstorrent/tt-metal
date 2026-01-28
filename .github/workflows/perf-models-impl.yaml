@@ -132,7 +132,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
+          commands: pytest -n auto models/demos/nlp/encoder/metal_BERT_large_11/tests/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'metal_BERT_large_11') }}
 
       - name: Run mobilenetv2 model_perf test
