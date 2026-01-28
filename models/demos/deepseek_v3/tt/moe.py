@@ -239,7 +239,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def forward(
+        cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, is_tensor_parallel: bool = True
+    ) -> ttnn.Tensor:
         # breakpoint()
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
@@ -248,9 +250,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
-        # All Gather
+        # All Gather (only if tensor parallel)
 
-        x = cls._fwd_all_gather(x, cfg)
+        if is_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
 
         # MoE Gate
 
@@ -272,9 +275,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Reduce Scatter
+        # Reduce Scatter (only if tensor parallel)
 
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        if is_tensor_parallel:
+            post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
 
         return post_combine_output_tensor
 
@@ -380,9 +384,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
+        return cls.forward(x, cfg, is_tensor_parallel)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
+        return cls.forward(x, cfg, is_tensor_parallel)
