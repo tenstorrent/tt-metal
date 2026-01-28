@@ -195,11 +195,15 @@ class MasterConfigLoader:
             original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
             reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
 
-            if MasterConfigLoader._use_database or os.path.exists(reconstructed_path):
+            if os.path.exists(reconstructed_path):
+                print(
+                    f"✅ Reconstructed JSON from database found at {reconstructed_path}. Using reconstructed master file."
+                )
                 master_file_path = reconstructed_path
             elif MasterConfigLoader._use_database:
                 print(
-                    "❌ Reconstructed JSON from database not found. Direct database querying is not yet implemented. Resorting to original master_file_path."
+                    f"❌ Reconstructed JSON from database not found at {reconstructed_path}. "
+                    f"Direct database querying is not yet implemented. Resorting to original master file at {original_path}."
                 )
                 master_file_path = original_path
             else:
