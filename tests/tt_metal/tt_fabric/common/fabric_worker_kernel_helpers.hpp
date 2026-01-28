@@ -11,10 +11,6 @@
 
 constexpr uint32_t WORKER_KEEP_RUNNING = 0;
 constexpr uint32_t WORKER_TEARDOWN = 1;
-// Forward declarations
-namespace tt::tt_fabric {
-class BaseFabricFixture;
-}
 
 namespace tt::tt_fabric::test_utils {
 
