@@ -223,20 +223,6 @@ class MasterConfigLoader:
                 print(f"❌ Error parsing master JSON: {e}")
                 self.master_data = {"operations": {}}
 
-    def _normalize_configs(self, configs: List[Dict]) -> List[Tuple]:
-        """Convert configs to (config_args, source, machine_info) tuples"""
-        normalized = []
-        for config in configs:
-            # New format has arguments, source, machine_info at top level
-            arguments = config.get("arguments", {})
-            source = config.get("source", "unknown")
-            machine_info = config.get("machine_info", [])
-
-            # Return as tuple: (arguments_dict, source, machine_info)
-            normalized.append((arguments, source, machine_info))
-
-        return normalized
-
     def get_operation_configs(self, operation_name: str) -> List[List[Dict]]:
         """Get all configurations for a specific operation"""
         self.load_master_data()
@@ -296,6 +282,11 @@ class MasterConfigLoader:
 
         Returns:
             List of (arguments, source, machine_info) tuples for traceability
+
+        Handles multiple formats:
+        - New (executions): {arguments, executions: [{source, machine_info, count}]} - explicit pairs
+        - Mid (contexts): {arguments, contexts: [{source, machine_info}]} - intermediate format
+        - Old: {arguments, source, machine_info} - merged format (pairing lost)
         """
         # Check if we should filter for lead models only
         # Uses class-level setting instead of environment variable for cleaner control
@@ -304,10 +295,26 @@ class MasterConfigLoader:
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
-                # Check if this config has the contexts format (multiple execution contexts)
-                if "contexts" in config:
+                arguments = config["arguments"]
+
+                # Check for new "executions" format (explicit source/machine pairs with counts)
+                if "executions" in config:
+                    # Newest format: expand each execution into separate tuples
+                    for execution in config["executions"]:
+                        source = execution.get("source", "unknown")
+                        machine_info = execution.get("machine_info", None)
+                        # count is tracked but not passed to sweep tests
+
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not self._source_matches_lead_models(source):
+                                continue  # Skip this execution
+
+                        normalized.append((arguments, source, machine_info))
+
+                # Check for mid-level "contexts" format (multiple execution contexts)
+                elif "contexts" in config:
                     # Contexts format: expand each context into separate tuples
-                    arguments = config["arguments"]
                     for context in config["contexts"]:
                         # Extract source (should be a list)
                         source_list = context.get("source", ["unknown"])
@@ -322,8 +329,9 @@ class MasterConfigLoader:
                                 continue  # Skip this context
 
                         normalized.append((arguments, source, machine_info))
+
                 else:
-                    # Single source/machine_info format
+                    # Old format: single source/machine_info (pairing may be lost)
                     source = config.get("source", "unknown")
                     machine_info = config.get("machine_info", None)
 
@@ -332,7 +340,7 @@ class MasterConfigLoader:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((config["arguments"], source, machine_info))
+                    normalized.append((arguments, source, machine_info))
             elif isinstance(config, list):
                 # Legacy list format: use as-is with unknown source
                 # Skip if lead_models_only since we can't determine source

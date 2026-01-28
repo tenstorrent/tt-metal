@@ -366,7 +366,9 @@ def update_master_file(master_file_path, operations, test_source):
                 content = f.read().strip()
                 if content:
                     master_data = json.loads(content)
-        except:
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load existing master JSON: {e}")
+            print(f"   Starting with empty master data")
             pass
 
     # Find the current max config_id
@@ -411,57 +413,104 @@ def update_master_file(master_file_path, operations, test_source):
             config_entry = {
                 "config_id": next_config_id,
                 "arguments": op_args,
-                "source": test_source,
-                "execution_count": operation.get("execution_count", 1),
+                "executions": [
+                    {
+                        "source": test_source,
+                        "machine_info": operation.get("machine_info"),
+                        "count": operation.get("execution_count", 1),
+                    }
+                ],
             }
-
-            if operation.get("machine_info"):
-                config_entry["machine_info"] = [operation["machine_info"]]
 
             master_data["operations"][op_name]["configurations"].append(config_entry)
             new_configs_added += 1
             next_config_id += 1
         else:
-            # Configuration exists - update execution count to max seen
+            # Configuration exists - check if this (source, machine_info) pair exists
             if isinstance(matching_config, dict):
-                # Update execution count to max (keep the highest count seen)
-                new_count = operation.get("execution_count", 1)
-                existing_count = matching_config.get("execution_count", 1)
-                matching_config["execution_count"] = max(existing_count, new_count)
+                # Get or create executions list
+                if "executions" not in matching_config:
+                    # Migrate old format to new format
+                    old_source = matching_config.get("source", "")
+                    old_machine_info = matching_config.get("machine_info")
+                    old_count = matching_config.get("execution_count", 1)
 
-                # Merge source
-                existing_source = matching_config.get("source")
-                if isinstance(existing_source, str):
-                    if existing_source != test_source:
-                        matching_config["source"] = [existing_source, test_source]
-                elif isinstance(existing_source, list):
-                    if test_source not in existing_source:
-                        existing_source.append(test_source)
-
-                # Merge machine info
-                if operation.get("machine_info"):
-                    new_machine_info = operation["machine_info"]
-                    if "machine_info" not in matching_config:
-                        matching_config["machine_info"] = [new_machine_info]
+                    # Handle old format where source could be string or list
+                    if isinstance(old_source, str):
+                        sources = [old_source] if old_source else []
                     else:
-                        existing_machine_info = matching_config["machine_info"]
-                        if isinstance(existing_machine_info, dict):
-                            existing_machine_info = [existing_machine_info]
-                            matching_config["machine_info"] = existing_machine_info
+                        sources = old_source if old_source else []
 
-                        # Check for duplicates
-                        is_duplicate = False
-                        for entry in existing_machine_info:
-                            if (
-                                entry.get("board_type") == new_machine_info.get("board_type")
-                                and entry.get("device_series") == new_machine_info.get("device_series")
-                                and entry.get("card_count") == new_machine_info.get("card_count")
-                            ):
-                                is_duplicate = True
+                    # Handle old format where machine_info could be dict or list
+                    if isinstance(old_machine_info, dict):
+                        machines = [old_machine_info]
+                    elif isinstance(old_machine_info, list):
+                        machines = old_machine_info
+                    else:
+                        machines = []
+
+                    # Create executions from old format (best effort - can't recover exact pairs)
+                    matching_config["executions"] = []
+                    if sources and machines:
+                        # Create all combinations (we lost the original pairing)
+                        for src in sources:
+                            for machine in machines:
+                                matching_config["executions"].append(
+                                    {
+                                        "source": src,
+                                        "machine_info": machine,
+                                        "count": old_count,
+                                    }
+                                )
+                    elif sources:
+                        for src in sources:
+                            matching_config["executions"].append(
+                                {
+                                    "source": src,
+                                    "machine_info": None,
+                                    "count": old_count,
+                                }
+                            )
+
+                    # Remove old fields
+                    matching_config.pop("source", None)
+                    matching_config.pop("machine_info", None)
+                    matching_config.pop("execution_count", None)
+
+                # Check if this (source, machine_info) pair already exists
+                new_source = test_source
+                new_machine_info = operation.get("machine_info")
+                new_count = operation.get("execution_count", 1)
+
+                found_execution = None
+                for execution in matching_config["executions"]:
+                    if execution["source"] == new_source:
+                        # Check if machine_info matches
+                        exec_machine = execution.get("machine_info")
+                        if exec_machine is None and new_machine_info is None:
+                            found_execution = execution
+                            break
+                        elif exec_machine and new_machine_info:
+                            # Compare complete machine_info (all fields must match)
+                            # Convert to JSON strings for deep comparison
+                            exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
+                            new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
+                            if exec_machine_str == new_machine_str:
+                                found_execution = execution
                                 break
 
-                        if not is_duplicate:
-                            existing_machine_info.append(new_machine_info)
+                if found_execution:
+                    # Update existing execution - take max count
+                    found_execution["count"] = max(found_execution.get("count", 1), new_count)
+                else:
+                    # Add new execution entry
+                    matching_config["executions"].append(
+                        {
+                            "source": new_source,
+                            "machine_info": new_machine_info,
+                            "count": new_count,
+                        }
+                    )
 
     # Update metadata
     if test_source not in master_data["metadata"]["models"]:
@@ -1046,6 +1095,16 @@ Examples (Import existing traces):
 
             filtered_operations_unique = list(unique_operations.values())
             print(f"✅ Reduced to {len(filtered_operations_unique)} unique configurations")
+
+            # Fix shard_spec strings in operations BEFORE adding to master JSON
+            # This ensures consistent hashing with existing configs
+            print("\n🔧 Normalizing memory configs in operations...")
+            fixed_count = [0]  # Mutable reference for counting
+            for operation in filtered_operations_unique:
+                if "arguments" in operation:
+                    fix_memory_config_recursive(operation["arguments"], fixed_count)
+            if fixed_count[0] > 0:
+                print(f"   Fixed {fixed_count[0]} shard_spec entries in operations")
 
             # Update master JSON
             os.makedirs(args.output_dir, exist_ok=True)
