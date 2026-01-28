@@ -665,19 +665,12 @@ inline auto is_uneven(const TensorSpec& t) {
 }
 
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
-    // scalar value treated as interleaved
-    if (!b.has_value()) {
+    if (!c.is_sharded()) {
         return false;
     }
 
-    // does not work for width and block sharding, pcc error,
-    // maybe support later to improve performance
-    // if (!b.has_value() && a.memory_config().is_sharded()) {
-    //     return !is_uneven(a);
-    // }
-
-    if (!c.is_sharded()) {
-        return false;
+    if (!b.has_value() && a.memory_config().is_sharded()) {
+        return !is_uneven(a);
     }
 
     // a and b identical shape, no broadcast on any dimension
