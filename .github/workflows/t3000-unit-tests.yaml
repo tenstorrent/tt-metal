@@ -368,10 +368,20 @@ jobs:
 
                       if len(parts) >= 2:
                           device = parts[0]
-                          # Find where 'Demo' starts (marks end of model name)
-                          demo_index = parts.index('Demo') if 'Demo' in parts else len(parts)
-                          # Join all parts between device and 'Demo' to get full model name
-                          model = '-'.join(parts[1:demo_index])
+
+                          # Find where test name starts (marks end of model name)
+                          # TT-Transformers tests: "Batch", "Long"
+                          # Standalone tests: "Demo"
+                          test_markers = ['Demo', 'Batch', 'Long']
+                          test_start_index = len(parts)  # default to end if no marker found
+
+                          for i, part in enumerate(parts[1:], start=1):
+                              if part in test_markers:
+                                  test_start_index = i
+                                  break
+
+                          # Join all parts between device and test name to get full model name
+                          model = '-'.join(parts[1:test_start_index])
 
                           print(f"  Extracted - Device: '{device}', Model: '{model}'")
 
