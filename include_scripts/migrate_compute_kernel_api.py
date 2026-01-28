@@ -37,12 +37,18 @@ def load_json_data(repo_root: Path) -> tuple[list, dict]:
 
     if not device_includes_path.exists():
         print(f"ERROR: {device_includes_path} not found.", file=sys.stderr)
-        print("Run: python3 include_scripts/find_device_side_includes.py > include_scripts/device_includes.json", file=sys.stderr)
+        print(
+            "Run: python3 include_scripts/find_device_side_includes.py > include_scripts/device_includes.json",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not headers_to_dirs_path.exists():
         print(f"ERROR: {headers_to_dirs_path} not found.", file=sys.stderr)
-        print("Run: python3 include_scripts/map_headers_to_include_dirs.py include_scripts/device_includes.json > include_scripts/headers_to_include_dirs.json", file=sys.stderr)
+        print(
+            "Run: python3 include_scripts/map_headers_to_include_dirs.py include_scripts/device_includes.json > include_scripts/headers_to_include_dirs.json",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     with open(device_includes_path) as f:
@@ -64,7 +70,7 @@ def find_headers_to_migrate(repo_root: Path) -> set[str]:
         return set()
 
     headers = set()
-    for item in src_dir.rglob('*'):
+    for item in src_dir.rglob("*"):
         if item.is_file():
             rel_path = item.relative_to(src_dir)
             headers.add(str(rel_path))
@@ -99,7 +105,9 @@ def build_include_mapping(headers_to_migrate: set[str], device_includes: list, h
     #    Include string: "compute_kernel_api/x.h"
     tt_metal_include_headers = headers_to_dirs.get("headers_by_directory", {}).get("tt_metal/include", [])
     for header in tt_metal_include_headers:
-        if header in headers_to_migrate or any(header.startswith(h.rsplit('/', 1)[0] + '/') for h in headers_to_migrate if '/' in h):
+        if header in headers_to_migrate or any(
+            header.startswith(h.rsplit("/", 1)[0] + "/") for h in headers_to_migrate if "/" in h
+        ):
             # Check if this header is one we're migrating
             if header in headers_to_migrate:
                 mapping[header] = new_path_for(header)
@@ -109,7 +117,7 @@ def build_include_mapping(headers_to_migrate: set[str], device_includes: list, h
     root_headers = headers_to_dirs.get("headers_by_directory", {}).get("(root)", [])
     for header in root_headers:
         if header.startswith("tt_metal/include/"):
-            rel_to_include = header[len("tt_metal/include/"):]
+            rel_to_include = header[len("tt_metal/include/") :]
             if rel_to_include in headers_to_migrate:
                 mapping[header] = new_path_for(rel_to_include)
 
@@ -123,7 +131,7 @@ def build_include_mapping(headers_to_migrate: set[str], device_includes: list, h
 
             # Check if it's a full path to tt_metal/include/
             if inc.startswith("tt_metal/include/"):
-                rel_to_include = inc[len("tt_metal/include/"):]
+                rel_to_include = inc[len("tt_metal/include/") :]
                 if rel_to_include in headers_to_migrate:
                     mapping[inc] = new_path_for(rel_to_include)
                 continue
@@ -168,7 +176,7 @@ def move_files(repo_root: Path, dry_run: bool = False) -> set[str]:
         print(f"ERROR: Source directory not found: {src_dir}", file=sys.stderr)
         return moved
 
-    for item in src_dir.rglob('*'):
+    for item in src_dir.rglob("*"):
         if item.is_file():
             rel_path = item.relative_to(src_dir)
 
@@ -199,7 +207,7 @@ def update_includes_in_file(filepath: Path, include_mapping: dict, dry_run: bool
     Returns number of changes made.
     """
     try:
-        content = filepath.read_text(encoding='utf-8', errors='replace')
+        content = filepath.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
         print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
         return 0
@@ -212,10 +220,10 @@ def update_includes_in_file(filepath: Path, include_mapping: dict, dry_run: bool
 
     for old_path, new_path in sorted_mappings:
         # Match both angle brackets and quotes
-        pattern1 = f'#include\\s*<{re.escape(old_path)}>'
+        pattern1 = f"#include\\s*<{re.escape(old_path)}>"
         pattern2 = f'#include\\s*"{re.escape(old_path)}"'
 
-        replacement1 = f'#include <{new_path}>'
+        replacement1 = f"#include <{new_path}>"
         replacement2 = f'#include "{new_path}"'
 
         new_content = re.sub(pattern1, replacement1, content)
@@ -232,7 +240,7 @@ def update_includes_in_file(filepath: Path, include_mapping: dict, dry_run: bool
         if dry_run:
             print(f"WOULD UPDATE: {filepath} ({changes} includes)")
         else:
-            filepath.write_text(content, encoding='utf-8')
+            filepath.write_text(content, encoding="utf-8")
             print(f"Updated: {filepath} ({changes} includes)")
         return changes
 
@@ -254,7 +262,7 @@ def update_all_includes(repo_root: Path, include_mapping: dict, dry_run: bool = 
         dirnames[:] = [d for d in dirnames if not any(excl in d for excl in exclude_dirs)]
 
         for filename in filenames:
-            if not (filename.endswith(('.cpp', '.cc', '.h', '.hpp'))):
+            if not (filename.endswith((".cpp", ".cc", ".h", ".hpp"))):
                 continue
 
             filepath = Path(dirpath) / filename
@@ -272,12 +280,14 @@ def update_path_references(repo_root: Path, dry_run: bool = False):
     These are plain path strings, not #include directives.
     """
     # Path mappings for non-include references
+    # ORDER MATTERS: more specific patterns must come first to avoid partial matches
     path_mappings = [
-        # Directory paths (order matters - more specific first)
-        ("tt_metal/include/compute_kernel_api/", "tt_metal/hw/inc/api/compute/"),
-        ("tt_metal/include/compute_kernel_api", "tt_metal/hw/inc/api/compute"),
-        # Top-level header
+        # Top-level header MUST come before directory pattern without slash
         ("tt_metal/include/compute_kernel_api.h", "tt_metal/hw/inc/api/compute/compute_kernel_api.h"),
+        # Directory with trailing slash
+        ("tt_metal/include/compute_kernel_api/", "tt_metal/hw/inc/api/compute/"),
+        # Directory without trailing slash (least specific, must be last)
+        ("tt_metal/include/compute_kernel_api", "tt_metal/hw/inc/api/compute"),
     ]
 
     # Files to update
@@ -299,7 +309,7 @@ def update_path_references(repo_root: Path, dry_run: bool = False):
             continue
 
         try:
-            content = filepath.read_text(encoding='utf-8', errors='replace')
+            content = filepath.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
             print(f"Warning: Could not read {filepath}: {e}", file=sys.stderr)
             continue
@@ -313,7 +323,7 @@ def update_path_references(repo_root: Path, dry_run: bool = False):
             if dry_run:
                 print(f"WOULD UPDATE: {filepath}")
             else:
-                filepath.write_text(content, encoding='utf-8')
+                filepath.write_text(content, encoding="utf-8")
                 print(f"Updated: {filepath}")
             total_files += 1
 
@@ -322,16 +332,8 @@ def update_path_references(repo_root: Path, dry_run: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without making changes"
-    )
-    parser.add_argument(
-        "repo_root",
-        nargs="?",
-        help="Repository root directory (default: parent of script directory)"
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    parser.add_argument("repo_root", nargs="?", help="Repository root directory (default: parent of script directory)")
     args = parser.parse_args()
 
     # Determine repo root
