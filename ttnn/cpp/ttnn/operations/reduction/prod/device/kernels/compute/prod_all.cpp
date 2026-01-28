@@ -12,8 +12,7 @@
 #include "tt_metal/include/compute_kernel_api.h"
 #include "api/debug/dprint_pages.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
     const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
@@ -69,4 +68,3 @@ void MAIN {
     cb_push_back(final_output_cb, one_tile);
     tile_regs_release();
 }
-}  // namespace NAMESPACE
