@@ -34,7 +34,7 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): configuration for the reduction
 
         Returns:
-            list of ttnn.Tensor: returns 8 tensors, representative of the single logical output tensor split on the last dim
+            list of ttnn.Tensor: returns x split tensors, representative of the single logical output tensor split on the last dim
         )doc",
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
