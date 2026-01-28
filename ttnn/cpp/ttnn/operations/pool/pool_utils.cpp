@@ -345,7 +345,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
 
     struct l1_usage_config {
         uint32_t l1_usage{};
-        std::optional<ParallelConfig> config{};
+        std::optional<ParallelConfig> config;
     };
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
