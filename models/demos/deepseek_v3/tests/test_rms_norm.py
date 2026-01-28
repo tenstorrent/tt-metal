@@ -131,7 +131,7 @@ def test_forward_pass(
         memory_config=memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
-
+    breakpoint()
     # Run TTNN forward pass
     tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
 

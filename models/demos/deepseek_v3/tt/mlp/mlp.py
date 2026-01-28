@@ -435,8 +435,16 @@ class MLP(AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
+        ####################
+        ### AllGather_preff1/3 ##
+        ####################
+        # Import the fused op for verification
+        from models.demos.deepseek_v3.tests.unit.fused_op_unit_tests.mlp.test_ds_fused_all_gather_preff1_3 import (
+            ds_fused_all_gather_preff1_3_ttnn,
+        )
+
         # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = ds_fused_all_gather_preff1_3_ttnn(x, cfg, ccl)
 
         # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -488,7 +496,7 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = ds_fused_all_gather_preff1_3_ttnn(x, cfg, ccl)
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])

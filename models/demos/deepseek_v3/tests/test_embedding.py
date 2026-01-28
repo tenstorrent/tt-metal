@@ -127,7 +127,7 @@ def test_embedding_forward_pass(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-
+    breakpoint()
     # TTNN forward pass
     logger.info("Running TTNN forward pass")
     tt_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
