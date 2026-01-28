@@ -322,7 +322,7 @@ jobs:
           # Sanitize test name for file naming (replace spaces with hyphens)
           TEST_NAME_SAFE="$(echo '${{ matrix.test.name }}' | tr ' ' '-')"
 
-          # Check if we're in CI mode (not regenerating cache) and should verify cache exists
+          # Check if we're not regenerating cache and should verify cache exists
           SKIP_IF_MISSING="${{ !inputs.regenerate-ttnn-cache }}"
 
           if [[ "${{ matrix.test.model_type }}" == "tt-transformers" ]]; then
