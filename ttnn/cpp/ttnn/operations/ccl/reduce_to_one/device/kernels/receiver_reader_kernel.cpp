@@ -32,15 +32,6 @@ void kernel_main() {
     constexpr uint32_t scratch_cb = get_compile_time_arg_val(6);
     constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(7);
 
-    // Senders don't receive anything - they just read local data
-    if constexpr (device_role == MESH_LEAF) {
-        // For senders: local_cb is already populated (in-place on input shard)
-        // Just push to indicate data is ready
-        cb_reserve_back(local_cb, num_tiles);
-        cb_push_back(local_cb, num_tiles);
-        return;
-    }
-
     // Runtime args - all 3 semaphore addresses always passed
     size_t arg_idx = 0;
     const uint32_t recv_sem_round1 = get_arg_val<uint32_t>(arg_idx++);

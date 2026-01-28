@@ -97,7 +97,9 @@ void kernel_main() {
     uint64_t payload_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, payload_dest_addr);
 
     // Wait for data in source CB
-    cb_wait_front(source_cb, num_tiles);
+    if constexpr (device_role != MESH_LEAF) {
+        cb_wait_front(source_cb, num_tiles);
+    }
     uint32_t data_addr = get_read_ptr(source_cb);
 
     // Send header to bottom core
@@ -110,7 +112,9 @@ void kernel_main() {
     uint64_t arrival_sem_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, arrival_sem_addr);
     noc_semaphore_inc(arrival_sem_noc_addr, 1);
 
-    cb_pop_front(source_cb, num_tiles);
+    if constexpr (device_role != MESH_LEAF) {
+        cb_pop_front(source_cb, num_tiles);
+    }
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
