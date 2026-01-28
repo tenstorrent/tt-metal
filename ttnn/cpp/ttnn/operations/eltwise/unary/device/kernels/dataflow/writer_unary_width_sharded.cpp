@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     // Compile time args

@@ -69,13 +69,8 @@ def test_tilize_row_major_to_width_sharded(device, dtype):
     # 64 cores in an 8x8 grid
     shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
 
-    # Create ShardSpec for width sharding
     shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-
-    # Input memory config: row major with width sharding
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    # Output memory config: tile layout with width sharding
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     # Create test data
@@ -87,11 +82,6 @@ def test_tilize_row_major_to_width_sharded(device, dtype):
         input_torch_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory_config
     )
 
-    # Apply tilize operation
     ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
-
-    # Convert back to torch and verify
     output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
-
-    # Verify the output matches the input
     assert torch.allclose(input_torch_tensor, output_torch_tensor, rtol=1e-2, atol=1e-2)

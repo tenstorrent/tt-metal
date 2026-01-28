@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
@@ -29,7 +31,7 @@ void kernel_main() {
 
         // Get NOC addresses (one for each row in a tile)
         for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; i++) {
-            noc_addrs[i] = get_noc_addr(chunk_id + i, src_accessor);
+            noc_addrs[i] = src_accessor.get_noc_addr(chunk_id + i, 0);
         }
 
         for (uint32_t tile_col = 0; tile_col < num_tiles_per_row; tile_col++) {
@@ -47,9 +49,9 @@ void kernel_main() {
 
             noc_async_read_barrier();
             cb_push_back(cb_id_out, 1);
+            chunk_id++;
         }
 
         // Move to next set of 32 rows
-        chunk_id += tt::constants::TILE_HEIGHT;
     }
 }
