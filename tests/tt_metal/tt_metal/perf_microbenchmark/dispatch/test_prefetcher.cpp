@@ -897,62 +897,52 @@ protected:
         const uint32_t src_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
         
         // Destination: DRAM bank 0
-        // Use the same approach as RelayLinearHTest for DRAM NOC addressing
-        uint32_t dest_bank_id = 0;
-        uint32_t dest_dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
-        CoreCoord dest_dram_physical_core = MetalContext::instance()
-                                                .get_cluster()
-                                                .get_soc_desc(device_->id())
-                                                .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
-        uint32_t dst_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
+        const uint32_t dest_bank_id = 0;
+        const uint32_t dest_dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
+        const CoreCoord dest_dram_physical_core = MetalContext::instance()
+                                                      .get_cluster()
+                                                      .get_soc_desc(device_->id())
+                                                      .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
+        const uint32_t dst_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
+        const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
         
-        // Use much larger size since we're writing to DRAM now
         uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
-        // Limit max read size per sub-command since we're reading from L1 which has limited data
         constexpr uint32_t MAX_SUB_CMD_SIZE = 256 * 1024;  // 256KB per sub-command
 
         while (remaining_bytes > 0) {
-            uint32_t n_sub_cmds =
+            const uint32_t n_sub_cmds =
                 payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
-            uint32_t max_read_size = std::min(remaining_bytes, MAX_SUB_CMD_SIZE);
+            const uint32_t max_read_size = std::min(remaining_bytes, MAX_SUB_CMD_SIZE);
 
             std::vector<uint64_t> lengths;
             std::vector<uint64_t> addresses;
             lengths.reserve(n_sub_cmds);
             addresses.reserve(n_sub_cmds);
             uint64_t total_length = 0;
-            fmt::println(stderr, "n_sub_cmds: {}", n_sub_cmds);
 
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
-                // limit the length to min and max read size
-                uint32_t raw = payload_generator_->get_rand<uint32_t>(MIN_READ_SIZE, max_read_size);
-                uint32_t clamped = std::min(max_read_size, std::max(MIN_READ_SIZE, raw));
-                uint64_t length = tt::align(clamped, l1_alignment);
+                const uint32_t raw_length = payload_generator_->get_rand<uint32_t>(MIN_READ_SIZE, max_read_size);
+                const uint64_t length = tt::align(raw_length, l1_alignment);
                 total_length += length;
                 lengths.push_back(length);
-                fmt::println(stderr, "length: {}", length);
 
-                // Linear address in L1 - read from already written data (can overlap)
-                // Generate arbitrary L1 address that's a multiple of L1 alignment
-                uint32_t max_l1_offset = DEVICE_DATA_SIZE - length;
-                uint32_t random_offset = payload_generator_->get_rand<uint32_t>(0, max_l1_offset);
-                random_offset = tt::align(random_offset, l1_alignment);
-                uint64_t addr = l1_base + random_offset;
+                // Generate arbitrary L1 address (can overlap with other sub-commands)
+                const uint32_t max_l1_offset = DEVICE_DATA_SIZE - length;
+                const uint32_t random_offset =
+                    tt::align(payload_generator_->get_rand<uint32_t>(0, max_l1_offset), l1_alignment);
+                const uint64_t addr = l1_base + random_offset;
                 addresses.push_back(addr);
             }
 
-            // If we're about to exceed size limit, then exit
+            // Check if we've reached the DRAM size limit
             if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE_LARGE) {
-                fmt::println(stderr, "total_length: {}, skipping", total_length);
                 break;
             }
 
-            // Get destination DRAM address
-            CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
-            uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
+            const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
 
-            // Create n_sub_cmds
-            std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses, n_sub_cmds);
+            const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds =
+                build_sub_cmds(lengths, addresses, n_sub_cmds);
 
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
@@ -960,13 +950,11 @@ protected:
 
             commands_per_iteration.push_back(std::move(cmd));
 
-            // Update device_data with expected data
-            // We pre-populated L1 with sequential values [0, 1, 2, 3, ...]
-            // Reading from addresses[i] will get the values starting at that offset
+            // Update expected data: L1 is pre-populated with sequential values [0, 1, 2, ...]
+            // Prefetcher reads from L1 addresses and dispatcher writes sequentially to DRAM
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
-                uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
-                uint32_t length_words = lengths[i] / sizeof(uint32_t);
-                // The prefetcher reads these values and dispatcher writes them sequentially to DRAM destination
+                const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
+                const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
                     device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
                 }
@@ -1995,14 +1983,13 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
 }
 
 // This tests relay of packed linear data using prefetcher to dispatcher
-// with multiple sub commands, each with a linear address
+// with multiple sub commands, each with a linear address.
+// Source: Worker L1 (can overlap), Destination: DRAM bank 0
 TEST_P(PrefetcherLinearPackedReadTestFixture, LinearPackedReadTest) {
     log_info(tt::LogTest, "PrefetcherLinearPackedReadTestFixture - LinearPackedReadTest - Test Start");
 
     const uint32_t num_iterations = 1;
-    const uint32_t dram_data_size_words = Common::DRAM_DATA_SIZE_WORDS;
 
-    // Setup target worker cores
     const CoreCoord first_worker = default_worker_start;
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
@@ -2010,40 +1997,29 @@ TEST_P(PrefetcherLinearPackedReadTestFixture, LinearPackedReadTest) {
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
-    // Pre-populate L1 with test data for the prefetcher to read
-    const uint32_t max_data_size = DEVICE_DATA_SIZE;
-    const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
-    std::vector<uint32_t> data(max_data_size_words);
-    for (uint32_t i = 0; i < max_data_size_words; i++) {
-        data[i] = i;
+    // Pre-populate L1 with sequential test data [0, 1, 2, 3, ...] for the prefetcher to read
+    const uint32_t l1_data_size_words = DEVICE_DATA_SIZE / sizeof(uint32_t);
+    std::vector<uint32_t> l1_data(l1_data_size_words);
+    for (uint32_t i = 0; i < l1_data_size_words; i++) {
+        l1_data[i] = i;
     }
-    CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
-    MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
+    const CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
+    MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, l1_data, l1_base);
     MetalContext::instance().get_cluster().l1_barrier(device_->id());
 
-    // Initialize destination DRAM with sentinel pattern to verify writes occur
-    {
-        const uint32_t sentinel_pattern = 0x99999999;
-        std::vector<uint32_t> dirty_data(dram_data_size_words, sentinel_pattern);
-        const uint32_t num_banks = device_->allocator()->get_num_banks(BufferType::DRAM);
-        
-        for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, bank_id, dram_base_, dirty_data);
-        }
-        MetalContext::instance().get_cluster().dram_barrier(device_->id());
-    }
+    // Initialize DRAM bank 0 with sentinel pattern to detect unwritten regions
+    constexpr uint32_t dest_bank_id = 0;
+    constexpr uint32_t sentinel_pattern = 0x99999999;
+    const uint32_t dram_size_words = DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t);
+    std::vector<uint32_t> sentinel_data(dram_size_words, sentinel_pattern);
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dest_bank_id, dram_base_, sentinel_data);
+    MetalContext::instance().get_cluster().dram_barrier(device_->id());
 
-    // DeviceData constructor - do NOT pre-populate DRAM (pass 0) since we're writing to it
-    Common::DeviceData device_data(
-        device_, worker_range, l1_base, dram_base_, nullptr, false, 0 /* don't prepopulate DRAM */, cfg_);
+    // Initialize DeviceData tracking (do not pre-populate DRAM since we're writing to it)
+    Common::DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, 0, cfg_);
 
-    // PHASE 1: Generate linear packed read command metadata
-    // Source addresses are arbitrary L1 addresses (can overlap)
-    // Destination addresses are in DRAM bank 0
+    // Generate and execute commands
     auto commands_per_iteration = generate_linear_packed_read_commands(first_worker, l1_alignment, device_data);
-
-    // PHASE 2, 3, 4: Execute and Validate
-    // Note: validation now checks DRAM bank 0 instead of worker L1
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
