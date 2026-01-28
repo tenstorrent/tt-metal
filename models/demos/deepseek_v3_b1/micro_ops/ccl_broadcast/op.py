@@ -92,8 +92,6 @@ class DeepseekMinimalBroadcast:
         barrier_semaphore = semaphores[1]
         secondary_sync_semaphore = semaphores[2]
 
-        # ttnn.synchronize_device(mesh_device)
-
         out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
         barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
         secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
