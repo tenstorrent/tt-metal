@@ -210,12 +210,11 @@ class WanTransformerBlock(Module):
             spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
         )
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-
-        spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+        spatial_ff_1BND = self.ffn(
+            spatial_normed_1BND,
+            compute_kernel_config=self.ff_compute_kernel_config,
+            parallel_config=self.parallel_config,
+        )
 
         # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
         # NOTE: higher precision compute config in addcmul may be needed for correctness
