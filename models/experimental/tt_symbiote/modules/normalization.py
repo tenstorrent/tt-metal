@@ -65,19 +65,19 @@ class DeepseekV2RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
-class TtRMSNorm(TTNNModule):
+class TTNNRMSNorm(TTNNModule):
     @classmethod
     def from_torch(cls, rms_norm: DeepseekV2RMSNorm):
-        """Create  from PyTorch LayerNorm."""
+        """Create from PyTorch RMSNorm."""
         if rms_norm.weight is None:
-            print(f"Warning: LayerNorm layer {rms_norm} has no weight. Using standard RMSNorm.")
+            print(f"Warning: RMSNorm layer {rms_norm} has no weight. Using standard RMSNorm.")
             return rms_norm
         new_layer_norm = cls()
         new_layer_norm._fallback_torch_layer = rms_norm
         return new_layer_norm
 
     def preprocess_weights_impl(self):
-        """Preprocess LayerNorm weights for TTNN."""
+        """Preprocess RMSNorm weights for TTNN."""
         if self.torch_layer is None:
             self._fallback_torch_layer = DeepseekV2RMSNorm(hidden_size=1)
         self.tt_weight = ttnn.from_torch(

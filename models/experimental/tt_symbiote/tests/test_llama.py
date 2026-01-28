@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TtRMSNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
 from models.experimental.tt_symbiote.modules.attention import LlamaAttention
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -50,7 +50,7 @@ def test_llama(device):
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
         nn.LayerNorm: TTNNLayerNorm,
-        model.model.layers[0].input_layernorm.__class__: TtRMSNorm,
+        model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
         model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
     modules = register_module_replacement_dict(model, nn_to_nn, model_config=None)
