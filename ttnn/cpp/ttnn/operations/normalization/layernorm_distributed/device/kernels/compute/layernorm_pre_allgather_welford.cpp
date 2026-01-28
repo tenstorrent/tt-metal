@@ -14,16 +14,16 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "compute_kernel_api/compute_kernel_hw_startup.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose_wh_dest.h"
 
 template <typename To, typename From>
 inline To _bit_cast_(const From& from) noexcept {

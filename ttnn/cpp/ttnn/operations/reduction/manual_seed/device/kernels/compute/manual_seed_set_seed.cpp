@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/rand.h"
 
 void kernel_main() {
     // Get compile time args

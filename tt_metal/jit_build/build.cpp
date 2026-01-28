@@ -269,7 +269,6 @@ void JitBuildEnv::init(
         root_ + "ttnn",
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
-        root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/hw/inc/debug",
