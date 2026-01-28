@@ -519,8 +519,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     extra_args = extra_args or []
 
     print(f"🚀 Running test with parameter tracing...")
+
+    # Show deprecation warning if debug flag was used
     if debug_mode:
-        print(f"🐛 Debug mode enabled - showing live test output...")
+        print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
 
     # Use python executable from tt-metal environment
     python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
@@ -555,11 +557,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     env = os.environ.copy()
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
 
-    # Run the command with custom environment
-    if debug_mode:
-        result = subprocess.run(cmd, cwd=BASE_DIR, text=True, env=env)
-    else:
-        result = subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True, env=env)
+    # Run the command with custom environment (always show live output now)
+    result = subprocess.run(cmd, cwd=BASE_DIR, text=True, env=env)
 
     # Collect generated JSON files from the unique subdirectory
     json_files = collect_operation_jsons(trace_dir)
@@ -607,11 +606,13 @@ def main():
 Examples (Pytest tests):
     python model_tracer/generic_ops_tracer.py test.py -k "test_pow"
     python model_tracer/generic_ops_tracer.py test.py --store
-    python model_tracer/generic_ops_tracer.py test.py --debug
 
 Examples (Standalone Python scripts):
     python model_tracer/generic_ops_tracer.py model.py
     python model_tracer/generic_ops_tracer.py model.py --store --output-dir ./my_traces
+
+Examples (Import existing traces):
+    python model_tracer/generic_ops_tracer.py --from-trace-dir /path/to/traces
         """,
     )
     parser.add_argument("test_path", nargs="?", help="Path to test file or script")
@@ -624,7 +625,7 @@ Examples (Standalone Python scripts):
     parser.add_argument(
         "--store", "--keep-traces", action="store_true", help="Keep individual trace files (default: delete them)"
     )
-    parser.add_argument("-d", "--debug", action="store_true", help="Show live test output in terminal")
+    parser.add_argument("-d", "--debug", action="store_true", help="[DEPRECATED] Live output is now always enabled")
     parser.add_argument(
         "--from-trace-dir",
         type=str,
@@ -679,8 +680,6 @@ Examples (Standalone Python scripts):
         print(f"📁 {os.path.basename(args.test_path)}")
         if args.store:
             print(f"💾 Keeping individual trace files")
-        if args.debug:
-            print(f"🐛 Debug mode enabled")
         if extra_args:
             print(f"📎 Extra arguments: {' '.join(extra_args)}")
         test_source = args.test_path
