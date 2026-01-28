@@ -215,9 +215,74 @@ jobs:
             echo "should-skip=false" >> $GITHUB_OUTPUT
           fi
 
+  notify-dispatch:
+    name: "📢 Notify workflow dispatch"
+    needs: [setup-branch, wait-for-mirror, detect-changes]
+    if: |
+      always() &&
+      (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
+       github.event_name == 'workflow_dispatch') &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.should-skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR number
+        id: get-pr-number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "pr-number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr-number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare dispatch notification
+        id: prepare-notification
+        run: |
+          # Determine which test suites will be dispatched
+          DISPATCHED_TESTS=""
+
+          if [ "${{ needs.detect-changes.outputs.run-wormhole }}" = "true" ]; then
+            DISPATCHED_TESTS="${DISPATCHED_TESTS}- 🌀 **All post-commit tests**"$'\n'
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.run-blackhole }}" = "true" ]; then
+            DISPATCHED_TESTS="${DISPATCHED_TESTS}- 🕳️ **Blackhole post-commit tests**"$'\n'
+          fi
+
+          # Both Wormhole and Blackhole trigger L2 and Perf tests
+          if [ "${{ needs.detect-changes.outputs.run-wormhole }}" = "true" ] || \
+             [ "${{ needs.detect-changes.outputs.run-blackhole }}" = "true" ]; then
+            DISPATCHED_TESTS="${DISPATCHED_TESTS}- ⚙️ **C++ post-commit tests**"$'\n'
+            DISPATCHED_TESTS="${DISPATCHED_TESTS}- 📊 **Device perf regression tests**"$'\n'
+          fi
+
+          echo "dispatched-tests<<EOF" >> $GITHUB_OUTPUT
+          echo "$DISPATCHED_TESTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post dispatch notification comment
+        uses: mshick/add-pr-comment@v2
+        with:
+          issue: ${{ steps.get-pr-number.outputs.pr-number }}
+          message-id: llk-dispatch-${{ github.run_id }}
+          message: |
+            ## 🚀 tt-metal post-commit tests dispatched
+
+            **Branch:** `${{ needs.setup-branch.outputs.branch-to-run }}`
+
+            The following test workflows have been dispatched to the tt-metal repository:
+
+            ${{ steps.prepare-notification.outputs.dispatched-tests }}
+
+            ⏳ Tests are now running. Results will be posted when complete.
+
+            🔗 **This workflow:** [#${{ github.run_id }}](${{
+              github.server_url }}/${{ github.repository }}/actions/runs/${{
+              github.run_id }})
+
   trigger-tt-metal-tests:
     name: "🚀 Run post-commit tests"
-    needs: [setup-branch, wait-for-mirror, detect-changes]
+    needs: [setup-branch, wait-for-mirror, detect-changes, notify-dispatch]
     if: |
       always() &&
       (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
@@ -465,7 +530,7 @@ jobs:
         with:
           issue: ${{ steps.get-pr-number.outputs.pr-number }}
           # using run_id to ensure it's unique for every workflow run
-          message-id: llk-${{ github.run_id }}
+          message-id: llk-results-${{ github.run_id }}
           message: |
             ## 🚀 tt-metal post-commit tests
 
