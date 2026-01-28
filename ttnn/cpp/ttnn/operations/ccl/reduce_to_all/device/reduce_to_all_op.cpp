@@ -68,11 +68,13 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
     TT_FATAL(
         input_page_size_bytes % l1_alignment == 0 || input_page_size_bytes == l1_alignment,
         "Tensor page size must be aligned");
-    // input mux cores should be 4
+    // input mux cores (now used for aggregator) should be at least 2
+    // Aggregator needs 2 cores (1 per link), mux needed 4.
+    // Accept 2-4 cores for backward compatibility.
     if (operation_attributes.input_mux_cores.has_value()) {
         TT_FATAL(
-            operation_attributes.input_mux_cores.value().size() == 4,
-            "Input mux cores size must be 4, got {}",
+            operation_attributes.input_mux_cores.value().size() >= 2,
+            "Input mux/aggregator cores size must be at least 2, got {}",
             operation_attributes.input_mux_cores.value().size());
     }
 
@@ -245,7 +247,8 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_bw_intermediate_tensor,
     const std::optional<Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores) {
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores,
+    const std::optional<Tensor>& optional_aggregator_scratch_tensor) {
     using OperationType = ttnn::operations::ccl::ReduceToAllOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -264,6 +267,7 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
             optional_output_tensor_m,
             optional_fw_intermediate_tensor,
             optional_bw_intermediate_tensor,
-            optional_coord_intermediate_tensor});
+            optional_coord_intermediate_tensor,
+            optional_aggregator_scratch_tensor});
 }
 }  // namespace ttnn::prim

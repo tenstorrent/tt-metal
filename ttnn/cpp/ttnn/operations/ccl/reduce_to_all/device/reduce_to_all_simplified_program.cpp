@@ -37,48 +37,9 @@
 namespace ttnn::operations::ccl {
 namespace {
 
-// Helper to add mux compile-time args (prefixed to avoid unity build conflicts)
-void simplified_fabric_mux_ct_args(
-    const uint32_t num_workers_per_direction,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    std::vector<uint32_t>& worker_ct_args) {
-    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
-    worker_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());
-    worker_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
-    worker_ct_args.push_back(num_workers_per_direction);
-}
-
-// Helper to add mux runtime args (prefixed to avoid unity build conflicts)
-void simplified_fabric_mux_rt_args(
-    const bool is_termination_master,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const CoreCoord& mux_virtual_core,
-    const uint32_t worker_id,
-    const CoreCoord& worker_logical_core,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
-    tt::tt_metal::Program& program,
-    CoreCoord termination_master_virtual_core,
-    uint32_t shared_termination_sync_sem,
-    std::vector<uint32_t>& worker_rt_args) {
-    worker_rt_args.push_back(is_termination_master);
-    worker_rt_args.push_back(mux_virtual_core.x);
-    worker_rt_args.push_back(mux_virtual_core.y);
-    worker_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, worker_id));
-    worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));
-    worker_rt_args.push_back(shared_termination_sync_sem);
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
-    worker_rt_args.push_back(termination_master_virtual_core.x);
-    worker_rt_args.push_back(termination_master_virtual_core.y);
-}
+// NOTE: Mux helper functions removed - replaced with aggregator-based approach
+// The aggregator is much simpler: workers write packets to aggregator L1 slots
+// via NoC and increment semaphore, aggregator forwards packets via fabric.
 
 }  // anonymous namespace
 
@@ -132,9 +93,6 @@ reduce_to_all_simplified_program_factory(
     //          Odd devices (1,3):  R1=BWD, R2=FWD
     const uint32_t device_index = device_coordinate[0];  // Assuming 1D ring on first dimension
     const bool is_even_device = (device_index % 2) == 0;
-    // For even devices: R1 uses FWD mux, R2 uses BWD mux
-    // For odd devices:  R1 uses BWD mux, R2 uses FWD mux
-    const bool r1_uses_fwd_mux = is_even_device;
 
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
@@ -429,35 +387,69 @@ reduce_to_all_simplified_program_factory(
     CreateCircularBuffer(program, shard_grid, cb_sync_config);
 
     // =========================================================================
-    // Setup mux cores and config
+    // Setup aggregator cores and config
     // =========================================================================
+    // Aggregator replaces heavyweight mux with lightweight packet forwarding.
+    // - 2 aggregator cores (1 per link) instead of 4 mux cores
+    // - Each aggregator core runs BRISC (FWD) and NCRISC (BWD)
+    // - Workers write complete packets to aggregator slots, aggregator forwards via fabric
     constexpr auto num_links = 2;
-    // Each link has its own mux and termination master, so workers per mux = cores_per_link
-    const uint32_t num_workers_per_direction = num_shard_cores / num_links;
+    const uint32_t num_workers_per_link = num_shard_cores / num_links;
 
-    std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
-    if (operation_attributes.input_mux_cores.has_value()) {
-        mux_cores = operation_attributes.input_mux_cores.value();
+    // Workers are split into Type A and Type B based on (core_index % 2).
+    // Half the workers per link are Type A, half are Type B.
+    // packets_per_round = workers of same type per link = num_workers_per_link / 2
+    const uint32_t packets_per_round = num_workers_per_link / 2;
+
+    // Use first 2 cores from input_mux_cores (renamed to aggregator cores) or default
+    std::vector<CoreCoord> aggregator_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};
+    if (operation_attributes.input_mux_cores.has_value() && operation_attributes.input_mux_cores.value().size() >= 2) {
+        // Use first 2 cores only (aggregator needs 2, not 4 like mux)
+        aggregator_cores = {
+            operation_attributes.input_mux_cores.value()[0], operation_attributes.input_mux_cores.value()[1]};
     }
-    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
+    CoreRangeSet aggregator_core_range_set = CoreRangeSet(aggregator_cores);
 
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    // Aggregator buffer layout per core (68KB total, shared by BRISC and NCRISC):
+    // - BRISC region (offset 0): [FWD R1 slots][FWD R2 slots] - 4 slots total
+    // - NCRISC region (offset 4*slot_size): [BWD R1 slots][BWD R2 slots] - 4 slots total
+    // Each slot = packet header + L + S + M
+    const uint32_t slot_size = packet_header_size_bytes + total_packet_size;  // header + payload
+    const uint32_t slots_per_direction = 2 * packets_per_round;               // R1 + R2 slots
+    const uint32_t brisc_buffer_size = slots_per_direction * slot_size;
+    const uint32_t ncrisc_buffer_offset = brisc_buffer_size;  // NCRISC starts after BRISC region
 
-    tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
+    // Allocate aggregator buffer in L1 on aggregator cores
+    // Use scratch tensor if provided (preferred - decouples from semaphore allocations)
+    // Otherwise fall back to l1_unreserved_base_address (legacy behavior)
+    uint32_t aggregator_buffer_base = 0;
+    if (tensor_args.optional_aggregator_scratch_tensor.has_value()) {
+        const auto& scratch_tensor = tensor_args.optional_aggregator_scratch_tensor.value();
+        aggregator_buffer_base = scratch_tensor.buffer()->address();
+    } else {
+        const uint32_t l1_unreserved_base_address =
+            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        aggregator_buffer_base = l1_unreserved_base_address;
+    }
 
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    // Create semaphores for aggregator synchronization (4 per aggregator core)
+    // Layout: [link0_fwd_r1, link0_fwd_r2, link0_bwd_r1, link0_bwd_r2,
+    //          link1_fwd_r1, link1_fwd_r2, link1_bwd_r1, link1_bwd_r2]
+    std::vector<uint32_t> aggregator_sem_addrs;
+    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+        CoreCoord agg_core = aggregator_cores[link_idx];
+        // FWD R1, FWD R2, BWD R1, BWD R2
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r1
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r2
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r1
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r2
+    }
+
+    // Aggregator compile-time args
+    std::vector<uint32_t> aggregator_ct_args = {
+        packets_per_round,  // 0: Workers per round (half the workers per link)
+        slot_size,          // 1: Total packet size (header + L + S + M)
+    };
 
     // =========================================================================
     // Create kernel compile-time args
@@ -487,8 +479,9 @@ reduce_to_all_simplified_program_factory(
         m_tile_size_bytes,      // 15 - size of M data to copy
     };
 
-    // Writer compile-time args
-    // Build base args first, then calculate mux indices based on size
+    // Writer compile-time args (simplified for aggregator - no mux config needed)
+    // The writer builds packets and writes them to aggregator slots via NoC,
+    // then increments aggregator semaphore. Much simpler than mux client protocol.
     std::vector<uint32_t> writer_ct_args = {
         Sq_chunk_t,             // 0
         vDHt,                   // 1
@@ -503,35 +496,8 @@ reduce_to_all_simplified_program_factory(
         l1_alignment,           // 10
         input_page_size_bytes,  // 11
         cb_sync,                // 12
+        slot_size,              // 13: Aggregator slot size (total packet size)
     };
-
-    // Calculate mux indices based on current size.
-    // The indices will be at positions 13 and 14, followed by the mux args.
-    // r1_mux_ct_idx points to where R1 mux args start (after base args + 2 indices)
-    // r2_mux_ct_idx points to where R2 mux args start (after R1 mux args)
-    constexpr uint32_t num_mux_args_per_direction = 5;
-    uint32_t r1_mux_ct_idx = writer_ct_args.size() + 2;  // +2 for the two index args we're about to add
-    uint32_t r2_mux_ct_idx = r1_mux_ct_idx + num_mux_args_per_direction;
-
-    // Push the calculated indices (positions 13 and 14)
-    writer_ct_args.push_back(r1_mux_ct_idx);
-    writer_ct_args.push_back(r2_mux_ct_idx);
-
-    // Add mux compile-time args for R1 and R2.
-    // NOTE: The compile-time args are IDENTICAL for both muxes because they come from
-    // the same mux_kernel_config. The FWD vs BWD direction only affects RUNTIME args
-    // (mux core coordinates, semaphores). The memory layout, buffer sizes, status
-    // addresses, etc. are the same for all muxes sharing a config.
-    simplified_fabric_mux_ct_args(
-        num_workers_per_direction,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        writer_ct_args);  // R1 mux config
-    simplified_fabric_mux_ct_args(
-        num_workers_per_direction,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        writer_ct_args);  // R2 mux config (identical values, different runtime mapping)
 
     // Compute compile-time args (23 total)
     // Layout matches compute.cpp expectations:
@@ -584,7 +550,7 @@ reduce_to_all_simplified_program_factory(
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/writer.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/writer_aggregator.cpp",
         shard_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -604,6 +570,30 @@ reduce_to_all_simplified_program_factory(
             .compile_args = compute_ct_args,
         });
 
+    // Create aggregator kernels (BRISC for FWD, NCRISC for BWD)
+    // Both use the same kernel code - direction is implicit in fabric connection rt args
+    auto aggregator_brisc_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/aggregator.cpp",
+        aggregator_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = aggregator_ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    auto aggregator_ncrisc_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/aggregator.cpp",
+        aggregator_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = aggregator_ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
     // =========================================================================
     // Set runtime args
     // =========================================================================
@@ -616,57 +606,105 @@ reduce_to_all_simplified_program_factory(
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
-    // Termination masters (first core per link)
-    // We need termination masters for both FWD and BWD mux, but we'll assign
-    // them to R1 and R2 based on device position
-    std::vector<CoreCoord> r1_term_masters = {cores_link_1[0], cores_link_2[0]};
-    std::vector<CoreCoord> r2_term_masters = {cores_link_1[0], cores_link_2[0]};
-
-    std::vector<uint32_t> r1_term_sems;
-    std::vector<uint32_t> r2_term_sems;
-    for (auto& tm : r1_term_masters) {
-        r1_term_sems.push_back(CreateSemaphore(program, {tm}, 0));
-    }
-    for (auto& tm : r2_term_masters) {
-        r2_term_sems.push_back(CreateSemaphore(program, {tm}, 0));
-    }
-
-    // Set mux runtime args
-    uint32_t mux_core_offset = 0;
+    // Set aggregator runtime args (BRISC for FWD, NCRISC for BWD)
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        for (uint32_t dir = 0; dir < 2; dir++) {
-            CoreCoord mux_logical_core = mux_cores[mux_core_offset++];
-            std::vector<uint32_t> mux_rt_args = {};
-            if (dir) {  // forward
-                if (forward_coord.has_value()) {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
-                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-                }
-            } else {
-                if (backward_coord.has_value()) {
-                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-                    mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                        src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
-                    tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-                }
-            }
+        CoreCoord agg_core = aggregator_cores[link_idx];
+
+        // Semaphore addresses for this aggregator core
+        uint32_t fwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 0];
+        uint32_t fwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 1];
+        uint32_t bwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 2];
+        uint32_t bwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 3];
+
+        // BRISC runtime args (FWD direction)
+        // buffer_offset = 0 (BRISC uses first region)
+        std::vector<uint32_t> brisc_rt_args = {
+            aggregator_buffer_base,  // 0: buffer_base
+            0,                       // 1: buffer_offset (BRISC uses offset 0)
+            fwd_r1_sem,              // 2: R1 semaphore
+            fwd_r2_sem,              // 3: R2 semaphore
+        };
+        // Append fabric connection args (direction implicit in src→dst)
+        if (forward_coord.has_value()) {
+            const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_node_id, dst_node_id, link_idx, program, agg_core, brisc_rt_args);
         }
+        tt::tt_metal::SetRuntimeArgs(program, aggregator_brisc_kernel, agg_core, brisc_rt_args);
+
+        // NCRISC runtime args (BWD direction)
+        // buffer_offset = ncrisc_buffer_offset (NCRISC uses second region)
+        std::vector<uint32_t> ncrisc_rt_args = {
+            aggregator_buffer_base,  // 0: buffer_base
+            ncrisc_buffer_offset,    // 1: buffer_offset (NCRISC uses offset after BRISC region)
+            bwd_r1_sem,              // 2: R1 semaphore
+            bwd_r2_sem,              // 3: R2 semaphore
+        };
+        // Append fabric connection args (direction implicit in src→dst)
+        if (backward_coord.has_value()) {
+            const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_node_id, dst_node_id, link_idx, program, agg_core, ncrisc_rt_args);
+        }
+        tt::tt_metal::SetRuntimeArgs(program, aggregator_ncrisc_kernel, agg_core, ncrisc_rt_args);
     }
 
-    // Set kernel runtime args per core
+    // Set kernel runtime args per worker core
     std::vector<CoreCoord> all_cores;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         const auto& cores_for_link = (link_idx == 0) ? cores_link_1 : cores_link_2;
-        uint32_t worker_id = 0;
+        CoreCoord agg_core = aggregator_cores[link_idx];
+        CoreCoord agg_core_noc = mesh_device->worker_core_from_logical_core(agg_core);
 
-        for (auto& core : cores_for_link) {
+        // Semaphore addresses for this aggregator core
+        uint32_t fwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 0];
+        uint32_t fwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 1];
+        uint32_t bwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 2];
+        uint32_t bwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 3];
+
+        // Track slot indices for each worker type
+        uint32_t type_a_slot_idx = 0;  // Type A workers use slots 0, 1, ...
+        uint32_t type_b_slot_idx = 0;  // Type B workers use slots 0, 1, ...
+
+        for (uint32_t worker_idx = 0; worker_idx < cores_for_link.size(); worker_idx++) {
+            CoreCoord core = cores_for_link[worker_idx];
             auto core_noc = mesh_device->worker_core_from_logical_core(core);
 
+            // Determine worker type: Type A if (device_id + core_index) % 2 == 0
+            // Type A: R1=FWD, R2=BWD; Type B: R1=BWD, R2=FWD
+            const bool is_type_a = ((device_index + worker_idx) % 2) == 0;
+
+            // Calculate slot index within this worker's type
+            uint32_t my_slot_idx = is_type_a ? type_a_slot_idx++ : type_b_slot_idx++;
+
+            // Calculate aggregator slot addresses for R1 and R2
+            // Type A: R1→FWD (BRISC region, offset 0), R2→BWD (NCRISC region, offset ncrisc_buffer_offset)
+            // Type B: R1→BWD (NCRISC region), R2→FWD (BRISC region)
+            uint32_t r1_slot_base;
+            uint32_t r2_slot_base;
+            uint32_t r1_agg_sem;
+            uint32_t r2_agg_sem;
+
+            if (is_type_a) {
+                // Type A: R1=FWD, R2=BWD
+                r1_slot_base = aggregator_buffer_base + 0;                     // BRISC region
+                r2_slot_base = aggregator_buffer_base + ncrisc_buffer_offset;  // NCRISC region
+                r1_agg_sem = fwd_r1_sem;
+                r2_agg_sem = bwd_r2_sem;
+            } else {
+                // Type B: R1=BWD, R2=FWD
+                r1_slot_base = aggregator_buffer_base + ncrisc_buffer_offset;  // NCRISC region
+                r2_slot_base = aggregator_buffer_base + 0;                     // BRISC region
+                r1_agg_sem = bwd_r1_sem;
+                r2_agg_sem = fwd_r2_sem;
+            }
+
+            // Calculate actual slot addresses (R1 slots, then R2 slots in each region)
+            uint32_t r1_slot_addr = r1_slot_base + (my_slot_idx * slot_size);
+            uint32_t r2_slot_addr = r2_slot_base + (packets_per_round * slot_size) + (my_slot_idx * slot_size);
+
             // Reader runtime args
-            // Include buffer addresses so reader can memcpy S and M from packet buffer
             std::vector<uint32_t> reader_rt_args = {
                 r1_recv_sem.address(),               // 0: R1 neighbor semaphore
                 r2_recv_sem.address(),               // 1: R2 neighbor semaphore
@@ -675,9 +713,7 @@ reduce_to_all_simplified_program_factory(
             };
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
-            // Writer runtime args
-            // Input tensor addresses for R1 send (writer reads directly, no CB sync)
-            // This avoids CB contention with compute kernel which also reads input via CBs
+            // Writer runtime args (simplified for aggregator - no mux protocol needed)
             std::vector<uint32_t> writer_rt_args = {
                 input_tensor_l.buffer()->address(),  // 0: Local L source address
                 input_tensor_s.buffer()->address(),  // 1: Local S source address
@@ -688,55 +724,18 @@ reduce_to_all_simplified_program_factory(
                 r2_recv_sem.address(),               // 6: R2 neighbor semaphore
                 core_noc.x,                          // 7: current_core_x
                 core_noc.y,                          // 8: current_core_y
+                // Aggregator-specific args
+                agg_core_noc.x,  // 9: aggregator_core_x
+                agg_core_noc.y,  // 10: aggregator_core_y
+                r1_slot_addr,    // 11: R1 aggregator slot address
+                r1_agg_sem,      // 12: R1 aggregator semaphore
+                r2_slot_addr,    // 13: R2 aggregator slot address
+                r2_agg_sem,      // 14: R2 aggregator semaphore
             };
-
-            // Determine which physical mux (FWD or BWD) is used for R1 and R2
-            // mux_cores layout: [link0_bwd, link0_fwd, link1_bwd, link1_fwd]
-            CoreCoord fwd_mux_logical = mux_cores[(link_idx * 2) + 1];
-            CoreCoord bwd_mux_logical = mux_cores[link_idx * 2];
-
-            // Map R1/R2 to FWD/BWD based on device position
-            CoreCoord r1_mux_logical = r1_uses_fwd_mux ? fwd_mux_logical : bwd_mux_logical;
-            CoreCoord r2_mux_logical = r1_uses_fwd_mux ? bwd_mux_logical : fwd_mux_logical;
-
-            CoreCoord r1_mux_virtual = mesh_device->worker_core_from_logical_core(r1_mux_logical);
-            CoreCoord r2_mux_virtual = mesh_device->worker_core_from_logical_core(r2_mux_logical);
-
-            CoreCoord r1_term_master = r1_term_masters[link_idx];
-            CoreCoord r2_term_master = r2_term_masters[link_idx];
-            CoreCoord r1_term_master_virtual = mesh_device->worker_core_from_logical_core(r1_term_master);
-            CoreCoord r2_term_master_virtual = mesh_device->worker_core_from_logical_core(r2_term_master);
-
-            // Add R1 mux runtime args (must match order of compile-time args!)
-            simplified_fabric_mux_rt_args(
-                core == r1_term_master,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                r1_mux_virtual,
-                worker_id,
-                core,
-                mux_kernel_config,
-                program,
-                r1_term_master_virtual,
-                r1_term_sems[link_idx],
-                writer_rt_args);
-
-            // Add R2 mux runtime args
-            simplified_fabric_mux_rt_args(
-                core == r2_term_master,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                r2_mux_virtual,
-                worker_id,
-                core,
-                mux_kernel_config,
-                program,
-                r2_term_master_virtual,
-                r2_term_sems[link_idx],
-                writer_rt_args);
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
 
             all_cores.push_back(core);
-            worker_id++;
         }
     }
 

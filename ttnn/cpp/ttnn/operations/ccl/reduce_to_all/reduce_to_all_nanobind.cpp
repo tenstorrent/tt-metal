@@ -87,6 +87,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
                const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
                const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores,
+               const std::optional<ttnn::Tensor>& aggregator_scratch_tensor,
                const tt::tt_fabric::Topology topology) {
                 return self(
                     input_tensor_l,
@@ -102,7 +103,8 @@ void bind_reduce_to_all(nb::module_& mod) {
                     bw_intermediate_tensor,
                     coord_intermediate_tensor,
                     input_mux_cores,
-                    extra_worker_cores);
+                    extra_worker_cores,
+                    aggregator_scratch_tensor);
             },
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_s").noconvert(),
@@ -118,6 +120,7 @@ void bind_reduce_to_all(nb::module_& mod) {
             nb::arg("coord_intermediate_tensor") = nb::none(),
             nb::arg("input_mux_cores") = nb::none(),
             nb::arg("extra_worker_cores") = nb::none(),
+            nb::arg("aggregator_scratch_tensor") = nb::none(),
             nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});
 
     mod.def(

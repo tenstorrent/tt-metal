@@ -129,8 +129,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((8, 32))
 
-    # mux cores
-    mux_cores = [ttnn.CoreCoord(0, 9), ttnn.CoreCoord(1, 9), ttnn.CoreCoord(2, 9), ttnn.CoreCoord(3, 9)]
+    # mux cores (aggregator uses only 2 cores - 1 per link)
+    mux_cores = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(6, 9)]
 
     # results in better perf compared to automating the generation of worker cores (other than data cores)
     extra_worker_cores = [
@@ -147,8 +147,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(3, 7)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(3, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),
         }
     )
     shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)
@@ -254,6 +254,36 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         mesh_mapper=mesh_mapper2,
     )
 
+    # Create aggregator scratch tensor for aggregator cores
+    # The aggregator needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + S + M packed
+    # Slot layout: [header (256B reserved)] [L payload] [S payload] [M payload]
+    # - Header: 256B reserved (actual header is smaller, but generous padding avoids overflow)
+    # - L: 4 tiles * 256B = 1024B (128 elements width / 32 tile_width = 4 tiles)
+    # - S: 1 tile * 256B = 256B
+    # - M: 1 tile * 256B = 256B
+    # Total per slot: 256 + 1024 + 256 + 256 = 1792B
+    # 8 slots * 1792B = 14336B per core
+    #
+    # In bfloat16 elements per core:
+    # - Payload: 192 * 4 = 768 columns (L+S+M per slot * 4 slots per round direction * 2 rounds)
+    # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
+    # Total shard width: 768 + 128 = 896 columns
+    aggregator_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(mux_cores[0], mux_cores[1])})
+    aggregator_shard_spec = ttnn.ShardSpec(aggregator_shard_grid, [8, 192 * 4 + 128], ttnn.ShardOrientation.ROW_MAJOR)
+    aggregator_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, aggregator_shard_spec
+    )
+    aggregator_scratch_shape = [8, (192 * 4 + 128) * 2]  # shard_width * 2 cores
+    aggregator_scratch_tensor = ttnn.from_torch(
+        torch.zeros(aggregator_scratch_shape, dtype=torch.bfloat16),
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=aggregator_mem_config,
+        mesh_mapper=mesh_mapper2,
+    )
+
     # Create barrier resources for device synchronization (only used when use_barrier=True)
     # Uses all_gather_async which requires global semaphores but NOT SubDevice setup.
     # We need 1 set of 2 semaphores - all_gather is inherently synchronizing so no double-buffering needed.
@@ -303,6 +333,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         topology=topology,
         input_mux_cores=mux_cores,
         extra_worker_cores=extra_worker_cores,
+        aggregator_scratch_tensor=aggregator_scratch_tensor,
     )
     # Also compile barrier if used
     if use_barrier:
@@ -342,6 +373,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             topology=topology,
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,
+            aggregator_scratch_tensor=aggregator_scratch_tensor,
         )
         if use_barrier:
             _ = ttnn.experimental.all_gather_async(
@@ -379,6 +411,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             topology=topology,
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,
+            aggregator_scratch_tensor=aggregator_scratch_tensor,
         )
         if use_barrier:
             _ = ttnn.experimental.all_gather_async(

@@ -41,6 +41,7 @@ struct ReduceToAllOp {
         const std::optional<Tensor> optional_fw_intermediate_tensor;
         const std::optional<Tensor> optional_bw_intermediate_tensor;
         const std::optional<Tensor> optional_coord_intermediate_tensor;
+        const std::optional<Tensor> optional_aggregator_scratch_tensor;
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
@@ -149,6 +150,7 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
-    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt,
+    const std::optional<Tensor>& optional_aggregator_scratch_tensor = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn
