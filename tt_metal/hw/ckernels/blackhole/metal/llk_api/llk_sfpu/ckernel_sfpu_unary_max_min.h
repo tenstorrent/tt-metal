@@ -35,7 +35,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 // Load value param to lreg2 and cast 2's complement to sign + magnitude format
 sfpi_inline void load_value_param_int(uint value) {
     _sfpu_load_imm32_(p_sfpu::LREG2, value);
-    TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+    TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);
     TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
 }
 template <bool IS_MAX_OP>
