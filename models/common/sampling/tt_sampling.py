@@ -76,7 +76,9 @@ class TTSampling(LightweightModule):
                 args.max_top_k // 32 if args.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
             )
         else:
-            self.num_gather_links = 1
+            # Default to 4 links for multi-device Galaxy configurations, 1 for single device
+            num_devices = self.cluster_shape[0] * self.cluster_shape[1]
+            self.num_gather_links = 4 if num_devices > 1 else 1
         if hasattr(args, "model_config") and "DECODE_SAMPLING_INPUT_MEMCFG" in args.model_config:
             self.sampling_memory_config = args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"]
         else:
@@ -185,16 +187,14 @@ class TTSampling(LightweightModule):
                 buffer_key=buffer_key,
             )
         else:
-            # Use tt_all_gather
-            cluster_axis = None
-            num_links = 1
+            # Use tt_all_gather with Ring topology for multi-device configurations
             tt_logits = ttnn.all_gather(
                 tensor,
                 dim=dim,
-                num_links=num_links,
+                num_links=self.num_gather_links,
                 memory_config=tensor.memory_config(),
-                cluster_axis=cluster_axis,
-                topology=ttnn.Topology.Linear,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
             )
             return tt_logits
 
