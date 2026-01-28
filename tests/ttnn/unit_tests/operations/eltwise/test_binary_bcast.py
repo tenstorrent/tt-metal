@@ -197,10 +197,9 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     (
         [torch.bfloat16, ttnn.bfloat16],
         # works, but time consuming
-        # [torch.float32, ttnn.float32],
-        # currently handled by legacy, and it does not work
-        # [torch.bfloat16, ttnn.bfloat8_b],
-        # [torch.bfloat16, ttnn.bfloat4_b],
+        # [torch.float32, ttnn.float32]
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_no_identical(
@@ -226,14 +225,14 @@ def test_binary_sharded_bcast_no_identical(
     )
 
     out_pt = torch.add(a_pt, b_pt)
-    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
     if dtype_tt == ttnn.bfloat4_b:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt, 0.993)
     else:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
     # no memory config
-    out_tt = ttnn.add(a_tt, b_tt, use_legacy=None)
+    out_tt = ttnn.add(a_tt, b_tt, use_legacy=False)
     if dtype_tt == ttnn.bfloat4_b:
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt, 0.993)
     else:
@@ -354,8 +353,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work for binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
@@ -409,11 +407,11 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_tt_sharded, out_pt)
 
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_tt_sharded, out_pt)
 
@@ -1488,8 +1486,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value(
@@ -1560,8 +1557,7 @@ def test_binary_sharded_bcast_scalar_value(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value_uneven(
@@ -2806,7 +2802,7 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     (
         [torch.bfloat16, ttnn.bfloat16],
         # does not work for binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):

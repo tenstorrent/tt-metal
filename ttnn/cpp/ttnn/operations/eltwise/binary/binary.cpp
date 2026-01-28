@@ -343,8 +343,45 @@ inline auto invoke_binary_ng(
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
     }
 
-    const auto typecast_a = detail::needs_typecast_to_bfloat16(binary_op_type, lhs, rhs);
-    const auto typecast_b = detail::needs_typecast_to_bfloat16(binary_op_type, rhs, lhs);
+    // Check for broadcast
+    const auto& lhs_shape = lhs.logical_shape();
+    const bool has_subtile_bcast = [&] {
+        if constexpr (requires { rhs.logical_shape(); }) {
+            const auto& rhs_shape = rhs.logical_shape();
+            return (lhs_shape[-1] != rhs_shape[-1]) || (lhs_shape[-2] != rhs_shape[-2]);
+        } else {
+            // Scalar value is broadcast too
+            return true;
+        }
+    }();
+
+    // For BFloat8_b/BFloat4_b, we need special handling
+    const bool both_block_format = detail::is_block_format(a_dtype) && detail::is_block_format(b_dtype);
+
+    // auto-typecasts BFloat8_b/BFloat4_b for:
+    // 1. Non-ADD/SUB/MUL operations
+    // 2. ADD/SUB/MUL with broadcast
+    // 3. Scalar operations with block formats (to handle uneven sharding)
+    bool typecast_a = false;
+    bool typecast_b = false;
+
+    if (both_block_format) {
+        using enum BinaryOpType;
+        // For non-ADD/SUB/MUL ops, always typecast block formats
+        if (binary_op_type != ADD && binary_op_type != SUB && binary_op_type != MUL) {
+            typecast_a = true;
+            typecast_b = true;
+        }
+        // For ADD/SUB/MUL with broadcast or scalar operations, also typecast
+        else if (has_subtile_bcast) {
+            typecast_a = true;
+            typecast_b = true;
+        }
+    } else {
+        // For non-block formats, use the existing logic
+        typecast_a = detail::needs_typecast_to_bfloat16(binary_op_type, lhs, rhs);
+        typecast_b = detail::needs_typecast_to_bfloat16(binary_op_type, rhs, lhs);
+    }
     const auto typecast_out = detail::is_block_format(out_dtype);
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
@@ -385,8 +422,48 @@ inline auto invoke_binary_ng(
 
         return result;
     }
-    const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
-    const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
+
+    // For BFloat8_b/BFloat4_b, we need to handle typecast with potential memory layout mismatches
+    // When inputs have different memory layouts (e.g., sharded vs DRAM), we need to handle this carefully
+    auto convert_to_bfloat16 = [](const auto& tensor, bool needs_typecast) -> auto {
+        if (!needs_typecast) {
+            return tensor;
+        }
+
+        // Handle scalar vs tensor types
+        if constexpr (requires { tensor.dtype(); }) {
+            // It's a Tensor
+            // Check if it's already BFLOAT16, no conversion needed
+            if (tensor.dtype() == DataType::BFLOAT16) {
+                return tensor;
+            }
+
+            // If the tensor is BFloat8_b/BFloat4_b, convert to BFLOAT16
+            if (detail::is_block_format(tensor.dtype())) {
+                // If the tensor is sharded, we need to convert to DRAM first
+                // because typecast doesn't support sharded inputs for BFloat8_b
+                if (tensor.is_sharded()) {
+                    auto dram_tensor = ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG);
+                    // Ensure the conversion succeeded
+                    if (dram_tensor.is_sharded()) {
+                        TT_FATAL(false, "Failed to convert sharded BFloat8_b tensor to DRAM");
+                    }
+                    return ttnn::typecast(dram_tensor, DataType::BFLOAT16);
+                }
+                // For DRAM tensors, typecast directly
+                return ttnn::typecast(tensor, DataType::BFLOAT16);
+            }
+
+            // For other types, use the existing to_dtype conversion
+            return detail::to_dtype(tensor, DataType::BFLOAT16);
+        } else {
+            // It's a scalar, just return it
+            return tensor;
+        }
+    };
+
+    const auto input_a = convert_to_bfloat16(lhs, typecast_a);
+    const auto input_b = convert_to_bfloat16(rhs, typecast_b);
     const auto output_tensor =
         output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
 
@@ -403,7 +480,26 @@ inline auto invoke_binary_ng(
         post_activations,
         std::nullopt,
         sub_core_grids);
-    return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
+
+    // Handle typecast back to block format
+    if (typecast_out) {
+        // If the result is sharded and we need to typecast back to BFloat8_b/BFloat4_b,
+        // we must convert to DRAM first because typecast doesn't support different tile sizes with sharding
+        if (result.is_sharded()) {
+            // Convert to DRAM for typecast
+            auto dram_result = ttnn::to_memory_config(result, ttnn::DRAM_MEMORY_CONFIG);
+            // Typecast to block format
+            auto typed_result = ttnn::typecast(dram_result, out_dtype, std::nullopt, output);
+            // Reshard if needed
+            if (memory_config.has_value() && memory_config->is_sharded()) {
+                return ttnn::to_memory_config(typed_result, *memory_config);
+            }
+            return typed_result;
+        }
+        // For non-sharded results, typecast directly
+        return ttnn::typecast(result, out_dtype, std::nullopt, output);
+    }
+    return result;
 }
 }  // namespace detail
 
