@@ -343,7 +343,7 @@ void kernel_main() {
                             }
 
                             cb_wait_front(cb_output_id, tile_granularity);
-                            DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
+                            // DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                             if (i < (ring_size - 1)) {
@@ -370,12 +370,12 @@ void kernel_main() {
 
                                 uint64_t out_ready_sem_noc_addr_in_pkt =
                                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                // DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                                     &mux_connection_handle,
                                     pkt_hdr_seminc,
                                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                                DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                // DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 noc_async_writes_flushed();
                             } else {
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
