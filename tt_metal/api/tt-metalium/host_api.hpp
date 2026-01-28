@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -86,6 +87,16 @@ bool IsGalaxyCluster();
 size_t GetNumPCIeDevices();
 
 ChipId GetPCIeDeviceID(ChipId device_id);
+
+/**
+ * Returns a mapping of tray IDs to PCIe device IDs based on physical topology.
+ * This is used on Galaxy systems to determine which devices belong to which tray.
+ *
+ * Return value: std::unordered_map<uint32_t, std::vector<uint32_t>>
+ *               Maps tray ID (1-indexed) to list of PCIe device IDs.
+ *               Returns empty map if not on a Galaxy system.
+ */
+std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray();
 
 // clang-format off
 /**

@@ -4,7 +4,7 @@ import argparse
 import shutil
 
 
-def multi_user_containers(num_containers, image, chips_per_container, mesh_descriptor, container_prefix):
+def multi_user_containers(num_containers, image, chips_per_container, mesh_descriptor, container_prefix, tray_mapping=None):
     services = {}
 
     user_id = os.environ.get("UID") or os.getuid()
@@ -14,9 +14,17 @@ def multi_user_containers(num_containers, image, chips_per_container, mesh_descr
     for i in range(0, num_containers):
         devices = []
 
-        for n in range(0, chips_per_container):
-            dev_num = i * chips_per_container + n
-            devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
+        if tray_mapping:
+            # Use physical topology mapping for tray scenario
+            tray_id = i + 1  # Tray IDs are 1-indexed
+            device_ids = tray_mapping["device_mapping"][str(tray_id)]
+            for dev_id in device_ids[:chips_per_container]:
+                devices.append(f"/dev/tenstorrent/{dev_id}:/dev/tenstorrent/{dev_id}")
+        else:
+            # Sequential device IDs for single/tp2 scenarios
+            for n in range(0, chips_per_container):
+                dev_num = i * chips_per_container + n
+                devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
 
         service_name = f"{container_prefix}-{i}"
         services[service_name] = {
@@ -68,10 +76,24 @@ parser.add_argument(
     default="container",
     help="Prefix for container names (default: container)",
 )
+parser.add_argument(
+    "--tray-mapping-file",
+    type=str,
+    help="Path to tray_to_pcie_device_mapping.yaml for physical topology-based device assignment",
+)
 args = parser.parse_args()
 
+# Load tray mapping if provided
+tray_mapping = None
+if args.tray_mapping_file:
+    with open(args.tray_mapping_file) as f:
+        tray_mapping = yaml.safe_load(f)
+    print(f"Loaded tray mapping from {args.tray_mapping_file}")
+    print(f"Architecture: {tray_mapping.get('arch', 'unknown')}")
+    print(f"Device mapping: {tray_mapping.get('device_mapping', {})}")
+
 services = multi_user_containers(
-    args.num_containers, args.image, args.chips_per_container, args.mesh_descriptor, args.container_prefix
+    args.num_containers, args.image, args.chips_per_container, args.mesh_descriptor, args.container_prefix, tray_mapping
 )
 
 data = {"services": services}

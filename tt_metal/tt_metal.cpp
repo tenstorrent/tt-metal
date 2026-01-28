@@ -30,6 +30,7 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "fabric/physical_system_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -970,6 +971,25 @@ size_t GetNumPCIeDevices() { return MetalContext::instance().get_cluster().numbe
 
 ChipId GetPCIeDeviceID(ChipId device_id) {
     return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+}
+
+std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray() {
+    auto& metal_context = MetalContext::instance();
+    const auto& cluster = metal_context.get_cluster();
+    auto distributed_context = metal_context.get_distributed_context_ptr();
+    const auto& rtoptions = metal_context.rtoptions();
+
+    // Create PhysicalSystemDescriptor to get the mapping
+    auto physical_system_desc =
+        PhysicalSystemDescriptor(cluster.get_driver(), distributed_context, &metal_context.hal(), rtoptions, true);
+    const auto& mapping = physical_system_desc.get_pcie_devices_per_tray();
+
+    // Convert unordered_set -> vector for API compatibility
+    std::unordered_map<uint32_t, std::vector<uint32_t>> result;
+    for (const auto& [tray_id, device_set] : mapping) {
+        result[tray_id] = std::vector<uint32_t>(device_set.begin(), device_set.end());
+    }
+    return result;
 }
 
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }

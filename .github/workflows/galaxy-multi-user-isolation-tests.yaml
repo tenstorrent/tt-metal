@@ -104,12 +104,23 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Install Wheel
+        run: |
+          pip install ttnn-*.whl
+      - name: Generate tray to PCIe device mapping
+        run: |
+          python3 .github/scripts/utils/generate_tray_mapping.py
       - name: Create Docker Compose file
         run: |
+          TRAY_MAPPING_ARG=""
+          if [ "${{ matrix.scenario }}" = "tray" ]; then
+            TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
+          fi
           python3 .github/scripts/utils/multi-user-create-files.py \
             --image "${{ needs.build-artifact.outputs.dev-docker-image }}" \
             --num-containers ${{ matrix.num_containers }} \
             --chips-per-container ${{ matrix.chips_per_container }} \
+            $TRAY_MAPPING_ARG \
             --mesh-descriptor ${{ matrix.mesh_descriptor }} \
             --container-prefix ${{ matrix.container_prefix }}
       - name: Run Docker Compose
