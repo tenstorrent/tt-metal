@@ -262,8 +262,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  # pytest models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  # pytest models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest models/demos/nlp/llms/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest models/demos/nlp/llms/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
   mixtral8x7=mistralai/Mixtral-8x7B-v0.1
   tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
 
