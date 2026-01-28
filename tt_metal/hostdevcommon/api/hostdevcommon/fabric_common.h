@@ -9,8 +9,6 @@
 #include <array>
 #include <type_traits>
 
-#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
-
 namespace tt::tt_fabric {
 
 // Forward declaration to avoid including heavy host-only headers here
@@ -492,39 +490,11 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
-enum class RouterCommand : std::uint32_t {
-    // The main state where messages and credits are forwarded
-    RUN = 0,
-
-    // The router enters the pause state, which is the "hub" transitionary state to other states.
-    // When paused, no messages/credits are processed by the router
-    PAUSE = 1,
-
-    // The router accepts messages but drops them instead of forwarding them.
-    // The pipe to /dev/null of TT-Fabric
-    DRAIN = 3,
-
-    // Commands the router to make one link retrain attempt
-    RETRAIN = 4
-};
-
-struct RouterStateManager {
-    RouterState state;      // 4B, written by device, read by host
-    uint8_t padding0[12];   //
-    RouterCommand command;  // 4B, written by host, read by device
-    uint8_t padding1[12];   //
-
-    // template <bool ENABLE_RISC_CPU_DATA_CACHE>
-    bool is_non_run_command_pending() const {
-        // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        return command != RouterCommand::RUN;
-    }
-};
-
 struct routing_l1_info_t {
-    RouterStateManager state_manager{};  // 32 bytes
-    uint16_t my_mesh_id = 0;             // Current mesh ID // 2 bytes
-    uint16_t my_device_id = 0;           // Current chip ID // 2 bytes
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
+    //       these fabric node ids should be another struct as really commonly used data
+    uint16_t my_mesh_id = 0;    // Current mesh ID
+    uint16_t my_device_id = 0;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
@@ -539,10 +509,7 @@ struct routing_l1_info_t {
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
-};
-static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
-static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
-static_assert(sizeof(routing_l1_info_t) % 16 == 0);
+} __attribute__((packed));
 
 // 64 chips * 16 bytes = 1024
 static_assert(
@@ -558,8 +525,8 @@ static_assert(
 
 // Verify total struct size
 static_assert(
-    sizeof(routing_l1_info_t) == 2576,
-    "routing_l1_info_t must be 2576 bytes: base(516) + union(1024) + exit(1024) + pad(12)");
+    sizeof(routing_l1_info_t) == 2544,
+    "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
