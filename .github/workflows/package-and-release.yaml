@@ -120,9 +120,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
+        version: [22.04, 24.04]
     with:
-      platform: ${{ matrix.platform }}
+      version: ${{ matrix.version }}
       dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
