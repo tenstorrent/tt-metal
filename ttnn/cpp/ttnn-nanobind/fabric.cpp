@@ -164,14 +164,6 @@ void bind_fabric_api(nb::module_& mod) {
                 worker_core: Logical core coordinate of the worker
                 core_type: Core type (WORKER or ETH), defaults to WORKER
         )");
-    nb::enum_<tt::tt_fabric::FabricApiType>(mod, "FabricApiType", R"(
-        Specifies the fabric API type for routing.
-        Values:
-            Linear: Use linear (1D) fabric API.
-            Mesh: Use mesh (2D) fabric API.
-        )")
-        .value("Linear", tt::tt_fabric::FabricApiType::Linear)
-        .value("Mesh", tt::tt_fabric::FabricApiType::Mesh);
 
     mod.def(
         "setup_routing_plane_connection",
@@ -180,9 +172,7 @@ void bind_fabric_api(nb::module_& mod) {
            const std::vector<uint32_t>& connection_link_indices,
            tt::tt_metal::ProgramDescriptor& program_descriptor,
            size_t kernel_idx,
-           tt::tt_metal::CoreCoord worker_core,
-           tt::tt_fabric::FabricApiType api_type,
-           tt::CoreType core_type) {
+           tt::tt_metal::CoreCoord worker_core) {
             std::vector<uint32_t> fabric_args;
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
@@ -193,9 +183,7 @@ void bind_fabric_api(nb::module_& mod) {
                 program_descriptor,
                 kernel_id,
                 worker_core,
-                fabric_args,
-                api_type,
-                core_type);
+                fabric_args);
 
             return fabric_args;
         },
@@ -205,8 +193,6 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("program_descriptor"),
         nb::arg("kernel_idx"),
         nb::arg("worker_core"),
-        nb::arg("api_type") = nb::cast(tt::tt_fabric::FabricApiType::Linear),
-        nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
         R"(
             Sets up routing plane connection manager: returns necessary runtime args and appends
             SemaphoreDescriptors and defines to the given ProgramDescriptor.
@@ -218,8 +204,6 @@ void bind_fabric_api(nb::module_& mod) {
                 program_descriptor: ProgramDescriptor to add semaphores/defines to (mutated)
                 kernel_idx: Index of the kernel in the program descriptor
                 worker_core: Logical core coordinate of the worker
-                api_type: Fabric API type (Linear or Mesh), defaults to Linear
-                core_type: Core type (WORKER or ETH), defaults to WORKER
         )");
 }
 
