@@ -1215,8 +1215,7 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
         "generate_dram_bank_to_noc_table_by_proximity should only be called for Silicon devices");
 
     // Check cache first
-    if (dram_bank_to_noc_xy_by_proximity_[device_id].find(virtual_core) !=
-        dram_bank_to_noc_xy_by_proximity_[device_id].end()) {
+    if (dram_bank_to_noc_xy_by_proximity_[device_id].contains(virtual_core)) {
         return dram_bank_to_noc_xy_by_proximity_[device_id].at(virtual_core);
     }
 
