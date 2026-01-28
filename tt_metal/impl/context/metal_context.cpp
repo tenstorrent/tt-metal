@@ -1088,8 +1088,8 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
-    // Skip for simulator/mock devices as they don't have real device coordinates or need NOC tables
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
+    // Skip for Mock devices as they don't have real device coordinates or need NOC tables
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
     // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
@@ -1165,12 +1165,10 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 }
 
 void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
-    // Skip for simulator/mock devices as they don't have real device coordinates
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
-    // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
@@ -1179,17 +1177,28 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
     worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
 
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        worker_logical_col_to_virtual_col_[device_id].push_back(
-            soc_desc
-                .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
-                .x);
+        if (noc_translation_enabled) {
+            worker_logical_col_to_virtual_col_[device_id].push_back(
+                soc_desc
+                    .translate_coord_to(
+                        {tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                    .x);
+        } else {
+            worker_logical_col_to_virtual_col_[device_id].push_back(x);
+        }
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        worker_logical_row_to_virtual_row_[device_id].push_back(
-            soc_desc
-                .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
-                .y);
+        if (noc_translation_enabled) {
+            worker_logical_row_to_virtual_row_[device_id].push_back(
+                soc_desc
+                    .translate_coord_to(
+                        {tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                    .y);
+        } else {
+            worker_logical_row_to_virtual_row_[device_id].push_back(y);
+        }
     }
 }
 
@@ -1275,8 +1284,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    // Skip for simulator/mock devices as they don't need NOC tables written to cores
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
@@ -1718,26 +1726,26 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     // to multiple DRAM endpoints can hang the card.
     std::unordered_set<tt::umd::CoreCoord> dram_cores;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
-    bool is_silicon = cluster_->get_target_device_type() == tt::TargetDevice::Silicon;
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     for (uint32_t dram_channel = 0; dram_channel < num_dram_channels; dram_channel++) {
         for (uint32_t noc = 0; noc < hal_->get_num_nocs(); noc++) {
             auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
             auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
-            if (is_silicon) {
-                auto physical_worker_dram_ep =
+            tt::umd::CoreCoord physical_worker_dram_ep;
+            tt::umd::CoreCoord physical_eth_dram_ep;
+            if (noc_translation_enabled) {
+                physical_worker_dram_ep =
                     soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-                auto physical_eth_dram_ep =
+                physical_eth_dram_ep =
                     soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-                dram_cores.insert(physical_worker_dram_ep);
-                dram_cores.insert(physical_eth_dram_ep);
             } else {
-                // For simulator/mock devices, use the coordinates directly as they're already in the right system
-                // Convert metal CoreCoord to umd CoreCoord
-                dram_cores.insert(tt::umd::CoreCoord(
-                    tt_xy_pair(worker_dram_ep.x, worker_dram_ep.y), CoreType::DRAM, CoordSystem::NOC0));
-                dram_cores.insert(
-                    tt::umd::CoreCoord(tt_xy_pair(eth_dram_ep.x, eth_dram_ep.y), CoreType::DRAM, CoordSystem::NOC0));
+                physical_worker_dram_ep =
+                    tt::umd::CoreCoord(worker_dram_ep.x, worker_dram_ep.y, CoreType::DRAM, CoordSystem::NOC0);
+                physical_eth_dram_ep =
+                    tt::umd::CoreCoord(eth_dram_ep.x, eth_dram_ep.y, CoreType::DRAM, CoordSystem::NOC0);
             }
+            dram_cores.insert(physical_worker_dram_ep);
+            dram_cores.insert(physical_eth_dram_ep);
         }
     }
 
