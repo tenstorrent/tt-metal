@@ -226,10 +226,16 @@ void kernel_main() {
         const uint32_t mm_block_ht = 2;
         const uint32_t N_block_wt = 2;
 
-        const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
+        uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
         const uint32_t last_mm_core_idx = 0;
+
+        if (effective_worker_id == 1) {
+            effective_worker_id = 2;
+        } else if (effective_worker_id == 2) {
+            effective_worker_id = 1;
+        }
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -255,6 +261,8 @@ void kernel_main() {
         DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
         DPRINT << "worker_id: " << worker_id << ENDL();
         DPRINT << "num_workers: " << num_workers << ENDL();
+
+        DPRINT << " start_row_offset: " << start_row_offset << ENDL();
 
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "batch element: " << b << " " << ENDL();

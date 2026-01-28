@@ -117,8 +117,13 @@ void kernel_main() {
     const uint32_t mm_block_ht = 2;
     const uint32_t N_block_wt = 2;
 
-    const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
+    uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
+    if (effective_worker_id == 1) {
+        effective_worker_id = 2;
+    } else if (effective_worker_id == 2) {
+        effective_worker_id = 1;
+    }
 
     const uint32_t last_mm_core_idx = 0;
 
@@ -142,6 +147,8 @@ void kernel_main() {
     DPRINT << " out_ready_sem: " << out_ready_sem << ENDL();
     DPRINT << " worker_id: " << worker_id << ENDL();
     DPRINT << " num_workers: " << num_workers << ENDL();
+    DPRINT << " start_row_offset: " << start_row_offset << ENDL();
+    DPRINT << " effective_worker_id: " << effective_worker_id << ENDL();
 
     uint32_t sem_target = 0;
 
