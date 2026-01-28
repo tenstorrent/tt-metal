@@ -1,4 +1,4 @@
-name: PR Gate
+tname: PR Gate
 # This pipeline is the minimum bar a PR must pass before it can be merged.
 # It is intended to be fast and lightweight to trigger automatically on every
 # change in every PR and provide quick feedback without overloading the CI.
@@ -274,6 +274,9 @@ jobs:
 
       - name: Configure tt-train
         timeout-minutes: 10
+        env:
+          CC: clang-20
+          CXX: clang++-20
         run: |
           set -euo pipefail
 
