@@ -341,36 +341,6 @@ ALWI void power_tile(uint32_t idst, uint32_t param0) {
 ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
 
 // clang-format off
-// MAX : y = max(idst0, idst1)
-/**
- * Performs element-wise computation of max value on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * TODO: fix idst1.
- * currently idst1 is not used and (idst0 + 1) is used for max.
- * because don't know how to use 2 dst register with sfpu.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst1           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode     | Controls face tiles which are operated on. Default RC - all face tiles.    | int      | Valid members of VectorMode enum                      | False    |
- */
-// clang-format on
-ALWI void max_tile(uint32_t idst0, uint32_t idst1, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0, vector_mode)));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_max_init<APPROX>())); }
-
-// clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
 /**
  * Performs element-wise computation of 2^x value where x is each element of a tile

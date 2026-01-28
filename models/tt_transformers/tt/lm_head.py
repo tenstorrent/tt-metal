@@ -175,8 +175,6 @@ class LMHead(LightweightModule):
             self.tt_ccl,
             cluster_axis=1,
             dim=3 if self.args.is_galaxy else 0,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             sharded=False,

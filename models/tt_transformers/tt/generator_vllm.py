@@ -605,7 +605,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+        from models.demos.multimodal.gemma3.demo.vision_demo import create_multimodal_model
 
         optimizations = (
             DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
@@ -681,6 +681,11 @@ class GptOssForCausalLM(Generator):
         model_args = []
         model = []
         state_dict = None
+        # GPT-OSS throughput profile uses user-row sharding on
+        # multi-row meshes with large max batch sizes (e.g., 128 on 4x8).
+        # This must be selected at model init time to ensure correct sharding
+        # and input preparation.
+        users_row_sharded = bool(mesh_device.shape[0] > 1 and max_batch_size > 32)
 
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
@@ -694,6 +699,8 @@ class GptOssForCausalLM(Generator):
                 num_layers=n_layers,
                 mesh_config=None,
                 create_kv_cache=False,
+                users_row_sharded=users_row_sharded,
+                use_throughput_experts=submesh.shape[0] > 1 and (max_batch_size > 1),
             )
 
             model_args.append(model_args_i)

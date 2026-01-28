@@ -9,7 +9,6 @@
 // Check initialized and uninitialized data are initialized correctly.
 
 using namespace sfpi;
-namespace NAMESPACE {
 volatile uint32_t global __attribute__((used)) = 0x12345678;
 volatile uint32_t zero __attribute__((used));
 
@@ -18,7 +17,7 @@ static uint32_t __attribute__((noinline)) get(volatile uint32_t *ptr) {
     return *ptr;
 }
 
-void MAIN {
+void kernel_main() {
 #if COMPILE_FOR_TRISC == 1  // compute
 #include "pre.inc"
     {
@@ -32,4 +31,3 @@ void MAIN {
 #include "post.inc"
 #endif
 }
-}  // namespace NAMESPACE

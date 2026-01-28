@@ -19,11 +19,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "test_case",
     [
-        # qkv_a
+        # qkv_a Roofline 8.4, achieve 13.2
+        # Compute bound -> could be 10.7us
+        # Perhaps tweak transaction IDs, go ahead by 3 transactions instead of 2?
         {
             "m": 32,
             "k": 896,
-            "n": 2112,
+            "n": 2112,  # this pads up to 2304
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 1),
             "out_core_grid": (8, 1),
@@ -31,10 +33,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
             "expected_pcc": 0.999,
-            "tile_h": 32,
-            "tile_w": 32,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
         },
-        # wq_b
+        # wq_b Roofline 21, achieves 23
         {
             "m": 32,
             "k": 1536,
@@ -46,26 +52,179 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
             "expected_pcc": 0.999,
-            "tile_h": 32,
-            "tile_w": 32,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
         },
-        # wo
+        # wo Roofline 64.99, achieve 93
+        # Can achieve 83 with in0_block_w // 2. This maps to ~250GBps
         {
             "m": 32,
             "k": 16384,
-            "n": 896,
+            "n": 896,  # this pads up to 1152
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (8, 1),
-            "out_core_grid": (7, 2),
+            "out_core_grid": (8, 1),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
             "expected_pcc": 0.999,
-            "tile_h": 32,
-            "tile_w": 32,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # llama shape
+        {
+            "m": 32,
+            "k": 8192,
+            "n": 1280,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (8, 1),
+            "out_core_grid": (8, 1),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.999,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # mlp ff1 / ff3
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 3584,  # 2304, padded up
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # mlp ff2
+        {
+            "m": 32,
+            "k": 3584,  # 2304, padded up
+            "n": 7168,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # moe gate
+        {
+            "m": 16,
+            "k": 7168,
+            "n": 256,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (1, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 16,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 16,
+            "out_tile_w": 32,
+        },
+        # shared expert ff1 / ff3
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 384,  # 256, padded up
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (3, 4),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # shared expert ff2
+        {
+            "m": 32,
+            "k": 256,
+            "n": 7168,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
+        },
+        # lm heads
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 16512,  # 16160 padded
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (8, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "in0_tile_h": 32,
+            "in0_tile_w": 32,
+            "in1_tile_h": 32,
+            "in1_tile_w": 32,
+            "out_tile_h": 32,
+            "out_tile_w": 32,
         },
     ],
-    ids=["qkv_a", "wq_b", "wo"],
+    ids=[
+        "qkv_a",
+        "wq_b",
+        "wo",
+        "llama",
+        "mlp_ff1_ff3",
+        "mlp_ff2",
+        "moe_gate",
+        "shared_expert_ff1_ff3",
+        "shared_expert_mlp_ff2",
+        "lm_heads",
+    ],
 )
 @pytest.mark.parametrize("num_iters", [1])
 def test_matmul_l1_dram_sharded(device, test_case, num_iters):
@@ -86,8 +245,12 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     in1_dtype = test_case["in1_dtype"]
     out_dtype = test_case["out_dtype"]
     expected_pcc = test_case["expected_pcc"]
-    tile_h = test_case["tile_h"]
-    tile_w = test_case["tile_w"]
+    in0_tile_h = test_case["in0_tile_h"]
+    in0_tile_w = test_case["in0_tile_w"]
+    in1_tile_h = test_case["in1_tile_h"]
+    in1_tile_w = test_case["in1_tile_w"]
+    out_tile_h = test_case["out_tile_h"]
+    out_tile_w = test_case["out_tile_w"]
 
     # Tensor shapes
     in0_shape = [1, 1, m, k]
@@ -95,7 +258,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
 
     # DRAM configuration - 12 banks
     num_dram_banks = 12
-    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
+    n_padded = pad_to_dram_banks(n, in1_tile_w, in1_tile_w * num_dram_banks)
     in1_shard_shape = [k, n_padded // num_dram_banks]
 
     # Core grid configurations
@@ -107,17 +270,17 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     # Calculate program config parameters based on sharding strategy
     if in0_shard_strategy == ttnn.ShardStrategy.WIDTH:
         # WIDTH sharding: shard along K dimension
-        in0_block_w = k // num_in0_cores // tile_w
+        in0_block_w = k // num_in0_cores // in0_tile_w
     else:  # HEIGHT sharding
         # HEIGHT sharding: shard along M dimension
-        in0_block_w = k // tile_w
-    per_core_M = m // tile_h
+        in0_block_w = k // in0_tile_w
+    per_core_M = m // out_tile_h
     # Calculate per_core_N ensuring we don't exceed available cores
     # The code calculates: num_blocks_x = ((N_tiles - 1) / per_core_N) + 1
     # and num_cores = num_blocks_x * num_blocks_y
     # We need to ensure num_cores <= available cores (64 for 8x8 grid)
-    N_tiles = n // tile_w
-    M_tiles = m // tile_h
+    N_tiles = n // out_tile_w
+    M_tiles = m // out_tile_h
     num_blocks_y = ((M_tiles - 1) // per_core_M) + 1
     # Maximum number of blocks in x direction to stay within available cores
     # Use device grid size (typically 8x8 = 64 cores) as the limit
@@ -134,7 +297,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     else:
         min_per_core_N = N_tiles
     # Use the larger of the two: what we want for sharding vs what fits in available cores
-    desired_per_core_N = n // num_out_cores // tile_w
+    desired_per_core_N = n // num_out_cores // out_tile_w
     per_core_N = max(min_per_core_N, desired_per_core_N)
 
     # Create torch tensors
@@ -150,7 +313,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     )
     in0_t = ttnn.from_torch(
         in0,
-        tile=ttnn.Tile((tile_h, tile_w)),
+        tile=ttnn.Tile((in0_tile_h, in0_tile_w)),
         dtype=in0_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -164,7 +327,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
-        tile=ttnn.Tile((tile_h, tile_w)),
+        tile=ttnn.Tile((in1_tile_h, in1_tile_w)),
         dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -205,7 +368,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
             memory_config=out_memory_config,
             dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
-            output_tile=ttnn.Tile((tile_h, tile_w)),
+            output_tile=ttnn.Tile((out_tile_h, out_tile_w)),
         )
 
         if itr != num_iters - 1:

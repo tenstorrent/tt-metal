@@ -133,6 +133,19 @@ run_t3000_qwen25_vl_tests() {
   fi
 }
 
+run_t3000_qwen3_vl_tests() {
+  # install qwen3_vl requirements
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen3-VL-32B
+  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
+}
+
 run_t3000_qwen3_tests() {
   # Record the start time
   fail=0
@@ -273,7 +286,7 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -346,9 +359,9 @@ run_t3000_gemma3_tests() {
   gemma27b=google/gemma-3-27b-it
   tt_cache_gemma27b=$TT_CACHE_HOME/$gemma27b
 
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
@@ -363,7 +376,7 @@ run_t3000_whisper_tests() {
 
   echo "LOG_METAL: Running run_t3000_whisper_tests"
 
-  pytest -n auto models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -421,12 +434,18 @@ run_t3000_gpt_oss_tests() {
   uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 20B accuracy tests completed"
+
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
+
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 120B accuracy tests completed"
 
   # Record the end time
   end_time=$(date +%s)

@@ -25,7 +25,11 @@ inline Tensor mean_NHW(
     return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
 }
 
-Tensor BatchNorm::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn {
+
+Tensor batch_norm(
     const Tensor& input,
     std::optional<Tensor> running_mean,
     std::optional<Tensor> running_var,
@@ -54,8 +58,9 @@ Tensor BatchNorm::invoke(
 
     Tensor batch_mean, batch_var;
     if (training) {
-        batch_mean = mean_NHW(input, memory_config, compute_kernel_config);
-        auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config, compute_kernel_config);
+        batch_mean = operations::normalization::mean_NHW(input, memory_config, compute_kernel_config);
+        auto mean_sq = operations::normalization::mean_NHW(
+            ttnn::square(input, memory_config), memory_config, compute_kernel_config);
         batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
         ttnn::prim::running_statistics(
             batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
@@ -69,4 +74,5 @@ Tensor BatchNorm::invoke(
     return ttnn::prim::batch_norm(
         input, batch_mean, batch_var, eps, weight, bias, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::normalization
+
+}  // namespace ttnn

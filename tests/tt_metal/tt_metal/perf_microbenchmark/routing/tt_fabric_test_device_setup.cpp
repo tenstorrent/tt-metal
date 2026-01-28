@@ -335,14 +335,15 @@ void TestWorker::create_kernel(
     const std::vector<uint32_t>& rt_args,
     const std::vector<uint32_t>& local_args,
     uint32_t local_args_address,
-    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
+    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+    tt::tt_metal::NOC noc_id) const {
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
         {this->logical_core_},
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = noc_id,
             .compile_args = ct_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
@@ -956,13 +957,20 @@ void TestDevice::create_sender_kernels() {
                  sender_memory_map_->get_mux_termination_sync_size()});
         }
 
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default;
+        // Each sender will have the same NOC used for every pattern when parsing, take the one defined in the first config
+        if (sender.configs_[0].first.noc_id.has_value()) {
+            noc_id = sender.configs_[0].first.noc_id.value();
+        }
+
         sender.create_kernel(
             coord_,
             ct_args,
             rt_args,
             local_args,
             sender_memory_map_->get_local_args_address(),
-            addresses_and_size_to_clear);
+            addresses_and_size_to_clear,
+            noc_id);
 
         log_debug(tt::LogTest, "Created sender kernel on core {}", core);
     }
