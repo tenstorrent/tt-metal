@@ -188,7 +188,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
     for (uint32_t i = 0; i < num_cores; i++) {
         const auto& core = cores[i];
         uint32_t num_blocks_arg = num_blocks_per_core;
-        if (i >= core_group.size()) {
+        if (i >= core_group.num_cores()) {
             num_blocks_arg = num_blocks_per_core_cliff;
         }
 
