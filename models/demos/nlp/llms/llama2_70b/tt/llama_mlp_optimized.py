@@ -6,7 +6,7 @@ from typing import List
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
+from models.demos.nlp.llms.falcon40b.tt.model_utils import matmul_2d_config
 from ttnn import ShardTensorToMesh
 
 
