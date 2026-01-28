@@ -9,8 +9,14 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 
-namespace NAMESPACE {
-void MAIN {
+// Need these headers for running SFPU on PACK thread
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "llk_math_eltwise_binary_sfpu_binop.h"
+#endif
+
+void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
@@ -98,6 +104,9 @@ void MAIN {
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
+    // Initialize SFPU for SILU and eltwise multiply
+    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
@@ -129,26 +138,22 @@ void MAIN {
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
 
-            //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
-            //---------------------------------------------------------------------
-            silu_tile_init();
-            silu_tile(0);
-            silu_tile(2);
-
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-            mul_binary_tile(2, 3, 2);
-
             tile_regs_commit();
             tile_regs_wait();
 
-            // PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
-            // PACK(silu_tile_init());
-            // PACK(silu_tile(0));
+            // Make SFPU access the appropriate half of the destination registers
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
-            // PACK(mul_binary_tile_init());
-            // PACK(mul_binary_tile(0, 1, 0));
+            //---------------------------------------------------------------------
+            // Apply SILU activation and then eltwise multiply
+            //---------------------------------------------------------------------
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -227,4 +232,3 @@ void MAIN {
     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
 }
-}  // namespace NAMESPACE

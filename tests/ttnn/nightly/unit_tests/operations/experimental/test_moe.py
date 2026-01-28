@@ -16,7 +16,7 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.98
+PCC_THRESHOLD = 0.988
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
