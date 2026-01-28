@@ -233,13 +233,13 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          uv pip install -r models/demos/gpt_oss/requirements.txt
+          uv pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+            pytest models/demos/nlp/llms/gpt_oss/tests/unit -k "4x8" --timeout 300
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+            pytest models/demos/nlp/llms/gpt_oss/tests/unit -k "4x8" --timeout 300
 
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}

@@ -431,20 +431,20 @@ run_t3000_gpt_oss_tests() {
   start_time=$(date +%s)
 
   # Install gpt-oss requirements
-  uv pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 600 models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 900 models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B accuracy tests completed"
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 600 models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
 
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 900 models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B accuracy tests completed"
 
   # Record the end time
