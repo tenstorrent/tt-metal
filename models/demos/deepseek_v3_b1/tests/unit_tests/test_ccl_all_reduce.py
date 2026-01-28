@@ -226,18 +226,6 @@ def test_ccl_all_reduce(
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
-    logger.info(f"Input tensor shape: {input_back_torch.shape}")
-    logger.info(f"Device 0 input first 5 values: {input_back_torch[0, :5]}")
-    logger.info(f"Device 1 input first 5 values: {input_back_torch[1, :5]}")
-    logger.info(f"Intermediate tensor shape (reshaped): {intermediate_tensor_torch.shape}")
-    logger.info(f"Device 0 intermediate first 5 values: {intermediate_tensor_torch[0, :5]}")
-    logger.info(f"Device 1 intermediate first 5 values: {intermediate_tensor_torch[1, :5]}")
-    logger.info(f"Output tensor shape: {output_tensor_torch.shape}")
-
-    output_tensor_torch = output_tensor_torch.reshape(num_devices, -1)
-    logger.info(f"Device 0 output first 5 values: {output_tensor_torch[0, :5]}")
-    logger.info(f"Device 1 output first 5 values: {output_tensor_torch[1, :5]}")
-
     all_passed = True
     for device_idx in range(num_devices):
         received = output_tensor_torch[device_idx : device_idx + 1, :]
