@@ -281,7 +281,7 @@ class PI0ModelTTNN:
             )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
-        return ttnn.to_torch(x_t_ttnn)
+        return x_t_ttnn
 
     @classmethod
     def from_pretrained(
