@@ -984,10 +984,13 @@ class ModelArgs:
             )
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
-                core_grid=ttnn.CoreGrid(y=lm_head_num_rows, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // attn_input_grid.num_cores,
+                ),  # Shard shape: [32, 128] -> 1 shard per core
+                attn_input_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
 
