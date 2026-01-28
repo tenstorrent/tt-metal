@@ -4,8 +4,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
-from models.demos.qwen25_vl.tt.vision_mlp import MLP
+from models.demos.nlp.llms.qwen25_vl.tt.vision_attention import VisionAttention
+from models.demos.nlp.llms.qwen25_vl.tt.vision_mlp import MLP
 
 
 class VisionBlock(LightweightModule):

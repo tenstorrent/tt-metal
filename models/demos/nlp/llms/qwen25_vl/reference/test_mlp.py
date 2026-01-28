@@ -15,8 +15,8 @@ import ttnn
 
 def main():
     # Import both implementations
-    functional = importlib.import_module("models.demos.qwen25_vl.reference.functional")
-    functional_ttnn = importlib.import_module("models.demos.qwen25_vl.reference.functional_ttnn")
+    functional = importlib.import_module("models.demos.nlp.llms.qwen25_vl.reference.functional")
+    functional_ttnn = importlib.import_module("models.demos.nlp.llms.qwen25_vl.reference.functional_ttnn")
 
     # Get mesh size from command line args (default to 1x1 if not specified)
     if len(sys.argv) >= 3:

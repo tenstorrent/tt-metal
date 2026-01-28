@@ -54,7 +54,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 
-from models.demos.qwen25_vl.reference.instrument import instrument
+from models.demos.nlp.llms.qwen25_vl.reference.instrument import instrument
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_varlen_func
