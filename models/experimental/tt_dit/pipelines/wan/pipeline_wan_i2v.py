@@ -19,7 +19,7 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.loaders import WanLoraLoaderMixin
 from diffusers.models import AutoencoderKLWan, WanTransformer3DModel as TorchWanTransformer3DModel
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -29,7 +29,7 @@ import ttnn
 from loguru import logger
 from ...parallel.manager import CCLManager
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
-from ...models.vae.vae_wan2_1 import WanDecoder
+from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
 from ...utils import cache
@@ -145,10 +145,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae = AutoencoderKLWan.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="vae", trust_remote_code=True
         )
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        self.scheduler = UniPCMultistepScheduler.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="scheduler", trust_remote_code=True
         )
-        self.scheduler.set_shift(3.0)
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
             "Wan-AI/Wan2.2-I2V-A14B-Diffusers", subfolder="transformer", trust_remote_code=True
         )
@@ -189,7 +188,22 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
+        self.tt_encoder = WanEncoder(
+            base_dim=self.vae.config.base_dim,
+            in_channels=self.vae.config.in_channels,
+            z_dim=self.vae.config.z_dim,
+            dim_mult=self.vae.config.dim_mult,
+            num_res_blocks=self.vae.config.num_res_blocks,
+            attn_scales=self.vae.config.attn_scales,
+            temperal_downsample=self.vae.config.temperal_downsample,
+            is_residual=self.vae.config.is_residual,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.vae_parallel_config,
+        )
+
         self.tt_vae.load_state_dict(self.vae.state_dict())
+        self.tt_encoder.load_state_dict(self.vae.state_dict())
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -550,10 +564,27 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         if self.config.boundary_ratio is None and guidance_scale_2 is not None:
             raise ValueError("`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None.")
 
+    def prepare_latents_torch(self, image, width, height):
+        image = self.video_processor.preprocess(image, height=height, width=width).to(None, dtype=torch.float32)
+        logger.info("Preparing latents...")
+        model_id = "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+        image_encoder = CLIPVisionModel.from_pretrained(model_id, subfolder="image_encoder", torch_dtype=torch.float32)
+        vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
+        pipe = WanImageToVideoPipeline.from_pretrained(
+            model_id, vae=vae, image_encoder=image_encoder, torch_dtype=torch.bfloat16
+        )
+        pipe.to("cpu")
+        logger.info("Preprocessing image...")
+        # image = preprocess(image, width, height)
+        logger.info(f"Encoding image with shape {image.shape}...")
+        latents, mask_w_cond = pipe.prepare_latents(image, batch_size=1, width=width, height=height)
+        return latents, mask_w_cond
+
     def prepare_latents(
         self,
-        batch_size: int,
-        num_channels_latents: int = 36,
+        image: PIL.Image.Image,
+        batch_size: int = 1,
+        num_channels_latents: int = 16,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -562,6 +593,61 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        ## Encode image
+        # Convert image to tensor
+        image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+        image = image.unsqueeze(2)
+        if self.config.expand_timesteps:
+            video_condition = image
+        else:
+            video_condition = torch.cat(
+                [image, image.new_zeros(image.shape[0], image.shape[1], num_frames - 1, height, width)], dim=2
+            )
+
+        # Convert to ttnn
+        tt_video_condition_BTHWC = video_condition.permute(0, 2, 3, 4, 1)
+        # --> Do the required padding and sharding. Verify if this is needed.
+        tt_video_condition_BTHWC = conv_pad_in_channels(tt_video_condition_BTHWC)
+        tt_video_condition_BTHWC, logical_h = conv_pad_height(
+            tt_video_condition_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
+        )
+        tt_video_condition_BTHWC = bf16_tensor_2dshard(
+            tt_video_condition_BTHWC,
+            self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                self.vae_parallel_config.width_parallel.mesh_axis: 3,
+            },
+        )
+
+        encoded_video_BCTHW, new_logical_h = self.tt_encoder(tt_video_condition_BTHWC, logical_h)
+
+        # convert to torch
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        encoded_video_torch = ttnn.to_torch(
+            encoded_video_BCTHW,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
+            ),
+        )
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch.to(dtype=dtype)
+
+        latents_mean = (
+            torch.tensor(self.vae.config.latents_mean)
+            .view(1, self.vae.config.z_dim, 1, 1, 1)
+            .to(encoded_video_torch.device, encoded_video_torch.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+            encoded_video_torch.device, encoded_video_torch.dtype
+        )
+
+        encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
+
+        ## Noise latents
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
 
@@ -571,7 +657,6 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             num_channels_latents,
             num_latent_frames,
             int(height) // self.vae_scale_factor_spatial,
-            # 58,
             int(width) // self.vae_scale_factor_spatial,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -579,9 +664,19 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
-
+        # torch.manual_seed(2)
         latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
-        return latents
+
+        # Add latent mask
+        msk = torch.ones(batch_size, num_frames, shape[-2], shape[-1])
+        msk[:, 1:] = 0
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4, shape[-2], shape[-1])
+        msk = msk.transpose(1, 2)
+
+        tt_y = torch.concat([msk, encoded_video_torch], dim=1)
+
+        return latents, tt_y
 
     @property
     def guidance_scale(self):
@@ -764,38 +859,13 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
         self.timing_data["text_encoder"] = time.time() - text_encoder_start_time
 
-        # transformer_dtype = self.transformer.dtype if self.transformer is not None else self.transformer_2.dtype
-        # prompt_embeds = prompt_embeds.to(transformer_dtype)
-        # if negative_prompt_embeds is not None:
-        #     negative_prompt_embeds = negative_prompt_embeds.to(transformer_dtype)
-
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
 
         # 5. Prepare latent variables
-        # num_channels_latents = (
-        #     self.transformer.config.in_channels
-        #     if self.transformer is not None
-        #     else self.transformer_2.config.in_channels
-        # )
-        num_channels_latents = self.torch_transformer.config.in_channels
-        latents = self.prepare_latents(
-            batch_size * num_videos_per_prompt,
-            # num_channels_latents,
-            16,
-            height,
-            width,
-            num_frames,
-            torch.float32,
-            device,
-            generator,
-            latents,
-        )
-
+        latents, y = self.prepare_latents(image, num_frames=num_frames, height=height, width=width, device=device)
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
-        y = torch.load("mask_w_cond.pt")
-        # y = self.prepare_image(image).unsqueeze(0)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -847,6 +917,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
 
                 logger.info(f"step {i} of {num_inference_steps}")
                 logger.info(f"latent_model_input.shape: {latent_model_input.shape}")
+                logger.info(f"tt_y.shape: {tt_y.shape}")
                 logger.info(f"timestep.shape: {timestep.shape}")
                 logger.info(f"prompt_embeds.shape: {prompt_embeds.shape}")
                 logger.info(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
