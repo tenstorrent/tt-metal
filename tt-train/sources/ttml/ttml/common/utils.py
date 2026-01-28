@@ -67,22 +67,24 @@ def initialize_device(yaml_config: dict):
     )
 
 
-def create_optimizer(model, config):
+def create_optimizer(model, yaml_config: dict):
     """Create AdamW or MorehAdamW optimizer from configuration.
 
     Args:
         model: Model to optimize
-        config: TrainingConfig object containing optimizer configuration
+        yaml_config: Dictionary containing optimizer configuration
 
     Returns:
         AdamW or MorehAdamW optimizer instance based on configuration
     """
-    lr = getattr(config, "lr", getattr(config, "learning_rate", 0.0003))
-    beta1 = getattr(config, "beta1", 0.9)
-    beta2 = getattr(config, "beta2", 0.999)
-    eps = getattr(config, "eps", 1e-8)
-    weight_decay = getattr(config, "weight_decay", 0.01)
-    use_moreh_adamw = getattr(config, "use_moreh_adamw", False)
+    optimizer_config = yaml_config.get("training_config", {})
+
+    lr = optimizer_config.get("learning_rate", 0.0003)
+    beta1 = optimizer_config.get("beta1", 0.9)
+    beta2 = optimizer_config.get("beta2", 0.999)
+    eps = optimizer_config.get("eps", 1e-8)
+    weight_decay = optimizer_config.get("weight_decay", 0.01)
+    use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
 
     adamw_cfg = ttml.optimizers.AdamWConfig.make(
         float(lr),
