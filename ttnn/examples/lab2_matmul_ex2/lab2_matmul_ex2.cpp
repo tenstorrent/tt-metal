@@ -211,6 +211,7 @@ void matmul_multi_core(
     const uint32_t N_block_tiles = Nt / core_grid.y;
     // This needs to be chosen so that all the data fits into on-chip SRAM.
     const uint32_t K_block_tiles = 2;
+    TT_FATAL(Kt % K_block_tiles == 0, "Kt must be divisible by K_block_tiles.");
     const uint32_t num_k_blocks = Kt / K_block_tiles;
 
     // The number of tiles in the input A and B slabs.
