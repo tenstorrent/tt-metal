@@ -111,7 +111,7 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  uv pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -119,12 +119,12 @@ run_t3000_qwen25_vl_tests() {
   # Qwen2.5-VL-32B
   qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
   tt_cache_32b=$TT_CACHE_HOME/$qwen25_vl_32b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 600 || fail=1
 
   # Qwen2.5-VL-72B
   qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 900 || fail=1
 
   echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
 

@@ -16,7 +16,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.nlp.llms.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 
 
 @contextmanager

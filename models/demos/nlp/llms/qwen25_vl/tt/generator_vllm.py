@@ -21,10 +21,14 @@ from vllm.model_executor.models.qwen2_5_vl import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
-from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
-from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen25_vl.tt.common import (
+    merge_vision_tokens,
+    multimodal_rope_from_hf,
+    preprocess_inputs_prefill,
+)
+from models.demos.nlp.llms.qwen25_vl.tt.generator import Generator as QwenVLGenerator
+from models.demos.nlp.llms.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
+from models.demos.nlp.llms.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
