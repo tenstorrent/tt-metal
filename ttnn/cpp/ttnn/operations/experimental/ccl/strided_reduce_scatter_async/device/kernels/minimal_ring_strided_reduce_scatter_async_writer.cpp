@@ -276,81 +276,77 @@ void kernel_main() {
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
-                        if (i < (ring_size - 1)) {
-                            uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-                            // DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
-                            for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
-                                 chunk_piece_idx++) {
-                                uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                                uint32_t direction_offset = direction ? chunk_width / 2 : 0;
+                        uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                        uint32_t output_tile_id_start = b * output_batch_num_pages;
 
-                                uint32_t first_tile_row_in_mm_M_block = 0;
-                                uint32_t first_chunk_col_in_tiles = 0;
-                                uint32_t first_mm_core_idx = 0;
+                        for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                            uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
+                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
 
-                                uint32_t effective_chunk_width_in_tiles =
-                                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width, slice_Wt);
-                                uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
-                                get_next_tile_coordinates(
-                                    first_tile_row_in_mm_M_block,
-                                    first_chunk_col_in_tiles,
-                                    first_mm_core_idx,
-                                    effective_worker_id,
-                                    effective_chunk_piece_size,
-                                    effective_chunk_width_in_tiles,
-                                    mm_block_ht);
+                            uint32_t first_tile_row_in_mm_M_block = 0;
+                            uint32_t first_chunk_col_in_tiles = 0;
+                            uint32_t first_mm_core_idx = 0;
 
-                                uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                                    first_tile_row_in_mm_M_block,
-                                    first_chunk_col_in_tiles,
-                                    first_mm_core_idx,
-                                    effective_advance_by_tiles,
-                                    last_mm_core_idx,
-                                    effective_chunk_piece_size,
-                                    effective_chunk_width_in_tiles);
-                                DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
-                                while (tiles_to_read > 0) {
-                                    DPRINT << "next tile that would be read" << ENDL();
-                                    uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
-                                    tiles_to_read -= tiles_to_read_in_this_step;
-                                    for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
-                                        auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
-                                            first_tile_row_in_mm_M_block,
-                                            first_chunk_col_in_tiles,
-                                            first_mm_core_idx,
-                                            chunk_piece_idx,
-                                            m_block_iter,
-                                            chunk_idx,
-                                            N_block_wt,
-                                            mm_block_ht,
-                                            mm_block_ht,
-                                            chunk_width_in_tiles);
+                            uint32_t effective_chunk_width_in_tiles =
+                                get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
+                            uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
+                            get_next_tile_coordinates(
+                                first_tile_row_in_mm_M_block,
+                                first_chunk_col_in_tiles,
+                                first_mm_core_idx,
+                                effective_worker_id,
+                                effective_chunk_piece_size,
+                                effective_chunk_width_in_tiles,
+                                mm_block_ht);
 
-                                        get_next_tile_coordinates(
-                                            first_tile_row_in_mm_M_block,
-                                            first_chunk_col_in_tiles,
-                                            first_mm_core_idx,
-                                            effective_advance_by_tiles,
-                                            effective_chunk_piece_size,
-                                            effective_chunk_width_in_tiles,
-                                            mm_block_ht);
-                                        // DPRINT << "first_tile_row_in_mm_M_block: " << first_tile_row_in_mm_M_block <<
-                                        // ENDL(); DPRINT << "first_chunk_col_in_tiles: " << first_chunk_col_in_tiles <<
-                                        // ENDL(); DPRINT << "first_mm_core_idx: " << first_mm_core_idx << ENDL();
-                                        uint32_t slice_tile_idx =
-                                            slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                        uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
-                                            slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                        // DPRINT << "slice_tile_idx: " << slice_tile_idx << ENDL();
-                                        // DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
-                                        DPRINT << "predicted input_tile_id:" << global_tile_idx << " " << ENDL();
-                                        DPRINT << "predicted intermediate_tile_id:" << global_tile_idx << " " << ENDL();
-                                    };
+                            uint32_t tiles_to_read = how_many_tiles_to_read_formula(
+                                first_tile_row_in_mm_M_block,
+                                first_chunk_col_in_tiles,
+                                first_mm_core_idx,
+                                effective_advance_by_tiles,
+                                last_mm_core_idx,
+                                effective_chunk_piece_size,
+                                effective_chunk_width_in_tiles);
+                            DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
+                            while (tiles_to_read > 0) {
+                                DPRINT << "next tile that would be read" << ENDL();
+                                uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
+                                tiles_to_read -= tiles_to_read_in_this_step;
+                                for (uint32_t k = 0; k < tiles_to_read_in_this_step; ++k) {
+                                    auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+                                        first_tile_row_in_mm_M_block,
+                                        first_chunk_col_in_tiles,
+                                        first_mm_core_idx,
+                                        chunk_piece_idx,
+                                        m_block_iter,
+                                        chunk_idx,
+                                        N_block_wt,
+                                        mm_block_ht,
+                                        mm_block_ht,
+                                        chunk_width_in_tiles);
+
+                                    get_next_tile_coordinates(
+                                        first_tile_row_in_mm_M_block,
+                                        first_chunk_col_in_tiles,
+                                        first_mm_core_idx,
+                                        effective_advance_by_tiles,
+                                        effective_chunk_piece_size,
+                                        effective_chunk_width_in_tiles,
+                                        mm_block_ht);
+                                    uint32_t slice_tile_idx =
+                                        slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
+                                    uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                    DPRINT << "predicted input_tile_id:" << global_tile_idx << " " << ENDL();
+                                    DPRINT << "predicted intermediate_tile_id:" << global_tile_idx << " " << ENDL();
                                 }
+                            }
 
-                                cb_wait_front(cb_output_id, tile_granularity);
-                                // DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
-                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                            cb_wait_front(cb_output_id, tile_granularity);
+                            DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
+                            size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                            if (i < (ring_size - 1)) {
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                     uint32_t intermediate_tile_id =
                                         intermediate_tile_id_start + input_row_offset + direction_offset + j;
@@ -370,38 +366,34 @@ void kernel_main() {
                                     l1_read_addr += page_size;
                                     noc_async_writes_flushed();
                                 }
-                                DPRINT << "--------------------------------" << ENDL();
                                 cb_pop_front(cb_output_id, tile_granularity);
 
                                 uint64_t out_ready_sem_noc_addr_in_pkt =
                                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                // DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                                     &mux_connection_handle,
                                     pkt_hdr_seminc,
                                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                                // DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 noc_async_writes_flushed();
-                            }
-                        } else {
-                            uint32_t output_tile_id_start = b * output_batch_num_pages;
-                            uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                            uint32_t direction_offset = direction ? chunk_width / 2 : 0;
-                            cb_wait_front(cb_output_id, tile_granularity);
-                            size_t l1_read_addr = get_read_ptr(cb_output_id);
-                            for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                uint32_t output_tile_id =
-                                    output_tile_id_start + output_row_offset + direction_offset + j;
-                                DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
-                                uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                                l1_read_addr += page_size;
+                            } else {
+                                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                                    uint32_t output_tile_id =
+                                        output_tile_id_start + output_row_offset + direction_offset + j;
+                                    DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
+                                    uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                    noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                    l1_read_addr += page_size;
+                                }
+                                noc_async_write_barrier();
+                                cb_pop_front(cb_output_id, tile_granularity);
                             }
                             DPRINT << "--------------------------------" << ENDL();
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_output_id, tile_granularity);
+                        }
 
-                            // 2. mcast ring cycle done semaphore
+                        // Signal ring cycle done only after all chunks in final iteration
+                        if (i == ring_size - 1) {
                             uint64_t batch_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
                             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
