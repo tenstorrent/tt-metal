@@ -160,7 +160,6 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     }
     return config;
 }
-
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
     // Special case for sequential high level patterns, which are allowed
     if(test_config.patterns.has_value()){
@@ -187,6 +186,40 @@ static void validate_latency_test_config(const ParsedTestConfig& test_config) {
             test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
             "Test '{}': latency_test_mode only supports unicast",
             test_config.name);
+    }
+}
+
+static void validate_core_sweep_config(const ParsedTestConfig& test_config){
+    bool has_sender_sweep = std::any_of(test_config.senders.begin(), test_config.senders.end(), [](const ParsedSenderConfig& cfg) {
+        return cfg.core.has_value() && std::holds_alternative<std::string>(cfg.core.value()) && std::get<std::string>(cfg.core.value()) == "all";
+    });
+
+    // If any destinations are sweeping, make sure its the only one
+    bool has_dest_sweep = false;
+    for(const auto& sender: test_config.senders){
+        if(std::any_of(sender.patterns.begin(), sender.patterns.end(), [](const ParsedTrafficPatternConfig& traffic_pattern){
+            return (traffic_pattern.destination.has_value() && traffic_pattern.destination.value().core.has_value() 
+            && std::holds_alternative<std::string>(traffic_pattern.destination.value().core.value()) && std::get<std::string>(traffic_pattern.destination.value().core.value()) == "all");
+        })){
+            has_dest_sweep = true;
+            break;
+        }
+    } 
+
+    if(has_sender_sweep || has_dest_sweep){
+        TT_FATAL(
+            test_config.senders.size() == 1, 
+            "Test '{}': core sweep option requires exactly one sender, got {}",
+            test_config.name, 
+            test_config.senders.size() 
+        );
+
+        TT_FATAL(
+            test_config.senders[0].patterns.size() == 1, 
+            "Test '{}': core sweep option requires exactly one pattern per sender, got {}",
+            test_config.name, 
+            test_config.senders[0].patterns.size() 
+        );
     }
 }
 
@@ -248,6 +281,8 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
                 parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
         }
     }
+
+    validate_core_sweep_config(test_config);
 
     if (test_yaml["bw_calc_func"]) {
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
