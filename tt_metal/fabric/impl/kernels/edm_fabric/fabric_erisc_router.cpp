@@ -28,6 +28,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/flow-control/credits.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
@@ -228,6 +229,62 @@ In total there are 5 such counters:
 
 See calls to `increment_local_update_ptr_val`, `remote_update_ptr_val`, `init_ptr_val` for more on implementation.
 
+### Credit Flow Summary Tables
+
+The fabric EDM uses two independent credit flows for flow control between sender and receiver channels.
+Each flow uses different storage mechanisms and credit formats depending on the architecture (WH vs BH)
+and configuration (number of channels, first-level ACK enabled).
+
+#### Table 1: Sender → Receiver Credit Flow (Packet Sent Credits)
+This flow tracks how many packets the sender has sent to the receiver's buffer.
+
+| Architecture | Channels | Credit Width | Storage Location | Packing Format | Read By | Cleared By |
+|--------------|----------|--------------|------------------|----------------|---------|------------|
+| **WH** (stream regs) | ≤3 | 8 bits | Overlay registers (1 reg) | Byte-aligned, linear layout: ch_i at offset i×8 bits | Receiver reads stream register | Receiver decrements stream register |
+| **WH** (stream regs) | 4 | 6 bits* | Overlay registers (1 reg) | Bit-packed, linear layout: ch_i at offset i×6 bits (fits in 24-bit reg) | Receiver reads stream register | Receiver decrements stream register |
+| **WH** (stream regs) | 5 | 8 bits | Overlay registers (2 regs) | Byte-aligned split: reg0={ch0,ch1}, reg1={ch2,ch3,ch4} | Receiver reads both stream registers | Receiver decrements both stream registers |
+| **BH** (multi-txq) | Any | 8 bits** | Overlay registers (1-2 regs) | Same as WH depending on channel count | Receiver reads stream register(s) | Receiver decrements stream register(s) |
+
+\* Credit width = log2_ceil(MAX_BUFFER_SLOTS + 1), typically 6 bits for 64 buffer slots
+\*\* **NOTE**: BH should always use 8-bit credits for consistency (no 24-bit register constraint). Current implementation may use MIN_BITS for >3 channels - this should be fixed.
+
+**Flow**: Sender increments when sending packet → Receiver reads to know packets available → Receiver decrements after consuming packet
+
+#### Table 2: Receiver → Sender Credit Flow (ACK and Completion Credits)
+This flow has two sub-flows: first-level ACKs (when enabled) and completion ACKs.
+
+##### First-Level ACK Credits (when `enable_first_level_ack` is true)
+Used for bubble flow control in ring/torus topologies. Receiver sends ACK immediately when packet is received.
+
+| Architecture | Channels | Credit Width | Storage Location | Packing Format | Written By | Read By |
+|--------------|----------|--------------|------------------|----------------|------------|---------|
+| **WH** (stream regs) | ≤3 | 8 bits | Overlay register 0 (shared) | Byte-aligned, linear: ch_i at offset i×8 bits | Receiver writes via `remote_update_ptr_val()` | Sender reads stream register, extracts per-channel |
+| **WH** (stream regs) | 4 | 6 bits | Overlay register 0 (shared) | Bit-packed: ch_i at offset i×6 bits | Receiver writes via `remote_update_ptr_val()` | Sender reads stream register, unpacks |
+| **WH** (stream regs) | 5 | 8 bits | Overlay registers 0-1 (shared) | Split: reg0={ch0,ch1}, reg1={ch2,ch3,ch4} | Receiver writes via `remote_update_ptr_val()` | Sender reads both registers |
+| **BH** (multi-txq) | ≤4 | 8 bits | L1 memory (1 word) | Byte-aligned: ch_i at byte i of 32-bit word | Receiver increments L1 counters, sends via eth_send | Sender reads L1 memory, extracts bytes |
+| **BH** (multi-txq) | 5-8 | 8 bits | L1 memory (2 words) | Split: word0={ch0-ch3}, word1={ch4-ch7} | Receiver increments L1 counters, sends via eth_send | Sender reads L1 memory |
+
+**Flow**: Receiver increments when packet received → Sends batch update to sender's L1/registers → Sender reads to know buffer space freed
+
+**IMPORTANT**: When first-level ACK is enabled, the receiver should send ACKs in BATCH (negating the packed credits read from sender→receiver stream) rather than per-packet during processing. This ensures correct credit accounting and prevents hangs in ring topologies.
+
+##### Completion Credits
+Sent when receiver has fully processed (forwarded/written) a packet and freed the buffer slot.
+
+| Architecture | Channels | Credit Width | Storage Location | Packing Format | Written By | Read By |
+|--------------|----------|--------------|------------------|----------------|------------|---------|
+| **WH** (stream regs) | Any | Varies | Per-channel stream registers OR shared register 0 | Depends on `enable_first_level_ack` | Receiver writes via `remote_update_ptr_val()` | Sender reads per-channel stream register |
+| **BH** (multi-txq) | Any | 32 bits | L1 memory (per-channel counters) | Unpacked: one 32-bit counter per channel | Receiver increments, sends via eth_send | Sender reads L1 memory |
+
+**Flow**: Receiver increments when packet fully processed → Sends update to sender → Sender reads to allow new packet transmission
+
+#### Key Insights
+1. **Consistency is critical**: Receiver must send credits in the SAME format that sender expects to read them
+2. **BH simplification**: BH should use 8-bit credits everywhere (no register size constraint)
+3. **WH constraints**: WH limited to 24-bit overlay registers, requiring bit-packing for 4 channels
+4. **Batch ACKs**: First-level ACKs should be sent in batch (all channels at once) when reading packed sender→receiver credits, not per-packet during processing
+5. **Independent flows**: Sender→Receiver and Receiver→Sender use independent credit formats (don't need to match each other)
+
 ### Sender Channel Flow Control
 Both sender channels share the same flow control view into the receiver channel. This is because both channels
 write to the same receiver channel.
@@ -287,6 +344,13 @@ enum class CoordinatedEriscContextSwitchState : uint32_t {
 
 // In case underlying type for the enum class is changed later
 using CoordinatedEriscCtxType = std::underlying_type_t<CoordinatedEriscContextSwitchState> ;
+static constexpr size_t PACKED_CREDITS_PER_STREAM_AUTOINC_REG = 2;
+static constexpr size_t BITS_PER_PACKED_CREDITS_IN_AUTOINC_REG = 8;
+
+union PackedCredits {
+    int32_t packed;
+    uint8_t bytes[4];
+};
 
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
@@ -596,13 +660,24 @@ FORCE_INLINE void send_next_data(
     outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
-    // update the remote reg
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+    // update the remote reg
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+
+    // Determine target stream ID based on sender channel (handles multi-register case)
+    constexpr uint32_t target_stream_id = get_sender_target_stream_id<sender_channel_index, to_receiver_pkts_sent_id>();
+    const uint32_t packets_to_forward = build_packet_forward_value<sender_channel_index, to_receiver_pkts_sent_id>();
+
+    // DPRINT << "SEND_PKT: ch=" << (uint32_t)sender_channel_index
+    //        << " payload_sz=" << payload_size_bytes
+    //        << " target_stream=" << target_stream_id
+    //        << " packed_credit=" << HEX() << packets_to_forward
+    //        << " remote_free_slots=" << remote_receiver_num_free_slots << ENDL();
+
+    remote_update_ptr_val<target_stream_id, sender_txq_id>(static_cast<int32_t>(packets_to_forward));
 }
 
 /////////////////////////////////////////////
@@ -841,6 +916,7 @@ FORCE_INLINE void receiver_forward_packet(
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        WATCHER_RING_BUFFER_PUSH(0x44440000);
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -1372,26 +1448,32 @@ constexpr bool IS_RETRAIN_SYNC_MASTER() { return enable_context_switch; }
 void run_routing_without_noc_sync_coordinated_as_master(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+        // DPRINT << "CTX_MASTER_START: erisc0 signaling RETRAIN_INTENT" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT));
         // Wait for erisc1 to ack
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                // DPRINT << "CTX_MASTER_TERM: termination during wait for INTENT_ACK" << ENDL();
                 return;
             }
         }
+        // DPRINT << "CTX_MASTER_ACK: erisc1 acked, running base FW" << ENDL();
         run_routing_without_noc_sync();
+        // DPRINT << "CTX_MASTER_DONE: base FW complete, signaling RETRAIN_COMPLETE" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE));
         // Wait for erisc1 to ack
         while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
             if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                // DPRINT << "CTX_MASTER_TERM: termination during wait for COMPLETE_ACK" << ENDL();
                 return;
             }
         }
         // Resume normal operation
+        // DPRINT << "CTX_MASTER_RESUME: erisc1 acked, resuming NORMAL_EXECUTION" << ENDL();
         write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION));
     }
@@ -1401,22 +1483,27 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
     if constexpr (!IS_RETRAIN_SYNC_MASTER()) {
         if (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() ==
             static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
+            DPRINT << "CTX_SLAVE_START: erisc1 detected RETRAIN_INTENT, acking" << ENDL();
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::INTENT_ACK));
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                    static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE)) {
                 if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    // DPRINT << "CTX_SLAVE_TERM: termination during wait for RETRAIN_COMPLETE" << ENDL();
                     return;
                 }
             }
+            // DPRINT << "CTX_SLAVE_DONE: erisc0 completed, acking COMPLETE_ACK" << ENDL();
             write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(
                 static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::COMPLETE_ACK));
             while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() !=
                    static_cast<CoordinatedEriscCtxType>(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION)) {
                 if (got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+                    // DPRINT << "CTX_SLAVE_TERM: termination during wait for NORMAL_EXECUTION" << ENDL();
                     return;
                 }
             }
+            // DPRINT << "CTX_SLAVE_RESUME: erisc0 resumed, back to NORMAL_EXECUTION" << ENDL();
         }
     }
 }
@@ -1426,6 +1513,7 @@ void run_coordinated_context_switch_to_base_firmware(
         run_routing_without_noc_sync();
     } else {
         if constexpr (IS_RETRAIN_SYNC_MASTER()) {
+            DPRINT << "CTX_SWITCH!!!\n";
             run_routing_without_noc_sync_coordinated_as_master(termination_signal_ptr);
         }
     }
@@ -1545,6 +1633,17 @@ FORCE_INLINE void update_bw_cycles(
     }
 }
 
+int sender_packets_sent = 0;
+int sender_acks_received = 0;
+int sender_completions_received = 0;
+int sender_acks_sent_to_worker = 0;
+
+
+int last_sender_packets_sent = 0;
+int last_sender_acks_received = 0;
+int last_sender_completions_received = 0;
+int last_sender_acks_sent_to_worker = 0;
+
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1614,24 +1713,35 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+        sender_packets_sent++;
+
+        // WATCHER_RING_BUFFER_PUSH(0x55000000 | sender_channel_index | (to_receiver_pkts_sent_id << 16));
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        DPRINT << "SEND NEXT DATA FREE SLOTS: " << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
     }
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
     if (completions_since_last_check) {
+        // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
+        sender_completions_received += completions_since_last_check;
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+        // DPRINT << "SEND_PROC_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
+        //        << " completions=" << HEX() << completions_since_last_check << DEC()
+        //     //    << " old_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots
+        //        << " new_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
         // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
         if constexpr (!enable_first_level_ack) {
+            sender_acks_sent_to_worker += completions_since_last_check;
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
         }
@@ -1641,11 +1751,35 @@ FORCE_INLINE
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-        if (acks_since_last_check > 0) {
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+        auto packed_acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
+        if (packed_acks != 0) {
+
+            // DPRINT << "SEND_ACK_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
+            //     << " acks=" << HEX() << packed_acks << ENDL();
+            auto acks_since_last_check = extract_sender_channel_acks<sender_channel_index>(packed_acks);
+            if (acks_since_last_check > 0) {
+                sender_acks_sent_to_worker += acks_since_last_check;
+                sender_acks_received += acks_since_last_check;
+                // if overlay reg based, this will materialize as decrement; but for multi_txq based,
+                // we're using unbounded L1 based counters, so we must increment instead
+                
+                uint32_t acks_to_change_by = build_ack_decrement_value<sender_channel_index>(acks_since_last_check);
+                if constexpr (!multi_txq_enabled) {
+                    // if not multi-txq, we're using overlay regs so we need
+                    // to decrement instead
+                    acks_to_change_by = -acks_to_change_by;
+                }
+                // DPRINT << "SEND_PROC_ACK_LOOP: ch=" << (uint32_t)sender_channel_index
+                //        << " packed_acks=" << HEX() << packed_acks
+                //        << " extracted=" << DEC() << acks_since_last_check
+                //        << " acks_to_dec=" << HEX() << acks_to_change_by
+                //        << " cumulative=" << DEC() << sender_acks_received << ENDL();
+                sender_channel_from_receiver_credits.increment_num_processed_acks<sender_channel_index>(acks_to_change_by);
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface,
+                    acks_since_last_check,
+                    channel_connection_established);
+            }
         }
     }
 
@@ -1662,6 +1796,12 @@ FORCE_INLINE
     return progress;
 };
 
+/*
+ * Sender channel processing template function.
+ *
+ * Internally compiles away the call to implementation if the channel
+ * is not serviced by this ERISC.
+ */
 template <
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
@@ -1691,9 +1831,14 @@ FORCE_INLINE
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
+        constexpr size_t PACKED_STREAM_ID_IDX = 0;
         return run_sender_channel_step_impl<
             sender_channel_index,
-            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+            //   enable_first_level_ack  ?
+            //     // for first level ack, the src_id is actually interpreted as the receiver channel index
+                to_sender_packets_completed_streams[VC_RECEIVER_CHANNEL]
+                // : to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL]
+            ,
             sender_ch_live_check_skip[sender_channel_index],
             enable_first_level_ack>(
             local_sender_channels.template get<sender_channel_index>(),
@@ -1709,6 +1854,16 @@ FORCE_INLINE
     return false;
 }
 
+int receiver_packets_received = 0;
+int receiver_ack_credits_sent = 0;
+int receiver_packets_forwarded = 0;
+int receiver_completion_credits_sent = 0;
+
+int last_receiver_packets_received = 0;
+int last_receiver_ack_credits_sent = 0;
+int last_receiver_packets_forwarded = 0;
+int last_receiver_completion_credits_sent = 0;
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1719,7 +1874,9 @@ template <
     typename ReceiverChannelPointersT,
     typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename ReceiverPacketCreditsViewT = ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id>,
+    typename ReceiverPacketCreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id>>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
@@ -1729,46 +1886,59 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
-    LocalTelemetryT& local_fabric_telemetry) {
+    LocalTelemetryT& local_fabric_telemetry,
+    ReceiverPacketCreditsViewT& credits_view,
+    ReceiverPacketCreditsUpdaterT& credits_updater) {
+
+        // for (size_t i = 0; i < 10000; i++) {
+        //     asm volatile ("nop");
+        // }
+
     bool progress = false;
-    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
-
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
+    uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
-    if constexpr (enable_first_level_ack) {
-        auto& ack_counter = receiver_channel_pointers.ack_counter;
-        bool pkts_received = pkts_received_since_last_check > 0;
-        bool can_send_ack = pkts_received;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (can_send_ack) {
-            // currently only support processing one packet at a time, so we only decrement by 1
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+    auto packed_num_packets = credits_view.get_packed();  // Returns PackedCreditContainer - READ ONCE
+    uint32_t new_credits = 0;
+    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+        // WH with enable_first_level_ack: Packed credits - read from shared stream register(s)
+        // Type resolved at compile-time from template parameter (single vs multi-register)
+        // pkts_received_since_last_check = packed_num_packets;
 
-            uint8_t src_ch_id;
-            if constexpr (skip_src_ch_id_update) {
-                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
-                // sender channel so we don't dynamically fetch it off the packet header
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+        // Track newly received packets that need first-level acks
+        if (packed_num_packets != 0) {
+            // Get raw value for accumulation (still packed, but as scalar)
+            auto packed_num_packets_raw = packed_num_packets.get();
+
+            if constexpr (enable_first_level_ack) {
+                // Don't accumulate here - ACKs will be sent per-packet during consumption
             }
+            // Compute sum from cached packed value to avoid race condition
+            // (get_total() would re-read register, potentially seeing new credits that arrive between reads)
+            constexpr uint8_t num_channels = std::remove_reference_t<decltype(credits_view)>::NUM_CHANNELS_VALUE;
+            constexpr uint8_t credit_width = std::remove_reference_t<decltype(credits_view)>::CREDIT_WIDTH;
+            new_credits = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
+            // uint32_t old_unsent = receiver_channel_pointers.m.unsent_messages;
+            receiver_channel_pointers.m.unsent_messages += new_credits;
+            receiver_packets_received += new_credits;
 
-            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id);
-            ack_counter.increment();
+            DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
+                   << " new_credits=" << new_credits
+                //    << " old_unsent=" << (uint32_t)old_unsent
+                   << " new_unsent=" << (uint32_t)receiver_channel_pointers.m.unsent_messages
+                   << " packed_to_clear=" << HEX() << packed_num_packets.get() << DEC() << ENDL();
+
+            // Clear the register(s) by decrementing with the packed value
+            // The updater handles single vs multi-register splitting automatically
+            credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
         }
-        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
-
+        unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
+        // BH (multi_txq_enabled) or !enable_first_level_ack: Use stream register
+        pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
         unwritten_packets = pkts_received_since_last_check != 0;
     }
+
 
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
@@ -1776,6 +1946,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     receiver_forward_timer.open();
 
     if (unwritten_packets) {
+        WATCHER_RING_BUFFER_PUSH(0x00002222);
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -1785,7 +1956,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-        if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
+        // Store src_ch_id for all modes - needed for both ACKs and completions
+        if constexpr (!skip_src_ch_id_update) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
@@ -1831,6 +2003,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
+            receiver_packets_forwarded++;
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
                 receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
@@ -1849,8 +2022,47 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            if constexpr (!enable_first_level_ack) {
+            if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+                receiver_channel_pointers.m.unsent_messages--;
+                // DPRINT << "RECV_CONSUME_PKT: unsent_msgs=" << (uint32_t)before << "->" << (uint32_t)receiver_channel_pointers.m.unsent_messages << ENDL();
+
+            } else {
+                // DPRINT << "RECV_CONSUME_PKT: decrement stream register" << ENDL();
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+
+                if constexpr (enable_first_level_ack) {
+                    uint8_t src_ch_id;
+                    if constexpr (skip_src_ch_id_update) {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                    } else {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+                    }
+                    DPRINT << "RECV_PKT_ACK: rx_buf=" << (uint32_t)receiver_buffer_index
+                           << " src_ch=" << (uint32_t)src_ch_id << ENDL();
+                    // Send first-level ACK via receiver_send_received_ack (counter-based for BH)
+                    receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                        receiver_channel_response_credit_sender, src_ch_id, 1);
+                    receiver_ack_credits_sent++;  // Update statistics
+                }
+            }
+        }
+    }
+
+    // Send batch first-level ACK after packet processing (for packed credits mode)
+    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+        if constexpr (enable_first_level_ack) {
+            if (packed_num_packets != 0) {
+                // Send batch ACK - formats should match (8-bit on BH)
+                // Use same spin-wait policy as per-packet ACKs
+                constexpr uint8_t num_channels = std::remove_reference_t<decltype(credits_view)>::NUM_CHANNELS_VALUE;
+                constexpr uint8_t credit_width = std::remove_reference_t<decltype(credits_view)>::CREDIT_WIDTH;
+                uint32_t total_acks = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
+                DPRINT << "RECV_SEND_BATCH_ACK: packed_value=" << packed_num_packets.get()
+                       << " total=" << (uint32_t)total_acks << ENDL();
+                receiver_channel_response_credit_sender.template send_packed_ack_credits<
+                    ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(packed_num_packets);
+                // Update statistics based on total credits in packed value
+                receiver_ack_credits_sent += total_acks;
             }
         }
     }
@@ -1858,59 +2070,49 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
-    if constexpr (!fuse_receiver_flush_and_completion_ptr) {
-        auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
-        bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
-        if (unflushed_writes) {
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
-                wr_flush_counter.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            }
-        }
+    // ACKs are now sent immediately per packet above for both packed and non-packed modes
 
-        auto& completion_counter = receiver_channel_pointers.completion_counter;
-        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (unsent_completions) {
-            // completion ptr incremented in callee
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
-            completion_counter.increment();
-        }
-    } else {
-        // flush and completion are fused, so we only need to update one of the counters
-        // update completion since other parts of the code check against completion
-        auto& completion_counter = receiver_channel_pointers.completion_counter;
-        // Currently unclear if it's better to loop here or not...
-        bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-        auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        bool can_send_completion = unflushed_writes && next_trid_flushed;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (can_send_completion) {
-            uint8_t src_ch_id;
-            if constexpr (skip_src_ch_id_update) {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-            }
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id);
-            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            completion_counter.increment();
-        }
+    // flush and completion are fused, so we only need to update one of the counters
+    // update completion since other parts of the code check against completion
+    auto& completion_counter = receiver_channel_pointers.completion_counter();
+    // Currently unclear if it's better to loop here or not...
+    bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
+    auto receiver_buffer_index = completion_counter.get_buffer_index();
+    bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+    bool can_send_completion = unflushed_writes && next_trid_flushed;
+    if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
     }
+    if (can_send_completion) {
+        uint8_t src_ch_id;
+        // Get the actual source channel ID from the packet for both packed and non-packed modes
+        if constexpr (skip_src_ch_id_update) {
+            src_ch_id = receiver_channel_pointers.get_src_chan_id();
+        } else {
+            src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+        }
+        // DPRINT << "RECV_PKT_COMPL: rx_buf=" << (uint32_t)receiver_buffer_index
+        //        << " src_ch=" << (uint32_t)src_ch_id
+        //        << " compl_counter=" << (uint32_t)completion_counter.get_buffer_index() << ENDL();
+        WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
+        // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
+        receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_channel_response_credit_sender, src_ch_id);
+        receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+        completion_counter.increment();
+        receiver_completion_credits_sent++;
+    }
+
+
     return progress;
 };
 
+/*
+ * Receiver channel processing template function.
+ *
+ * Internally compiles away the call to implementation if the channel
+ * is not serviced by this ERISC.
+ */
 template <
     uint8_t receiver_channel,
     bool enable_first_level_ack,
@@ -1933,9 +2135,15 @@ FORCE_INLINE bool run_receiver_channel_step(
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+
+        // Instantiate zero-size credits view and updater
+        constexpr size_t to_receiver_pkts_sent_id = to_sender_packets_completed_streams[receiver_channel];
+        ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id> credits_view;
+        ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id> credits_updater;
+
         return run_receiver_channel_step_impl<
             receiver_channel,
-            to_receiver_packets_sent_streams[receiver_channel],
+            to_receiver_pkts_sent_id,
             enable_first_level_ack,
             DOWNSTREAM_EDM_SIZE,  // Pass size explicitly
             WriteTridTracker,
@@ -1951,7 +2159,9 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel],
             routing_table,
-            local_fabric_telemetry);
+            local_fabric_telemetry,
+            credits_view,
+            credits_updater);
     }
     return false;
 }
@@ -2031,7 +2241,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto outbound_to_receiver_channel_pointer_ch0 =
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
 
-    auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
+    auto receiver_channel_pointers =
+        ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY, ENABLE_FIRST_LEVEL_ACK_VC0>::make();
     // Workaround the perf regression in RingAsLinear test.
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
@@ -2065,7 +2276,21 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     uint64_t loop_start_cycles;
+    uint64_t loop_iteration_count = 0;
+
+    // DPRINT << "MAIN_LOOP_START: erisc_id=" << MY_ERISC_ID
+    //        << " term_sig_ptr=" << HEX() << (uint32_t)termination_signal_ptr << ENDL();
+
+    int count = 0;
     while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        loop_iteration_count++;
+
+        // Periodic heartbeat every 10000 iterations
+        // if ((loop_iteration_count % 10000) == 0) {
+        //     DPRINT << "MAIN_LOOP_ALIVE: erisc_id=" << MY_ERISC_ID
+        //            << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
+        // }
+
         did_something = false;
 
         uint32_t tx_progress = 0;
@@ -2246,6 +2471,41 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
 
+        count++;
+        if (count > 1024) {
+            if constexpr (is_sender_channel_serviced[0]) {
+                if (sender_packets_sent > 0) {
+                    bool any_changes = last_sender_packets_sent != sender_packets_sent || last_sender_acks_received != sender_acks_received || last_sender_completions_received != sender_completions_received || last_sender_acks_sent_to_worker != sender_acks_sent_to_worker;
+                    if (any_changes) {
+                        DPRINT << "SENDER_STATS[ERISC"  << (uint32_t)MY_ERISC_ID << "_CH0]: packets_sent=" << sender_packets_sent
+                            << " acks_received=" << sender_acks_received
+                            << " completions_received=" << sender_completions_received
+                            << " acks_sent_to_worker=" << sender_acks_sent_to_worker << ENDL();
+                        last_sender_packets_sent = sender_packets_sent;
+                        last_sender_acks_received = sender_acks_received;
+                        last_sender_completions_received = sender_completions_received;
+                        last_sender_acks_sent_to_worker = sender_acks_sent_to_worker;
+                    }
+                }
+            }
+            if constexpr (is_receiver_channel_serviced[0]) {
+                if (receiver_packets_received > 0) {
+                    bool any_changes = last_receiver_packets_received != receiver_packets_received || last_receiver_ack_credits_sent != receiver_ack_credits_sent || last_receiver_packets_forwarded != receiver_packets_forwarded || last_receiver_completion_credits_sent != receiver_completion_credits_sent;
+                    if (any_changes) {
+                        DPRINT << "RECEIVER_STATS[ERISC"  << (uint32_t)MY_ERISC_ID << "_CH0]: packets_received=" << receiver_packets_received
+                                << " ack_credits_sent=" << receiver_ack_credits_sent
+                                << " packets_forwarded=" << receiver_packets_forwarded
+                                << " completion_credits_sent=" << receiver_completion_credits_sent << ENDL();
+                                last_receiver_packets_received = receiver_packets_received;
+                                last_receiver_ack_credits_sent = receiver_ack_credits_sent;
+                                last_receiver_packets_forwarded = receiver_packets_forwarded;
+                                last_receiver_completion_credits_sent = receiver_completion_credits_sent;
+                    }
+                }
+            }
+            count = 0;
+        }
+
         // Compute idle conditions and update heartbeats in one helper
         if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -2261,19 +2521,30 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 fabric_telemetry);
         }
 
+        // Periodically try to flush receiver->sender credits (acks and completions)
+        // This ensures credits reach the sender even if ethernet queue was busy during increment
+        // for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
+        // }
+
         if constexpr (enable_context_switch) {
             // shouldn't do noc counter sync since we are not incrementing them
             if constexpr (IDLE_CONTEXT_SWITCHING) {
                 if (did_something) {
                     did_nothing_count = 0;
                 } else {
-                    if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    if (did_nothing_count++ > 10000) {//SWITCH_INTERVAL) {
+                        // DPRINT << "CTX_SWITCH_IDLE: did_nothing=" << did_nothing_count
+                        //        << " interval=" << SWITCH_INTERVAL
+                        //        << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
                         did_nothing_count = 0;
                         run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    // DPRINT << "CTX_SWITCH: count=" << did_nothing_count
+                    //        << " interval=" << SWITCH_INTERVAL
+                    //        << " iter=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF) << ENDL();
                     did_nothing_count = 0;
                     run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                 }
@@ -2293,6 +2564,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
     }
+
+    // DPRINT << "MAIN_LOOP_EXIT: erisc_id=" << MY_ERISC_ID
+    //        << " total_iters=" << (uint32_t)(loop_iteration_count & 0xFFFFFFFF)
+    //        << " termination_detected" << ENDL();
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>

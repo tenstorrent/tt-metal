@@ -195,7 +195,7 @@ struct ChannelCounter {
 /*
  * Tracks receiver channel pointers (from sender side)
  */
-template <uint8_t RECEIVER_NUM_BUFFERS>
+template <uint8_t RECEIVER_NUM_BUFFERS, bool UNUSED = false>
 struct OutboundReceiverChannelPointers {
     uint32_t slot_size_bytes;
     uint32_t remote_receiver_channel_address_base;
@@ -230,44 +230,96 @@ struct OutboundReceiverChannelPointers {
     }
 };
 
-/*
- * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
- */
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct ReceiverChannelPointers {
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
+struct ReceiverChannelPointersMembers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    uint32_t unsent_first_level_acks;
+    uint8_t unsent_messages;
+    // Always include src_chan_ids for enable_first_level_ack=true to support both
+    // packed credits (WH) and unpacked credits (BH). Small memory overhead but simpler.
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
-
-    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
-        src_chan_ids[buffer_index.get()] = src_chan_id;
-    }
-
-    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
-
-    FORCE_INLINE uint8_t get_src_chan_id() const { return src_chan_ids[0]; }
-
-    FORCE_INLINE void init() { reset(); }
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
-        wr_flush_counter.reset();
-        ack_counter.reset();
         completion_counter.reset();
+        unsent_first_level_acks = 0;
+        unsent_messages = 0;
     }
 };
 
+template <uint8_t RECEIVER_NUM_BUFFERS>
+struct ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, false> {
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    uint8_t unsent_messages;
+    // no ack_counter
+
+    FORCE_INLINE void reset() {
+        wr_sent_counter.reset();
+        completion_counter.reset();
+        unsent_messages = 0;
+    }
+};
+
+/*
+ * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
+ *
+ * Template parameter enable_first_level_ack controls first-level acknowledgment
+ * behavior for this specific receiver channel. Each virtual channel (VC0, VC1)
+ * is instantiated separately with its appropriate value:
+ * - VC0: Can have enable_first_level_ack=true for Ring/Torus topologies
+ * - VC1: Always has enable_first_level_ack=false (no bubble flow control needed)
+ */
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
+struct ReceiverChannelPointers {
+    ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, enable_first_level_ack> m;
+
+    FORCE_INLINE auto& wr_sent_counter() { return m.wr_sent_counter; }
+    FORCE_INLINE const auto& wr_sent_counter() const { return m.wr_sent_counter; }
+
+    FORCE_INLINE auto& wr_flush_counter() { return m.wr_flush_counter; }
+    FORCE_INLINE const auto& wr_flush_counter() const { return m.wr_flush_counter; }
+
+    FORCE_INLINE auto& completion_counter() { return m.completion_counter; }
+    FORCE_INLINE const auto& completion_counter() const { return m.completion_counter; }
+
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
+    FORCE_INLINE auto& ack_counter() {
+        return m.ack_counter;
+    }
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
+    FORCE_INLINE const auto& ack_counter() const {
+        return m.ack_counter;
+    }
+
+    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
+        m.src_chan_ids[buffer_index.get()] = src_chan_id;
+    }
+
+    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const {
+        return m.src_chan_ids[buffer_index.get()];
+    }
+
+    FORCE_INLINE uint8_t get_src_chan_id() const {
+        return m.src_chan_ids[0];
+    }
+
+    FORCE_INLINE void init() { reset(); }
+
+    FORCE_INLINE void reset() { m.reset(); }
+};
+
 // Forward‐declare the Impl primary template:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam, typename Seq>
 struct ChannelPointersTupleImpl;
 
 // Provide the specialization that actually holds the tuple and `get<>`:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
-struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam, size_t... Is>
+struct ChannelPointersTupleImpl<ChannelType, BufferSizes, ExtraParam, std::index_sequence<Is...>> {
     static constexpr size_t N = sizeof...(Is);
-    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
+    std::tuple<ChannelType<BufferSizes[Is], ExtraParam>...> channel_ptrs;
 
     template <size_t I>
     constexpr auto& get() {
@@ -276,13 +328,14 @@ struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is
 };
 
 // Simplify the "builder" so that make() returns the Impl<…> directly:
-template <template <uint8_t> class ChannelType, auto& BufferSizes>
+template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam = false>
 struct ChannelPointersTuple {
     static constexpr size_t N = std::size(BufferSizes);
 
     static constexpr auto make() {
         // call init() on each element and return it
-        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        auto channel_ptrs =
+            ChannelPointersTupleImpl<ChannelType, BufferSizes, ExtraParam, std::make_index_sequence<N>>{};
         std::apply(
             [&](auto&... chans) { ((chans.init()), ...); },
             channel_ptrs.channel_ptrs);  // Apply to the actual tuple member
