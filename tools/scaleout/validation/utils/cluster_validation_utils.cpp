@@ -264,7 +264,7 @@ void configure_local_kernels(
 
     // Parallelize write_core calls
     const size_t max_concurrent_writes = std::thread::hardware_concurrency();
-    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
+    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task, ChipId chip_id) {
         cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
         cluster.l1_barrier(chip_id);
     });
