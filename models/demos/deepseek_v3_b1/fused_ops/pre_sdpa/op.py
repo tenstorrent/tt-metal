@@ -190,17 +190,14 @@ class PreSDPA:
 
         # CB indices
         input_cb = 0
-        scalars_cb = 1
-        interm_cb = 2
-        gamma_cb = 3
-        rmsnorm_output_cb = 4
+        gamma_cb = 1
+        rmsnorm_output_cb = 2
         matmul_weights_cb = 5
         matmul_output_cb = 9
         matmul_input_cb = 8
         rmsnorm2_gamma_cb = 10  # New gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
         rmsnorm2_input_cb = 11  # Separate input CB for RMSNorm2
-        rmsnorm2_interm_cb = 12  # Separate interm CB for RMSNorm2
-        rmsnorm2_output_cb = 13  # Separate output CB for RMSNorm2
+        rmsnorm2_output_cb = 12  # Separate output CB for RMSNorm2
         matmul2_input_cb = 14  # Input CB for second matmul (1x1536 with 1x32 tiles)
         matmul2_weights_cb = 15  # Weights CB for second matmul (width sharded, 4 tiles per core)
         matmul2_output_cb = 16  # Output CB for second matmul
@@ -208,7 +205,6 @@ class PreSDPA:
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
         rmsnorm2_num_tiles = 3  # 3 tiles of 16x32 = 3 * 512 = 1536 elements
-        rmsnorm2_num_faces = 2  # 16x32 tiles have 2 faces
 
         # Compute 1/sqrt(1536) for RMSNorm2 reduction
         inv_sqrt_rmsnorm2_numel = 1.0 / math.sqrt(float(rmsnorm2_numel))
@@ -239,10 +235,8 @@ class PreSDPA:
         # RMSNorm reader compile-time args (named args for NCRISC)
         rmsnorm_reader_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_scalars_cb", scalars_cb),
             ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_num_tiles", num_tiles),
-            ("rmsnorm_num_faces", interpreted_tile.num_faces),
         ]
 
         # Mcast sender compile-time args (named args for BRISC)
@@ -318,8 +312,6 @@ class PreSDPA:
         # RMSNorm compute compile-time args (named args for TRISC)
         rmsnorm_compute_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_scalars_cb", scalars_cb),
-            ("rmsnorm_interm_cb", interm_cb),
             ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_output_cb", rmsnorm_output_cb),
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
@@ -331,15 +323,12 @@ class PreSDPA:
         # Uses separate CBs with exact sizes for testing
         rmsnorm2_ncrisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_interm_cb", rmsnorm2_interm_cb),
             ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
-            ("rmsnorm2_num_faces", rmsnorm2_num_faces),
         ]
         rmsnorm2_trisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_interm_cb", rmsnorm2_interm_cb),
             ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
@@ -418,33 +407,7 @@ class PreSDPA:
         in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-        # CB 1: Scalars (reduction scalar only, epsilon passed as runtime arg to compute)
-        scalars_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=scalars_cb,
-            data_format=data_format,
-            page_size=cb_page_size,
-            tile=tile_descriptor,
-        )
-        scalars_cb_descriptor = ttnn.CBDescriptor(
-            total_size=cb_page_size,
-            core_ranges=rmsnorm_core_grid,
-            format_descriptors=[scalars_cb_format],
-        )
-
-        # CB 2: Intermediate buffer
-        interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=interm_cb,
-            data_format=data_format,
-            page_size=cb_page_size,
-            tile=tile_descriptor,
-        )
-        interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=num_tiles * cb_page_size,
-            core_ranges=rmsnorm_core_grid,
-            format_descriptors=[interm_cb_format],
-        )
-
-        # CB 3: Gamma (created from sharded tensor)
+        # CB 1: Gamma (created from sharded tensor)
         gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor)
         # Update the tile descriptor in the format descriptor
         gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
@@ -476,20 +439,7 @@ class PreSDPA:
             format_descriptors=[rmsnorm2_input_cb_format],
         )
 
-        # CB 12: RMSNorm2 intermediate buffer (num_tiles = 3 tiles)
-        rmsnorm2_interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=rmsnorm2_interm_cb,
-            data_format=data_format,
-            page_size=rmsnorm2_page_size,
-            tile=rmsnorm2_tile_descriptor,
-        )
-        rmsnorm2_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 3 tiles
-            core_ranges=rmsnorm_core_grid,
-            format_descriptors=[rmsnorm2_interm_cb_format],
-        )
-
-        # CB 13: RMSNorm2 output buffer (3 tiles)
+        # CB 12: RMSNorm2 output buffer (3 tiles)
         rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=rmsnorm2_output_cb,
             data_format=data_format,
@@ -502,7 +452,7 @@ class PreSDPA:
             format_descriptors=[rmsnorm2_output_cb_format],
         )
 
-        # CB 4: RMSNorm output buffer (dynamically created)
+        # CB 2: RMSNorm output buffer (dynamically created)
         rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=rmsnorm_output_cb,
             data_format=data_format,
@@ -661,6 +611,7 @@ class PreSDPA:
             # TRISC common runtime args: epsilon (used by rmsnorm compute)
             trisc_common_runtime_args=[
                 epsilon_packed,
+                scalar_packed,
             ],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
@@ -696,8 +647,6 @@ class PreSDPA:
             kernels=unified_kernel.get_kernel_descriptors(),
             cbs=[
                 in_cb_descriptor,
-                scalars_cb_descriptor,
-                interm_cb_descriptor,
                 gamma_cb_descriptor,
                 rmsnorm_output_cb_descriptor,
                 matmul_weights_cb_descriptor,
@@ -705,8 +654,7 @@ class PreSDPA:
                 matmul_input_cb_descriptor,
                 rmsnorm2_gamma_cb_descriptor,  # CB 10: RMSNorm2 gamma
                 rmsnorm2_input_cb_descriptor,  # CB 11: RMSNorm2 input
-                rmsnorm2_interm_cb_descriptor,  # CB 12: RMSNorm2 interm
-                rmsnorm2_output_cb_descriptor,  # CB 13: RMSNorm2 output
+                rmsnorm2_output_cb_descriptor,  # CB 12: RMSNorm2 output
                 matmul2_input_cb_descriptor,  # CB 14: Matmul2 input
                 matmul2_weights_cb_descriptor,  # CB 15: Matmul2 weights
                 matmul2_output_cb_descriptor,  # CB 16: Matmul2 output
