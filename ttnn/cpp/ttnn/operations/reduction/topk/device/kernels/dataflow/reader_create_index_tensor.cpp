@@ -21,11 +21,11 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
     constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(4);
     constexpr bool uint16_output = get_compile_time_arg_val(5) == 1;
-    constexpr auto s_args = TensorAccessorArgs<6>();
+    constexpr auto inout_tensor_args = TensorAccessorArgs<6>();
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
-    constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto indices_args = TensorAccessorArgs<inout_tensor_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
     constexpr uint32_t indices_tile_bytes = get_tile_size(cb_intermed_index);
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
@@ -36,31 +36,31 @@ void kernel_main() {
 
     // Tensor accessor
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(s_args, src_addr, tile_bytes);
+    const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr, tile_bytes);
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
-        const uint32_t i = id + core_loop * total_number_of_cores;
-        for (uint32_t j = 0; j < Wt; ++j) {
+        const uint32_t row = id + core_loop * total_number_of_cores;
+        for (uint32_t w = 0; w < Wt; ++w) {
             cb_reserve_back(cb_id_in0, onetile);
             const uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(i * Wt + j, s, l1_write_addr);
+            noc_async_read_tile(row * Wt + w, inout_tensor_accessor, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
 #if GENERATE_INDICES
             if (uint16_output) {
-                generate_index_tile<uint16_t>(cb_intermed_index, j);
+                generate_index_tile<uint16_t>(cb_intermed_index, w);
             } else {
-                generate_index_tile<uint32_t>(cb_intermed_index, j);
+                generate_index_tile<uint32_t>(cb_intermed_index, w);
             }
 #else
             // Read precomputed indices to circular buffer
             cb_reserve_back(cb_intermed_index, onetile);
             const uint32_t l1_write_addr_ind = get_write_ptr(cb_intermed_index);
-            noc_async_read_tile(i * Wt + j, indices_accessor, l1_write_addr_ind);
+            noc_async_read_tile(row * Wt + w, indices_accessor, l1_write_addr_ind);
             noc_async_read_barrier();
             cb_push_back(cb_intermed_index, onetile);
 #endif  // GENERATE_INDICES
-        }  // j loop
+        }  // w loop
     }  // core_loop loop
 }

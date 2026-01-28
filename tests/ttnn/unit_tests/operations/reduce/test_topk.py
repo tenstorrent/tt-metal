@@ -106,6 +106,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
+        (1, 1, 65 * 32, 96, 3, 32),
     ),
 )
 @pytest.mark.parametrize(
