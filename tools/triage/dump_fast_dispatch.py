@@ -29,6 +29,8 @@ from ttexalens.tt_exalens_lib import read_word_from_device
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
@@ -68,6 +70,8 @@ def _read_symbol_value(
     """
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         if check_value:
             log_check(False, f"Failed to read symbol {symbol} from kernel {elf_obj.elf_file_path} with error {str(e)}")
@@ -201,6 +205,8 @@ def read_wait_globals(
     )
     try:
         circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
             log_check(False, f"Failed to read circular_buffer_fence for kernel {dispatcher_core_data.kernel_name}")
@@ -212,6 +218,8 @@ def read_wait_globals(
             value = kernel_elf.get_constant(name)
             assert isinstance(value, int)
             return value
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             if check_value:
                 log_check(False, f"Failed to read constant {name} for kernel {dispatcher_core_data.kernel_name}")
@@ -254,6 +262,8 @@ def read_wait_globals(
             # Two's-complement 32-bit wrapping difference
             delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
             sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         log_check(
             False,
@@ -264,7 +274,7 @@ def read_wait_globals(
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
-    # Use unique_id instead of device._id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
+    # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
     chip_id = location._device.unique_id
     x, y = virtual_coord
 

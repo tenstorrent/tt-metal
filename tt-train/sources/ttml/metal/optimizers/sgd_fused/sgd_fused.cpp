@@ -6,9 +6,9 @@
 
 #include "device/sgd_fused_device_operation.hpp"
 
-namespace ttml::metal::optimizers::sgd_fused {
+namespace ttml::metal {
 
-ttnn::Tensor SGDFusedOptimizer::invoke(
+ttnn::Tensor sgd_fused(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const float lr,
@@ -19,4 +19,5 @@ ttnn::Tensor SGDFusedOptimizer::invoke(
     const std::optional<ttnn::Tensor>& momentum_buffer) {
     return ttnn::prim::ttml_sgd_fused(param, grad, lr, momentum, dampening, weight_decay, nesterov, momentum_buffer);
 }
-}  // namespace ttml::metal::optimizers::sgd_fused
+
+}  // namespace ttml::metal

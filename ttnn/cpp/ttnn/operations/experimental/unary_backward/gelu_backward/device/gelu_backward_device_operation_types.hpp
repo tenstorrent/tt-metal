@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::gelu_backward {
+namespace ttnn::experimental::prim {
 
 struct GeluBackwardParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
@@ -21,4 +21,4 @@ struct GeluBackwardInputs {
     std::optional<Tensor> preallocated_input_grad;
 };
 
-}  // namespace ttnn::operations::experimental::gelu_backward
+}  // namespace ttnn::experimental::prim

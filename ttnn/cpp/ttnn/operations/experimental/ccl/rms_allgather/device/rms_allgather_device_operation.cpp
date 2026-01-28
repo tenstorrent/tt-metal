@@ -8,6 +8,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,11 +16,11 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::experimental::prim {
 
 RMSAllGatherDeviceOperation::program_factory_t RMSAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::RMSAllGatherMeshWorkloadFactory{};
+    return RMSAllGatherMeshWorkloadFactory{};
 }
 
 void RMSAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -37,7 +38,8 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] == 32 &&
             a.logical_shape()[3] % 32 == 0,
-        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where M is a multiple of 32");
+        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where "
+        "M is a multiple of 32");
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -254,13 +256,13 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
+ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -276,7 +278,7 @@ ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_retu
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
-    using OperationType = ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
@@ -288,7 +290,7 @@ ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_retu
     auto [subblock_wt, block_wt, inplace, grid_size] = std::visit(
         [](const auto& config) -> std::tuple<uint32_t, uint32_t, bool, CoreCoord> {
             using T = std::decay_t<decltype(config)>;
-            if constexpr (std::is_same_v<T, ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<T, ttnn::prim::LayerNormShardedMultiCoreProgramConfig>) {
                 return {
                     static_cast<uint32_t>(config.subblock_w),
                     static_cast<uint32_t>(config.block_w),

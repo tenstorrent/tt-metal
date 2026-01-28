@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::argmax {
+namespace ttnn::prim {
 
 /*
  * Generates the output shape for the reduction operation.
@@ -58,9 +59,9 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_multicore) {
-        return program::ArgMaxMultiCoreProgramFactory{};
+        return ArgMaxMultiCoreProgramFactory{};
     }
-    return program::ArgMaxSingleCoreProgramFactory{};
+    return ArgMaxSingleCoreProgramFactory{};
 }
 
 void ArgMaxDeviceOperation::validate_on_program_cache_hit(
@@ -180,21 +181,17 @@ Tensor ArgMaxDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::reduction::argmax
-
-namespace ttnn::prim {
 ttnn::Tensor argmax(
-    const Tensor& input,
+    const ttnn::Tensor& input,
     tt::tt_metal::DataType output_dtype,
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<Tensor> optional_output_tensor) {
-    using OperationType = ttnn::operations::reduction::argmax::ArgMaxDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    std::optional<ttnn::Tensor> optional_output_tensor) {
+    return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
+        ArgMaxDeviceOperation::operation_attributes_t{
             .output_dtype = output_dtype,
             .dim = dim,
             .keepdim = keepdim,
@@ -202,6 +199,8 @@ ttnn::Tensor argmax(
             .use_multicore = use_multicore,
             .output_mem_config = output_mem_config,
         },
-        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+        ArgMaxDeviceOperation::tensor_args_t{
+            .input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
+
 }  // namespace ttnn::prim

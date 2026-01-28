@@ -14,6 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -343,7 +344,8 @@ int main() {
             float relative_error = (expected == 0.0f) ? std::abs(actual) : std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
                 log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
-                log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
+                log_error(
+                    tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);
                 pass = false;
             }
         }

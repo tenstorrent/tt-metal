@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::indexed_fill::program {
+namespace ttnn::prim {
 
 IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
     const IndexedFillParams& /*operation_attributes*/, const IndexedFillInputs& tensor_args, Tensor& output) {
@@ -71,7 +71,7 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -147,4 +147,4 @@ void IndexedFillProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::indexed_fill::program
+}  // namespace ttnn::prim

@@ -609,8 +609,6 @@ class MLP2D(LightweightModule):
             max_batch_size=args.max_batch_size,
             mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
             topology=ccl_topology,
-            num_reduce_scatter_links=args.num_reduce_scatter_links,
-            num_all_gather_links=args.num_all_gather_links,
             decode_w1_w3_prg_config=decode_w1_w3_prg_config,
             decode_w2_prg_config=decode_w2_prg_config,
             ff1_out_reduce_scatter_memcfg=ff1_out_reduce_scatter_memcfg,

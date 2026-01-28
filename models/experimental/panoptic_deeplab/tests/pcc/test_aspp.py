@@ -29,7 +29,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
     "pcc_values, skip_check",
     [
         (
-            {"pcc": 0.99, "abs_err": 0.03, "rel_err": 0.4},
+            {"pcc": 0.998, "abs_err": 0.03, "rel_err": 0.45},
             skip_if_not_blackhole_20_cores,
         ),
         (

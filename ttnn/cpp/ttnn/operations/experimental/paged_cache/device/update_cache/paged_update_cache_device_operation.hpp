@@ -13,15 +13,14 @@
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::update {
+namespace ttnn::experimental::prim {
 
 struct PagedUpdateCacheDeviceOperation {
-    using operation_attributes_t = UpdateParams;
-    using tensor_args_t = UpdateInputs;
+    using operation_attributes_t = PagedUpdateCacheParams;
+    using tensor_args_t = PagedUpdateCacheInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<program::PagedUpdateCacheProgramFactory, program::PagedUpdateCacheMeshWorkloadFactory>;
+    using program_factory_t = std::variant<PagedUpdateCacheProgramFactory, PagedUpdateCacheMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -42,12 +41,11 @@ struct PagedUpdateCacheDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::update
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation::tensor_return_value_t
-paged_update_cache(
+ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t paged_update_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const std::vector<uint32_t>& update_idxs,

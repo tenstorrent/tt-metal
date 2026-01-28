@@ -7,7 +7,7 @@
 #include "prefix_scan_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ssm::prefix_scan::program {
+namespace ttnn::experimental::prim {
 
 struct PrefixScanSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -39,4 +39,4 @@ struct PrefixScanProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ssm::prefix_scan::program
+}  // namespace ttnn::experimental::prim

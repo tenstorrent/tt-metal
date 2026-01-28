@@ -8,10 +8,10 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::data_movement::gather::program {
+namespace ttnn::prim {
 // Single row - single core
 GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
-    const GatherParams& attributes, const GatherInputs& tensor_args, tensor_return_value_t& output_tensor) {
+    const GatherParams& attributes, const GatherInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program{};
 
     // Tensor config info
@@ -161,7 +161,7 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const GatherParams& /*attributes*/,
     const GatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
     auto* output_tensor_buffer = output_tensor.buffer();
@@ -180,7 +180,7 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
 
 // Single row - multi core
 GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySingleRowMultiCore::create(
-    const GatherParams& attributes, const GatherInputs& tensor_args, tensor_return_value_t& output_tensor) {
+    const GatherParams& attributes, const GatherInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program{};
 
     // Tensor config info
@@ -329,7 +329,7 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const GatherParams& /*attributes*/,
     const GatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     // Get tensor buffers
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
@@ -347,4 +347,4 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
         gather_writer_runtime_args[1] = output_tensor_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::gather::program
+}  // namespace ttnn::prim

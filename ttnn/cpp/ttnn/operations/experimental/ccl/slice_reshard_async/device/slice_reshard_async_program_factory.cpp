@@ -15,7 +15,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -28,12 +28,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::slice_reshard_async::program {
+namespace ttnn::experimental::prim {
 
 SliceReshardAsyncProgramFactory::cached_mesh_workload_t SliceReshardAsyncProgramFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const SliceReshardAsyncParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
@@ -48,11 +48,11 @@ SliceReshardAsyncProgramFactory::cached_mesh_workload_t SliceReshardAsyncProgram
 }
 
 SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactory::create_at(
-    const operation_attributes_t& args,
+    const SliceReshardAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
-    const ttnn::Tensor& input_tensor = tensor_args.input;
+    const ttnn::Tensor& input_tensor = tensor_args;
     const ttnn::Tensor& output_tensor = tensor_return_value;
 
     tt::tt_metal::Program program{};
@@ -264,8 +264,8 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
 
 void SliceReshardAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
+    const SliceReshardAsyncParams& args,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
     const ttnn::Tensor& output_tensor = tensor_return_value;
 
@@ -281,12 +281,12 @@ void SliceReshardAsyncProgramFactory::override_runtime_arguments(
 
                 // reader
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_runtime_args[0] = tensor_args.input.buffer()->address();
+                worker_reader_runtime_args[0] = tensor_args.buffer()->address();
                 worker_reader_runtime_args[9] = args.final_semaphore.address();
 
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_runtime_args[0] = tensor_args.input.buffer()->address();
+                worker_writer_runtime_args[0] = tensor_args.buffer()->address();
                 worker_writer_runtime_args[1] = output_tensor.buffer()->address();
                 worker_writer_runtime_args[14] = args.final_semaphore.address();
                 worker_writer_runtime_args[18] = args.barrier_semaphore.address();
@@ -297,4 +297,4 @@ void SliceReshardAsyncProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async::program
+}  // namespace ttnn::experimental::prim

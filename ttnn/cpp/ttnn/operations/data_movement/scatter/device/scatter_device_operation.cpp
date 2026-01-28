@@ -6,14 +6,15 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <enchantum/enchantum.hpp>
 
-namespace ttnn::operations::data_movement::scatter {
+namespace ttnn::prim {
 
 ScatterDeviceOperation::program_factory_t ScatterDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if ((args.opt_reduction != ScatterReductionType::INVALID) &&
+    if ((args.opt_reduction != ttnn::operations::data_movement::scatter::ScatterReductionType::INVALID) &&
         tensor_args.input_tensor.dtype() == DataType::BFLOAT16) {
         return ScatterReduceBfloat16ProgramFactory{};
     }
@@ -76,15 +77,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<ScatterDeviceOperation::tenso
 ScatterDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input_tensor = inputs.input_tensor;
-    int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::scatter
-
-namespace ttnn::prim {
 ttnn::Tensor scatter(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -93,9 +91,10 @@ ttnn::Tensor scatter(
     const MemoryConfig& output_memory_config,
     const operations::data_movement::scatter::ScatterReductionType& reduction,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    using OperationType = ttnn::operations::data_movement::scatter::ScatterDeviceOperation;
+    using OperationType = ttnn::prim::ScatterDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
         OperationType::tensor_args_t{input_tensor, index_tensor, source_tensor});
 }
+
 }  // namespace ttnn::prim

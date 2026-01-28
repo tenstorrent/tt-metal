@@ -5,6 +5,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
@@ -70,6 +71,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_debugging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp

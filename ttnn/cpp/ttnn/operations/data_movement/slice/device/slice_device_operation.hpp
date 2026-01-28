@@ -23,7 +23,9 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
-namespace slice {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
 
 struct SliceDeviceOperation {
     using operation_attributes_t = SliceParams;
@@ -31,11 +33,11 @@ struct SliceDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::SliceRmProgramFactory,
-        program::SliceRmShardedProgramFactory,
-        program::SliceRmStrideProgramFactory,
-        program::SliceTileProgramFactory,
-        program::SliceTileTensorArgsProgramFactory>;
+        SliceRmProgramFactory,
+        SliceRmShardedProgramFactory,
+        SliceRmStrideProgramFactory,
+        SliceTileProgramFactory,
+        SliceTileTensorArgsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -51,11 +53,7 @@ struct SliceDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
 
-}  // namespace slice
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
+SliceDeviceOperation::tensor_return_value_t slice(
     const Tensor& input,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,

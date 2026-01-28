@@ -134,6 +134,7 @@ class PreSDPA:
 
         # Calculate per-core width in tiles for matmul2 (from shard spec)
         matmul2_weights_memory_config = matmul2_weights_tensor.memory_config()
+        matmul2_weights_core_grid = matmul2_weights_memory_config.shard_spec.grid
         matmul2_weights_tile = matmul2_weights_tensor.get_tile()
         matmul2_weights_shard_shape = matmul2_weights_memory_config.shard_spec.shape
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
@@ -147,7 +148,7 @@ class PreSDPA:
         MCAST_GRID_START_X = 0
         MCAST_GRID_START_Y = 0
         MCAST_GRID_END_X = device_grid_size.x - 1  # 11 for P150, 10 for non-P150
-        MCAST_GRID_END_Y = 7
+        MCAST_GRID_END_Y = 9
         main_grid = ttnn.CoreRange(
             ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
             ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
@@ -162,6 +163,7 @@ class PreSDPA:
 
         # Calculate number of mcast cores (full grid)
         mcast_num_cores = main_grid.grid_size().x * main_grid.grid_size().y
+        mcast_is_part_of_receiver_grid = main_grid.contains(rmsnorm_core_grid)
 
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_id = 0
@@ -256,6 +258,7 @@ class PreSDPA:
             ("mcast_src_cb", rmsnorm_output_cb),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_src_num_pages", mcast_src_num_pages),
+            ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
         ]
 
         # Mcast receiver compile-time args (named args for NCRISC)
@@ -681,7 +684,7 @@ class PreSDPA:
                 ),
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_matmul2_core",
-                    core_range=main_grid,  # Full device grid (8x12 or 8x11)
+                    core_range=matmul2_weights_core_grid,  # matmul2 cores
                     value=1,
                     other_value=0,
                 ),

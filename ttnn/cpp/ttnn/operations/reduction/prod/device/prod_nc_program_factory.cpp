@@ -11,7 +11,7 @@
 
 #include <string>
 
-namespace ttnn::operations::reduction::prod_nc::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
@@ -76,7 +76,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    ttnn::operations::CreateCircularBuffer(
+    operations::CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -103,9 +103,9 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     const auto reader_kernel_id =
-        ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
-        ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -115,7 +115,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
-    const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(
+    const auto compute_kernel_1_id = operations::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
     std::optional<tt::tt_metal::KernelHandle> compute_kernel_2_id = std::nullopt;
@@ -212,4 +212,4 @@ void ProdNcProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::prod_nc::program
+}  // namespace ttnn::prim

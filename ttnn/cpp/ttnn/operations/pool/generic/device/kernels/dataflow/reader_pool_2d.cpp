@@ -4,7 +4,8 @@
 #include <sys/types.h>
 
 #include <cstdint>
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
+#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -21,22 +22,6 @@
 #define FACE_HEIGHT 16
 #define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
 #define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
-
-// Zero out a single page (where wr ptr points) for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_page() {
-    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -236,14 +221,14 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
             }
 
-            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
             cb_reserve_back(in_cb_id, 1);
+            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
             uint32_t processed_sticks = 0;
             // page zeroing is only necessary for tiled block output format so that scale is not affected by
             // junk/padding data
             if constexpr (zero_pages) {
                 if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                    zero_out_page<in_cb_id>();
+                    zero_out_page<in_cb_id>(in_l1_write_addr);
                 }
             }
             for (uint32_t h = 0; h < kernel_h; ++h) {

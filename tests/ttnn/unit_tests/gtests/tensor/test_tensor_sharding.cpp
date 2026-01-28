@@ -31,7 +31,6 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"

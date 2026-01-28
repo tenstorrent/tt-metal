@@ -15,7 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -62,9 +62,9 @@ int main() {
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 
-        ttnn::operations::matmul::operation_attributes_t attributes;
+        ttnn::prim::MatmulParams attributes;
         attributes.user_run_batched = true;
-        attributes = ttnn::operations::matmul::create_matmul_attributes(a, b, attributes, {});
+        attributes = ttnn::prim::create_matmul_attributes(a, b, attributes, {});
         auto mm = ttnn::prim::matmul(
                       a,
                       b,
@@ -79,8 +79,7 @@ int main() {
                          b1,
                          /*bias=*/std::nullopt,
                          /*output_tensor*/ std::nullopt,
-                         ttnn::operations::matmul::create_matmul_attributes(
-                             a, b1, ttnn::operations::matmul::operation_attributes_t{}, {}))
+                         ttnn::prim::create_matmul_attributes(a, b1, ttnn::prim::MatmulParams{}, {}))
                          .at(0)
                          .cpu();
 

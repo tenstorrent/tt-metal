@@ -8,23 +8,23 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::move::program {
+namespace ttnn::prim {
 
 // Program factory for MULTI_CORE and MULTI_CORE_OVERLAP strategies
 struct MoveProgramFactory {
-    using shared_variables_t = ttnn::operations::data_movement::copy::program::CopySharedVariables;
-    using cached_program_t = ttnn::operations::data_movement::copy::program::CopyProgramFactory::cached_program_t;
+    using shared_variables_t = ttnn::prim::CopySharedVariables;
+    using cached_program_t = ttnn::prim::CopyProgramFactory::cached_program_t;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const MoveOperationAttributes& operation_attributes,
+        const MoveTensorArgs& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const MoveOperationAttributes& operation_attributes,
+        const MoveTensorArgs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::move::program
+}  // namespace ttnn::prim

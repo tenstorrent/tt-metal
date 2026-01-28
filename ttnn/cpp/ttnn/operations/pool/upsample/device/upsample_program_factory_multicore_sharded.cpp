@@ -19,7 +19,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::pool::upsample::program {
+namespace ttnn::prim {
 using namespace tt;
 
 struct StickInterval {
@@ -243,12 +243,13 @@ static CoreRangeSet get_cores_with_work(
 }
 
 UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreShardedProgramFactory::create(
-    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input_tensor;
+    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+    const auto& input = input_tensor;
     auto& output = output_tensor;
     // This factory only supports integer scale factors
     TT_FATAL(
-        is_integer_scale(operation_attributes.scale_factor_h) && is_integer_scale(operation_attributes.scale_factor_w),
+        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
+            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
         "Sharded upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
         operation_attributes.scale_factor_h,
         operation_attributes.scale_factor_w);
@@ -406,14 +407,14 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
 void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const UpsampleParams& /*operation_attributes*/,
-    const UpsampleInputs& tensor_args,
+    const Tensor& input_tensor,
     Tensor& output_tensor) {
     auto& program = cached_program.program;
-    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.out_cb, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::pool::upsample::program
+}  // namespace ttnn::prim

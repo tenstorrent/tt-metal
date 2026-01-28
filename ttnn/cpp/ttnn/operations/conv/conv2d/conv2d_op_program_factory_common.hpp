@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
 
 // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
 constexpr static uint32_t kInvalidCBIndex = 32;
@@ -116,4 +116,4 @@ void post_conv2d_op_memory_checks(
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor);
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

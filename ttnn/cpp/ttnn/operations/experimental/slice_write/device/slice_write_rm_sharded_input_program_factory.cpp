@@ -18,7 +18,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -353,4 +353,4 @@ void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

@@ -6,7 +6,7 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::pool::grid_sample::program {
+namespace ttnn::prim {
 
 struct GridSampleNearestProgramFactory {
     struct shared_variables_t {
@@ -32,4 +32,4 @@ struct GridSampleNearestProgramFactory {
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::pool::grid_sample::program
+}  // namespace ttnn::prim

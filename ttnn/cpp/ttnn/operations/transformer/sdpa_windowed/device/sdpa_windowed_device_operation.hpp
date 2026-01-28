@@ -16,7 +16,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::transformer::sdpa_windowed {
+namespace ttnn::prim {
 
 constexpr uint32_t cu_window_seqlens_nelements = 4096;
 // [INFO] 1024 is large enough for 300DPI images and it was increased to 4096 to support larger images.
@@ -28,7 +28,7 @@ struct WindowedScaledDotProductAttentionDeviceOperation {
     using tensor_args_t = SdpaWindowedInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::WindowedSDPAProgramFactory>;
+    using program_factory_t = std::variant<WindowedSDPAProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -44,11 +44,7 @@ struct WindowedScaledDotProductAttentionDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t& output_tensor);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa_windowed
-
-namespace ttnn::prim {
-ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
-windowed_scaled_dot_product_attention(
+Tensor windowed_scaled_dot_product_attention(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
@@ -57,4 +53,5 @@ windowed_scaled_dot_product_attention(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
+
 }  // namespace ttnn::prim

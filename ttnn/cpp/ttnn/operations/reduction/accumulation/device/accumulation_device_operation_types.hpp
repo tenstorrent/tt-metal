@@ -11,7 +11,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 enum class AccumulationOp : uint8_t { CUMSUM, CUMPROD };
 
@@ -28,4 +28,4 @@ struct AccumulationInputs {
     std::optional<Tensor> opt_output;
 };
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim

@@ -18,11 +18,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
@@ -212,9 +212,9 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
 void UntilizeSingleCoreProgramFactory::override_runtime_arguments(
     UntilizeSingleCoreProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -234,4 +234,4 @@ void UntilizeSingleCoreProgramFactory::override_runtime_arguments(
         runtime_args[0] = dst_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

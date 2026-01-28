@@ -68,6 +68,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
 
     hf_config = load_hf_mixtral_config()
     model_args = ModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args.use_qk_fused = False
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith(f"layers.{layer_idx}."))}
     reference_model = MixtralDecoderLayer(hf_config, layer_idx)

@@ -8,10 +8,11 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_async {
+namespace ttnn::experimental::prim {
 
 AllReduceAsyncDeviceOperation::program_factory_t AllReduceAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
@@ -121,12 +122,11 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation::tensor_return_value_t
-all_reduce_async(
+ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     uint32_t cluster_axis,
@@ -139,7 +139,7 @@ all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    using OperationType = ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");

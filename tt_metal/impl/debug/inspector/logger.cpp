@@ -349,4 +349,22 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
     }
 }
 
+void Logger::log_mesh_workload_operation_name_and_parameters(
+    const MeshWorkloadData& mesh_workload_data, std::string_view name, std::string_view parameters) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        mesh_workloads_ostream << "- mesh_workload_set_metadata:\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << mesh_workload_data.mesh_workload_id << "\n";
+        mesh_workloads_ostream << "    name: " << name << "\n";
+        mesh_workloads_ostream << "    parameters: '" << parameters << "'\n";
+        mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                               << "\n";
+        mesh_workloads_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
+    }
+}
+
 }  // namespace tt::tt_metal::inspector

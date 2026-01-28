@@ -4,25 +4,25 @@
 
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl::all_broadcast {
+namespace ttnn::prim {
 
 AllBroadcastDeviceOperation::program_factory_t AllBroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::AllBroadcastProgramFactory{};
+    const AllBroadcastParams& /*operation_attributes*/, const Tensor& /*tensor_args*/) {
+    return AllBroadcastProgramFactory{};
 }
 
 void AllBroadcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    validate_on_program_cache_miss(operation_attributes, input);
 }
 
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    const auto& input_tensor = input;
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -47,9 +47,9 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
 }
 
-spec_return_value_t AllBroadcastDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+std::vector<TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    const auto& input_tensor = input;
     const auto& shape = input_tensor.logical_shape();
     const uint32_t ring_size = operation_attributes.ring_size;
     std::vector<TensorSpec> output_specs;
@@ -65,13 +65,13 @@ spec_return_value_t AllBroadcastDeviceOperation::compute_output_specs(
     return output_specs;
 }
 
-tensor_return_value_t AllBroadcastDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto specs = compute_output_specs(operation_attributes, tensor_args);
+std::vector<Tensor> AllBroadcastDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const Tensor& input) {
+    auto specs = compute_output_specs(operation_attributes, input);
     std::vector<Tensor> outputs;
     outputs.reserve(specs.size());
     for (const auto& spec : specs) {
-        outputs.push_back(create_device_tensor(spec, tensor_args.input_tensor.device()));
+        outputs.push_back(create_device_tensor(spec, input.device()));
     }
     return outputs;
 }
@@ -81,7 +81,7 @@ tt::stl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
 
     auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
@@ -98,9 +98,6 @@ tt::stl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::ccl::all_broadcast
-
-namespace ttnn::prim {
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
@@ -108,7 +105,6 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology) {
-    using OperationType = ttnn::operations::ccl::all_broadcast::AllBroadcastDeviceOperation;
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -129,14 +125,14 @@ std::vector<ttnn::Tensor> all_broadcast(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<AllBroadcastDeviceOperation>(
+        AllBroadcastParams{
             .num_links = num_links,
             .ring_size = num_devices,
             .output_mem_config = output_mem_config,
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
             .topology = topology},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
 }  // namespace ttnn::prim

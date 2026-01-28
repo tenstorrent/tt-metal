@@ -92,6 +92,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
@@ -225,6 +226,8 @@ class TriageScript:
                 else:
                     raise TTTriageError("Data provider script did not return any data.")
             return result
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -497,7 +500,7 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 

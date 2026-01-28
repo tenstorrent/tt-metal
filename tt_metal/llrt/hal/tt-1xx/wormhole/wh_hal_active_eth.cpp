@@ -123,17 +123,20 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
             {"ER", "ERISC"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
 
     static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         false /*supports_cbs*/,
+        false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
         active_eth_fabric_telemetry::create_factory()};

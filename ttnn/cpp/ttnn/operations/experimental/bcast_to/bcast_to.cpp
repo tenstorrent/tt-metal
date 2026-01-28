@@ -8,7 +8,6 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

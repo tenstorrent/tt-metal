@@ -169,8 +169,6 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
             memory_config=(w2_out.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
             dtype=self.args.ccl_dtype,

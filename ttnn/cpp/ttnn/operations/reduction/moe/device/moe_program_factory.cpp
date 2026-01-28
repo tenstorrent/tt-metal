@@ -11,7 +11,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::moe::program {
+namespace ttnn::prim {
 
 MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     const MoeParams& operation_attributes, const MoeInputs& tensor_args, Tensor& output_tensor) {
@@ -240,4 +240,4 @@ void MoeProgramFactory::override_runtime_arguments(
     writer_runtime_args[0] = output_buffer->address();
 }
 
-}  // namespace ttnn::operations::reduction::moe::program
+}  // namespace ttnn::prim

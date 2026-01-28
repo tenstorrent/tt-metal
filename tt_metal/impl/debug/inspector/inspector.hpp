@@ -57,6 +57,12 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+    static void mesh_workload_set_operation_name_and_parameters(
+        const distributed::MeshWorkloadImpl* mesh_workload,
+        std::string_view operation_name,
+        std::string_view operation_parameters) noexcept;
+    static void mesh_workload_set_runtime_id(
+        const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(
