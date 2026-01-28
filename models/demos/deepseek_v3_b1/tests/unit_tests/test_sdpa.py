@@ -163,21 +163,26 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_s
         packer_l1_acc=False,
     )
 
-    # Run the op
-    logger.info("Running FlashMLADecode.op...")
-    attn_out = FlashMLADecode.op(
-        q_tensor=tt_q,
-        kv_cache_tensor=tt_cache,
-        head_dim_v=kv_lora_rank,
-        cur_pos_tensor=tt_position_ids,
-        output_tensor=tt_out,
-        scale=scale,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    # Run the op - stress test with 100 iterations
+    num_iterations = 1000
+    logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
+    for i in range(num_iterations):
+        if i % 10 == 0:
+            logger.info(f"  Iteration {i}/{num_iterations}...")
+        attn_out = FlashMLADecode.op(
+            q_tensor=tt_q,
+            kv_cache_tensor=tt_cache,
+            head_dim_v=kv_lora_rank,
+            cur_pos_tensor=tt_position_ids,
+            output_tensor=tt_out,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        # Convert output to torch
+        output_torch = ttnn.to_torch(attn_out)
 
-    # Convert output to torch
-    output_torch = ttnn.to_torch(attn_out)
+    logger.info(f"  Completed {num_iterations} iterations!")
 
     # Verify output shape: [1, batch_size, num_heads, kv_lora_rank]
     expected_shape = (1, batch_size, num_heads, kv_lora_rank)
