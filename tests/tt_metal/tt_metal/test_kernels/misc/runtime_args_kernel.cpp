@@ -25,7 +25,7 @@ void kernel_main() {
         for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
             constexpr uint32_t kCommonRTASeparation = 1024;
-            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);  // Is this function supported on QSR?
+            results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
 #endif
             results[i] = get_arg_val<uint32_t>(i);
         }
