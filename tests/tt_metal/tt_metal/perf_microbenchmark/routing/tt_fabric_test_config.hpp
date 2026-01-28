@@ -441,12 +441,12 @@ private:
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
 
-    ParsedSenderConfig expand_sender_core_sweep(
+    std::vector<ParsedSenderConfig> expand_sender_core_sweep(
         const ParsedSenderConfig& input_senders,
         const std::vector<tt::tt_metal::CoreCoord>& all_cores,
         uint32_t sender_core_idx);
 
-    ParsedSenderConfig expand_dest_core_sweep(
+    std::vector<ParsedSenderConfig> expand_dest_core_sweep(
         const ParsedSenderConfig& input_senders,
         const std::vector<tt::tt_metal::CoreCoord>& all_cores,
         uint32_t dest_core_idx);

@@ -1145,18 +1145,18 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
 
         // If sender core sweep is active, expand sender to one specific core for this iteration based on calculated idx
         // The check for restriction on one sender/receiver was validated before
-        ParsedSenderConfig expanded_sender = p_config.senders[0];
+        std::vector<ParsedSenderConfig> expanded_senders = p_config.senders;
         if (sender_core_sweep_iterations > 0 && sender_core_idx < all_cores.size()) {
             // Core sweep only has one sender
-            expanded_sender = expand_sender_core_sweep(expanded_sender, all_cores, sender_core_idx);
+            expanded_senders = expand_sender_core_sweep(expanded_senders[0], all_cores, sender_core_idx);
         }
 
         // If destination core sweep is active, expand destination to one specific core for this iteration
         if (dest_core_sweep_iterations > 0 && dest_core_idx < all_cores.size()) {
-            expanded_sender = expand_dest_core_sweep(expanded_sender, all_cores, dest_core_idx);
+            expanded_senders = expand_dest_core_sweep(expanded_senders[0], all_cores, dest_core_idx);
         }
 
-        iteration_test.senders = {expanded_sender};
+        iteration_test.senders = expanded_senders;
 
         // Initialize parametrized_name with original name if empty
         if (iteration_test.parametrized_name.empty()) {
@@ -1253,7 +1253,7 @@ void TestConfigBuilder::parametrize_core_sweep_test_name(ParsedTestConfig& itera
         detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", iteration_num);
     }
 }
-ParsedSenderConfig TestConfigBuilder::expand_sender_core_sweep(
+std::vector<ParsedSenderConfig> TestConfigBuilder::expand_sender_core_sweep(
     const ParsedSenderConfig& input_sender,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t sender_core_idx) {
@@ -1261,10 +1261,10 @@ ParsedSenderConfig TestConfigBuilder::expand_sender_core_sweep(
     if (is_core_sweep_config(input_sender.core)) {
         expanded_sender.core = all_cores[sender_core_idx];
     }
-    return expanded_sender;
+    return {expanded_sender};
 }
 
-ParsedSenderConfig TestConfigBuilder::expand_dest_core_sweep(
+std::vector<ParsedSenderConfig> TestConfigBuilder::expand_dest_core_sweep(
     const ParsedSenderConfig& input_sender,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t dest_core_idx) {
@@ -1286,7 +1286,7 @@ ParsedSenderConfig TestConfigBuilder::expand_dest_core_sweep(
         target_pattern.destination->core = all_cores[dest_core_idx];
     }
 
-    return expanded_sender;
+    return {expanded_sender};
 }
 
 std::pair<uint32_t, uint32_t> TestConfigBuilder::calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration){
