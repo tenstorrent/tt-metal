@@ -873,10 +873,10 @@ protected:
 class PrefetcherLinearPackedReadTestFixture : virtual public BasePrefetcherTestFixture {
 protected:
     std::vector<CQPrefetchRelayLinearPackedSubCmd> build_sub_cmds(
-        const std::vector<uint64_t>& lengths, const std::vector<uint64_t>& addresses, uint32_t n_sub_cmds) {
+        const std::vector<uint64_t>& lengths, const std::vector<uint64_t>& addresses) {
         std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds;
-        sub_cmds.reserve(n_sub_cmds);
-        for (uint32_t i = 0; i < n_sub_cmds; i++) {
+        sub_cmds.reserve(lengths.size());
+        for (uint32_t i = 0; i < lengths.size(); i++) {
             CQPrefetchRelayLinearPackedSubCmd sub_cmd{};
             sub_cmd.addr = addresses[i];
             sub_cmd.length = lengths[i];
@@ -907,20 +907,23 @@ protected:
         const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
         
         uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
-        constexpr uint32_t MAX_SUB_CMD_SIZE = 256 * 1024;  // 256KB per sub-command
+        const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
         while (remaining_bytes > 0) {
             const uint32_t n_sub_cmds =
                 payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
-            const uint32_t max_read_size = std::min(remaining_bytes, MAX_SUB_CMD_SIZE);
 
             std::vector<uint64_t> lengths;
             std::vector<uint64_t> addresses;
             lengths.reserve(n_sub_cmds);
             addresses.reserve(n_sub_cmds);
-            uint64_t total_length = 0;
+            uint32_t total_length = 0;
 
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
+                const uint32_t max_read_size = std::min(remaining_bytes - total_length, MAX_SUB_CMD_SIZE);
+                if (max_read_size < MIN_READ_SIZE) {
+                    break;
+                }
                 const uint32_t raw_length = payload_generator_->get_rand<uint32_t>(MIN_READ_SIZE, max_read_size);
                 const uint64_t length = tt::align(raw_length, l1_alignment);
                 total_length += length;
@@ -934,15 +937,12 @@ protected:
                 addresses.push_back(addr);
             }
 
-            // Check if we've reached the DRAM size limit
-            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE_LARGE) {
-                break;
-            }
+            EXPECT_LE(total_length + device_data.size() * sizeof(uint32_t), DEVICE_DATA_SIZE_LARGE);
 
             const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds =
-                build_sub_cmds(lengths, addresses, n_sub_cmds);
+                build_sub_cmds(lengths, addresses);
 
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
@@ -952,7 +952,7 @@ protected:
 
             // Update expected data: L1 is pre-populated with sequential values [0, 1, 2, ...]
             // Prefetcher reads from L1 addresses and dispatcher writes sequentially to DRAM
-            for (uint32_t i = 0; i < n_sub_cmds; i++) {
+            for (uint32_t i = 0; i < sub_cmds.size(); i++) {
                 const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
