@@ -4,13 +4,8 @@
 
 #pragma once
 
-<<<<<<< HEAD
-#include "ttnn/decorators.hpp"
-||||||| parent of dce2e9b254 (Nanobind support. (Bounty: #4258))
-=======
 #include <optional>
 
->>>>>>> dce2e9b254 (Nanobind support. (Bounty: #4258))
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 

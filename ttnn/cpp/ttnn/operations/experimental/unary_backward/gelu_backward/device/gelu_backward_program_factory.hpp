@@ -7,7 +7,7 @@
 #include "gelu_backward_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::gelu_backward::program {
+namespace ttnn::experimental::prim {
 
 struct GeluBackwardProgramFactory {
     struct shared_variables_t {
@@ -29,4 +29,4 @@ struct GeluBackwardProgramFactory {
         Tensor& output);
 };
 
-}  // namespace ttnn::operations::experimental::gelu_backward::program
+}  // namespace ttnn::experimental::prim

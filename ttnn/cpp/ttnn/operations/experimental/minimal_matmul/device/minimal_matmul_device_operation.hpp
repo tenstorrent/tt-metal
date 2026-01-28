@@ -13,15 +13,15 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental::prim {
 
 struct MinimalMatmulDeviceOperation {
-    using operation_attributes_t = ttnn::operations::experimental::minimal_matmul::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::experimental::minimal_matmul::tensor_args_t;
+    using operation_attributes_t = MinimalMatmulParams;
+    using tensor_args_t = MinimalMatmulInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<program::MinimalMatmulProgramFactory>;
+    using program_factory_t = std::variant<MinimalMatmulProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -42,23 +42,23 @@ struct MinimalMatmulDeviceOperation {
         const Tensor& input_tensor,
         const Tensor& weight_tensor,
         const std::optional<Tensor>& bias_tensor,
-        std::optional<unary::UnaryWithParam> fused_activation,
+        std::optional<operations::unary::UnaryWithParam> fused_activation,
         const std::optional<const MinimalMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> dtype,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
+Tensor minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
-    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config);

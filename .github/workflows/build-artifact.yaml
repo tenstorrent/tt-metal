@@ -25,14 +25,6 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      distro:
-        required: false
-        type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
       architecture:
         required: false
         type: string
@@ -73,11 +65,20 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      platform:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04').
+          If provided, overrides distro/version/toolchain.
       fetch-depth:
         required: false
         type: number
         default: 500
-        description: "Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`."
+        description: >-
+          Git fetch depth for the checkout step. Must be large enough to
+          include all tags and history needed for `git describe`.
       ref:
         required: false
         type: string
@@ -121,8 +122,10 @@ on:
         description: "Pre-built ManyLinux Docker image tag"
     outputs:
       ci-build-docker-image:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-tag }}
+        description: >-
+          Docker tag for the CI Build Docker image for building TT-Metalium et al
+        value: >-
+          ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-tag }}
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-tag }}
@@ -140,20 +143,28 @@ on:
         value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
-        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.packages-artifact-name ||
+              (jobs.download-artifacts.result == 'success' &&
+               jobs.download-artifacts.outputs.packages-artifact-name || '') }}
       build-artifact-name:
         description: "Name of the published build artifact"
-        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.build_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.build_artifact_name || '') }}
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.build_artifact_name ||
+              (jobs.download-artifacts.result == 'success' &&
+               jobs.download-artifacts.outputs.build_artifact_name || '') }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+        value: >-
+          ${{ jobs.build-wheel.result == 'success' &&
+              jobs.build-wheel.outputs.artifact-name ||
+              (jobs.download-artifacts.result == 'success' &&
+               jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
 
   workflow_dispatch:
     inputs:
-      build-type:
-        required: false
-        type: string
-        default: "Release"
       tracy:
         required: false
         type: boolean
@@ -169,15 +180,6 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-          - "Fedora 43"
-        description: "Platform to build for"
       architecture:
         required: false
         type: string
@@ -197,6 +199,19 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        description: "Target Platform"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
       enable-lto:
         required: false
         type: boolean
@@ -204,6 +219,18 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # =============================================================================
+  # ARCHITECTURE NOTE: Platform Parsing
+  # =============================================================================
+  # This workflow handles platform parsing internally via the parse-platform job.
+  # Callers should NOT run their own parse-platform job - just pass:
+  #   - platform: "Ubuntu 22.04" or "Ubuntu 24.04"
+  #   - enable-lto: true/false (optional, defaults based on platform)
+  #
+  # The parse-platform job converts the platform string to distro/version/toolchain
+  # and applies platform-specific defaults (e.g., LTO settings).
+  # =============================================================================
+
   # Parse platform dropdown to extract distro/version/toolchain
   parse-platform:
     runs-on: ubuntu-latest
@@ -211,6 +238,7 @@ jobs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
       toolchain: ${{ steps.parse.outputs.toolchain }}
+      enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -220,19 +248,29 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          distro: ${{ inputs.distro }}
-          version: ${{ inputs.version }}
+          enable-lto: ${{ inputs.enable-lto || false }}
+
+  # =============================================================================
+  # ARCHITECTURE NOTE: Docker Image Caching
+  # =============================================================================
+  # Docker images can be provided in two ways:
+  # 1. Pre-built: Pass ci-build-docker-image, dev-docker-image, etc. as inputs
+  #    (used by merge-gate.yaml which builds all images once upfront)
+  # 2. On-demand: Leave docker image inputs empty; build-docker-image job runs
+  #
+  # The "always() && !failure() && !cancelled()" pattern is used throughout to
+  # allow jobs to run even when upstream jobs are SKIPPED (not just successful).
+  # This is necessary because pre-built image inputs cause build-docker-image
+  # to be skipped, but downstream jobs still need to run.
+  # =============================================================================
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    needs: parse-platform
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      # Use parsed platform values for workflow_dispatch, otherwise use direct inputs
-      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:
@@ -285,7 +323,10 @@ jobs:
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
-    name: "🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }} ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}"
+    name: >-
+      🛠️ Build ${{ inputs.build-type }}
+      ${{ needs.parse-platform.outputs.distro }}
+      ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on: tt-ubuntu-2204-large-stable
@@ -294,12 +335,16 @@ jobs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
     env:
-      # Resolved platform values (from parse-platform for workflow_dispatch, or direct inputs for workflow_call)
-      DISTRO: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
-      VERSION: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
-      TOOLCHAIN: ${{ needs.parse-platform.outputs.toolchain || inputs.toolchain }}
+      # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
+      DISTRO: ${{ needs.parse-platform.outputs.distro }}
+      VERSION: ${{ needs.parse-platform.outputs.version }}
+      TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -308,7 +353,8 @@ jobs:
         TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
         - ${{ github.workspace }}:/work
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
@@ -329,8 +375,19 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          # Conditionally set this here so that it remains unset on forks,
+          # otherwise it resolves an invalid URL and the job fails
+          REDIS_USER="${{ vars.REDIS_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_PARTS=(
+            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
+            "@${REDIS_HOST}:${REDIS_PORT}"
+            "|read-only=${REDIS_READONLY}"
+          )
+          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
@@ -338,11 +395,28 @@ jobs:
         id: set-artifact-name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="packages-${{ env.DISTRO }}-${{ env.VERSION }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          DISTRO="${{ env.DISTRO }}"
+          VERSION="${{ env.VERSION }}"
+          ARCH="${{ inputs.architecture }}"
+          BUILD_TYPE="${{ inputs.build-type }}"
+          RUN_ID="${{ github.run_id }}"
+          ARTIFACT_PARTS=(
+            "packages"
+            "${DISTRO}"
+            "${VERSION}"
+            "${ARCH}"
+            "${BUILD_TYPE}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${SANITIZED_REF}"
+            "${RUN_ID}"
+          )
+          ARTIFACT_NAME=$(IFS='-'; echo "${ARTIFACT_PARTS[*]}")
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -376,30 +450,45 @@ jobs:
         run: |
           set -eu # basic shell hygiene
 
-          args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
+          if [ "${{ inputs.skip-tt-train }}" = "true" ]; then
+            args_fixme="--build-metal-tests --build-ttnn-tests --build-programming-examples"
+          else
+            args_fixme="--build-all"
+          fi
           echo "Args: ${args_fixme}"
-          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ env.TOOLCHAIN }} ${args_fixme} --enable-ccache --configure-only"
+
+          build_args=(
+            "./build_metal.sh"
+            "--build-dir" "build"
+            "--build-type" "${{ inputs.build-type }}"
+            "--toolchain-path" "${{ env.TOOLCHAIN }}"
+            ${args_fixme}
+            "--enable-ccache"
+            "--configure-only"
+          )
+
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
-            build_command="$build_command --disable-profiler"
+            build_args+=("--disable-profiler")
           fi
           echo "Build distributed: ${{ inputs.distributed }}"
           if [ "${{ inputs.distributed }}" = "false" ]; then
-            build_command="$build_command --without-distributed"
+            build_args+=("--without-distributed")
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
-            build_command="$build_command --enable-time-trace --disable-unity-builds"
+            build_args+=("--enable-time-trace" "--disable-unity-builds")
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
-            build_command="$build_command --build-umd-tests"
+            build_args+=("--build-umd-tests")
           fi
           if [ "${{ inputs.enable-lto }}" = "true" ]; then
-            build_command="$build_command --enable-lto"
+            build_args+=("--enable-lto")
           fi
-          echo "build-artifact.yaml running: $build_command"
-          $build_command
+          echo "build-artifact.yaml running: ${build_args[*]}"
+          "${build_args[@]}"
 
       - name: 🛠️ Compile
+        timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
@@ -424,8 +513,10 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
+        timeout-minutes: 10
         run: |
           cmake --build build --target package
+
           if [[ "${{ env.DISTRO }}" == "fedora" ]]; then
             ls -1sh build/*.rpm || true
           else
@@ -439,6 +530,7 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+        # TODO: VALIDATE POST MERGE
       - name: ☁️ Upload packages (DEB)
         if: ${{ inputs.publish-package && (needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu') != 'fedora' }}
         uses: actions/upload-artifact@v4
@@ -475,11 +567,24 @@ jobs:
         id: set_build_artifact_name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ env.VERSION }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
+          TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
+          DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          VERSION="${{ env.VERSION }}"
+          ARCH="${{ inputs.architecture }}"
+          RUN_ID="${{ github.run_id }}"
+          BUILD_ARTIFACT_PARTS=(
+            "TTMetal_build_any"
+            "${VERSION}"
+            "${ARCH}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${SANITIZED_REF}"
+            "${RUN_ID}"
+          )
+          BUILD_ARTIFACT_NAME=$(IFS='_'; echo "${BUILD_ARTIFACT_PARTS[*]}")
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -506,8 +611,8 @@ jobs:
           DISTRO="${{ needs.parse-platform.outputs.distro }}"
           VERSION="${{ needs.parse-platform.outputs.version }}"
 
-          # Use Python 3.12 for Fedora 43 and Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
-          if [ "$DISTRO" = "fedora" ] || [ "$VERSION" = "24.04" ]; then
+          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
+          if [ "$VERSION" = "24.04" ]; then
             PYTHON_VERSION="3.12"
           else
             PYTHON_VERSION="3.10"
@@ -525,6 +630,10 @@ jobs:
     secrets: inherit
     with:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
-      docker-image: ${{ inputs.manylinux-docker-image || needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      docker-image: >-
+        ${{ inputs.manylinux-docker-image ||
+            needs.build-docker-image.outputs.manylinux-tag ||
+            'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
+      enable-lto: ${{ inputs.enable-lto || false }}

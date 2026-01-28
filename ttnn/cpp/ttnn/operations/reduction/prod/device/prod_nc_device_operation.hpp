@@ -9,15 +9,15 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::prod_nc {
+namespace ttnn::prim {
 
 struct ProdNcDeviceOperation {
     using operation_attributes_t = ProdNcParams;
     using tensor_args_t = ProdNcInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::ProdNcProgramFactory>;
-    using shared_variables_t = program::ProdNcProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<ProdNcProgramFactory>;
+    using shared_variables_t = ProdNcProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -30,8 +30,6 @@ struct ProdNcDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::reduction::prod_nc
-
-namespace ttnn::prim {
 ttnn::Tensor prod_nc(const ttnn::Tensor& input, const ttnn::Tensor& output, int64_t dim);
+
 }  // namespace ttnn::prim

@@ -15,15 +15,15 @@
 
 #include "dropout_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::dropout {
+namespace ttnn::experimental::prim {
 
 struct DropoutDeviceOperation {
     using operation_attributes_t = DropoutParams;
     using tensor_args_t = DropoutInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::DropoutProgramFactory, program::DropoutMeshWorkloadFactory>;
-    using shared_variables_t = program::DropoutProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<DropoutProgramFactory, DropoutMeshWorkloadFactory>;
+    using shared_variables_t = DropoutProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -37,11 +37,11 @@ struct DropoutDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
+ttnn::experimental::prim::DropoutDeviceOperation::tensor_return_value_t dropout(
     const Tensor& input,
     float prob,
     float scale,

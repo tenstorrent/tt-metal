@@ -202,12 +202,12 @@ struct Mcast {
     // ========================================================================
 
     // Sender CTArgs (BRISC): mcast_num_cores, is_part_of_receiver_grid
-    // loopback is inferred: if sender is part of receiver grid, it needs loopback to receive its own mcast
-    template <uint32_t McastNumCores, bool IsPartOfReceiverGrid>
+    // If sender is part of receiver grid, it needs loopback to receive its own mcast
+    template <uint32_t McastNumCores, bool IsPartOfReceiverGrid, bool Loopback>
     struct SenderCTArgs {
         static constexpr uint32_t mcast_num_cores = McastNumCores;
         static constexpr bool is_part_of_receiver_grid = IsPartOfReceiverGrid;
-        static constexpr bool loopback = IsPartOfReceiverGrid;  // Inferred from is_part_of_receiver_grid
+        static constexpr bool loopback = Loopback;
     };
 
     // Receiver CTArgs (NCRISC): none needed

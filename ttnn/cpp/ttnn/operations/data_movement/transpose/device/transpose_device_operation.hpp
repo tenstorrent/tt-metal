@@ -19,22 +19,22 @@
 
 #include <variant>
 
-namespace ttnn::operations::data_movement::transpose {
+namespace ttnn::prim {
 
 struct TransposeDeviceOperation {
     using operation_attributes_t = TransposeParams;
     using tensor_args_t = TransposeInputs;
-    using spec_return_value_t = transpose::spec_return_value_t;
-    using tensor_return_value_t = transpose::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::TransposeWHProgramFactory,
-        program::TransposeWHShardedProgramFactory,
-        program::TransposeWHShardedRMProgramFactory,
-        program::TransposeHCTiledInterleavedProgramFactory,
-        program::TransposeHCTiledProgramFactory,
-        program::TransposeHCRMProgramFactory,
-        program::TransposeHCShardedProgramFactory,
-        program::TransposeCNProgramFactory>;
+        TransposeWHProgramFactory,
+        TransposeWHShardedProgramFactory,
+        TransposeWHShardedRMProgramFactory,
+        TransposeHCTiledInterleavedProgramFactory,
+        TransposeHCTiledProgramFactory,
+        TransposeHCRMProgramFactory,
+        TransposeHCShardedProgramFactory,
+        TransposeCNProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -58,12 +58,12 @@ struct TransposeDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::transpose
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 ttnn::Tensor transpose(
     const Tensor& input_tensor,
-    ttnn::operations::data_movement::transpose::TransposeOpDim dim,
+    ttnn::prim::TransposeOpDim dim,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     float pad_value = 0.0f);
 }  // namespace ttnn::prim

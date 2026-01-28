@@ -37,7 +37,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     # Mcast/gather core coordinates (same as RMSNorm input core)
     mcast_core_x = matmul2_grid_x - 1  # 11 for P150, 10 for non-P150
-    mcast_core_y = 8
+    mcast_core_y = 9
 
     tile = ttnn.Tile([1, 32])
 

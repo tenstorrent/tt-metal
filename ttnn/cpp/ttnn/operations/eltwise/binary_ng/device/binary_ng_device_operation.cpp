@@ -5,6 +5,7 @@
 #include "binary_ng_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
@@ -44,7 +45,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_OR:
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
-        case DIV_TRUNC: return (a == INT32 && b == INT32);
+        case DIV_TRUNC:
+        case REMAINDER:
+        case FMOD: return (a == INT32 && b == INT32);
         case QUANT:
         case REQUANT:
         case DEQUANT:

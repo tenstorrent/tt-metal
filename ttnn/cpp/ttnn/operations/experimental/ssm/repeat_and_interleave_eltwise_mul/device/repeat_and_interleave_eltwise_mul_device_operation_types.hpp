@@ -7,7 +7,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
 
-namespace ttnn::operations::experimental::ssm::repeat_mul {
+namespace ttnn::experimental::prim {
+
+inline constexpr uint32_t HIDDEN_SIZE = 5120;
 
 struct RepeatMulParams {
     const tt::tt_metal::MemoryConfig memory_config;
@@ -21,4 +23,4 @@ struct RepeatMulInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::ssm::repeat_mul
+}  // namespace ttnn::experimental::prim

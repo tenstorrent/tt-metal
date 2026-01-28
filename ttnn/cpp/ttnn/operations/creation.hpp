@@ -14,11 +14,12 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn {
 

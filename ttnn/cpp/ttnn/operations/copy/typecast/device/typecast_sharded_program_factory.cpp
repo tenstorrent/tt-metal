@@ -8,13 +8,13 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::copy::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -158,9 +158,9 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
 void TypecastShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const TypecastParams& /*operation_attributes*/,
+    const TypecastInputs& tensor_args,
+    Tensor& output) {
     auto& program = cached_program.program;
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
@@ -171,4 +171,4 @@ void TypecastShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::copy::program
+}  // namespace ttnn::prim

@@ -6,12 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
-struct ReductionParams {};
+struct IntImgParams {};
 
-struct ReductionInputs {
-    const Tensor& input_tensor;
-};
-
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim

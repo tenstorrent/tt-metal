@@ -1,16 +1,32 @@
 name: "Build tt-metal docker artifact"
 
+# =============================================================================
+# NAMING CONVENTION: Docker Image Tags
+# =============================================================================
+# This workflow outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag)
+# to indicate these are Docker image tags that were built/verified.
+#
+# Consuming workflows (like build-artifact.yaml) accept these values via
+# inputs with the "-docker-image" suffix (e.g., ci-build-docker-image) to
+# indicate these are pre-built Docker images to use.
+#
+# Example usage:
+#   build-docker-images:
+#     uses: ./.github/workflows/build-docker-artifact.yaml
+#   build:
+#     uses: ./.github/workflows/build-artifact.yaml
+#     with:
+#       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+# =============================================================================
+
 on:
   workflow_call:
     inputs:
-      distro:
+      platform:
         required: false
         type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "20.04"
+        default: "Ubuntu 22.04"
+        description: "Platform to build Docker images for"
       architecture:
         required: false
         type: string
@@ -81,8 +97,6 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          distro: ${{ inputs.distro }}
-          version: ${{ inputs.version }}
 
       - name: Set environment variables
         run: |
@@ -101,6 +115,7 @@ jobs:
         id: tags
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
+          # TODO: VALIDATE POST MERGE
           DISTRO="${{ steps.platform.outputs.distro }}"
 
           # Select dockerfile based on distro
@@ -163,7 +178,7 @@ jobs:
             echo "manylinux-exists=false" >> $GITHUB_OUTPUT
           fi
 
-  # Build Ubuntu images (runs in parallel with Fedora and ManyLinux)
+  # Build Ubuntu images
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
     needs: check-docker-images

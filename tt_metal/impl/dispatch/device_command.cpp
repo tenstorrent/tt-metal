@@ -178,6 +178,27 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_ad
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_h(
+    uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr) {
+    uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
+    auto initialize_relay_linear_h_cmd = [&](CQPrefetchCmdLarge* relay_linear_h_cmd) {
+        relay_linear_h_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
+        relay_linear_h_cmd->relay_linear_h.noc_xy_addr = noc_xy_addr;
+        relay_linear_h_cmd->relay_linear_h.length = lengthB;
+        relay_linear_h_cmd->relay_linear_h.addr = addr;
+    };
+    CQPrefetchCmdLarge* relay_linear_h_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmdLarge relay_linear_h_cmd{};
+        initialize_relay_linear_h_cmd(&relay_linear_h_cmd);
+        this->memcpy(relay_linear_h_cmd_dst, &relay_linear_h_cmd, sizeof(CQPrefetchCmdLarge));
+    } else {
+        initialize_relay_linear_h_cmd(relay_linear_h_cmd_dst);
+    }
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_paged(
     uint8_t is_dram,
     uint8_t start_page,

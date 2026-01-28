@@ -8,15 +8,16 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <algorithm>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused {
+namespace ttnn::experimental::prim {
 
 AllGatherConcatDeviceOperation::program_factory_t AllGatherConcatDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::AllGatherConcatMeshWorkloadFactory{};
+    return AllGatherConcatMeshWorkloadFactory{};
 }
 
 void AllGatherConcatDeviceOperation::validate_on_program_cache_hit(
@@ -113,27 +114,20 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::AllGatherConcatDeviceOperation::
-    tensor_return_value_t
-    all_gather_concat(
-        const Tensor& input_tensor,
-        Tensor& buffer_tensor,
-        int32_t dim,
-        uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        const GlobalSemaphore& global_semaphore,
-        uint32_t num_heads,
-        const MemoryConfig& memory_config,
-        bool use_noc1_only,
-        std::optional<uint32_t> num_links,
-        ttnn::ccl::Topology topology,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType =
-        ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::AllGatherConcatDeviceOperation;
+Tensor all_gather_concat(
+    const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    int32_t dim,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const GlobalSemaphore& global_semaphore,
+    uint32_t num_heads,
+    const MemoryConfig& memory_config,
+    bool use_noc1_only,
+    std::optional<uint32_t> num_links,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    using OperationType = AllGatherConcatDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
@@ -163,4 +157,4 @@ ttnn::operations::experimental::ccl::all_gather_concat_heads_fused::AllGatherCon
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::experimental::prim

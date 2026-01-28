@@ -25,7 +25,13 @@ Tensor CumprodOperation::invoke(
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
     return common::accumulation_invoke(
-        input_tensor, dim, dtype, std::move(optional_out), reverse_order, memory_config, AccumulationOp::CUMPROD);
+        input_tensor,
+        dim,
+        dtype,
+        std::move(optional_out),
+        reverse_order,
+        memory_config,
+        ttnn::prim::AccumulationOp::CUMPROD);
 }
 
 }  // namespace ttnn::operations::reduction::accumulation

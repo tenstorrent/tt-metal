@@ -19,6 +19,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_datacopy_bfp8b.cpp
     test_datacopy_output_in_l1.cpp
     test_dataflow_cb.cpp
+    test_dm_loopback.cpp
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
     test_eltwise_binary.cpp
@@ -28,6 +29,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
     test_multi_core_kernel.cpp
+    test_multi_dm_add_two_ints.cpp
     test_multiple_programs.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
@@ -90,6 +92,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/jit_build)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc_debugging)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
@@ -109,6 +112,7 @@ add_custom_target(
         unit_tests_integration
         unit_tests_llk
         unit_tests_noc
+        unit_tests_noc_debugging
         unit_tests_lightmetal
         unit_tests_sfpi
         unit_tests_misc

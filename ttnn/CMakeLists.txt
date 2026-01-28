@@ -62,7 +62,22 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
+        FILES
+            api/ttnn/tensor/layout/layout.hpp
+            cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+            cpp/ttnn/kernel/compute/eltwise_copy.cpp
+            cpp/ttnn/kernel/compute/moreh_common.hpp
+            cpp/ttnn/kernel/compute/tilize.cpp
+            cpp/ttnn/kernel/compute/transpose_wh.cpp
+            cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+            cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
+            cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
+            cpp/ttnn/kernel/dataflow/moreh_common.hpp
+            cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
+            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
+            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+            cpp/ttnn/kernel/kernel_common_utils.hpp
+            cpp/ttnn/kernel/kernel_utils.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -216,6 +231,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
@@ -312,6 +328,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
@@ -366,6 +383,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.cpp
 )
 
 set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
@@ -516,6 +534,7 @@ target_sources(
             api/ttnn/tensor/tensor.hpp
             api/ttnn/tensor/tensor_attributes.hpp
             api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_ops.hpp
             api/ttnn/tensor/tensor_spec.hpp
             api/ttnn/tensor/tensor_utils.hpp
             api/ttnn/tensor/to_string.hpp
@@ -553,6 +572,7 @@ target_sources(
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/typecast.cpp
 )
@@ -823,7 +843,6 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
-add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)

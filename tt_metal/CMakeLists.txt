@@ -116,6 +116,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/tensor/host_tensor.hpp
+    api/tt-metalium/experimental/tensor/device_tensor.hpp
 )
 target_sources(
     tt_metal
@@ -256,6 +258,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        dfb
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
@@ -345,6 +348,7 @@ set_target_properties(
 
 add_subdirectory(fabric)
 add_subdirectory(experimental/udm)
+add_subdirectory(experimental/dataflow_buffer)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

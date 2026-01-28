@@ -54,3 +54,8 @@ fi
 echo "Running MGD generation tests..."
 ./build/test/tools/scaleout/test_cabling_descriptor_mgd_generation
 echo "MGD generation tests finished"
+
+# Descriptor merger tests (tests for merging cabling descriptors)
+echo "Running descriptor merger tests..."
+TT_METAL_LOGGER_LEVEL=Fatal ./build/test/tools/scaleout/test_descriptor_merger
+echo "Descriptor merger tests finished"

@@ -47,7 +47,7 @@ ALWI void custom_mm_block_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
@@ -63,6 +63,16 @@ ALWI void custom_mm_block_init(
  * For K-dimension optimization (ct_dim=1, rt_dim=1, kt_dim>1), this will use
  * a single MOP replay that handles up to 128 K tiles, eliminating software loop overhead.
  *
+ * Template parameter partial_acc:
+ *   false (default): Full custom_mm - MVMULs + finalization (MOVD2A/MOVD2B/ELWADD)
+ *   true: Partial K accumulation - MVMULs only, no finalization (for intermediate K subblocks)
+ *
+ * Usage pattern for partial K:
+ *   for (k = 0; k < num_k_subblocks - 1; k++) {
+ *     custom_mm_block<true>(...);  // Accumulate without finalization
+ *   }
+ *   custom_mm_block<false>(...);  // Final K subblock with finalization
+ *
  * Return value: None
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
@@ -74,8 +84,10 @@ ALWI void custom_mm_block_init(
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
+ * | in1_k_stride   | Stride between K tiles in in1 CB (default 1 for contiguous K tiles).    | uint32_t | >= 1                                           | False    |
  */
 // clang-format on
+template <bool partial_acc = false>
 ALWI void custom_mm_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -83,9 +95,10 @@ ALWI void custom_mm_block(
     uint32_t in1_tile_index,
     uint32_t idst,
     const uint32_t transpose,
-    uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_custom_mm(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim)));
-    MATH((llk_math_custom_mm<MATH_FIDELITY>(idst, transpose, kt_dim)));
+    uint32_t kt_dim,
+    uint32_t in1_k_stride = 1) {
+    UNPACK((llk_unpack_AB_custom_mm(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, in1_k_stride)));
+    MATH((llk_math_custom_mm<MATH_FIDELITY, partial_acc>(idst, transpose, kt_dim)));
 }
 
 ALWI void custom_mm_block_unpack(

@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::dropout {
+namespace ttnn::experimental::prim {
 
 struct DropoutParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
@@ -26,4 +26,4 @@ struct DropoutInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::experimental::prim

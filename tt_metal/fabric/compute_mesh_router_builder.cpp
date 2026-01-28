@@ -283,10 +283,12 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
 
     bool I_am_ew = builder::is_east_or_west(direction);
     bool I_am_ns = builder::is_north_or_south(direction);
+    bool I_am_z = direction == eth_chan_directions::Z;
 
     TT_FATAL(
-        I_am_ew ^ I_am_ns,
-        "Internal error: In compute_sender_channel_injection_flags_for_vc, I_am_ew and I_am_ns cannot both be true");
+        I_am_ew + I_am_ns + I_am_z == 1,
+        "Internal error: In compute_sender_channel_injection_flags_for_vc, exactly one of I_am_ew, I_am_ns, and I_am_z "
+        "must be true");
 
     for (size_t ch_idx = 1; ch_idx < num_channels; ++ch_idx) {
         // Map to VC0 equivalent channel for direction lookup

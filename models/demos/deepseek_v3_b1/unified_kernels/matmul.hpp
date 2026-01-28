@@ -19,7 +19,7 @@
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// Matmul micro-op with configurable output width (up to 4)
+// Matmul micro-op with configurable output width (supports large out_w via blocking)
 //
 // Computes: output[1,out_w] = in0[1,K] @ in1[K,out_w]
 //
@@ -106,42 +106,50 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w == 1) {
-                // Use optimized custom_mm API for single output tile with K-dimension reduction
+            if constexpr (out_w <= 8) {
+                // Use optimized custom_mm API for up to 8 output tiles (half-DST)
                 custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
 
                 tile_regs_acquire();
 
-                // Single call handles all K tiles internally via MOP replay
-                custom_mm_block(args.in0, args.in1, 0, 0, 0, transpose, args.k_num_tiles);
-
-                tile_regs_commit();
-
-                // Pack output tile
-                tile_regs_wait();
-                pack_tile(0, args.out, 0);
-                tile_regs_release();
-            } else {
-                // Use standard matmul API for multiple output tiles
-                mm_block_init(args.in0, args.in1, args.out, transpose, out_subblock_w, out_subblock_h, in0_block_w);
-
-                tile_regs_acquire();
-
-                for (uint32_t k = 0; k < args.k_num_tiles; k++) {
-                    for (uint32_t w = 0; w < out_w; w++) {
-                        // Each output tile w accumulates into DST[w]
-                        matmul_tiles(args.in0, args.in1, k, k * out_w + w, w);
-                    }
+                for (uint32_t w = 0; w < out_w; w++) {
+                    custom_mm_block(args.in0, args.in1, 0, w, w, transpose, args.k_num_tiles, out_w);
                 }
 
                 tile_regs_commit();
 
-                // Pack all output tiles
                 tile_regs_wait();
                 for (uint32_t w = 0; w < out_w; w++) {
                     pack_tile(w, args.out, w);
                 }
                 tile_regs_release();
+            } else {
+                // Use optimized custom_mm API with blocking for out_w > 8
+                // Process in blocks of 8 tiles (half-DST with SyncHalf mode)
+                constexpr uint32_t dst_tiles = 8;  // Half-DST for reliable blocking
+                constexpr uint32_t num_blocks = (out_w + dst_tiles - 1) / dst_tiles;
+
+                for (uint32_t block = 0; block < num_blocks; block++) {
+                    uint32_t block_start = block * dst_tiles;
+                    uint32_t tiles_in_block = ((block_start + dst_tiles) < out_w) ? dst_tiles : (out_w - block_start);
+
+                    // Re-init for each block to reset MOP state
+                    custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+
+                    tile_regs_acquire();
+
+                    for (uint32_t w = 0; w < tiles_in_block; w++) {
+                        custom_mm_block(args.in0, args.in1, 0, block_start + w, w, transpose, args.k_num_tiles, out_w);
+                    }
+
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    for (uint32_t w = 0; w < tiles_in_block; w++) {
+                        pack_tile(w, args.out, block_start + w);
+                    }
+                    tile_regs_release();
+                }
             }
 
             // Pop inputs

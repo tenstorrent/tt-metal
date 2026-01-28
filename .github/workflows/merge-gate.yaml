@@ -76,7 +76,7 @@ jobs:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      version: 24.04
+      platform: "Ubuntu 24.04"
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
@@ -119,7 +119,8 @@ jobs:
     with:
       build-type: Release
       build-wheel: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: false
       skip-tt-train: false
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
@@ -141,7 +142,7 @@ jobs:
     secrets: inherit
     with:
       build-type: TSan
-      version: 24.04
+      platform: "Ubuntu 24.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
@@ -230,7 +231,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ASan
-      version: 22.04
+      platform: "Ubuntu 22.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false

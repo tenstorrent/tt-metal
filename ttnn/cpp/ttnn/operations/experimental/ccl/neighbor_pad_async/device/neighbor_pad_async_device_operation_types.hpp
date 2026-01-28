@@ -12,9 +12,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::neighbor_pad {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct NeighborPadAsyncParams {
     uint32_t dim = 0;
     uint32_t padding_left = 0;
     uint32_t padding_right = 0;
@@ -30,7 +30,7 @@ struct operation_attributes_t {
     std::optional<std::vector<uint32_t>> secondary_mesh_shape;
 
     // Constructor required because GlobalSemaphore is not default constructible
-    operation_attributes_t(
+    NeighborPadAsyncParams(
         uint32_t dim,
         uint32_t padding_left,
         uint32_t padding_right,
@@ -78,9 +78,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
-   Tensor input_tensor;
+struct NeighborPadAsyncInputs {
+    Tensor input_tensor;
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::experimental::prim

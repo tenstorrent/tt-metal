@@ -7,7 +7,7 @@
 #include "conv3d_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::conv3d::program {
+namespace ttnn::experimental::prim {
 
 struct Conv3dSharedVariables {
     uint32_t num_cores = 0;
@@ -32,4 +32,4 @@ struct Conv3dProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::conv3d::program
+}  // namespace ttnn::experimental::prim

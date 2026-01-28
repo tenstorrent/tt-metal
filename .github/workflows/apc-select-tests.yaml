@@ -3,26 +3,6 @@ name: "(APC) Select and Run Post-Commit Tests"
 on:
   workflow_dispatch:
     inputs:
-      build-type:
-        description: "Build type"
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: Release
-      platform:
-        description: "Platform to build and test"
-        required: false
-        type: choice
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-          - "Fedora 43"
-        default: "Ubuntu 22.04"
       tests-json:
         description: |
           JSON object specifying which tests to run.
@@ -50,6 +30,31 @@ on:
         required: false
         default: false
         type: boolean
+      platform:
+        description: "Platform to build and test"
+        required: false
+        type: choice
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        default: "Ubuntu 22.04"
+      build-type:
+        description: "Build type"
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
+      enable-lto:
+        description: "Enable Link Time Optimization (LTO)"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   parse-tests-json:
@@ -64,24 +69,10 @@ jobs:
           TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
           echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
 
-  # Parse platform dropdown to extract distro/version
-  parse-platform:
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - id: parse
-        uses: ./.github/actions/parse-platform
-        with:
-          platform: ${{ inputs.platform }}
-
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: [parse-tests-json, parse-platform]
+    needs: [parse-tests-json]
     if: ${{ always() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -91,10 +82,10 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
+      platform: ${{ inputs.platform }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
+      enable-lto: ${{ inputs.enable-lto || false }}
 
   sd-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -246,7 +237,7 @@ jobs:
 
   run-profiler-regression:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -303,7 +294,7 @@ jobs:
 
   triage-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'triage-tests') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'triage-tests') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
     secrets: inherit
     strategy:
       fail-fast: false

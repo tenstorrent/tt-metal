@@ -6,17 +6,10 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotate_half {
+namespace ttnn::experimental::prim {
 
 struct RotateHalfParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct RotateHalfInputs {
-    Tensor input;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::rotate_half
+}  // namespace ttnn::experimental::prim

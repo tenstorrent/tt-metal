@@ -6,6 +6,11 @@ on:
     - cron: "0 0 * * *"
 
   workflow_dispatch:
+    inputs:
+      enable-lto:
+        default: false
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
 
 permissions:
   actions: read
@@ -22,19 +27,9 @@ jobs:
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04", "Fedora 43"]
-        include:
-          - platform: "Ubuntu 22.04"
-            distro: ubuntu
-            version: "22.04"
-          - platform: "Ubuntu 24.04"
-            distro: ubuntu
-            version: "24.04"
-          - platform: "Fedora 43"
-            distro: fedora
-            version: "43"
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
-      distro: ${{ matrix.distro }}
-      version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
+      enable-lto: ${{ inputs.enable-lto || false }}

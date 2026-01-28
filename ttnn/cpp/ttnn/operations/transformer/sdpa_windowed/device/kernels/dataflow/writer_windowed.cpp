@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
@@ -61,34 +61,23 @@ void kernel_main() {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 uint32_t q_chunk = local_q_start + q_iter;
 
-                // Wait for compute to deliver output chunk
                 /*
-                Determine how many rows of OUT will be written. Both start and end rows are
-                capped by valid_Sqt, since Sq padding is independent of Sk padding.
+                  Determine how many rows of OUT will be written. Both start and end rows are
+                  capped by valid_Sqt, since Sq padding is independent of Sk padding.
                 */
                 const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                 const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                 const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                 uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, out_row_start_tile, 0);
-
-                cb_wait_front(cb_out, out_chunk_tiles);
-                barrier_count = 0;
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
-                for (uint32_t row = 0; row < out_row_tile_count; ++row) {
-                    for (uint32_t col = 0; col < DHt; ++col) {
-                        uint64_t dst_noc_addr = out_writer.get_noc_addr(out_tile_id);
-                        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
-                        ++out_tile_id;
-                        l1_read_addr += tile_bytes;
-
-                        if (++barrier_count == barrier_threshold) {
-                            noc_async_writes_flushed();
-                            barrier_count = 0;
-                        }
-                    }
-                }
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, out_chunk_tiles);
+                write_block(
+                    out_writer,
+                    cb_out,
+                    out_chunk_tiles,
+                    out_row_tile_count,
+                    DHt,
+                    out_tile_id,
+                    tile_bytes,
+                    barrier_threshold);
             }
         }
     }

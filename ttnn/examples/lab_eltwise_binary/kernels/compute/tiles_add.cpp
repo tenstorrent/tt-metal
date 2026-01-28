@@ -8,8 +8,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Note: The argument index to get_compile_time_arg_val() must be a compile time constant.
     uint32_t n_tiles = get_compile_time_arg_val(0);
 
@@ -77,4 +76,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

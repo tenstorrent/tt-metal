@@ -7,7 +7,7 @@
 #include "upsample_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::pool::upsample::program {
+namespace ttnn::prim {
 
 struct UpsampleNearestFloatSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -22,13 +22,13 @@ struct UpsampleNearestFloatProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor);
+        const UpsampleParams& operation_attributes, const Tensor& input, Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const UpsampleParams& operation_attributes,
-        const UpsampleInputs& tensor_args,
+        const Tensor& input,
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::pool::upsample::program
+}  // namespace ttnn::prim

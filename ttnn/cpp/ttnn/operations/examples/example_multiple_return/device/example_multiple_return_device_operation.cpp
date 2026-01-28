@@ -4,6 +4,7 @@
 
 #include "example_multiple_return_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::examples {
 

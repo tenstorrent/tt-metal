@@ -1,7 +1,13 @@
 name: "Build all Docker images"
-# This workflow builds all Docker images needed by the CI pipeline in parallel.
-# It should be called once at the start of the pipeline, and all subsequent jobs
-# should use the pre-built images via the outputs.
+# =============================================================================
+# This workflow builds ALL Docker images needed by the CI pipeline in parallel.
+# It should be called once at the start of the pipeline (e.g., by merge-gate.yaml),
+# and all subsequent jobs should use the pre-built images via the outputs.
+#
+# NAMING CONVENTION: Outputs use "ubuntu-XXXX-*-tag" format to distinguish
+# platform-specific images. These map to build-artifact.yaml inputs like:
+#   ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+# =============================================================================
 
 on:
   workflow_call:

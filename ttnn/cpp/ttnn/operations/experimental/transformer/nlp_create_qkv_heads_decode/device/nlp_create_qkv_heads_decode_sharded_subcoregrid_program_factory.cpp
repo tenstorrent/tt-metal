@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::cached_program_t
 NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
@@ -317,4 +317,4 @@ void NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::override_runtime_a
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program
+}  // namespace ttnn::experimental::prim

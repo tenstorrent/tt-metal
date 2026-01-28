@@ -162,8 +162,7 @@ static void CompareKernelVsXArray(
         auto rstd_tensor = core::from_xtensor(rstd_data, &autograd::ctx().get_device());
         auto dy_tensor = core::from_xtensor(dy_4d, &autograd::ctx().get_device());
 
-        auto output_tensors = metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke(
-            input_tensor, gamma_tensor, mean_tensor, rstd_tensor, dy_tensor);
+        auto output_tensors = metal::layernorm_bw(input_tensor, gamma_tensor, mean_tensor, rstd_tensor, dy_tensor);
 
         auto metal_dx_xtensor = core::to_xtensor(output_tensors[0].value());
         auto metal_dgamma_xtensor = core::to_xtensor(output_tensors[1].value());

@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode {
+namespace ttnn::experimental::prim {
 
 struct NlpCreateQkvHeadsDecodeParams {
     uint32_t num_q_heads;
@@ -23,8 +23,4 @@ struct NlpCreateQkvHeadsDecodeInputs {
     std::optional<Tensor> batch_offset;
 };
 
-using tensor_return_value_t = std::vector<Tensor>;
-
-using spec_return_value_t = std::vector<TensorSpec>;
-
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
+}  // namespace ttnn::experimental::prim

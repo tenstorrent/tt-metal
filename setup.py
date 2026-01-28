@@ -195,7 +195,7 @@ class CMakeBuild(build_ext):
     def get_build_env():
         return {
             **os.environ.copy(),
-            "CXX": "clang++-17",
+            "CXX": "clang++-20",
         }
 
     @staticmethod
@@ -262,6 +262,14 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=OFF",
+                        ]
+                    )
+
+                # Add LTO flags if enabled
+                if os.environ.get("CIBW_ENABLE_LTO") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DTT_ENABLE_LTO=ON",
                         ]
                     )
 
@@ -333,7 +341,7 @@ class CMakeBuild(build_ext):
             "api/ttnn/tensor/enum_types.hpp",
         ]
         ttnn_cpp_patterns = [
-            "ttnn/deprecated/**/kernels/**/*",
+            "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
             "ttnn/operations/kernel_helper_functions/*",

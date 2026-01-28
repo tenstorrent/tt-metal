@@ -11,13 +11,13 @@
 #include "nlp_concat_heads_boltz_device_operation_types.hpp"
 #include "nlp_concat_heads_boltz_program_factory.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
+namespace ttnn::experimental::prim {
 
 struct NLPConcatHeadsBoltzDeviceOperation {
-    using operation_attributes_t = nlp_concat_heads_boltz::operation_attributes_t;
-    using tensor_args_t = nlp_concat_heads_boltz::tensor_args_t;
-    using spec_return_value_t = nlp_concat_heads_boltz::spec_return_value_t;
-    using tensor_return_value_t = nlp_concat_heads_boltz::tensor_return_value_t;
+    using operation_attributes_t = NLPConcatHeadsBoltzParams;
+    using tensor_args_t = NLPConcatHeadsBoltzInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NLPConcatHeadsBoltzProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -31,10 +31,10 @@ struct NLPConcatHeadsBoltzDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::nlp_concat_heads_boltz::tensor_return_value_t nlp_concat_heads_boltz(
+Tensor nlp_concat_heads_boltz(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& memory_config,
     std::optional<Tensor> optional_output_tensor);

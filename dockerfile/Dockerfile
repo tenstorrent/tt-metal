@@ -49,15 +49,15 @@ RUN chmod +x /tmp/install-clang-build-analyzer.sh
 RUN /tmp/install-clang-build-analyzer.sh
 
 # Install extra ci apt requirements
+# Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
-    libclang-17-dev \
     libclang-20-dev \
     libclang-rt-20-dev \
-    clang-tidy-17 \
     clang-tidy-20 \
     clang-20 \
+    llvm-20 \
     curl \
     dialog \
     file \
@@ -80,8 +80,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN  umask 000 && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
-
+RUN  umask 000 && uv venv --relocatable --python $PYTHON_VERSION $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -91,7 +90,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN uv pip install --no-cache-dir build numpy setuptools
+RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
@@ -138,7 +137,8 @@ RUN umask 000 && \
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
+RUN umask 000 && \
+    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
     ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
     echo "Debugger installation completed" && \
@@ -173,7 +173,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # RUN mkdir -p /tmp/iwyu \
 #     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
 #     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
 #     && cmake --build /tmp/iwyu/build --parallel \
 #     && cmake --install /tmp/iwyu/build \
 #     && rm -rf /tmp/iwyu
@@ -210,7 +210,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+RUN  umask 000 && uv venv --relocatable --python $PYTHON_VERSION $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"

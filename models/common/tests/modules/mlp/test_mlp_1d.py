@@ -188,7 +188,6 @@ def test_mlp_1d_config_defaults():
     # Check defaults
     assert config.max_batch_size == 32
     assert config.mlp_activation_type == ttnn.UnaryOpType.SILU
-    assert config.num_reduce_scatter_links == 1
 
     # Optional fields default to None
     assert config.mesh_device is None
