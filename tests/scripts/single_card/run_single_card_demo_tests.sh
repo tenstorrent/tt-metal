@@ -203,7 +203,7 @@ run_sdxl_func() {
 
 run_distilbert_func() {
 
-  pytest models/demos/wormhole/distilbert/demo/demo.py
+  pytest models/demos/nlp/encoder/distilbert/demo/demo.py
 
 }
 
