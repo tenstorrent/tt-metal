@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
+from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
