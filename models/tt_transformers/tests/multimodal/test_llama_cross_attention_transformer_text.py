@@ -94,10 +94,12 @@ def test_cross_attention_transformer_text_inference(
         torch.set_default_dtype(model_dtype_hf)
         # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
         n_iter = 3
-        config.text_config.num_hidden_layers = 2
-        config.text_config.cross_attention_layers = [0]
-        model_args.n_layers = 1
-        model_args.vision_num_cross_attention_layers = 1
+        if is_ci_env:
+            # In CI, test only 2 layers with 1 cross-attention layer to reduce runtime
+            config.text_config.num_hidden_layers = 2
+            config.text_config.cross_attention_layers = [0]
+            model_args.n_layers = 1
+            model_args.vision_num_cross_attention_layers = 1
         logger.info(
             f"Load and test {model_args.n_layers} layers and {model_args.vision_num_cross_attention_layers} cross attention layer in CI for Llama 90B model"
         )
@@ -127,7 +129,7 @@ def test_cross_attention_transformer_text_inference(
     )
     partial_state_dict.update(lm_head_weights)
 
-    if model_args.is_90b:
+    if model_args.is_90b and is_ci_env:
         partial_state_dict = prune_weights_90b(partial_state_dict, config.text_config.num_hidden_layers)
 
     if model_dtype_hf == torch.float32:
