@@ -46,10 +46,16 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const tt::tt_fabric::Topology topology;
         const AllToAllTransferType impl;
         const uint32_t output_concat_dim;
-        const CoreCoord drain_sync_tilizer_core;  // Core where indices/scores are sharded for selective_tilize
+        // Core where indices/scores are sharded for selective_tilize
+        // Optional: when persistent output tensors are provided, extracted from their shard spec
+        const std::optional<CoreCoord> drain_sync_tilizer_core;
         const WorkerMode worker_mode;           // Worker distribution mode (DIRECT, MUX_TOKEN_SPLIT, MUX_PAYLOAD_SPLIT)
         const CoreRangeSet mux_core_range_set;  // Cores to run mux kernels on (only used if worker_mode uses mux)
         const DispatchAlgorithm dispatch_algorithm;  // Algorithm for routing tokens to destination devices
+        // Note: cross_device_semaphore is NOT included in attribute_names/attribute_values because
+        // GlobalSemaphore contains CoreRangeSet in its attribute_values() which isn't supported by the visitor.
+        // It's still part of the struct for use in the program factory.
+        const std::optional<GlobalSemaphore> cross_device_semaphore;  // Optional external semaphore for persistent mode
         static constexpr auto attribute_names = std::forward_as_tuple(
             "worker_core_range_set",
             "output_mem_config",
@@ -83,6 +89,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const Tensor expert_scores_tensor;
         const Tensor expert_mapping_tensor;
         const std::optional<std::array<Tensor, 3>> optional_output_tensors;
+        // Note: GlobalSemaphore moved to operation_attributes_t because tensor_args_t is visited
+        // by visit_object_of_type<Tensor> and GlobalSemaphore's attribute_values() contains CoreRangeSet
+        // which isn't supported by the visitor.
     };
 
     using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
@@ -95,8 +104,10 @@ struct AllToAllDispatchMetadataDeviceOperation {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle binary_writer_kernel_id;
             std::vector<CoreCoord> cores;
-            const GlobalSemaphore init_semaphore;
+            const std::optional<GlobalSemaphore> init_semaphore;  // Optional - not used in persistent mode
             const GlobalSemaphore cross_device_semaphore;
+            const bool
+                skip_init_semaphore;  // True when using persistent mode (all outputs persistent + external semaphore)
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -112,8 +123,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
+            const std::optional<GlobalSemaphore>& init_semaphore,
+            const GlobalSemaphore& cross_device_semaphore,
+            bool skip_init_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_workload,
@@ -158,8 +170,9 @@ all_to_all_dispatch_metadata(
     const CoreRangeSet& worker_core_range_set,
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim,
-    const CoreCoord& drain_sync_tilizer_core,
+    const std::optional<CoreCoord>& drain_sync_tilizer_core,
     ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,
-    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm);
+    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm,
+    const std::optional<ttnn::GlobalSemaphore>& cross_device_semaphore = std::nullopt);
 }  // namespace ttnn::prim

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -43,7 +44,8 @@ struct ExecuteAllToAllDispatchMetadata {
         WorkerMode worker_mode = WorkerMode::DIRECT,
         DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH,
         const std::optional<CoreRangeSet>& worker_core_range_set = std::nullopt,
-        const std::optional<CoreRangeSet>& mux_core_range_set = std::nullopt);
+        const std::optional<CoreRangeSet>& mux_core_range_set = std::nullopt,
+        const std::optional<GlobalSemaphore>& cross_device_semaphore = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

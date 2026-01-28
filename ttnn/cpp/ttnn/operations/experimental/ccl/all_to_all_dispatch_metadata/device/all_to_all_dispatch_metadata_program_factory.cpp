@@ -168,10 +168,31 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto* mesh_device = tensor_args.input_tensor.device();
 
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    // Determine if we're in persistent mode:
+    // - cross_device_semaphore is provided externally
+    // - all 3 output tensors are provided (persistent buffers)
+    // In this mode, we skip the init_semaphore to avoid the barrier overhead
+    bool skip_init_semaphore =
+        operation_attributes.cross_device_semaphore.has_value() && tensor_args.optional_output_tensors.has_value();
+
+    log_debug(
+        tt::LogOp,
+        "Persistent mode: {} (cross_device_semaphore={}, optional_output_tensors={})",
+        skip_init_semaphore,
+        operation_attributes.cross_device_semaphore.has_value(),
+        tensor_args.optional_output_tensors.has_value());
+
+    std::optional<GlobalSemaphore> init_barrier_semaphore = std::nullopt;
+    GlobalSemaphore final_barrier_semaphore = skip_init_semaphore
+                                                  ? operation_attributes.cross_device_semaphore.value()
+                                                  : ttnn::global_semaphore::create_global_semaphore(
+                                                        mesh_device, operation_attributes.worker_core_range_set, 0);
+
+    if (!skip_init_semaphore) {
+        init_barrier_semaphore =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    }
+
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
@@ -183,7 +204,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             tensor_return_value,
             tensor_coords,
             init_barrier_semaphore,
-            final_barrier_semaphore);
+            final_barrier_semaphore,
+            skip_init_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -198,8 +220,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const std::optional<GlobalSemaphore>& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore,
+    bool skip_init_semaphore) {
     tt::tt_metal::Program program{};
 
     auto input_tensor = tensor_args.input_tensor;
@@ -219,11 +242,12 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_tensor.buffer()->address(),
         metadata_tensor.buffer()->size());
 
-    log_debug(
-        tt::LogOp,
-        "drain_sync_tilizer_core: ({}, {})",
-        operation_attributes.drain_sync_tilizer_core.x,
-        operation_attributes.drain_sync_tilizer_core.y);
+    // drain_sync_tilizer_core is resolved in the invoke function (all_to_all_dispatch_metadata.cpp)
+    // - Either explicitly provided by the caller, OR
+    // - Extracted from persistent output tensor's shard spec
+    // It's guaranteed to have a value by the time we reach here (invoke function errors otherwise)
+    CoreCoord drain_sync_tilizer_core = operation_attributes.drain_sync_tilizer_core.value();
+    log_debug(tt::LogOp, "drain_sync_tilizer_core: ({}, {})", drain_sync_tilizer_core.x, drain_sync_tilizer_core.y);
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -591,6 +615,11 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         log_debug(tt::LogOp, "Using payload split mode with {} workers per link", workers_per_link);
     }
 
+    if (skip_init_semaphore) {
+        writer_defines["SKIP_INIT_SEMAPHORE"] = "1";
+        log_debug(tt::LogOp, "Skipping init semaphore (persistent mode enabled)");
+    }
+
     // Build writer compile-time args - add mux args if enabled
     std::vector<uint32_t> writer_compile_time_args_final = writer_compile_time_args;
     if (use_mux) {
@@ -637,7 +666,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     reader_runtime_args.push_back(0);
 
     // Get drain sync tilizer core NOC coordinates for direct metadata output
-    auto drain_sync_tilizer_core = operation_attributes.drain_sync_tilizer_core;
+    // drain_sync_tilizer_core was already resolved at the start of create_at
     auto drain_sync_tilizer_noc_core = mesh_device->worker_core_from_logical_core(drain_sync_tilizer_core);
 
     // Debug: print address comparison for overlap detection
@@ -647,7 +676,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_tensor.buffer()->address(),
         metadata_tensor.buffer()->size(),
         cross_device_semaphore.address(),
-        init_semaphore.address());
+        init_semaphore.has_value() ? init_semaphore->address() : 0);
     log_debug(
         tt::LogOp,
         "drain_sync_tilizer_core logical: ({}, {}), NOC: ({}, {})",
@@ -699,7 +728,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             metadata_tensor.buffer()->address(),
             scores_out_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
-            (uint32_t)init_semaphore.address(),
+            init_semaphore.has_value() ? (uint32_t)init_semaphore->address() : 0,  // 0 when skipping init semaphore
         };
         uint32_t writer_token_start_idx = writer_runtime_args.size();
         writer_runtime_args.push_back(0);
@@ -845,7 +874,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
          .binary_writer_kernel_id = binary_writer_kernel_id,
          .cores = sender_cores,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+         .cross_device_semaphore = cross_device_semaphore,
+         .skip_init_semaphore = skip_init_semaphore}};
 }
 
 void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::override_runtime_arguments(
@@ -883,7 +913,10 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
             writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(6) = scores_out_tensor.buffer()->address();
             writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            // init_semaphore is optional - only update if it exists (not in persistent mode)
+            if (shared_variables.init_semaphore.has_value()) {
+                writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore->address();
+            }
         }
     }
 }

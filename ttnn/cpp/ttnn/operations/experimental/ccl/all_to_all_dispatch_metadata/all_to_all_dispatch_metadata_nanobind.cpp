@@ -120,7 +120,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                WorkerMode worker_mode,
                DispatchAlgorithm dispatch_algorithm,
                const std::optional<CoreRangeSet>& worker_core_range_set,
-               const std::optional<CoreRangeSet>& mux_core_range_set) /*-> std::array*/ {
+               const std::optional<CoreRangeSet>& mux_core_range_set,
+               const std::optional<GlobalSemaphore>& cross_device_semaphore) /*-> std::array*/ {
                 std::optional<CoreCoord> drain_core = std::nullopt;
                 if (drain_sync_tilizer_core.has_value()) {
                     drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
@@ -140,7 +141,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                     worker_mode,
                     dispatch_algorithm,
                     worker_core_range_set,
-                    mux_core_range_set);
+                    mux_core_range_set,
+                    cross_device_semaphore);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
@@ -157,7 +159,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             nb::arg("worker_mode") = WorkerMode::DIRECT,
             nb::arg("dispatch_algorithm") = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH,
             nb::arg("worker_core_range_set") = nb::none(),
-            nb::arg("mux_core_range_set") = nb::none()});
+            nb::arg("mux_core_range_set") = nb::none(),
+            nb::arg("cross_device_semaphore") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

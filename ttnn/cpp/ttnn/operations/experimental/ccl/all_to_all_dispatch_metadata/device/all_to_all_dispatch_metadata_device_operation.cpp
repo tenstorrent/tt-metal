@@ -46,6 +46,15 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
 
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
+    // Validate persistent mode: if cross_device_semaphore is provided, all 3 output tensors must be provided
+    // This is required to skip init_semaphore safely - all fabric write targets must be persistent
+    if (operation_attributes.cross_device_semaphore.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_output_tensors.has_value(),
+            "When cross_device_semaphore is provided, all 3 output tensors (tokens, indices, scores) must be provided "
+            "as persistent buffers to enable semaphore-free mode");
+    }
+
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
         const auto& sparse_token_tensor = output_tensors[0];
@@ -60,6 +69,9 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             scores_tensor_out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output scores tensor must be in row major layout");
+
+        // Note: When persistent output tensors are provided, the drain_sync_tilizer_core is extracted
+        // from their shard spec in the program factory. Validation of single-core sharding happens there.
 
         TT_FATAL(
             output_specs[0] == sparse_token_tensor.tensor_spec(),
@@ -161,7 +173,9 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
 
     // Create sharded memory config for indices/scores on drain_sync_tilizer_core
-    CoreCoord drain_core = operation_attributes.drain_sync_tilizer_core;
+    // Use provided drain_sync_tilizer_core, or default to (0, 0) if not provided
+    // (When persistent output tensors are provided, we extract the core from their shard spec instead)
+    CoreCoord drain_core = operation_attributes.drain_sync_tilizer_core.value_or(CoreCoord(0, 0));
     CoreRangeSet drain_core_range_set({CoreRange(drain_core, drain_core)});
 
     auto indices_shard_spec = tt::tt_metal::ShardSpec(
@@ -237,10 +251,11 @@ all_to_all_dispatch_metadata(
     const CoreRangeSet& worker_core_range_set,
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim,
-    const CoreCoord& drain_sync_tilizer_core,
+    const std::optional<CoreCoord>& drain_sync_tilizer_core,
     ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,
-    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm) {
+    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm,
+    const std::optional<ttnn::GlobalSemaphore>& cross_device_semaphore) {
     using OperationType = ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -254,7 +269,8 @@ all_to_all_dispatch_metadata(
             .drain_sync_tilizer_core = drain_sync_tilizer_core,
             .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
-            .dispatch_algorithm = dispatch_algorithm},
+            .dispatch_algorithm = dispatch_algorithm,
+            .cross_device_semaphore = cross_device_semaphore},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

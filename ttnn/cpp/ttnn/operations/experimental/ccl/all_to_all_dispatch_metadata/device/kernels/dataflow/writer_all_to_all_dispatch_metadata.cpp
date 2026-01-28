@@ -1043,16 +1043,20 @@ void kernel_main() {
 
     // Send initialization semaphore to configured targets for synchronization
     // Use bidirectional multicast for 1D ring topology (2 packets instead of dispatch_devices-1 unicasts)
+    // In persistent mode (SKIP_INIT_SEMAPHORE defined), we skip this barrier because:
+    // - All output buffers are persistent, so remote writes won't corrupt data being used
+    // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
+#ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
-    bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
-
+#endif
+    bool needs_barrier = false;
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, 1);
     uint16_t* expert_mapping = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id));

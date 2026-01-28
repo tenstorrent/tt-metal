@@ -144,6 +144,7 @@ def run_all_to_all_dispatch_metadata_test(
     shard_dim=0,
     worker_mode=ttnn.WorkerMode.DIRECT,
     dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+    use_persistent_mode=False,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
@@ -274,6 +275,75 @@ def run_all_to_all_dispatch_metadata_test(
 
     tt_out_tensor_list = []
 
+    # Create persistent output buffers and global semaphores for persistent mode
+    # Only create 1 set of output buffers and 2 semaphores (for double-buffering) to save L1 space
+    persistent_output_buffers = None
+    cross_device_semaphores = []
+
+    if use_persistent_mode:
+        logger.info("Creating persistent output buffers for persistent mode (1 buffer set, 2 semaphores)")
+
+        # Compute output shapes
+        output_tokens_shape = [1, total_tokens, hidden_size]
+        metadata_shape = [1, total_tokens, select_experts_k]
+
+        # Create core range set for worker cores (needed for global semaphore creation)
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        worker_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
+
+        # Create sharded memory config for metadata/scores on drain core
+        drain_core = ttnn.CoreCoord(0, 0)
+        drain_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core, drain_core)})
+        metadata_shard_spec = ttnn.ShardSpec(
+            drain_core_range_set,
+            [total_tokens * devices, select_experts_k],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        metadata_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            metadata_shard_spec,
+        )
+
+        # Create single set of persistent output buffers (reused across all iterations)
+        output_tokens_buffer = ttnn.from_torch(
+            torch.zeros(output_tokens_shape, dtype=tt_to_torch_dtype(dtype)),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+        )
+        logger.info(f"output_tokens_buffer shape: {output_tokens_buffer.shape}")
+
+        metadata_buffer = ttnn.from_torch(
+            torch.zeros(metadata_shape, dtype=torch.int16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=metadata_sharded_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+        )
+        logger.info(f"metadata_buffer shape: {metadata_buffer.shape}")
+        scores_buffer = ttnn.from_torch(
+            torch.zeros(metadata_shape, dtype=tt_to_torch_dtype(dtype)),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=metadata_sharded_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+        )
+        logger.info(f"scores_buffer shape: {scores_buffer.shape}")
+        persistent_output_buffers = (output_tokens_buffer, metadata_buffer, scores_buffer)
+
+        # Create only 2 semaphores for double-buffering (rotate with i % 2)
+        for _ in range(2):
+            cross_device_semaphore = ttnn.create_global_semaphore(mesh_device, worker_core_range_set, 0)
+            cross_device_semaphores.append(cross_device_semaphore)
+
+        logger.info(f"Created 1 persistent buffer set and {len(cross_device_semaphores)} semaphores")
+        ttnn.synchronize_device(mesh_device)
+
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
         tt_metadata_list = []
@@ -281,8 +351,20 @@ def run_all_to_all_dispatch_metadata_test(
 
         for i in range(n_iters):
             buffer_index = i
+
+            # Get optional persistent buffers and semaphore if in persistent mode
+            output_tensors_arg = None
+            cross_device_semaphore_arg = None
+            if use_persistent_mode and persistent_output_buffers is not None:
+                # Use single set of persistent buffers (reused across all iterations)
+                output_tensors_arg = persistent_output_buffers
+                # Rotate through 2 semaphores for double-buffering
+                cross_device_semaphore_arg = cross_device_semaphores[i % 2]
+
             # Use the experimental all_to_all_dispatch_metadata op
             # Returns 3 tensors: output_tensor, indices_tensor, scores_tensor
+            # When using persistent mode, drain_sync_tilizer_core is extracted from the tensor's shard spec
+            # so we don't need to pass it explicitly
             output_tensor, indices_tensor, scores_tensor = ttnn.experimental.all_to_all_dispatch_metadata(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
@@ -292,11 +374,13 @@ def run_all_to_all_dispatch_metadata_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # Use a drain core that's NOT in the sender cores to avoid L1 address overlap
-                # between the metadata tensor and the global semaphore
-                drain_sync_tilizer_core=(0, 0),
+                # Only pass drain_sync_tilizer_core when not using persistent mode
+                # In persistent mode, it's extracted from the tensor's shard spec
+                drain_sync_tilizer_core=None if use_persistent_mode else (0, 0),
                 worker_mode=worker_mode,
                 dispatch_algorithm=dispatch_algorithm,
+                output_tensors=output_tensors_arg,
+                cross_device_semaphore=cross_device_semaphore_arg,
             )
 
             if not trace_mode:
@@ -372,7 +456,15 @@ def run_all_to_all_dispatch_metadata_test(
     failed_metadata_indices = []
     failed_scores_indices = []
 
-    for tensor_index in range(len(tt_out_tensor_list)):
+    # In persistent mode, only verify the last iteration since we reuse the same output buffers
+    # The non-persistent mode test will be used for testing accuracy for all iterations
+    if use_persistent_mode:
+        verification_indices = [len(tt_out_tensor_list) - 1]  # Only last iteration
+        logger.info("Persistent mode: verifying only the last iteration for accuracy")
+    else:
+        verification_indices = range(len(tt_out_tensor_list))  # All iterations
+
+    for tensor_index in verification_indices:
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
@@ -539,6 +631,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "congestion_scheme", ["random_sequential_experts", "worst_congestion_descending", "best_congestion"]
 )
+@pytest.mark.parametrize("use_persistent_mode", [True, False], ids=["persistent", "synced"])
 def test_decode_perf(
     mesh_device,
     mesh_shape,
@@ -554,6 +647,7 @@ def test_decode_perf(
     topology,
     dtype,
     congestion_scheme,
+    use_persistent_mode,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -586,6 +680,7 @@ def test_decode_perf(
         cluster_axis=cluster_axis,
         worker_mode=ttnn.WorkerMode.DIRECT,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        use_persistent_mode=use_persistent_mode,
     )
 
     signpost(header="stop")

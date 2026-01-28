@@ -9,6 +9,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -29,7 +30,8 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     WorkerMode worker_mode,
     DispatchAlgorithm dispatch_algorithm,
     const std::optional<CoreRangeSet>& worker_core_range_set,
-    const std::optional<CoreRangeSet>& mux_core_range_set) {
+    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore) {
     auto* mesh_device = input_tensor.device();
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
@@ -38,8 +40,30 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
 
-    // Default drain_sync_tilizer_core to (0, 0) if not provided
-    CoreCoord drain_core = drain_sync_tilizer_core.value_or(CoreCoord(0, 0));
+    // Resolve drain_sync_tilizer_core:
+    // - If explicitly provided, use it
+    // - If persistent output tensors are provided, extract from their shard spec (must be single core)
+    // - Otherwise, error - one of the above must be provided
+    std::optional<CoreCoord> resolved_drain_sync_tilizer_core = drain_sync_tilizer_core;
+    if (!resolved_drain_sync_tilizer_core.has_value() && optional_output_tensors.has_value()) {
+        // Extract drain core from the metadata tensor's shard spec (indices tensor is at index 1)
+        const auto& indices_out_tensor = optional_output_tensors.value()[1];
+        const auto& shard_spec = indices_out_tensor.memory_config().shard_spec();
+        TT_FATAL(shard_spec.has_value(), "Persistent metadata tensor must have a shard spec");
+        auto cores = tt::tt_metal::corerange_to_cores(shard_spec->grid);
+        TT_FATAL(
+            cores.size() == 1, "Persistent metadata tensor must be sharded on exactly 1 core, got {}", cores.size());
+        resolved_drain_sync_tilizer_core = cores[0];
+        log_debug(
+            tt::LogOp,
+            "Extracted drain_sync_tilizer_core from persistent tensor: ({}, {})",
+            resolved_drain_sync_tilizer_core->x,
+            resolved_drain_sync_tilizer_core->y);
+    }
+    TT_FATAL(
+        resolved_drain_sync_tilizer_core.has_value(),
+        "drain_sync_tilizer_core must be provided explicitly OR persistent output tensors must be provided "
+        "(so drain core can be extracted from their shard spec)");
 
     AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
@@ -67,10 +91,11 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         worker_cores,
         impl,
         output_concat_dim_,
-        drain_core,
+        resolved_drain_sync_tilizer_core,
         worker_mode,
         mux_cores,
-        dispatch_algorithm);
+        dispatch_algorithm,
+        cross_device_semaphore);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
