@@ -34,7 +34,7 @@ sfpi_inline void calculate_fmod_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
