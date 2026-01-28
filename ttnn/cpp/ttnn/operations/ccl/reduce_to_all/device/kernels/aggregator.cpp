@@ -48,19 +48,13 @@ void kernel_main() {
     const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    DPRINT << "Aggregator: buffer_base=" << buffer_base << " offset=" << buffer_offset << ENDL();
-    DPRINT << "Aggregator: r1_sem=" << r1_sem_addr << " r2_sem=" << r2_sem_addr << ENDL();
-
     // Build fabric connection from remaining args
     // Direction is implicit in src→dst encoding from append_fabric_connection_rt_args
-    DPRINT << "Aggregator: Building fabric connection from args..." << ENDL();
     auto fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
     // Complete connection opening
-    DPRINT << "Aggregator: Opening fabric connection..." << ENDL();
     fabric_connection.open();
-    DPRINT << "Aggregator: Fabric connection opened!" << ENDL();
 
     // =========================================================================
     // Compute slot addresses
@@ -79,26 +73,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
 
     // Wait for all workers to deposit their R1 packets
-    DPRINT << "Aggregator: Waiting for R1 semaphore (need " << ct_packets_per_round << ")..." << ENDL();
     noc_semaphore_wait_min(r1_sem_ptr, ct_packets_per_round);
-    DPRINT << "Aggregator: R1 semaphore acquired, forwarding packets..." << ENDL();
-
     // Forward all R1 packets
     for (uint32_t slot = 0; slot < ct_slots_per_round; slot++) {
         const uint32_t slot_addr = r1_base + (slot * ct_slot_size);
 
         // Wait for an empty write slot in fabric
-        DPRINT << "Aggregator: R1 slot " << slot << " waiting for fabric slot..." << ENDL();
         fabric_connection.wait_for_empty_write_slot();
 
         // Send the complete packet (header + payload already prepared by worker)
-        DPRINT << "Aggregator: R1 slot " << slot << " sending..." << ENDL();
         fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, ct_slot_size);
     }
-    DPRINT << "Aggregator: R1 forwarding complete!" << ENDL();
-
-    // Reset R1 semaphore for potential future use (if operation is traced/repeated)
-    noc_semaphore_set(r1_sem_ptr, 0);
 
     // =========================================================================
     // Round 2: Wait for workers, forward packets
@@ -106,31 +91,23 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* r2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
 
     // Wait for all workers to deposit their R2 packets
-    DPRINT << "Aggregator: Waiting for R2 semaphore (need " << ct_packets_per_round << ")..." << ENDL();
     noc_semaphore_wait_min(r2_sem_ptr, ct_packets_per_round);
-    DPRINT << "Aggregator: R2 semaphore acquired, forwarding packets..." << ENDL();
 
     // Forward all R2 packets
     for (uint32_t slot = 0; slot < ct_slots_per_round; slot++) {
         const uint32_t slot_addr = r2_base + (slot * ct_slot_size);
 
         // Wait for an empty write slot in fabric
-        DPRINT << "Aggregator: R2 slot " << slot << " waiting for fabric slot..." << ENDL();
         fabric_connection.wait_for_empty_write_slot();
 
         // Send the complete packet (header + payload already prepared by worker)
-        DPRINT << "Aggregator: R2 slot " << slot << " sending..." << ENDL();
         fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, ct_slot_size);
     }
-    DPRINT << "Aggregator: R2 forwarding complete!" << ENDL();
-
-    // Reset R2 semaphore
-    noc_semaphore_set(r2_sem_ptr, 0);
 
     // =========================================================================
     // Cleanup: Close fabric connection
     // =========================================================================
-    DPRINT << "Aggregator: Closing fabric connection..." << ENDL();
     fabric_connection.close();
-    DPRINT << "Aggregator: Done!" << ENDL();
+
+    noc_async_full_barrier();
 }

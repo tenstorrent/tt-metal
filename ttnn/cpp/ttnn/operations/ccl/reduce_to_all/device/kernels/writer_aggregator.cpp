@@ -32,6 +32,52 @@
 
 using tt::data_movement::common::tt_memmove;
 
+// =============================================================================
+// Helper functions for packet construction and forwarding
+// =============================================================================
+
+/**
+ * Prepare fabric packet header with routing and fused write+atomic_inc command.
+ * No data dependency - can be called before payload data is ready.
+ */
+template <uint32_t l1_alignment, uint32_t total_payload_size>
+FORCE_INLINE void prepare_header(uint32_t header_addr, uint64_t dst_noc, uint64_t sem_noc) {
+    auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+    constexpr uint8_t num_hops = 1;
+
+    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)header, num_hops);
+    header->to_noc_fused_unicast_write_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, 1, false},
+        align(total_payload_size, l1_alignment));
+}
+
+/**
+ * Pack L, S, M data into contiguous packet buffer after header.
+ * Layout: [HEADER][L tiles][S tile aligned][M tile aligned]
+ */
+template <uint32_t payload_size_bytes, uint32_t aligned_page_size>
+FORCE_INLINE void pack_payload(uint32_t slot_addr, uint32_t src_l, uint32_t src_s, uint32_t src_m) {
+    constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    uint32_t payload_start = slot_addr + packet_header_size_bytes;
+    tt_memmove<true, false, false, 0>(payload_start, src_l, payload_size_bytes);
+    tt_memmove<true, false, false, 0>(payload_start + payload_size_bytes, src_s, aligned_page_size);
+    tt_memmove<true, false, false, 0>(payload_start + payload_size_bytes + aligned_page_size, src_m, aligned_page_size);
+}
+
+/**
+ * Forward complete packet (header + payload) to aggregator slot in single NOC transfer.
+ */
+template <uint32_t slot_size>
+FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint64_t agg_sem_noc) {
+    noc_async_write(slot_addr, agg_slot_noc, slot_size);
+    noc_async_writes_flushed();
+    noc_semaphore_inc(agg_sem_noc, 1);
+}
+
+// =============================================================================
+// Main kernel
+// =============================================================================
+
 void kernel_main() {
     // ==========================================================================
     // Compile-time args
@@ -47,20 +93,17 @@ void kernel_main() {
     constexpr uint32_t cb_r1_result_s = get_compile_time_arg_val(6);
     constexpr uint32_t cb_r1_result_m = get_compile_time_arg_val(7);
 
-    // Packet/header CBs
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(9);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(10);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_sync = get_compile_time_arg_val(12);
-    constexpr uint32_t slot_size = get_compile_time_arg_val(13);  // Aggregator slot size
+    // Unified packet slot CB (header + payload in single buffer)
+    constexpr uint32_t cb_packet_slot = get_compile_time_arg_val(8);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(9);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_sync = get_compile_time_arg_val(11);
+    constexpr uint32_t slot_size = get_compile_time_arg_val(12);  // L1-aligned slot size
 
     // Derived constants
     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
     constexpr uint32_t payload_size_bytes = out_tiles * page_size_bytes;  // L payload
     constexpr uint32_t aligned_page_size = ((page_size_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
-    constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-    constexpr uint8_t num_hops = 1;
     constexpr uint32_t total_payload_size = payload_size_bytes + 2 * aligned_page_size;
 
     // ==========================================================================
@@ -93,131 +136,74 @@ void kernel_main() {
     const uint32_t r2_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    DPRINT << "Writer: agg_core=(" << agg_core_x << "," << agg_core_y << ")" << ENDL();
-    DPRINT << "Writer: r1_slot=" << r1_agg_slot_addr << " r1_sem=" << r1_agg_sem_addr << ENDL();
-    DPRINT << "Writer: r2_slot=" << r2_agg_slot_addr << " r2_sem=" << r2_agg_sem_addr << ENDL();
+    // ==========================================================================
+    // Precompute NOC addresses (avoids redundant calculations in helpers)
+    // ==========================================================================
+    const uint64_t r1_dst_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_dst_addr);
+    const uint64_t r1_sem_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_sem_addr);
+    const uint64_t r1_agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_slot_addr);
+    const uint64_t r1_agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_sem_addr);
+
+    const uint64_t r2_dst_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_dst_addr);
+    const uint64_t r2_sem_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_sem_addr);
+    const uint64_t r2_agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_slot_addr);
+    const uint64_t r2_agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_sem_addr);
 
     // ==========================================================================
-    // PHASE 1: Send R1 (local input to R1 neighbor via aggregator)
+    // ROUND 1: Send local input to R1 neighbor via aggregator
     // ==========================================================================
-    DPRINT << "Writer: Starting R1 phase..." << ENDL();
     {
-        DeviceZoneScopedN("R1-PACK-DATA");
+        DeviceZoneScopedN("R1-SEND");
 
-        // Reserve space for packet in local CB
-        cb_reserve_back(packet_cb_id, 1);
-        uint32_t packet_addr = get_write_ptr(packet_cb_id);
+        cb_reserve_back(cb_packet_slot, 1);
+        uint32_t slot_addr = get_write_ptr(cb_packet_slot);
 
-        // Build packet header (fused write + sem_inc to neighbor)
-        cb_reserve_back(packet_header_cb_id, 1);
-        uint32_t header_addr = get_write_ptr(packet_header_cb_id);
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+        prepare_header<l1_alignment, total_payload_size>(slot_addr, r1_dst_noc, r1_sem_noc);
+        pack_payload<payload_size_bytes, aligned_page_size>(slot_addr, src_addr_l, src_addr_s, src_addr_m);
+        forward_packet<slot_size>(slot_addr, r1_agg_slot_noc, r1_agg_sem_noc);
 
-        // Set routing for fabric unicast
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)header, num_hops);
-
-        // Fused command: write data to neighbor CB + increment neighbor semaphore
-        const uint64_t r1_neighbor_dst_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_dst_addr);
-        const uint64_t r1_neighbor_sem_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_sem_addr);
-        header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r1_neighbor_dst_noc, r1_neighbor_sem_noc, 1, false},
-            align(total_payload_size, l1_alignment));
-
-        // Pack payload: [L tiles][S tile aligned][M tile aligned]
-        // Read directly from input tensor addresses (no CB sync to avoid contention with compute)
-        tt_memmove<true, false, false, 0>(packet_addr, src_addr_l, payload_size_bytes);
-        tt_memmove<true, false, false, 0>(packet_addr + payload_size_bytes, src_addr_s, aligned_page_size);
-        tt_memmove<true, false, false, 0>(
-            packet_addr + payload_size_bytes + aligned_page_size, src_addr_m, aligned_page_size);
-
-        cb_push_back(packet_header_cb_id, 1);
-        cb_push_back(packet_cb_id, 1);
-
-        // Write complete packet to aggregator slot via NoC
-        // Aggregator expects: [header][payload] contiguous in slot
-        uint64_t agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_slot_addr);
-
-        // Write header
-        noc_async_write(header_addr, agg_slot_noc, packet_header_size_bytes);
-        // Write payload after header
-        noc_async_write(packet_addr, agg_slot_noc + packet_header_size_bytes, total_payload_size);
-
-        noc_async_writes_flushed();  // Ensure write completes before signaling
-
-        // Increment aggregator semaphore to signal packet ready
-        uint64_t agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_sem_addr);
-        noc_semaphore_inc(agg_sem_noc, 1);
-        DPRINT << "Writer: R1 packet sent, sem incremented" << ENDL();
+        cb_push_back(cb_packet_slot, 1);
     }
 
     // ==========================================================================
-    // PHASE 2: Wait for R1 compute result
+    // R2 Header Preparation (overlapped with compute - no data dependency)
     // ==========================================================================
-    DPRINT << "Writer: Waiting for compute sync..." << ENDL();
+    uint32_t r2_slot_addr;
+    {
+        DeviceZoneScopedN("R2-PREPARE-HEADER");
+
+        cb_reserve_back(cb_packet_slot, 1);
+        r2_slot_addr = get_write_ptr(cb_packet_slot);
+
+        prepare_header<l1_alignment, total_payload_size>(r2_slot_addr, r2_dst_noc, r2_sem_noc);
+    }
+
+    // ==========================================================================
+    // Wait for R1 compute result
+    // ==========================================================================
     {
         DeviceZoneScopedN("R2-WAIT-COMPUTE");
 
-        // Wait for SYNC signal from Compute
         cb_wait_front(cb_sync, 1);
         cb_pop_front(cb_sync, 1);
-        DPRINT << "Writer: Compute sync received, waiting for R1 result CBs..." << ENDL();
 
-        // Wait for R1 result data to be ready
         cb_wait_front(cb_r1_result_l, out_tiles);
         cb_wait_front(cb_r1_result_s, Sq_chunk_t);
         cb_wait_front(cb_r1_result_m, Sq_chunk_t);
-        DPRINT << "Writer: R1 result CBs ready" << ENDL();
     }
 
     // ==========================================================================
-    // PHASE 3: Send R2 (R1 result to R2 neighbor via aggregator)
+    // ROUND 2: Send R1 result to R2 neighbor via aggregator
     // ==========================================================================
     {
-        DeviceZoneScopedN("R2-PACK-DATA");
+        DeviceZoneScopedN("R2-PACK-SEND");
 
-        // Reserve space for packet
-        cb_reserve_back(packet_cb_id, 1);
-        uint32_t packet_addr = get_write_ptr(packet_cb_id);
+        pack_payload<payload_size_bytes, aligned_page_size>(
+            r2_slot_addr, get_read_ptr(cb_r1_result_l), get_read_ptr(cb_r1_result_s), get_read_ptr(cb_r1_result_m));
+        forward_packet<slot_size>(r2_slot_addr, r2_agg_slot_noc, r2_agg_sem_noc);
 
-        // Build packet header
-        cb_reserve_back(packet_header_cb_id, 1);
-        uint32_t header_addr = get_write_ptr(packet_header_cb_id);
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
-
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)header, num_hops);
-
-        const uint64_t r2_neighbor_dst_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_dst_addr);
-        const uint64_t r2_neighbor_sem_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_sem_addr);
-        header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{r2_neighbor_dst_noc, r2_neighbor_sem_noc, 1, false},
-            align(total_payload_size, l1_alignment));
-
-        // Pack R1 result into payload
-        tt_memmove<true, false, false, 0>(packet_addr, get_read_ptr(cb_r1_result_l), payload_size_bytes);
-        tt_memmove<true, false, false, 0>(
-            packet_addr + payload_size_bytes, get_read_ptr(cb_r1_result_s), aligned_page_size);
-        tt_memmove<true, false, false, 0>(
-            packet_addr + payload_size_bytes + aligned_page_size, get_read_ptr(cb_r1_result_m), aligned_page_size);
-
-        cb_push_back(packet_header_cb_id, 1);
-        cb_push_back(packet_cb_id, 1);
-
-        // Write packet to R2 aggregator slot
-        uint64_t agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_slot_addr);
-
-        noc_async_write(header_addr, agg_slot_noc, packet_header_size_bytes);
-        noc_async_write(packet_addr, agg_slot_noc + packet_header_size_bytes, total_payload_size);
-
-        noc_async_writes_flushed();
-
-        // Signal R2 packet ready to aggregator
-        uint64_t agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_sem_addr);
-        noc_semaphore_inc(agg_sem_noc, 1);
-        DPRINT << "Writer: R2 packet sent, sem incremented" << ENDL();
+        cb_push_back(cb_packet_slot, 1);
     }
 
-    DPRINT << "Writer: Done!" << ENDL();
-    // NOTE: No mux termination needed - aggregator handles fabric connection lifecycle.
-    // This is a key benefit of the aggregator approach: workers don't need to manage
-    // per-client fabric connection setup/teardown.
+    noc_async_full_barrier();
 }

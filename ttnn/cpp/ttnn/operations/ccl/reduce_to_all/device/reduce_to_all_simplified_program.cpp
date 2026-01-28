@@ -215,12 +215,11 @@ reduce_to_all_simplified_program_factory(
     constexpr auto cb_l2_temp = tt::CBIndex::c_18;  // intermediate only
     constexpr auto cb_s_out = tt::CBIndex::c_19;    // ALIASED to output_s
 
-    // Packet CBs for writer
-    constexpr auto cb_packet_header = tt::CBIndex::c_20;
-    constexpr auto cb_packet = tt::CBIndex::c_21;
+    // Packet slot CB for writer (unified header + payload)
+    constexpr auto cb_packet_slot = tt::CBIndex::c_20;
 
     // Sync CB for coordination between Compute and Writer
-    constexpr auto cb_sync = tt::CBIndex::c_22;
+    constexpr auto cb_sync = tt::CBIndex::c_21;
 
     // =========================================================================
     // Create Circular Buffers
@@ -364,20 +363,24 @@ reduce_to_all_simplified_program_factory(
             .set_globally_allocated_address(*output_tensor_s.buffer());
     CreateCircularBuffer(program, shard_grid, cb_s_out_config);
 
-    // Packet CBs for writer
+    // Packet slot CB for writer (unified header + payload in single buffer)
+    // This enables single NOC transfer instead of separate header + payload writes
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            4 * packet_header_size_bytes, {{cb_packet_header, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_packet_header, packet_header_size_bytes)
-            .set_tile_dims(cb_packet_header, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_packet_header_config);
+    const uint32_t slot_size_unaligned = packet_header_size_bytes + total_packet_size;
+    const uint32_t slot_size = tt::round_up(slot_size_unaligned, l1_alignment);
+    TT_FATAL(
+        slot_size == slot_size_unaligned,
+        "Slot size ({}) must be L1 aligned ({}). Header={}, payload={}",
+        slot_size_unaligned,
+        l1_alignment,
+        packet_header_size_bytes,
+        total_packet_size);
 
-    tt::tt_metal::CircularBufferConfig cb_packet_config =
-        tt::tt_metal::CircularBufferConfig(2 * total_packet_size, {{cb_packet, input_dataformat}})
-            .set_page_size(cb_packet, total_packet_size)
-            .set_tile_dims(cb_packet, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_packet_config);
+    tt::tt_metal::CircularBufferConfig cb_packet_slot_config =
+        tt::tt_metal::CircularBufferConfig(2 * slot_size, {{cb_packet_slot, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_packet_slot, slot_size)
+            .set_tile_dims(cb_packet_slot, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
 
     // Sync CB (tiny, 1 tile size, can use 16B if supported but using aligned_page_size for safety)
     tt::tt_metal::CircularBufferConfig cb_sync_config =
@@ -413,9 +416,8 @@ reduce_to_all_simplified_program_factory(
     // Aggregator buffer layout per core (68KB total, shared by BRISC and NCRISC):
     // - BRISC region (offset 0): [FWD R1 slots][FWD R2 slots] - 4 slots total
     // - NCRISC region (offset 4*slot_size): [BWD R1 slots][BWD R2 slots] - 4 slots total
-    // Each slot = packet header + L + S + M
-    const uint32_t slot_size = packet_header_size_bytes + total_packet_size;  // header + payload
-    const uint32_t slots_per_direction = 2 * packets_per_round;               // R1 + R2 slots
+    // Each slot = packet header + L + S + M (slot_size already computed and L1-aligned above)
+    const uint32_t slots_per_direction = 2 * packets_per_round;  // R1 + R2 slots
     const uint32_t brisc_buffer_size = slots_per_direction * slot_size;
     const uint32_t ncrisc_buffer_offset = brisc_buffer_size;  // NCRISC starts after BRISC region
 
@@ -491,12 +493,11 @@ reduce_to_all_simplified_program_factory(
         cb_r1_result_l,         // 5
         cb_r1_result_s,         // 6
         cb_r1_result_m,         // 7
-        cb_packet_header,       // 8
-        cb_packet,              // 9
-        l1_alignment,           // 10
-        input_page_size_bytes,  // 11
-        cb_sync,                // 12
-        slot_size,              // 13: Aggregator slot size (total packet size)
+        cb_packet_slot,         // 8: Unified packet slot CB (header + payload)
+        l1_alignment,           // 9
+        input_page_size_bytes,  // 10
+        cb_sync,                // 11
+        slot_size,              // 12: Aggregator slot size (L1-aligned)
     };
 
     // Compute compile-time args (23 total)
