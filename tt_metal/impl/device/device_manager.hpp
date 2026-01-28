@@ -30,6 +30,9 @@ public:
         bool init_profiler = true,
         bool initialize_fabric_and_dispatch_fw = true);
 
+    void initialize_fast_dispatch();
+    void terminate_fast_dispatch();
+
     IDevice* get_active_device(ChipId device_id) const;
     std::vector<IDevice*> get_all_active_devices() const;
     bool close_device(ChipId device_id);

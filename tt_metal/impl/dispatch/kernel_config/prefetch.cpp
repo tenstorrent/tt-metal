@@ -62,6 +62,7 @@ PrefetchKernel::PrefetchKernel(
         this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
         type = PREFETCH_D;
     }
+    // std::cout << "Creating Prefetch Kernel for core " << this->logical_core_.str() << std::endl;
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();

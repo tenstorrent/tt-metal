@@ -412,6 +412,7 @@ int main() {
                 }
             }
         }
+        DPRINT << "Got Go Message" << ENDL();
 
         WAYPOINT("GD");
 
@@ -421,7 +422,9 @@ int main() {
             // "invalid" iterations.
             DeviceZoneScopedMainN("BRISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            DPRINT << "Launch Message RD Pointer: " << launch_msg_rd_ptr << ENDL();
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            DPRINT << "Got launch message" << ENDL();
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             uint32_t enables = launch_msg_address->kernel_config.enables;

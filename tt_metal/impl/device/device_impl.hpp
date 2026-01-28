@@ -112,6 +112,8 @@ public:
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
+    void reset_sysmem_manager() override;
+
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }

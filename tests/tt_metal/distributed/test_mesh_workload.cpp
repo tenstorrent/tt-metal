@@ -377,6 +377,35 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
+TEST_F(MeshWorkloadTest4x8, TestDispatchSwitching) {
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> src_vec(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+
+    mesh_device_->initialize_fast_dispatch();
+
+    for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
+        for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
+            std::cout << "Writing to device " << logical_y << ", " << logical_x << std::endl;
+            WriteShard(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
+        }
+    }
+
+    mesh_device_->terminate_fast_dispatch();
+}
+
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     uint32_t num_programs_0 = 16;
     uint32_t num_programs_1 = 24;

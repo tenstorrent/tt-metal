@@ -163,7 +163,8 @@ KernelHandle FDKernel::configure_kernel_variant(
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
         defines["GALAXY_CLUSTER"] = "1";
     }
-
+    // std::cout << "Creating kernel for dispatch core " << logical_core_.str() << " is worker: " << (GetCoreType() ==
+    // CoreType::WORKER) << std::endl;
     if (GetCoreType() == CoreType::WORKER) {
         kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,

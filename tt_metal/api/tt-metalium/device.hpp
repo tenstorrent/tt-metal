@@ -158,6 +158,8 @@ public:
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
 
+    virtual void reset_sysmem_manager() = 0;
+
     // If cq_id is not provided, the current command queue is returned from the current thread
     virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 

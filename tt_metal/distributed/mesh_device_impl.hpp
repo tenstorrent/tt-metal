@@ -216,8 +216,14 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
+    void reset_sysmem_manager() override {
+        for (const auto& dev : this->get_devices()) {
+            dev->reset_sysmem_manager();
+        }
+    }
     CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
-
+    void initialize_fast_dispatch(MeshDevice* pimpl_wrapper);
+    void terminate_fast_dispatch(MeshDevice* pimpl_wrapper);
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
     MeshTraceId begin_mesh_trace(uint8_t cq_id);

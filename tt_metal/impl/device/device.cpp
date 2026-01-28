@@ -313,6 +313,7 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
         for (const CoreCoord& logical_dispatch_core : logical_dispatch_cores) {
+            // std::cout << "Writing launch messages to dispatch core " << logical_dispatch_core.str() << std::endl;
             const auto* kernel = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
@@ -656,6 +657,8 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
 }
+
+void Device::reset_sysmem_manager() { sysmem_manager_.reset(); }
 
 SystemMemoryManager& Device::sysmem_manager() {
     // SystemMemoryManager handles mock devices internally with stubs

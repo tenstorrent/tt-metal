@@ -1528,6 +1528,42 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) c
 void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { pimpl_->enqueue_to_thread_pool(std::move(f)); }
 void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
+void MeshDeviceImpl::initialize_fast_dispatch(MeshDevice* pimpl_wrapper) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_THROW("Cannot dynamically switch between fast and slow dispatch when fast dispatch is enabled by default.");
+    }
+    mesh_command_queues_.clear();
+    mesh_command_queues_.reserve(this->num_hw_cqs());
+    MetalContext::instance().device_manager()->initialize_fast_dispatch();
+    auto cq_shared_state = std::make_shared<CQSharedState>();
+    cq_shared_state->sub_device_cq_owner.resize(1);
+    for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
+            pimpl_wrapper,
+            cq_id,
+            dispatch_thread_pool_,
+            reader_thread_pool_,
+            cq_shared_state,
+            std::bind(&MeshDeviceImpl::lock_api, this)));
+    }
+}
+
+void MeshDeviceImpl::terminate_fast_dispatch(MeshDevice* pimpl_wrapper) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_THROW("Cannot dynamically switch between fast and slow dispatch when fast dispatch is enabled by default.");
+    }
+    mesh_command_queues_.clear();
+    mesh_command_queues_.reserve(this->num_hw_cqs());
+    for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        mesh_command_queues_.push_back(
+            std::make_unique<SDMeshCommandQueue>(pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this)));
+    }
+    MetalContext::instance().device_manager()->terminate_fast_dispatch();
+}
+
+void MeshDevice::initialize_fast_dispatch() { pimpl_->initialize_fast_dispatch(this); }
+void MeshDevice::terminate_fast_dispatch() { pimpl_->terminate_fast_dispatch(this); }
+
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 }  // namespace tt::tt_metal::distributed

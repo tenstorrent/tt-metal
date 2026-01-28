@@ -395,6 +395,108 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
     }
 }
 
+void DeviceManager::initialize_fast_dispatch() {
+    // Initialize Host
+    const auto& active_devices = this->get_all_active_devices();
+    for (const auto& dev : active_devices) {
+        dev->init_command_queue_host();
+    }
+    // Generate and write CQ Programs
+    populate_fd_kernels(active_devices, 1);
+    for (auto* dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev);
+        if (not this->skip_remote_devices_) {
+            for (const auto& tunnel : tunnels_from_mmio) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                    auto* device = get_device(mmio_controlled_device_id);
+                    populate_cq_static_args(device);
+                }
+            }
+        }
+    }
+    for (auto* dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+        // std::cout << "Creating CQ program for device " << dev->id() << std::endl;
+        create_cq_program(dev);
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        if (not this->skip_remote_devices_) {
+            for (const auto& tunnel : tunnels_from_mmio) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                    auto* device = get_device(mmio_controlled_device_id);
+                    create_cq_program(device);
+                }
+            }
+        }
+    }
+    compile_cq_programs();
+
+    std::vector<std::shared_future<void>> events;
+    // Init command queues in parallel.
+    for (auto* dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+        events.emplace_back(detail::async([&, dev, mmio_device_id]() {
+            auto tunnels_from_mmio =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+            dev->init_command_queue_device();
+            log_info(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
+            if (not this->skip_remote_devices_) {
+                for (const auto& tunnel : tunnels_from_mmio) {
+                    // Need to create devices from farthest to the closest.
+                    for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                        uint32_t mmio_controlled_device_id = tunnel[ts];
+                        auto* device = get_device(mmio_controlled_device_id);
+                        device->init_command_queue_device();
+                        log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
+                    }
+                }
+            }
+        }));
+    }
+    for (const auto& event : events) {
+        event.get();
+    }
+    dispatch_firmware_active_ = true;
+}
+
+void DeviceManager::terminate_fast_dispatch() {
+    auto devices_to_close = this->get_all_active_device_ids();
+    teardown_fd(std::unordered_set<ChipId>(devices_to_close.begin(), devices_to_close.end()));
+    for (const auto& dev_id : devices_to_close) {
+        auto* dev = get_active_device(dev_id);
+        if (!dev->is_mmio_capable() || !using_fast_dispatch_) {
+            continue;
+        }
+
+        auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
+        tt::llrt::internal_::wait_until_cores_done(dev_id, dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+        dev->reset_sysmem_manager();
+    }
+}
+
 void DeviceManager::initialize_active_devices() {
     const auto& active_devices = this->get_all_active_devices();
 
@@ -934,6 +1036,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // Process registered termination signals from topology
+    // TODO: Need to migrate this for mux
     for (const auto& dev_id : devices_to_close) {
         auto* dev = this->get_active_device(dev_id);
         const auto& info = tt::tt_metal::get_registered_termination_cores(dev_id);

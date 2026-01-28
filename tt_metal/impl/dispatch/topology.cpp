@@ -674,6 +674,8 @@ void create_cq_program(IDevice* device) {
         device->id());
     empty_cores.clear();
     // Third pass, populate dependent configs, runtime configs, and create kernels for each node
+    // std::cout << "Creating cq program for device " << device->id() << " num nodes: " << node_id_to_kernel.size() <<
+    // std::endl;
     for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->GenerateDependentConfigs();
