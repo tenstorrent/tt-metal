@@ -10,6 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_gather_minimal_matmul_async.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/types.hpp"
@@ -18,9 +19,8 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"experimental.all_gather_minimal_matmul_async">(
         mod,
-        ttnn::experimental::all_gather_minimal_matmul_async,
         R"doc(
         all_gather_minimal_matmul_async(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
@@ -79,6 +79,12 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
               to 2x4 or 4x2 depending on aspect ratio and accumulation mode to balance NOC/dataflow.
             - The core grid defaults to the device compute-with-storage grid.
 
+        multi_device_global_semaphore: std::vector<GlobalSemaphore>,
+            A vector of 2 GlobalSemaphores used to synchronize communication between multiple devices during the all
+            gather phase of the operation.
+
+        topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring.
+
         memory_config : Optional[ttnn.MemoryConfig], default: None
             Memory configuration for the output tensor. If not provided, the output inherits the memory configuration
             of `input_tensor`. The output is produced in TILE layout.
@@ -90,6 +96,34 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`
             (e.g., MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
+
+        persistent_output_buffer : Optional[ttnn.Tensor], default: None
+            This is used to store the output of the all gather portion of the op.  This should have the dimensions of
+            M x (K x n), where n is the number of devices we are gathering over (the cluster axis dim).  Either this or
+            barrier_semaphore needs to be used.
+
+        num_links : int
+            Number of links to use for the all-gather operation. Defaults to `1`.
+
+        cluster_axis : Optional[int], default: None
+            Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+
+        barrier_semaphore: Optional[GlobalSemaphore], default : None
+            Used to guarantee correctness of the output of the all gather portion of the operation by ensuring that the
+            tensor for the all gather output is ready to be written.  Either this or persistent_output_buffer needs to be
+            used.
+
+        force_transpose : Optional[bool], default: true
+            Minimal matmul has better performance in transpose when M > N.  However, to alleviate noc congestion,
+            we want transpose to always be true.
+
+        num_workers_per_link : Optional[int], default: 1
+            The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
+            alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
+            per link begins to have diminished benefits.
+
+        num_buffers_per_channel : Optional[int], default: 1
+            The number of buffers per channel for the mux cores used for all gather.
 
         Returns
         -------
@@ -122,8 +156,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
 
         Notes on Implementation
         -----------------------
-        - Data movement reads A in MxK blocks and B in KxN blocks with serpentine ordering and reuse across
-          subblocks to reduce NOC pressure; writes are deferred to reduce congestion.
+        - Data movement reads A in MxK blocks and B in KxN blocks in row-major order with in0 and reuse when
+          striding across N blocks; writes are deferred to reduce congestion.
         - K is processed in blocks of size `K_block_size`, with zero-padding as needed when K is not a multiple.
         - If `fused_activation` is provided, it is applied per tile just before packing to the output buffer.
 
@@ -138,7 +172,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         ...     weight_tensor=b,
         ...     bias_tensor=bias,
         ...     fused_activation=(ttnn.UnaryOpType.GELU, False),
-        ...     config=ttnn.AllGatherMinimalMatmulAsyncConfig(
+        ...     config=ttnn.MinimalMatmulConfig(
         ...         M_block_size=8,
         ...         K_block_size=8,
         ...         N_block_size=8,
@@ -149,7 +183,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         ... )
         >>> y.shape  # [M, N]
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t{
+            &all_gather_minimal_matmul_async,
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
             nb::kw_only(),
@@ -165,47 +200,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("num_links") = 1,
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("force_transpose") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
-
-    auto py_all_gather_minimal_matmul_async_config =
-        nb::class_<all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig>(
-            mod,
-            "AllGatherMinimalMatmulAsyncConfig",
-            R"doc(
-                            Configuration for the AllGatherMinimalMatmulAsync operation.
-                            )doc")
-            .def(nb::init<>())
-            .def(
-                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
-                nb::kw_only(),
-                nb::arg("M_block_size") = 1,
-                nb::arg("K_block_size") = 1,
-                nb::arg("N_block_size") = 1,
-                nb::arg("subblock_h") = 1,
-                nb::arg("subblock_w") = 1,
-                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
-
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "M_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::M_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "K_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::K_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "N_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::N_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_h", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::subblock_h, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_w", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::subblock_w, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "compute_with_storage_grid_size",
-        &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::compute_with_storage_grid_size,
-        "");
-
-    py_all_gather_minimal_matmul_async_config.def(
-        "__repr__", [](const all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig& config) {
-            return fmt::format("{}", config);
-        });
+            nb::arg("force_transpose") = true,
+            nb::arg("num_workers_per_link") = 1,
+            nb::arg("num_buffers_per_channel") = 1});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

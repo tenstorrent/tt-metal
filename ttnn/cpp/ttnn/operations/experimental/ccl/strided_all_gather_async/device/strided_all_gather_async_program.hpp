@@ -13,10 +13,12 @@ struct StridedAllGatherAsyncProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
         std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-        std::vector<CoreCoord> all_worker_cores;
+        std::vector<CoreCoord> all_cores;
         uint32_t num_links;
         uint32_t num_directions_per_link;
         uint32_t num_workers_per_direction;
+        uint32_t num_mux_cores_per_direction_per_link;
+        uint32_t num_cores_per_link;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
