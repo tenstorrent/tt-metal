@@ -19,4 +19,4 @@ ignore:
     - built/
     - models/demos/nlp/llms/llama2_70b/reference/
     - infra/
-    - models/demos/deepseek_v3/reference/deepseek/
+    - models/demos/nlp/llms/deepseek_v3/reference/deepseek/
