@@ -9,8 +9,7 @@
 #include "api/debug/dprint_pages.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);    // Input A
@@ -56,4 +55,3 @@ void MAIN {
     //  Uninitialize the operation
     ckernel::mul_reduce_scalar_uninit();
 }
-}  // namespace NAMESPACE
