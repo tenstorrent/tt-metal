@@ -211,12 +211,12 @@ You can also check an example here: https://github.com/tenstorrent/tt-metal/blob
 
 ### How does the expected JSon looks like?
 
-Let's do the exercise of tracing the following demo: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/bert/demo/demo.py#L64-L166
+Let's do the exercise of tracing the following demo: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/bert/demo/demo.py#L64-L166
 
-We are going to add the begin_capture before the first operation here: https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/bert/demo/demo.py#L64
+We are going to add the begin_capture before the first operation here: https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/nlp/encoder/bert/demo/demo.py#L64
 
 and closing the capture here:
-https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/bert/demo/demo.py#L157
+https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/nlp/encoder/bert/demo/demo.py#L157
 
 Giving as a result a code like this:
 
