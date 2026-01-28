@@ -1524,27 +1524,26 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 
     // First step - read multiple sub_cmds worth into DB0
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
-    uint32_t read_length = sub_cmd->length;
-    ASSERT(read_length <= scratch_db_half_size);
+    uint64_t current_addr = sub_cmd->addr;
+    uint32_t current_length = sub_cmd->length;
     uint32_t amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
     uint32_t amt_read = 0;
     uint32_t scratch_read_addr = scratch_db_top[0];
 
-    while (read_length <= amt_to_read) {
-        uint64_t addr = sub_cmd->addr;
-        uint32_t length = sub_cmd->length;
-        sub_cmd++;
-
-        uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
-        noc_read_64bit_any_len<true>(noc_xy_addr, addr, scratch_read_addr, amt_to_read2);
+    while (amt_read < amt_to_read) {
+        uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
+        noc_read_64bit_any_len<true>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
         scratch_read_addr += amt_to_read2;
         amt_read += amt_to_read2;
-        amt_to_read -= amt_to_read2;
+        current_addr += amt_to_read2;
+        current_length -= amt_to_read2;
 
-        // note: below can walk off the end of the sub_cmds
-        // this is ok as we store a sentinel non-zero value
-        read_length = sub_cmd->length;
-        ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
+        // If we've consumed the current sub-command, move to the next one
+        if (current_length == 0) {
+            sub_cmd++;
+            current_addr = sub_cmd->addr;
+            current_length = sub_cmd->length;
+        }
     }
     noc_async_read_barrier();
 
@@ -1565,22 +1564,21 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
         uint32_t amt_to_write = amt_read;
         amt_read = 0;
         amt_to_read = (scratch_db_half_size > total_length) ? total_length : scratch_db_half_size;
-        while (read_length <= amt_to_read) {
-            uint64_t addr = sub_cmd->addr;
-            uint32_t length = sub_cmd->length;
-            sub_cmd++;
-
+        while (amt_read < amt_to_read) {
             uint32_t amt_to_read2 =
-                (scratch_db_half_size - amt_read > length) ? length : scratch_db_half_size - amt_read;
-            noc_read_64bit_any_len<false>(noc_xy_addr, addr, scratch_read_addr, amt_to_read2);
+                (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
+            noc_read_64bit_any_len<false>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
             scratch_read_addr += amt_to_read2;
             amt_read += amt_to_read2;
-            amt_to_read -= amt_to_read2;
+            current_addr += amt_to_read2;
+            current_length -= amt_to_read2;
 
-            // note: below can walk off the end of the sub_cmds
-            // this is ok as we store a sentinel non-zero value
-            read_length = sub_cmd->length;
-            ASSERT(read_length <= scratch_db_half_size || total_length == amt_read);
+            // If we've consumed the current sub-command, move to the next one
+            if (current_length == 0) {
+                sub_cmd++;
+                current_addr = sub_cmd->addr;
+                current_length = sub_cmd->length;
+            }
         }
 
         // Third step - write from DB
