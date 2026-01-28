@@ -6,8 +6,8 @@
 from qwen_vl_utils import process_vision_info
 from transformers import AutoProcessor
 
-from models.demos.qwen25_vl.reference.instrument import instrument
-from models.demos.qwen25_vl.reference.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
+from models.demos.nlp.llms.qwen25_vl.reference.instrument import instrument
+from models.demos.nlp.llms.qwen25_vl.reference.model import Qwen2_5_VLForConditionalGeneration, Qwen2_5_VLMLP
 
 # Instrument the vision MLP
 Qwen2_5_VLMLP.forward = instrument("Qwen2_5_VLMLP")(Qwen2_5_VLMLP.forward)

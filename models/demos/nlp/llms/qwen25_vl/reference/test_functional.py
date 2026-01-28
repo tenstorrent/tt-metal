@@ -40,7 +40,7 @@ def implementation(request, mesh_device):
             pytest.skip("TTNN not available")
 
     try:
-        module = importlib.import_module(f"models.demos.qwen25_vl.reference.{module_name}")
+        module = importlib.import_module(f"models.demos.nlp.llms.qwen25_vl.reference.{module_name}")
 
         # Set the mesh_device for the TTNN implementation
         if module_name == "functional_ttnn" and hasattr(module, "set_mesh_device"):
