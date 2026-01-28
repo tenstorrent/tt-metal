@@ -32,7 +32,7 @@ import ttnn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
-from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
+from models.demos.vision.classification.owl_vit.tt.ttnn_owl_vit import (
     OwlViTTTNNConfig,
     run_box_head,
     run_class_head,

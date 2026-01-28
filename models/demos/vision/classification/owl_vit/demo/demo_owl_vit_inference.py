@@ -9,7 +9,7 @@ This demo runs OWL-ViT for open-vocabulary object detection using TTNN APIs
 on Wormhole N300 hardware.
 
 Usage:
-    python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
+    python models/demos/vision/classification/owl_vit/demo/demo_owl_vit_inference.py
 
 Features:
     - Zero-shot text-conditioned object detection
@@ -31,7 +31,7 @@ import ttnn
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 # Import TTNN implementation from tests
-from models.demos.wormhole.owl_vit.tests.test_end_to_end import (
+from models.demos.vision.classification.owl_vit.tests.test_end_to_end import (
     get_pytorch_model_and_inputs,
     preprocess_all_weights_for_ttnn,
     run_owl_vit_end_to_end,
