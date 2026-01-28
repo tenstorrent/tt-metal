@@ -674,7 +674,7 @@ class GptOssForCausalLM(Generator):
         optimizations: str = None,
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        from models.demos.gpt_oss.tt.common import create_tt_model
+        from models.demos.nlp.llms.gpt_oss.tt.common import create_tt_model
 
         model_args = []
         model = []

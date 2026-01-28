@@ -143,24 +143,24 @@ jobs:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         run: |
           # Install requirements
-          uv pip install -r models/demos/gpt_oss/requirements.txt
+          uv pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
           # Test GPT-OSS 20B model
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8"\
+            pytest models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "4x8"\
             --timeout 1000
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8"\
+            pytest models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "4x8"\
             --timeout 900
 
           # Test GPT-OSS 120B model
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8"\
+            pytest models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "4x8"\
             --timeout 1000
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8"\
+            pytest models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "4x8"\
             --timeout 900
 
       - name: Run Llama3 demo tests (direct pytest)
