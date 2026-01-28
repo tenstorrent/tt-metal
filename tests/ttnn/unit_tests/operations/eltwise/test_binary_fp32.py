@@ -463,12 +463,8 @@ def test_special_values(device, op_name, dtype):
     special_values = [0.0, float("inf"), float("-inf"), float("nan"), 1.0, -1.0, -0.0]
 
     # Create all combinations
-    x_vals = []
-    y_vals = []
-    for x in special_values:
-        for y in special_values:
-            x_vals.append(x)
-            y_vals.append(y)
+    x_vals = [x for x in special_values for y in special_values]
+    y_vals = [y for x in special_values for y in special_values]
 
     x_torch = torch.tensor(x_vals, dtype=torch_dtype)
     y_torch = torch.tensor(y_vals, dtype=torch_dtype)
