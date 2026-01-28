@@ -268,17 +268,18 @@ void kernel_main() {
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
-                        if (i < (ring_size - 1)) {
-                            uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-                            // DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
-                            for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
-                                 chunk_piece_idx++) {
-                                uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                                uint32_t direction_offset = direction ? 0 : chunk_width / 2;
+                        uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                        uint32_t output_tile_id_start = b * output_batch_num_pages;
 
-                                cb_wait_front(cb_output_id, tile_granularity);
-                                DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
-                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                        for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                            uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
+                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
+
+                            cb_wait_front(cb_output_id, tile_granularity);
+                            DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
+                            size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                            if (i < (ring_size - 1)) {
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                     uint32_t intermediate_tile_id =
                                         intermediate_tile_id_start + input_row_offset + direction_offset + j;
@@ -298,7 +299,6 @@ void kernel_main() {
                                     l1_read_addr += page_size;
                                     noc_async_writes_flushed();
                                 }
-                                DPRINT << "--------------------------------" << ENDL();
                                 cb_pop_front(cb_output_id, tile_granularity);
 
                                 uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -310,26 +310,23 @@ void kernel_main() {
                                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                                 DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 noc_async_writes_flushed();
-                            }
-                        } else {
-                            uint32_t output_tile_id_start = b * output_batch_num_pages;
-                            uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
-                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                            cb_wait_front(cb_output_id, tile_granularity);
-                            size_t l1_read_addr = get_read_ptr(cb_output_id);
-                            for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                uint32_t output_tile_id =
-                                    output_tile_id_start + output_row_offset + direction_offset + j;
-                                DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
-                                uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                                l1_read_addr += page_size;
+                            } else {
+                                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                                    uint32_t output_tile_id =
+                                        output_tile_id_start + output_row_offset + direction_offset + j;
+                                    DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
+                                    uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                    noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                    l1_read_addr += page_size;
+                                }
+                                noc_async_write_barrier();
+                                cb_pop_front(cb_output_id, tile_granularity);
                             }
                             DPRINT << "--------------------------------" << ENDL();
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_output_id, tile_granularity);
+                        }
 
-                            // 2. mcast ring cycle done semaphore
+                        // Signal ring cycle done only after all chunks in final iteration
+                        if (i == ring_size - 1) {
                             uint64_t batch_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
                             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
