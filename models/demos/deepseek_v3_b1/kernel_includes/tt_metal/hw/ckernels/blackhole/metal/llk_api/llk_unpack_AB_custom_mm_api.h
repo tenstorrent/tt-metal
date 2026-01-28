@@ -75,7 +75,8 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t in1_k_stride = 1) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -90,6 +91,6 @@ inline void llk_unpack_AB_custom_mm(
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_custom_mm_(
-        base_address_a, base_address_b, tile_index_a, tile_index_b, tile_size_a, tile_size_b, kt_dim);
+        base_address_a, base_address_b, tile_index_a, tile_index_b, tile_size_a, tile_size_b, kt_dim, in1_k_stride);
     WAYPOINT("UPMD");
 }
