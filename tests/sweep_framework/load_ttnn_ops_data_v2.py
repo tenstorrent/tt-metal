@@ -93,6 +93,7 @@ def parse_array_value(value):
             if isinstance(parsed, list):
                 return parsed
         except (json.JSONDecodeError, ValueError):
+            # If JSON parsing fails, fall back to regex-based numeric extraction below.
             pass
         numbers = re.findall(r"-?\d+", value)
         if numbers:
