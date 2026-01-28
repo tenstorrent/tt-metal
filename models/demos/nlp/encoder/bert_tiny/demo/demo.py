@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
+from models.demos.nlp.encoder.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 
 
 def load_inputs(input_path, batch):
@@ -251,7 +251,7 @@ def run_bert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
-@pytest.mark.parametrize("input_loc", ["models/demos/wormhole/bert_tiny/demo/input_data.json"])
+@pytest.mark.parametrize("input_loc", ["models/demos/nlp/encoder/bert_tiny/demo/input_data.json"])
 def test_demo(
     input_loc,
     sequence_size,
