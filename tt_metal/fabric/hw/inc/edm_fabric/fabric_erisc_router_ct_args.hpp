@@ -12,6 +12,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/uarch/overlayregisterfile.hpp"
+
 #include "hostdev/fabric_telemetry_msgs.h"
 #include "api/alignment.h"
 
@@ -292,6 +295,10 @@ constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_AR
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
 constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
+constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
+
 constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
 
 // for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not

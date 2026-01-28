@@ -21,7 +21,7 @@ struct OverlayRegisterFile : public RegisterFile {
     static constexpr uint32_t const BEG_ADDR_VALUE = 0xFFB40000U; // base
     static constexpr uint32_t const END_ADDR_VALUE = 0xFFB5FFFFU; // offset
     static constexpr uint32_t const ADDR_RNG_VALUE = END_ADDR_VALUE - BEG_ADDR_VALUE + 1U;
-    static constexpr uint32_t const NUM_OVERLAY_REGISTERS = 15U;
+    static constexpr uint32_t const NUM_OVERLAY_REGISTERS = 30U;
 
     using NumLowerBits = std::integral_constant<std::uint32_t, 16U>;
     using NumUpperBits = std::integral_constant<std::uint32_t, 8U>;
@@ -48,10 +48,13 @@ struct OverlayRegisterFile : public RegisterFile {
         storage.fields.reserved = 0U;
         write_stream_scratch_register(register_identifier, storage.value);
     }    
-};
 
-struct overlayregister {
-    static constexpr uint32_t REGISTER = 0U;
+    template<uint32_t RegIdx>
+    static constexpr FORCE_INLINE uint32_t get_register() {
+        static_assert(RegIdx < NUM_OVERLAY_REGISTERS, "Overlay Register Index out of bounds");
+        return RegIdx;
+    }
+
 };
 
 #endif // end #define __TT_METAL_FABRIC_UARCH_OVERLAYREGISTERFILE_HPP__

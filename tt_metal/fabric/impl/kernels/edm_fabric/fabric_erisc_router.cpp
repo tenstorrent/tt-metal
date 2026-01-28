@@ -29,6 +29,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/uarch/overlayregisterfile.hpp"
+
 
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
@@ -268,7 +270,6 @@ write to the same receiver channel.
 ////////////////////////////////////////////////
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
-#define OVERLAY_REGISTER_ZERO 0UL
 
 // read and write stream scratch register store values as uint32_t
 enum class CoordinatedEriscContextSwitchState : uint32_t {

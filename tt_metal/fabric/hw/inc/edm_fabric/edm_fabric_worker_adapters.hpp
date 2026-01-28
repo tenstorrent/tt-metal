@@ -16,6 +16,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/uarch/overlayregisterfile.hpp"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
 
@@ -23,6 +24,9 @@
 #include <array>
 
 namespace tt::tt_fabric {
+
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
+constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -42,8 +46,6 @@ namespace tt::tt_fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-
-#define OVERLAY_REGISTER_ZERO 0UL
 
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 struct WorkerToFabricEdmSenderImpl {
@@ -94,7 +96,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO); // conn->edm_connection_handshake_addr;
+            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
@@ -111,7 +113,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
             num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO); // get_arg_val<uint32_t>(arg_idx++);
+            edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
             arg_idx++;
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
             buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));

@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/uarch/overlayregisterfile.hpp"
 
 #include <cstddef>
 #include <array>
@@ -45,9 +46,8 @@ constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
-const uint32_t constexpr USE_OVERLAY_REGISTER = 0UL;
-const uint32_t constexpr USE_L1_ADDRESS = 1UL;
-#define OVERLAY_REGISTER_ZERO 0UL
+const uint32_t constexpr USE_OVERLAY_REGISTER = OverlayRegisterFile::get_register<0U>();
+const uint32_t constexpr USE_L1_ADDRESS = OverlayRegisterFile::get_register<1U>();
 
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
@@ -157,7 +157,7 @@ void kernel_main() {
     set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
-    auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
+    auto status_ptr = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE); //reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     // clear out memory regions
