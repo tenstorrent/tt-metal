@@ -139,13 +139,6 @@ Tensor create_tt_tensor_from_host_data(
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
-        // from_span do first copy of the data to pass to from_vector
-        // than from_vecotr allocation another vector to change layout, in that use case we don't need first
-        // allocation.
-        if (!logical_matches_physical(tensor_spec)) {
-            auto res = Tensor::from_buffer(host_buffer.view_as<T>(), tensor_spec, static_cast<T>(pad_value));
-            return to_dtype(res, tensor_spec.data_type());
-        }
 
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),

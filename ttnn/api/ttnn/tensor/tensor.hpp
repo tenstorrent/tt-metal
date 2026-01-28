@@ -138,9 +138,6 @@ public:
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
-    template <typename T>
-    [[nodiscard]] static Tensor from_buffer(std::span<T> buffer, const TensorSpec& spec, T pad_value);
-
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
