@@ -41,10 +41,10 @@ public:
     SocketManager& operator=(SocketManager&&) = delete;
     ~SocketManager() = default;
 
-    // TODO: Remove legacy API when implementing pipeline parallelism - use unified API instead
+    // [[deprecated("Use unified API instead")]]
     void send(const ttnn::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
 
-    // TODO: Remove legacy API when implementing pipeline parallelism - use unified API instead
+    // [[deprecated("Use unified API instead")]]
     [[nodiscard]] ttnn::Tensor recv(
         ttnn::Tensor tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
 

@@ -24,19 +24,15 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
         return tensor;
     }
 
-    // all_reduce Mean is not supported, use sum and divide by #devices
-    auto result = ttnn_fixed::distributed::all_reduce(tensor, dp_dim);
+    auto result = ttnn::all_reduce(tensor, dp_dim);
     result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
     return result;
 }
 
 void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim) {
-    // If dp_dim not provided, query from ParallelismContext
-    auto dp_axis = dp_dim.has_value() ? dp_dim : autograd::ctx().get_parallelism_context().get_dp_axis();
-
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_axis));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_dim));
         }
     }
 }

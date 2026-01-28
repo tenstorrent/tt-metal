@@ -9,7 +9,6 @@
 namespace ttml::metal::ops::sdpa_bw::device::kv {
 
 struct operation_attributes_t {
-    bool fp32_dest_acc_en{true};
     float dropout_probability{0.0F};
 };
 

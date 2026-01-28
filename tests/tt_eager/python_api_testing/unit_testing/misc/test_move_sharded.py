@@ -223,3 +223,68 @@ def test_move_sharded_custom_grid(device):
         device,
         dtype,
     )
+
+
+def test_move_sharded_to_interleaved_rejected(device):
+    """Verify move rejects sharded-to-interleaved conversion (output must be sharded)."""
+    torch.manual_seed(42)
+    shape = [1, 1, 128, 64]
+    core_count = 4
+
+    # Create sharded input tensor
+    shard_grid = get_shard_grid_from_num_cores(core_count, device)
+    shard_shape = [shape[2] // core_count, shape[3]]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+
+    input_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        input_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_config
+    )
+
+    # Attempt to move to interleaved layout should fail
+    with pytest.raises(RuntimeError, match="Expected output tensor memory config to be sharded"):
+        ttnn.move(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def test_move_interleaved_to_sharded(device):
+    """Test move from interleaved to sharded layout."""
+
+    torch.manual_seed(42)
+    shape = [1, 1, 128, 64]
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    core_count = min(4, compute_grid_size.x * compute_grid_size.y)
+
+    # Create interleaved input tensor
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        input_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Move to sharded layout
+    shard_grid = get_shard_grid_from_num_cores(core_count, device)
+    shard_shape = [shape[2] // core_count, shape[3]]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    output_tensor = ttnn.move(input_tensor, memory_config=output_mem_config)
+
+    # Verify result
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    assert torch.equal(output_torch, input_torch)
