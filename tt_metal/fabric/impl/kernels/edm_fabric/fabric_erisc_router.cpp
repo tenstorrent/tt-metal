@@ -2560,11 +2560,16 @@ void kernel_main() {
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
 
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
 
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    asm volatile("nop");
     asm volatile("nop");
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
@@ -2761,13 +2766,13 @@ void kernel_main() {
          }.template operator()<Is>()),
          ...);
     }(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
-    asm volatile("nop");
+    //asm volatile("nop");
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
 #endif
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
-    asm volatile("nop");
+    //asm volatile("nop");
 
     //////////////////////////////
     //////////////////////////////
@@ -3101,7 +3106,7 @@ void kernel_main() {
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
-        asm volatile("nop");
+        //asm volatile("nop");
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
