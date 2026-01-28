@@ -5,8 +5,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_core_id = get_named_compile_time_arg_val("reduce_core_id");
@@ -59,4 +58,3 @@ void MAIN {
     cb_wait_front(cb_r2c_w, w_tiles_per_block);
     cb_pop_front(cb_r2c_w, w_tiles_per_block);
 }
-}  // namespace NAMESPACE
