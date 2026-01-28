@@ -9,8 +9,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
+from models.demos.nlp.llms.qwen3_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen3_vl.tt.vision_layernorm import LayerNorm
 
 
 @torch.no_grad()
