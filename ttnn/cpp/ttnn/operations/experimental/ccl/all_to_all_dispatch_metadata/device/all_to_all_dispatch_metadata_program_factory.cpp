@@ -35,7 +35,7 @@ auto launch_mux_workers(
     tt::tt_metal::Program& program) {
     auto num_full_size_channels = num_workers;
     constexpr auto num_header_only_channels = 0;
-    constexpr auto num_buffers_full_size_channels = 1;
+    constexpr auto num_buffers_full_size_channels = 8;
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -880,7 +880,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
 void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -893,6 +893,12 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
         const auto& metadata_tensor = tensor_return_value.at(1);
         const auto& scores_out_tensor = tensor_return_value.at(2);
 
+        // Use the cross_device_semaphore from operation_attributes if provided (for double-buffering),
+        // otherwise fall back to the cached one from shared_variables
+        const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore.has_value()
+                                                 ? operation_attributes.cross_device_semaphore.value()
+                                                 : shared_variables.cross_device_semaphore;
+
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
@@ -903,7 +909,7 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
             reader_runtime_args.at(4) = output_tensor.buffer()->address();
             reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(6) = scores_out_tensor.buffer()->address();
-            reader_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            reader_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -912,7 +918,7 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
             writer_runtime_args.at(4) = output_tensor.buffer()->address();
             writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(6) = scores_out_tensor.buffer()->address();
-            writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
             // init_semaphore is optional - only update if it exists (not in persistent mode)
             if (shared_variables.init_semaphore.has_value()) {
                 writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore->address();

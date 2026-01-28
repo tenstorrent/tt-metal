@@ -632,6 +632,11 @@ def run_all_to_all_dispatch_metadata_test(
     "congestion_scheme", ["random_sequential_experts", "worst_congestion_descending", "best_congestion"]
 )
 @pytest.mark.parametrize("use_persistent_mode", [True, False], ids=["persistent", "synced"])
+@pytest.mark.parametrize(
+    "worker_mode",
+    [ttnn.WorkerMode.DIRECT, ttnn.WorkerMode.MUX_TOKEN_SPLIT, ttnn.WorkerMode.MUX_PAYLOAD_SPLIT],
+    ids=["direct", "token_split", "payload_split"],
+)
 def test_decode_perf(
     mesh_device,
     mesh_shape,
@@ -648,6 +653,7 @@ def test_decode_perf(
     dtype,
     congestion_scheme,
     use_persistent_mode,
+    worker_mode,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -678,7 +684,7 @@ def test_decode_perf(
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
-        worker_mode=ttnn.WorkerMode.DIRECT,
+        worker_mode=worker_mode,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
         use_persistent_mode=use_persistent_mode,
     )
