@@ -109,7 +109,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  $PYTEST_CMD models/demos/wormhole/sentence_bert/demo/demo.py
+  $PYTEST_CMD models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py
 
 }
 

@@ -233,7 +233,7 @@ jobs:
         if: ${{ matrix.test-group.model == 'sentence_bert' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
+          pytest models/demos/nlp/encoder/sentence_bert/tg/tests/test_sentence_bert_e2e_performant.py --timeout=1500
       - name: Run Whisper demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'whisper' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}

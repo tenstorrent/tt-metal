@@ -305,7 +305,7 @@ run_t3000_sentence_bert_tests() {
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
   # Sentence BERT demo test
-  pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/nlp/encoder/sentence_bert/t3000/demo/demo.py --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
