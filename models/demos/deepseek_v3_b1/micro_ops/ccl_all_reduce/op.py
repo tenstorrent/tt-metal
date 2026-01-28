@@ -101,7 +101,6 @@ class DeepseekMinimalAllReduce:
 
         semaphore1 = semaphores[0]
         semaphore2 = semaphores[1]
-        # ttnn.synchronize_device(mesh_device)
 
         semaphore1_addr = ttnn.get_global_semaphore_address(semaphore1)
         semaphore2_addr = ttnn.get_global_semaphore_address(semaphore2)
