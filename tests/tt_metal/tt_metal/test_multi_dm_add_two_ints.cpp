@@ -63,7 +63,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result{0, 0};
-    tt_metal::detail::ReadFromDeviceL1(dev, core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
+    tt_metal::detail::ReadFromDeviceL1(dev, core, 0, sizeof(int) * 2, result);
 
     ASSERT_EQ(result[0], 300) << "Got the value " << result[0] << " instead of " << 300;
     ASSERT_EQ(result[1], 700) << "Got the value " << result[1] << " instead of " << 700;
