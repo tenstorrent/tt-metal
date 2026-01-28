@@ -30,5 +30,5 @@ for seq_len in ${seq_lens[@]}; do
         echo "No skip_num_ops_end known for given sequence length!"
         return -1
     fi
-    python models/demos/t3000/mixtral8x7b/scripts/op_perf_results.py --signpost PERF_RUN --skip-last ${skip_num_ops_end} --skip-first 3 --prefill --seqlen ${seq_len} --estimate-full-model 60 --write-ops-to-csv $output_perf_filename $csv_file
+    python models/demos/nlp/llms/mixtral8x7b/scripts/op_perf_results.py --signpost PERF_RUN --skip-last ${skip_num_ops_end} --skip-first 3 --prefill --seqlen ${seq_len} --estimate-full-model 60 --write-ops-to-csv $output_perf_filename $csv_file
 done
