@@ -176,7 +176,8 @@ Tensor create_tt_tensor_from_py_data(
     const tt::tt_metal::MemoryPin& pydata_pin,
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
-    const distributed::TensorToMesh* mesh_mapper) {
+    const distributed::TensorToMesh* mesh_mapper,
+    bool needs_float_to_bfloat16_conversion = false) {
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
@@ -188,7 +189,13 @@ Tensor create_tt_tensor_from_py_data(
         case DataType::INT32: return create_concrete.template operator()<int32_t>();
         case DataType::UINT32: return create_concrete.template operator()<uint32_t>();
         case DataType::FLOAT32: return create_concrete.template operator()<float>();
-        case DataType::BFLOAT16: return create_concrete.template operator()<bfloat16>();
+        case DataType::BFLOAT16: {
+            if (needs_float_to_bfloat16_conversion) {
+                // Input data is float32; Tensor::from_span will convert via to_dtype()
+                return create_concrete.template operator()<float>();
+            }
+            return create_concrete.template operator()<bfloat16>();
+        }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             return create_concrete.template operator()<float>();
@@ -206,6 +213,10 @@ Tensor create_tt_tensor_from_py_data(
 struct PreprocessedPyTensor {
     nb::ndarray<nb::array_api> contiguous_py_tensor;
     DataType data_type = DataType::INVALID;
+    // True when input is float32 but target is bfloat16. The dlpack/nanobind layer
+    // can't convert float32 to bfloat16, so we keep the data as float32 and convert
+    // during tensor creation via to_dtype().
+    bool needs_float_to_bfloat16_conversion = false;
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
@@ -220,8 +231,22 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
+    // Check if input is already bfloat16
+    bool input_is_bfloat16 =
+        py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat) && py_tensor_dtype.bits == 16;
+
+    // When target is BFLOAT16 but input is not bfloat16, we need to:
+    // 1. Keep the data as float32 (dlpack/nanobind can't convert float32->bfloat16)
+    // 2. Convert float32->bfloat16 during tensor creation via to_dtype()
+    bool needs_float_to_bfloat16_conversion = (data_type == DataType::BFLOAT16 && !input_is_bfloat16);
+
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
-    config.dtype = get_dtype_from_ttnn_datatype(data_type);
+    if (needs_float_to_bfloat16_conversion) {
+        // Keep as float32; conversion to bfloat16 happens later via to_dtype()
+        config.dtype = get_dtype_from_ttnn_datatype(DataType::FLOAT32);
+    } else {
+        config.dtype = get_dtype_from_ttnn_datatype(data_type);
+    }
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
 
@@ -241,7 +266,10 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
-    return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
+    return {
+        .contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle),
+        .data_type = data_type,
+        .needs_float_to_bfloat16_conversion = needs_float_to_bfloat16_conversion};
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
@@ -314,7 +342,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         pydata_pin,
         cq_id,
         pad_value,
-        mesh_mapper);
+        mesh_mapper,
+        preprocessed_py_tensor.needs_float_to_bfloat16_conversion);
 
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
