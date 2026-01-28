@@ -263,7 +263,7 @@ def run_flash_mla_decode_impl(
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
-        k_chunk_size=0,
+        k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
         max_cores_per_head_batch=num_cores_per_head_for_config,  # Tells program factory about Q replication factor
     )

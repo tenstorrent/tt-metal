@@ -146,8 +146,8 @@ void MAIN {
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
-    DPRINT << "Sk_chunk_t_dynamic: " << Sk_chunk_t_dynamic << ENDL();
-    DPRINT << "k_chunk_size_dynamic: " << k_chunk_size_dynamic << ENDL();
+    // DPRINT << "Sk_chunk_t_dynamic: " << Sk_chunk_t_dynamic << ENDL();
+    // DPRINT << "k_chunk_size_dynamic: " << k_chunk_size_dynamic << ENDL();
     // Get the sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
         cur_pos,
@@ -160,12 +160,12 @@ void MAIN {
         return;  // early exit because no computes needs to be done
     }
 
-    DPRINT << "PSt: " << PSt << ENDL();
-    DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
-    DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
-    DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
-    DPRINT << "window_start_chunk: " << window_start_chunk << ENDL();
-    DPRINT << "window_start_unaligned: " << window_start_unaligned << ENDL();
+    // DPRINT << "PSt: " << PSt << ENDL();
+    // DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
+    // DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
+    // DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
+    // DPRINT << "window_start_chunk: " << window_start_chunk << ENDL();
+    // DPRINT << "window_start_unaligned: " << window_start_unaligned << ENDL();
 
     // Get number of worker cores to wait for
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
@@ -324,6 +324,7 @@ void MAIN {
                     // K^T is in column-major order: each column of K^T is contiguous
                     // If reuse_k is true, don't pop K tiles - they're needed for V reading
                     constexpr bool pop_k_in_matmul = !reuse_k;
+                    DPRINT << "matmul streaming" << ENDL();
                     cb_matmul_blocks_streaming(
                         cb_q_in,
                         cb_k_in,
@@ -337,9 +338,11 @@ void MAIN {
                         cb_zero_in,
                         pop_k_in_matmul  // Don't pop if reuse_k
                     );
+                    DPRINT << "finished matmul streaming" << ENDL();
 #else
                     // BLOCKING QK MATMUL
                     // Wait for all K tiles before starting computation
+                    DPRINT << "matmul blocking" << ENDL();
                     cb_matmul_blocks(
                         cb_q_in,
                         cb_k_in,
@@ -359,6 +362,7 @@ void MAIN {
                         cb_zero_in,
                         false,
                         k_chunk_tiles_dynamic);
+                    DPRINT << "finished matmul blocking" << ENDL();
 #endif
                 }
 
@@ -370,7 +374,6 @@ void MAIN {
                             // For decode, we only apply mask at the last chunk for causal mode
                             if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                                DPRINT << "adding causal mask " << ENDL();
                                 add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                             }
                         } else {
@@ -408,6 +411,7 @@ void MAIN {
                  */
                 {
                     DeviceZoneScopedN("Reduce C max");
+                    DPRINT << "reduce c max" << ENDL();
                     reduce_c<
                         PoolType::MAX,
                         ReduceDim::REDUCE_ROW,
@@ -521,16 +525,25 @@ void MAIN {
                     /* OUT_ACC *= EXP_MAX_DIFF */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
                     pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
 
+                    // {
+                    //  DeviceZoneScopedN("mul block bcast cols");
+                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
+                    // }
                     /* CUR_SUM = CUR_SUM + PREV_SUM */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);
                     pack_reconfig_data_format(cb_cur_sum);
-                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
+                    // {
+                    // DeviceZoneScopedN("add block inplace cur sum");
+                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    // }
                     /* OUT_ACC += OUT_IM */
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);
                     pack_reconfig_data_format(cb_out_accumulate_im);
+
+                    // {
+                    // DeviceZoneScopedN("add block inplace acc im");
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 

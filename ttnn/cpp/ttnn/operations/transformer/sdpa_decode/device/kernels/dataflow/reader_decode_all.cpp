@@ -315,6 +315,7 @@ void kernel_main() {
                 uint32_t row_tile_bytes = DHt * k_tile_bytes;
 
                 if (do_k_mcast) {
+                    DeviceZoneScopedN("streaming k mcast");
                     // STREAMING K MULTICAST
                     // Read K row by row, write contiguously (column-major K^T layout)
                     // This enables streaming matmul that processes one K^T column at a time
@@ -351,6 +352,7 @@ void kernel_main() {
                             }
                         }
                         noc_async_read_barrier();
+                        DPRINT << "finished reading k chunk mcaster (streaming)" << ENDL();
 
                         // Multicast just this row (DHt tiles) to other cores
                         uint32_t row_start_ptr = k_write_ptr_base + row * row_tile_bytes;
@@ -361,6 +363,7 @@ void kernel_main() {
                             mcast_y1,  // y_end
                             row_start_ptr);
 
+                        DPRINT << "writing k chunk mcaster (streaming)" << ENDL();
                         noc_async_write_multicast(
                             row_start_ptr,
                             dst_mcast_addr,
@@ -368,9 +371,12 @@ void kernel_main() {
                             num_dests,
                             /*linked=*/false);
 
+                        DPRINT << "finished writing k chunk mcaster (streaming)" << ENDL();
+
                         // Ensure data multicast is complete
                         noc_async_write_barrier();
 
+                        DPRINT << "setting k mcast semaphore (streaming)" << ENDL();
                         // Signal "tiles ready" via semaphore multicast
                         constexpr uint32_t VALID = 1;
                         noc_semaphore_set(k_mcast_sem_ptr, VALID);
@@ -380,14 +386,18 @@ void kernel_main() {
 
                         noc_semaphore_set_multicast(k_mcast_sem_addr, sem_mcast_addr, num_dests, false);
 
+                        DPRINT << "finished setting k mcast semaphore (streaming)" << ENDL();
+
                         // Push DHt tiles (one K^T column) - allows compute to start immediately
                         cb_push_back(cb_k_in, DHt);
+                        DPRINT << "finished pushing back k chunk (streaming)" << ENDL();
                     }
 
                 } else {
                     // STREAMING K RECEIVER
                     // Reserve full buffer upfront for V reuse (k_base_read_ptr needs to stay valid)
                     // Wait for each row of K (column of K^T) and push incrementally
+                    DeviceZoneScopedN("streaming k receiver");
 
                     DPRINT << "waiting for k mcast semaphore (streaming)" << ENDL();
 
@@ -395,11 +405,17 @@ void kernel_main() {
                     k_base_read_ptr = get_noc_addr(get_write_ptr(cb_k_in));
 
                     for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
+                        DPRINT << "waiting for k mcast semaphore (streaming)" << ENDL();
                         noc_semaphore_wait(k_mcast_sem_ptr, 1);
+                        DPRINT << "finished waiting for k mcast semaphore (streaming)" << ENDL();
+                        DPRINT << "setting k mcast semaphore (streaming)" << ENDL();
                         noc_semaphore_set(k_mcast_sem_ptr, 0);
+                        DPRINT << "finished setting k mcast semaphore (streaming)" << ENDL();
 
                         // Push DHt tiles (data already written by mcast)
+                        DPRINT << "pushing back k chunk (streaming)" << ENDL();
                         cb_push_back(cb_k_in, DHt);
+                        DPRINT << "finished pushing back k chunk (streaming)" << ENDL();
                     }
                 }
 
@@ -425,6 +441,7 @@ void kernel_main() {
                         uint64_t k_read_ptr_base = k_base_read_ptr;
 
                         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
+                            DPRINT << "reading v chunk (streaming)" << ENDL();
                             for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
                                 // V[row, col] = K^T[col, row]
                                 // K^T[col, row] is at position row*DHt + col in column-major K^T layout
@@ -466,6 +483,7 @@ void kernel_main() {
 
                     noc_async_read_barrier();
                     cb_push_back(cb_v_in, v_chunk_tiles);
+                    DPRINT << "finished pushing back v chunk (streaming)" << ENDL();
                 }
             }
         } else {

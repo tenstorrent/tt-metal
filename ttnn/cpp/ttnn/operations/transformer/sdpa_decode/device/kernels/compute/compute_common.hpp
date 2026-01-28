@@ -669,6 +669,7 @@ ALWI void cb_matmul_blocks_streaming(
 
     cb_push_back(out_cb, M * N);
 
+    DPRINT << "pushing back output tiles (streaming)" << ENDL();
     // Pop all K tiles at once if requested (default)
     // If reuse_k is needed, caller sets pop_in1_cb=false and pops later
     if (pop_in1_cb) {
@@ -703,15 +704,18 @@ ALWI void cb_matmul_blocks(
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
+    // DPRINT << "initializing matmul (blocking)" << ENDL();
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
-
+    // DPRINT << "finished waiting for input tiles (blocking)" << ENDL();
     uint32_t output_num_tiles = M * N;
     cb_reserve_back(out_cb, output_num_tiles);
+    // DPRINT << "finished reserving output tiles (blocking)" << ENDL();
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    // DPRINT << "finished initializing matmul (blocking)" << ENDL();
     uint32_t in0_index_offset = 0;
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
@@ -722,15 +726,19 @@ ALWI void cb_matmul_blocks(
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
-
+            // DPRINT << "matmul (blocking)" << ENDL();
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                // DPRINT << "matmul block (blocking)" << ENDL();
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
             }
+            // DPRINT << "finished matmul (blocking)" << ENDL();
             if (add_mask) {
+                // DPRINT << "waiting for mask (blocking)" << ENDL();
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
+                // DPRINT << "finished waiting for mask (blocking)" << ENDL();
                 cb_wait_front(zero_cb, 1);
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -743,7 +751,9 @@ ALWI void cb_matmul_blocks(
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
+            // DPRINT << "finished packing tiles (blocking)" << ENDL();
             cb_push_back(out_cb, out_subblock_num_tiles);
+            // DPRINT << "finished pushing back output tiles (blocking)" << ENDL();
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
@@ -753,4 +763,5 @@ ALWI void cb_matmul_blocks(
     if (pop_in1_cb) {
         cb_pop_front(in1_cb, pop_in1_cb_num_tiles);
     }
+    // DPRINT << "finished poping input tiles (blocking)" << ENDL();
 }
