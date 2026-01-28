@@ -36,7 +36,7 @@ void bind_reduce_to_one(nb::module_& module) {
 
         Keyword Args:
             output_tensor (ttnn.Tensor, optional): Optional pre-allocated output tensor. Defaults to None.
-            intermediate_tensor (ttnn.Tensor, optional): Optional pre-allocated intermediate tensor for receiving data. Defaults to None.
+            intermediate_tensors (List[ttnn.Tensor], optional): Optional list of 3 pre-allocated intermediate tensors for the 3 reduction rounds. Required for trace mode. Defaults to None.
 
         Returns:
             ttnn.Tensor: The reduced tensor (sum of all input shards) on the root device.
@@ -54,8 +54,8 @@ void bind_reduce_to_one(nb::module_& module) {
                const MeshCoordinate& exit_coord,
                const tt::tt_fabric::Topology topology,
                std::optional<ttnn::Tensor>& output_tensor,
-               std::optional<ttnn::Tensor>& intermediate_tensor) {
-                return self(input_tensor, root_coord, exit_coord, topology, output_tensor, intermediate_tensor);
+               std::optional<std::vector<ttnn::Tensor>>& intermediate_tensors) {
+                return self(input_tensor, root_coord, exit_coord, topology, output_tensor, intermediate_tensors);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("root_coord"),
@@ -63,7 +63,7 @@ void bind_reduce_to_one(nb::module_& module) {
             nb::arg("topology"),
             nb::kw_only(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("intermediate_tensor") = nb::none()});
+            nb::arg("intermediate_tensors") = nb::none()});
 }
 
 }  // namespace ttnn::operations::ccl

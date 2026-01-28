@@ -20,7 +20,7 @@ struct ExecuteReduceToOne {
         const MeshCoordinate& exit_coord,
         tt::tt_fabric::Topology topology,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
+        const std::optional<std::vector<ttnn::Tensor>>& optional_intermediate_tensors = std::nullopt);
 };
 
 }  // namespace operations::ccl
