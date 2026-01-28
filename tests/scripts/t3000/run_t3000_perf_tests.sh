@@ -66,7 +66,7 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -120,7 +120,7 @@ run_t3000_gemma3_tests() {
   fail=0
   start_time=$(date +%s)
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

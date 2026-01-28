@@ -537,10 +537,8 @@ void py_module(nb::module_& mod) {
                 fused_activation_repr);
         });
 
-    ttnn::bind_function(
+    ttnn::bind_function<"matmul">(
         mod,
-        "matmul",
-        "ttnn.matmul",
         R"doc(
         Returns the matrix product of two tensors.
 
@@ -695,10 +693,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"linear">(
         mod,
-        "linear",
-        "ttnn.linear",
         R"doc(
         Returns the linear transformation of the inputs.
 
@@ -770,10 +766,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"matmul_batched_weights">(
         mod,
-        "matmul_batched_weights",
-        "ttnn.matmul_batched_weights",
         R"doc(
         DEPRECATED: This is for experimental internal use and is not supported.
 
@@ -838,10 +832,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"addmm">(
         mod,
-        "addmm",
-        "ttnn.addmm",
         R"doc(
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
 
@@ -924,10 +916,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"sparse_matmul">(
         mod,
-        "sparse_matmul",
-        "ttnn.sparse_matmul",
         R"doc(
         Returns the matrix product of two tensors. Based on `is_input_a_sparse`, `is_input_b_sparse` and the sparsity tensor, some parts of the output computation is skipped.
 
