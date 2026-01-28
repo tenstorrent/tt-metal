@@ -8,7 +8,7 @@ import random
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc, is_unsigned_tensor
+from tests.ttnn.utils_for_testing import is_unsigned_tensor
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
