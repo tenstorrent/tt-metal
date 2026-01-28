@@ -214,6 +214,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
     bool transpose_core_grid = M > N;
+    log_info(tt::LogOp, "Transpose core grid: {}", transpose_core_grid);
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -340,7 +341,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
             }
         } else if (fused_op_signaler->is_reduce_scatter()) {
             // Create semaphores
-            fused_op_signaler->init_fused_op(program, device, core_grid);
+            // fused_op_signaler->init_fused_op(program, device, core_grid);
+            fused_op_signaler->init_fused_op(program, device, core_grid, cores_list);
             defines["FUSE_RS"] = "1";
         }
     }
@@ -349,11 +351,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
-                            ? fused_op_signaler->ag_input.value().buffer()->address()
-                            : 0;
+    uint32_t in3_addr =
+        (fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input)
+            ? fused_op_signaler->ag_input.value().buffer()->address()
+            : 0;
     auto in3_data_format =
-        (fuse_op && fused_op_signaler->read_local_slice_from_input)
+        (fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input)
             ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
             : in1_data_format;
     auto in3_tile_size = tt::tile_size(in3_data_format);
@@ -612,7 +615,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
-        if (fuse_op) {
+        if (fuse_op && fused_op_signaler->is_all_gather()) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
         if (in1_idx == 0) {
@@ -639,7 +642,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
             defer_write_k_block,
         };
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            if (fused_op_signaler->is_all_gather()) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(
+                    in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            } else if (fused_op_signaler->is_reduce_scatter()) {
+                fused_op_signaler->push_matmul_fused_reduce_scatter_rt_args(
+                    transpose_core_grid, in1_args, in0_idx, in1_idx);
+            }
         }
         if (in0_idx == 0) {
             // in1 sender
@@ -666,7 +675,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->is_all_gather() && fused_op_signaler->read_local_slice_from_input};
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(

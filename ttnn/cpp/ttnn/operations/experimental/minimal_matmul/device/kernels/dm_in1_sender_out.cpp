@@ -5,7 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#ifdef FUSE_AG
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#endif
+#ifdef FUSE_RS
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -87,6 +92,10 @@ void kernel_main() {
             device_k_block_start_ids,
             forward_k_block_schedule);
     }
+#endif
+
+#ifdef FUSE_RS
+    OpSignaler op_signaler(argidx);
 #endif
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
@@ -245,6 +254,9 @@ void kernel_main() {
         n_forward = !n_forward;
         // We get reuse on in1 when striding M block
         reuse_block = true;
+#endif
+#ifdef FUSE_RS
+        op_signaler.synchronize_workers_and_signal_op(0);
 #endif
     }
     noc_async_write_barrier();

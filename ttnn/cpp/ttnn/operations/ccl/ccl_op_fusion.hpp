@@ -283,6 +283,11 @@ struct MinimalMatmulFusedOpSignaler {
     bool read_local_slice_from_input = false;
     std::optional<tt::tt_metal::Tensor> ag_input;
 
+    /* Matmul info for Reduce Scatter */
+    std::vector<CoreCoord> matmul_worker_cores_noc;
+    std::vector<CoreCoord> matmul_worker_cores;
+    uint32_t matmul_worker_sync_semaphore = 0;
+
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
@@ -303,6 +308,12 @@ struct MinimalMatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
+    void init_fused_op(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const CoreRange& matmul_workers,
+        const std::vector<CoreCoord>& matmul_worker_cores);
+
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
@@ -310,6 +321,12 @@ struct MinimalMatmulFusedOpSignaler {
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
+
+    void push_matmul_fused_reduce_scatter_rt_args(
+        bool transpose_core_grid,
+        std::vector<uint32_t>& out_rt_args,
+        uint32_t curr_worker_in0_idx,
+        uint32_t curr_worker_in1_idx);
 
     bool is_all_gather() const;
     bool is_reduce_scatter() const;
