@@ -492,11 +492,11 @@ jobs:
       - name: Add .nojekyll
         run: touch site/.nojekyll
 
-      - name: Publish to blozano-tt/clangsa-results (gh-pages)
+      - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
-          external_repository: blozano-tt/clangsa-results
+          external_repository: tenstorrent/tt-metal-clangsa-results
           publish_branch: gh-pages
           publish_dir: site
           force_orphan: true
