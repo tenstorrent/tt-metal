@@ -9,8 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
     const auto num_output_tiles = get_arg_val<uint32_t>(1);
 
@@ -74,4 +73,3 @@ void MAIN {
         cb_pop_front(cb_intermed0, onetile);
     }
 }
-}  // namespace NAMESPACE

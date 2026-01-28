@@ -49,6 +49,7 @@ struct ExecuteFlashMultiLatentAttentionDecode {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
+        const std::optional<const Tensor>& input_tensor_v,
         uint32_t head_dim_v,
         bool is_causal = true,
         const std::optional<const Tensor>& attn_mask = std::nullopt,
@@ -66,6 +67,7 @@ struct ExecutePagedFlashMultiLatentAttentionDecode {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
+        const std::optional<const Tensor>& input_tensor_v,
         uint32_t head_dim_v,
         const ttnn::Tensor& page_table_tensor,
         bool is_causal = true,
