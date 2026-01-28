@@ -1,4 +1,4 @@
-name: "Custom test dispatch"
+name: "Test INSTALLING.md install.sh step"
 
 on:
   workflow_dispatch:
