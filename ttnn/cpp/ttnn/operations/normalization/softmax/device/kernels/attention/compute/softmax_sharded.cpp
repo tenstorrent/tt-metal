@@ -20,8 +20,8 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::
-        reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::reduce_policies::PreloadedPolicy>(
-            cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::InputBlockShape::row(block_w));
+        reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -208,12 +208,12 @@ void kernel_main() {
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         cb_wait_front(cb_exps, block_w);
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::reduce_policies::PreloadedPolicy>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::InputBlockShape::row(block_w),
-                compute_kernel_lib::InputMemoryLayout::contiguous(),
+                compute_kernel_lib::ReduceInputBlockShape::row(block_w),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 [](uint32_t) {
                     recip_tile_init();
