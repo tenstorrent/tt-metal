@@ -55,38 +55,6 @@ void print_tile_rows(
     DPRINT << "++++++" << ENDL();
 }
 
-template <typename DataType>
-FORCE_INLINE DataType* tile_row_offset(DataType* indices_address, uint32_t row) {
-    constexpr uint32_t num_face_width = 2;
-    constexpr uint32_t num_face_height = 2;
-    constexpr uint32_t FaceWidth = 16;
-    constexpr uint32_t FaceHeight = 16;
-    constexpr uint32_t TileHeight = 32;
-    constexpr uint32_t TileWidth = 32;
-    uint32_t offset = 0;
-    uint32_t local_row = row;
-    if (row >= FaceHeight) {
-        offset += num_face_width * FaceHeight * FaceWidth;  // if it was generic, multiply by row/FaceHeight
-        local_row -= FaceHeight;
-    }
-    offset += local_row * FaceWidth;
-    return (DataType*)(indices_address + offset);
-}
-
-template <typename DataType>
-FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) {
-    constexpr uint32_t FaceWidth = 16;
-    constexpr uint32_t FaceHeight = 16;
-    uint32_t offset = 0;
-    uint32_t local_col = col;
-    if (col >= FaceWidth) {
-        offset += FaceHeight * FaceWidth;  // if it was generic, multiply by col/FaceWidth
-        local_col -= FaceWidth;
-    }
-    offset += local_col;
-    return (DataType*)(indices_address + offset);
-}
-
 template <
     uint32_t LinearizedMeshCoord,
     uint32_t TokensPerDevice,
