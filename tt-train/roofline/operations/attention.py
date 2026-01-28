@@ -16,6 +16,7 @@ from ..roofline import (
     attention_roofline,
     heads_creation_roofline,
     heads_fusion_roofline,
+    grouped_heads_creation_roofline,
 )
 from .operation import RooflineFunctionContext, RooflineFunction
 
@@ -120,6 +121,116 @@ class MockHeadsCreationOp(RooflineFunction):
         grad_qkv = MockTensor(qkv.shape, qkv.dtype, qkv.layout, requires_grad=False)
 
         return (grad_qkv,)
+
+
+class MockGroupedHeadsCreationOp(RooflineFunction):
+    """Roofline estimation for grouped heads creation (split Q and KV for GQA).
+
+    For Grouped Query Attention:
+    - Q: [B, 1, S, E] -> [B, num_heads, S, head_dim]
+    - KV: [B, 1, S, 2*num_groups*head_dim] -> K [B, num_groups, S, head_dim], V [B, num_groups, S, head_dim]
+    """
+
+    @staticmethod
+    def forward(
+        ctx: RooflineFunctionContext,
+        roofline_ctx: "RooflineContext",
+        q: MockTensor,
+        kv: MockTensor,
+        num_heads: int,
+        num_groups: int,
+    ) -> Tuple[MockTensor, MockTensor, MockTensor]:
+        """Forward pass: split Q and KV into separate head tensors.
+
+        Args:
+            ctx: Function context
+            roofline_ctx: Roofline context for estimates
+            q: Query tensor [B, 1, S, E] where E = num_heads * head_dim
+            kv: Combined KV tensor [B, 1, S, 2*num_groups*head_dim]
+            num_heads: Number of attention heads for Q
+            num_groups: Number of KV groups
+
+        Returns:
+            Tuple of (query, key, value) tensors
+            - query: [B, num_heads, S, head_dim]
+            - key: [B, num_groups, S, head_dim]
+            - value: [B, num_groups, S, head_dim]
+        """
+        ctx.save_for_backward(q, kv, num_heads, num_groups)
+
+        # Parse dimensions from q shape [B, 1, S, E]
+        batch_size = q.shape[0]
+        seq_len = q.shape[2]
+        embedding_dim = q.shape[3]
+        head_dim = embedding_dim // num_heads
+
+        estimate = grouped_heads_creation_roofline(
+            roofline_ctx.hw,
+            batch_size,
+            seq_len,
+            num_heads,
+            num_groups,
+            head_dim,
+            dtype=q.dtype,
+            operation="GroupedHeadsCreation.forward",
+            phase="forward",
+        )
+        roofline_ctx.add_perf_result(estimate)
+
+        # Output shapes
+        q_shape = (batch_size, num_heads, seq_len, head_dim)
+        kv_shape = (batch_size, num_groups, seq_len, head_dim)
+
+        query = MockTensor(q_shape, q.dtype, q.layout, requires_grad=True)
+        key = MockTensor(kv_shape, kv.dtype, kv.layout, requires_grad=True)
+        value = MockTensor(kv_shape, kv.dtype, kv.layout, requires_grad=True)
+
+        return query, key, value
+
+    @staticmethod
+    def backward(
+        ctx: RooflineFunctionContext,
+        roofline_ctx: "RooflineContext",
+        grad_query: MockTensor,
+        grad_key: MockTensor,
+        grad_value: MockTensor,
+    ) -> Tuple[MockTensor, MockTensor, None, None]:
+        """Backward pass: concatenate gradients back.
+
+        Args:
+            ctx: Function context with saved tensors
+            roofline_ctx: Roofline context for estimates
+            grad_query: Gradient for query
+            grad_key: Gradient for key
+            grad_value: Gradient for value
+
+        Returns:
+            (grad_q, grad_kv, None, None) tuple
+        """
+        q, kv, num_heads, num_groups = ctx.saved_tensors
+
+        batch_size = q.shape[0]
+        seq_len = q.shape[2]
+        embedding_dim = q.shape[3]
+        head_dim = embedding_dim // num_heads
+
+        estimate = grouped_heads_creation_roofline(
+            roofline_ctx.hw,
+            batch_size,
+            seq_len,
+            num_heads,
+            num_groups,
+            head_dim,
+            dtype=q.dtype,
+            operation="GroupedHeadsCreation.backward",
+            phase="backward",
+        )
+        roofline_ctx.add_perf_result(estimate)
+
+        grad_q = MockTensor(q.shape, q.dtype, q.layout, requires_grad=False)
+        grad_kv = MockTensor(kv.shape, kv.dtype, kv.layout, requires_grad=False)
+
+        return grad_q, grad_kv, None, None
 
 
 class MockHeadsFusionOp(RooflineFunction):

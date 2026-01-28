@@ -288,6 +288,73 @@ def heads_creation_roofline(
     )
 
 
+def grouped_heads_creation_roofline(
+    hw: HardwareSpec,
+    batch_size: int,
+    seq_len: int,
+    num_heads: int,
+    num_groups: int,
+    head_dim: int,
+    dtype: DataType = DataType.BFLOAT16,
+    fidelity: MathFidelity = MathFidelity.HiFi4,
+    num_cores: Optional[int] = None,
+    operation: str = "GroupedHeadsCreation",
+    phase: str = "forward",
+) -> "RooflineEstimate":
+    """
+    Performance model for grouped heads creation (split Q and KV into heads for GQA).
+
+    This is a reshape/transpose operation - pure memory movement.
+    For Grouped Query Attention:
+    - Q: [B, 1, S, E] -> [B, num_heads, S, head_dim]
+    - KV: [B, 1, S, 2*num_groups*head_dim] -> K [B, num_groups, S, head_dim], V [B, num_groups, S, head_dim]
+
+    Args:
+        hw: Hardware specification
+        batch_size: Batch size
+        seq_len: Sequence length
+        num_heads: Number of attention heads for Q
+        num_groups: Number of KV groups (num_heads for MHA, fewer for GQA)
+        head_dim: Dimension per head
+        dtype: Data type
+        fidelity: Math fidelity level
+        num_cores: Number of cores to use
+        operation: Name for the operation
+        phase: "forward" or "backward"
+
+    Returns:
+        RooflineEstimate with performance metrics
+    """
+    from .roofline import RooflineEstimate
+
+    if num_cores is None:
+        num_cores = hw.tensix_cores_per_chip
+
+    bytes_per_elem = dtype.value
+
+    # Total elements: Q has num_heads, K and V have num_groups each
+    q_elements = batch_size * seq_len * num_heads * head_dim
+    kv_elements = batch_size * seq_len * 2 * num_groups * head_dim
+    num_elements = q_elements + kv_elements
+
+    # Pure memory movement: read input, write output
+    total_bytes = int(2 * num_elements * bytes_per_elem)
+    total_flops = 0  # No compute, just reshape/transpose
+
+    ideal_compute_ns = 0
+    ideal_memory_ns = total_bytes / hw.dram_bw_gb_s
+
+    return RooflineEstimate(
+        operation=operation,
+        phase=phase,
+        total_flops=total_flops,
+        total_bytes=total_bytes,
+        ideal_compute_ns=ideal_compute_ns,
+        ideal_memory_ns=ideal_memory_ns,
+        hw=hw,
+    )
+
+
 def heads_fusion_roofline(
     hw: HardwareSpec,
     batch_size: int,

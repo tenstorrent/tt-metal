@@ -8,7 +8,10 @@ from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
 
 from ..hardware import HardwareSpec, DataType, MathFidelity
-from .roofline import sfpu_flops_per_core_per_cycle, fpu_flops_per_core_per_cycle
+from .roofline import (
+    sfpu_flops_per_core_per_cycle,
+    fpu_eltwise_flops_per_core_per_cycle,
+)
 
 if TYPE_CHECKING:
     from .roofline import RooflineEstimate
@@ -66,7 +69,9 @@ def elementwise_roofline(
     if sfpu_ops_per_element > 0.0:
         ops_per_cycle += sfpu_flops_per_core_per_cycle(fidelity) / sfpu_ops_per_element
     if fpu_ops_per_element > 0.0:
-        ops_per_cycle += fpu_flops_per_core_per_cycle(fidelity) / fpu_ops_per_element
+        ops_per_cycle += (
+            fpu_eltwise_flops_per_core_per_cycle(fidelity) / fpu_ops_per_element
+        )
 
     # No compute case (Avoid division by zero)
     if sfpu_ops_per_element <= 0.0 and fpu_ops_per_element <= 0.0:

@@ -11,14 +11,18 @@ from .operation import RooflineFunctionContext, RooflineFunction
 from .linear import MockLinearOp
 from .matmul import MockMatMulOp
 from .elementwise import MockAddOp, MockMulOp, MockGELUOp
+from .silu import MockSiLUOp
 from .embedding import MockEmbeddingOp
 from .layernorm import MockLayerNormOp
+from .rmsnorm import MockRMSNormOp
 from .dropout import MockDropoutOp
 from .attention import (
     MockHeadsCreationOp,
     MockHeadsFusionOp,
+    MockGroupedHeadsCreationOp,
     MockScaledDotProductAttentionOp,
 )
+from .rope import MockRoPEOp
 from .cross_entropy import MockCrossEntropyLossOp
 
 __all__ = [
@@ -32,16 +36,22 @@ __all__ = [
     "MockAddOp",
     "MockMulOp",
     "MockGELUOp",
+    # Activation
+    "MockSiLUOp",
     # Embedding
     "MockEmbeddingOp",
     # Normalization
     "MockLayerNormOp",
+    "MockRMSNormOp",
     # Dropout
     "MockDropoutOp",
     # Attention
     "MockHeadsCreationOp",
     "MockHeadsFusionOp",
+    "MockGroupedHeadsCreationOp",
     "MockScaledDotProductAttentionOp",
+    # Rotary Position Embedding
+    "MockRoPEOp",
     # Loss
     "MockCrossEntropyLossOp",
 ]

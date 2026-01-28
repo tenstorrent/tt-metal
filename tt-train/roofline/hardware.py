@@ -159,7 +159,20 @@ WORMHOLE_GALAXY = HardwareSpec(
     chips_per_galaxy=32,
 )
 
-BLACKHOLE_CHIP = HardwareSpec(
+BLACKHOLE_P100 = HardwareSpec(
+    name="Blackhole",
+    tensix_cores_per_chip=120,
+    clock_ghz=1.35,
+    dram_gb_per_chip=32,
+    dram_bw_gb_s=480,
+    sram_mb_per_core=1.5,  # 210 MB / 140 cores
+    noc_bw_tb_s=1.4,
+    noc_link_bw_gb_s=200,
+    eth_bw_gb_s_per_chip=480,  # 10 × 400GbE × 48 GB/s effective
+    chips_per_galaxy=1,
+)
+
+BLACKHOLE_P150 = HardwareSpec(
     name="Blackhole",
     tensix_cores_per_chip=140,
     clock_ghz=1.35,

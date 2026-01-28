@@ -11,7 +11,7 @@ import math
 from ..hardware import HardwareSpec, DataType, MathFidelity
 
 if TYPE_CHECKING:
-    from .roofline import RooflineEstimate, fpu_flops_per_core_per_cycle
+    from .roofline import RooflineEstimate, fpu_mm_flops_per_core_per_cycle
 
 
 def matmul_roofline(
@@ -49,7 +49,7 @@ def matmul_roofline(
         RooflineEstimate with performance metrics
     """
     # Local import to avoid circular dependency
-    from .roofline import RooflineEstimate, fpu_flops_per_core_per_cycle
+    from .roofline import RooflineEstimate, fpu_mm_flops_per_core_per_cycle
 
     if num_cores is None:
         num_cores = hw.tensix_cores_per_chip
@@ -62,7 +62,7 @@ def matmul_roofline(
     total_bytes = int((M * K + K * N + M * N) * bytes_per_elem)
 
     # Ideal compute time
-    tensix_mul_adds_per_cycle = fpu_flops_per_core_per_cycle(fidelity)
+    tensix_mul_adds_per_cycle = fpu_mm_flops_per_core_per_cycle(fidelity)
     ideal_compute_cycles = math.ceil(
         (total_flops / (num_cores * tensix_mul_adds_per_cycle))
     )

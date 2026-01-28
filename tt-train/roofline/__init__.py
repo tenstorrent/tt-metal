@@ -65,7 +65,8 @@ from .hardware import (
     WORMHOLE_N150,
     WORMHOLE_N300,
     WORMHOLE_GALAXY,
-    BLACKHOLE_CHIP,
+    BLACKHOLE_P100,
+    BLACKHOLE_P150,
     BLACKHOLE_GALAXY,
 )
 
@@ -84,10 +85,13 @@ from .roofline import (
     elementwise_roofline,
     embedding_roofline,
     layernorm_roofline,
+    rmsnorm_roofline,
     softmax_roofline,
     attention_roofline,
     heads_creation_roofline,
     heads_fusion_roofline,
+    grouped_heads_creation_roofline,
+    rope_roofline,
     dropout_roofline,
     cross_entropy_roofline,
 )
@@ -106,18 +110,29 @@ from .modules import (
     MockTrainablePositionalEmbedding,
     # Normalization
     MockLayerNorm,
+    MockRMSNormLayer,
     # Dropout
     MockDropout,
     # Attention
     MockMultiHeadAttention,
+    MockGroupedQueryAttention,
+    RoPEParams,
+    # Position Embedding
+    MockRotaryEmbedding,
     # MLP
     MockGPTMLP,
-    # Transformer
+    MockLlamaMLP,
+    # Transformer Blocks
     MockGPTBlock,
+    MockLlamaBlock,
     # NanoGPT
     MockNanoGPT,
     MockNanoGPTConfig,
     create_mock_nanogpt,
+    # Llama
+    MockLlama,
+    MockLlamaConfig,
+    create_mock_llama,
 )
 
 # Operations
@@ -132,16 +147,22 @@ from .operations import (
     MockAddOp,
     MockMulOp,
     MockGELUOp,
+    # Activation
+    MockSiLUOp,
     # Embedding
     MockEmbeddingOp,
     # Normalization
     MockLayerNormOp,
+    MockRMSNormOp,
     # Dropout
     MockDropoutOp,
     # Attention
     MockHeadsCreationOp,
     MockHeadsFusionOp,
+    MockGroupedHeadsCreationOp,
     MockScaledDotProductAttentionOp,
+    # Rotary Position Embedding
+    MockRoPEOp,
     # Loss
     MockCrossEntropyLossOp,
 )
@@ -172,10 +193,13 @@ __all__ = [
     "elementwise_roofline",
     "embedding_roofline",
     "layernorm_roofline",
+    "rmsnorm_roofline",
     "softmax_roofline",
     "attention_roofline",
     "heads_creation_roofline",
     "heads_fusion_roofline",
+    "grouped_heads_creation_roofline",
+    "rope_roofline",
     "dropout_roofline",
     "cross_entropy_roofline",
     # Mock tensor
@@ -191,13 +215,22 @@ __all__ = [
     "MockEmbedding",
     "MockTrainablePositionalEmbedding",
     "MockLayerNorm",
+    "MockRMSNormLayer",
     "MockDropout",
     "MockMultiHeadAttention",
+    "MockGroupedQueryAttention",
+    "RoPEParams",
+    "MockRotaryEmbedding",
     "MockGPTMLP",
+    "MockLlamaMLP",
     "MockGPTBlock",
+    "MockLlamaBlock",
     "MockNanoGPT",
     "MockNanoGPTConfig",
     "create_mock_nanogpt",
+    "MockLlama",
+    "MockLlamaConfig",
+    "create_mock_llama",
     # Operation base classes
     "RooflineFunctionContext",
     "RooflineFunction",
@@ -207,12 +240,16 @@ __all__ = [
     "MockAddOp",
     "MockMulOp",
     "MockGELUOp",
+    "MockSiLUOp",
     "MockEmbeddingOp",
     "MockLayerNormOp",
+    "MockRMSNormOp",
     "MockDropoutOp",
     "MockHeadsCreationOp",
     "MockHeadsFusionOp",
+    "MockGroupedHeadsCreationOp",
     "MockScaledDotProductAttentionOp",
+    "MockRoPEOp",
     "MockCrossEntropyLossOp",
     # Training utilities
     "MockAdamW",

@@ -19,7 +19,17 @@ if TYPE_CHECKING:
     from ..mock_tensor import MockTensor
 
 
-def fpu_flops_per_core_per_cycle(fidelity: MathFidelity) -> int:
+def fpu_eltwise_flops_per_core_per_cycle(
+    fidelity: MathFidelity, is_fma: bool = False
+) -> int:
+    """FPU (Matrix Engine) throughput for elementwise operations (add, sub, fma)
+
+    FPU works on 8x16 LoFi tiles, so that's 128 elements per cycle.
+    """
+    return 128 / fidelity.value if not is_fma else 256 / fidelity.value
+
+
+def fpu_mm_flops_per_core_per_cycle(fidelity: MathFidelity) -> int:
     """FPU (Matrix Engine) throughput.
 
     Matrix engine multiplies tiles of size 8x16 and 16x16 in one cycle at LoFi.
