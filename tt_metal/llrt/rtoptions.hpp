@@ -28,6 +28,10 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
@@ -66,6 +70,7 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -626,6 +631,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -690,11 +696,19 @@ public:
         }
     }
 
+    // Resolve FabricNodeIds to physical chip IDs using the control plane.
+    // This must be called after the control plane is initialized, since during
+    // rtoptions parsing we don't have access to the control plane yet.
+    void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
+
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    bool ParseFeatureChipIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if chips are specified
+    bool ParseFeatureNodeIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if nodes are specified
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
