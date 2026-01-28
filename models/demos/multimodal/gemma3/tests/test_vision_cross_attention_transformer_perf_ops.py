@@ -86,7 +86,9 @@ def target_maker():
     batch_size = 1
     subdir = f"ttnn_gemma_cross_attention_perf"
     num_iterations = 1
-    command = f"pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer.py::test_gemma_vision"
+    command = (
+        f"pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer.py::test_gemma_vision"
+    )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start("MAKING OP TO OP TARGETS")
@@ -126,12 +128,12 @@ def target_maker():
 
     # Write to file
     with open(
-        "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
+        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
     ) as f:
         json.dump(all_results_average, f, indent=2)
 
     with open(
-        "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
+        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
     ) as f:
         data_avg = json.load(f)
 
@@ -164,7 +166,7 @@ def target_maker():
 
     # Write to file
     with open(
-        "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
+        "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "w"
     ) as f:
         json.dump(avg_values, f, indent=2)
 
@@ -176,7 +178,8 @@ def target_maker():
     logger.info(f"Generated margin values: {margin_values}")
 
     with open(
-        "models/demos/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json", "w"
+        "models/demos/multimodal/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json",
+        "w",
     ) as f:
         json.dump(margin_values, f, indent=2)
 
@@ -197,7 +200,9 @@ def test_op_to_op_perf_gemma_vision():
     batch_size = 1
     subdir = f"ttnn_gemma_cross_attention_perf"
     num_iterations = 1
-    command = f"pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer.py::test_gemma_vision"
+    command = (
+        f"pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer.py::test_gemma_vision"
+    )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start("PROFILING OP TO OP")
@@ -220,11 +225,12 @@ def test_op_to_op_perf_gemma_vision():
     expected_perf_cols = {}
     margins = {}
     with open(
-        f"models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
+        f"models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_op_to_op.json", "r"
     ) as f:
         expected_perf_cols = json.load(f)
     with open(
-        f"models/demos/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json", "r"
+        f"models/demos/multimodal/gemma3/tests/perf_targets/targets_margins_test_perf_vision_cross_attention_op_to_op.json",
+        "r",
     ) as f:
         margins = json.load(f)
     compare_with_target(kernel_duration_per_instance_averaged_dict, expected_perf_cols, margins)
