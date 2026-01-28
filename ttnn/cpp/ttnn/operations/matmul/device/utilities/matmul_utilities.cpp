@@ -289,5 +289,5 @@ void get_optimal_dram_bank_to_reader_assignment(
     all_worker_cores = CoreRangeSet(all_cores_set);
 }
 
-}  // namespace dram_sharded_helpers
-}  // namespace ttnn::prim
+} // namespace ttnn::prim::dram_sharded_helpers
+
