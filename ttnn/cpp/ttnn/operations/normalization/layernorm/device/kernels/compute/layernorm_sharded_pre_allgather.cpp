@@ -121,13 +121,13 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::reduce_policies::PreloadedPolicy,
-        compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
         cb_in,
         cb_scaler,
         cb_ex_partial2,
-        compute_kernel_lib::InputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-        compute_kernel_lib::InputMemoryLayout::with_row_stride(block_w));
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -167,12 +167,12 @@ void kernel_main() {
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
     compute_kernel_lib::
-        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::reduce_policies::PreloadedPolicy>(
+        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             cb_x2,
             cb_scaler,
             cb_ex_partial2,
-            compute_kernel_lib::InputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-            compute_kernel_lib::InputMemoryLayout::with_row_stride(block_w));
+            compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+            compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2

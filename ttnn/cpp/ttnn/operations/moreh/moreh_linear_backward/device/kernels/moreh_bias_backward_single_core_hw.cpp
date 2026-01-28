@@ -89,8 +89,8 @@ void kernel_main() {
                     cb_reduce,
                     cb_scaler,
                     output_cb,
-                    compute_kernel_lib::InputBlockShape::single(),
-                    compute_kernel_lib::InputMemoryLayout::contiguous(),
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done));
 
                 num_tile_done++;

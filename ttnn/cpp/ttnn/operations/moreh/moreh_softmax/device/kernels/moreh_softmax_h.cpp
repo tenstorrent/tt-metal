@@ -36,19 +36,19 @@ void kernel_main() {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::InputBlockShape::single());
+                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             compute_kernel_lib::
-                reduce<PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::reduce_policies::PersistentPolicy>(
-                    cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::InputBlockShape::col(Ht - 1));
+                reduce<PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                    cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
                 cb_tmp,
                 cb_bcast_scaler,
                 cb_max,
-                compute_kernel_lib::InputBlockShape::single(),
-                compute_kernel_lib::InputMemoryLayout::contiguous(),
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
@@ -105,12 +105,12 @@ void kernel_main() {
 #ifdef LOG
         // log(sum) - pop tiles after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::reduce_policies::StreamingBatchedPolicy>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::InputBlockShape::col(Ht),
-                compute_kernel_lib::InputMemoryLayout::contiguous(),
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {
                     log_tile_init();
@@ -119,12 +119,12 @@ void kernel_main() {
 #else
         // 1/sum - keep tiles for subsequent multiplication
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::reduce_policies::PersistentPolicy>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::InputBlockShape::col(Ht),
-                compute_kernel_lib::InputMemoryLayout::contiguous(),
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {
                     recip_tile_init();
