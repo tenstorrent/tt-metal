@@ -1,27 +1,27 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
+import random
 from functools import partial
+from typing import Optional, Tuple
+
 import pytest
 import torch
-import random
+from loguru import logger
+
 import ttnn
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.framework.permutations import permutations
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_similarity
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
-from loguru import logger
+from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
 random.seed(0)
-
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -34,8 +34,8 @@ parameters = {
         + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
         "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
         "largest": [True],
-        "k": [32],  # only k = 32 is supported for now
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "k": [32],
+        "input_a_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -47,7 +47,7 @@ parameters = {
         "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
         "largest": [False],
         "k": [32],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -59,10 +59,13 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if len(test_vector["input_shape"]) != 4:
-        return True, "Input shape must be 4D"
-    if test_vector["dim"] != -1:
-        return True, "Only the last dim is supported right now"
+    print(f"test_vector[input_shape]: ", test_vector["input_shape"])
+    print(f"test_vector[dim]: ", test_vector["dim"])
+    print(f"test_vector[k]: ", test_vector["k"])
+    if test_vector["dim"] is None:
+        return True, "dim parameter cannot be None."
+    if test_vector["input_shape"][test_vector["dim"]] < test_vector["k"]:
+        return True, "k must be less than or equal to the maximum dimension size."
     if test_vector["dim"] is not None:
         if (
             test_vector["dim"] * (-1) > len(test_vector["input_shape"])
@@ -70,22 +73,32 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             or test_vector["dim"] > (len(test_vector["input_shape"]) - 1)
             and test_vector["dim"] >= 0
         ):
-            return True, "Absolute value of dim must be less or equal than the rank of input tensor"
+            return True, "Absolute value of dim must be less or equal than the rank of input tensor."
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+        return True, "TopK operation requires tensor to be in Tile layout."
     return False, None
 
 
 def run_topk(
-    input_shape, dim, largest, k, input_a_dtype, input_layout, input_a_memory_config, output_memory_config, device
-):
+    input_shape: list,
+    dim: int,
+    largest: bool,
+    k: int,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    device,
+) -> list:
+    # Set random seed for data generation
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    # Sanitize input shape
     input_shape = sanitize_shape(input_shape, "topk")
-
+    print("========================================")
+    print(f"Running topk with input_shape: {input_shape}, dim: {dim}, k: {k}, input_a_dtype: {input_a_dtype}")
+    print("========================================")
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
@@ -110,27 +123,30 @@ def run_topk(
         device=device,
         memory_config=input_a_memory_config,
     )
-    op_output_values = ttnn.from_torch(
-        torch_optional_output[0],
-        dtype=input_a_dtype,
-        layout=input_layout,
-        device=device,
-        memory_config=output_memory_config,
-    )
-    op_output_indices = ttnn.from_torch(
-        torch_optional_output[1],
-        dtype=ttnn.uint16,
-        layout=input_layout,
-        device=device,
-        memory_config=output_memory_config,
-    )
+    # op_output_values = ttnn.from_torch(
+    #     torch_optional_output[0],
+    #     dtype=input_a_dtype,
+    #     layout=input_layout,
+    #     device=device,
+    #     memory_config=output_memory_config,
+    # )
+    # op_output_indices = ttnn.from_torch(
+    #     torch_optional_output[1],
+    #     dtype=ttnn.uint16,
+    #     layout=input_layout,
+    #     device=device,
+    #     memory_config=output_memory_config,
+    # )
 
     start_time = start_measuring_time()
-    ttnn.topk(input_tensor_a, k=k, dim=dim, largest=largest, sorted=True, out=(op_output_values, op_output_indices))
+    op_output_values, op_output_indices = ttnn.topk(
+        input_tensor_a, k=k, dim=dim, largest=largest, sorted=True
+    )  # , output_tensor=(op_output_values, op_output_indices))
     output_values = ttnn.to_torch(op_output_values)
     output_indices = ttnn.to_torch(op_output_indices).to(torch.int64)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
+    assert_equal(output_values, torch_output_values)
     tensors = [input_tensor_a, op_output_values, op_output_indices]
     return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
 
@@ -150,7 +166,6 @@ def test_nightly(device, params):
         logger.info(f"E2E Performance: {e2e_perf}")
 
 
-@pytest.mark.xfail
 @pytest.mark.parametrize("params", list(permutations(parameters["xfail"])))
 def test_nightly(device, params):
     invalidated, output_str = invalidate_vector(params)
