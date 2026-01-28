@@ -178,6 +178,7 @@ def test_cross_attention_transformer_text_inference(
     logger.info(f"Running reference model for validation")
     get_ref_model_logits = lambda _, *args, **kwargs: reference_model.forward(*args, **kwargs)
     get_ref_model_xattn_cache = lambda _: pt_xattn_cache_chunks
+    token_emb = reference_model.get_input_embeddings()
 
     for i in range(n_iter):
         # Test prefill and decode
@@ -219,8 +220,7 @@ def test_cross_attention_transformer_text_inference(
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        Emb = reference_model.get_input_embeddings()
-        h = Emb(tokens[:, position_ids])
+        h = token_emb(tokens[:, position_ids])
 
         TEXT_ONLY = False
 
