@@ -33,8 +33,8 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_of_transactions; i++) {
                 noc_semaphore_inc<true>(dst_semaphore_noc_addr, atomic_inc_value);
             }
-            // Wait for all posted atomics to be sent
-            noc_async_posted_atomic_barrier();
+            // Wait for all posted atomics to be flushed/sent
+            noc_async_posted_atomics_flushed();
         } else {
             // Non-posted atomics - wait for each to complete
             for (uint32_t i = 0; i < num_of_transactions; i++) {
