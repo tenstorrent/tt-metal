@@ -54,7 +54,7 @@ The following models have been traced and their configurations are available in 
 
 | Model | Purpose | Pytest command used for tracing |
 |-------|---------|---------------------------------|
-| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
+| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/nlp/llms/deepseek_v3/demo/demo.py --prompts-file models/demos/nlp/llms/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
 
 
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
@@ -125,7 +125,7 @@ The new format supports multiple execution contexts per configuration, enabling 
           "arguments": [...],
           "contexts": [
             {
-              "source": ["models/demos/deepseek_v3/demo/demo.py"],
+              "source": ["models/demos/nlp/llms/deepseek_v3/demo/demo.py"],
               "machine_info": [
                 {
                   "board_type": "Wormhole",
