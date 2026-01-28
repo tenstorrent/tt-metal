@@ -35,21 +35,32 @@ void kernel_main() {
     uint32_t slice_row_offset = start_slice_row_offset;
     uint32_t pages_read_in_row = start_pages_read_in_row;
 
+    uint32_t slice_id = pages_read_in_row / slice_Wt;
+    uint32_t intra_slice_offset = pages_read_in_row % slice_Wt;
+
     uint32_t tiles_read = start_tiles_read;
     uint32_t tiles_to_read = start_tiles_to_read;
     while (tiles_read < tiles_to_read) {
-        uint32_t slice_id = pages_read_in_row / slice_Wt;
-        uint32_t slice_offset = pages_read_in_row - (slice_id * slice_Wt);
-        uint32_t normalized_page_id = slice_row_offset + slice_offset;
+        uint32_t normalized_page_id = slice_row_offset + intra_slice_offset;
+        uint64_t noc_addr = output_slice_tensor_accessors[slice_id].get_noc_addr(normalized_page_id);
 
         cb_wait_front(compute_output_cb_id, one_tile);
         uint32_t l1_read_addr = get_read_ptr(compute_output_cb_id);
-        uint64_t noc_addr = output_slice_tensor_accessors[slice_id].get_noc_addr(normalized_page_id);
         noc_async_write(l1_read_addr, noc_addr, page_size);
         noc_async_writes_flushed();
         cb_pop_front(compute_output_cb_id, one_tile);
 
         tiles_read += num_cores_to_be_used;
+
+        intra_slice_offset += num_cores_to_be_used;
+        while (intra_slice_offset >= slice_Wt) {
+            intra_slice_offset -= slice_Wt;
+            slice_id++;
+            if (slice_id == num_output_tensors) {
+                slice_id = 0;
+            }
+        }
+
         pages_read_in_row += num_cores_to_be_used;
         while (pages_read_in_row >= input_tensor_Wt) {
             pages_read_in_row -= input_tensor_Wt;
