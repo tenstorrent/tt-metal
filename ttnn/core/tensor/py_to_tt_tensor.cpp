@@ -37,7 +37,7 @@ bool can_exec_ops_on_device(DataType type) {
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
-            // TODO: Reproduce the bug and create github issue
+            // https://github.com/tenstorrent/tt-metal/issues/35048
             // Conversion from bfloat16 to bfloat4_b or bfloat8_b loses precision.
             // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
             return false;

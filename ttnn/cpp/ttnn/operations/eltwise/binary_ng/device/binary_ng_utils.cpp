@@ -146,6 +146,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
         case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
+        case BinaryOpType::REMAINDER: binary_op = SfpuBinaryOp::REMAINDER; break;
+        case BinaryOpType::FMOD: binary_op = SfpuBinaryOp::FMOD; break;
         // b - a
         case BinaryOpType::RSUB:
             if (is_sfpu_op()) {
@@ -399,6 +401,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
+        case REMAINDER: return {"remainder_int32_tile_init();", "remainder_int32_tile"};
+        case FMOD: return {"fmod_int32_tile_init();", "fmod_int32_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
@@ -665,19 +669,12 @@ inline auto is_uneven(const TensorSpec& t) {
 }
 
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
-    // scalar value treated as interleaved
-    if (!b.has_value()) {
+    if (!c.is_sharded()) {
         return false;
     }
 
-    // does not work for width and block sharding, pcc error,
-    // maybe support later to improve performance
-    // if (!b.has_value() && a.memory_config().is_sharded()) {
-    //     return !is_uneven(a);
-    // }
-
-    if (!c.is_sharded()) {
-        return false;
+    if (!b.has_value() && a.memory_config().is_sharded()) {
+        return !is_uneven(a);
     }
 
     // a and b identical shape, no broadcast on any dimension
