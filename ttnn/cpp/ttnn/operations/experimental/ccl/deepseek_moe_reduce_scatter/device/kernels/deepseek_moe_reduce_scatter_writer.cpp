@@ -253,8 +253,7 @@ void kernel_main() {
                 cb_wait_front(reduced_cb_id, tile_granularity);
                 size_t output_l1_read_addr = get_read_ptr(reduced_cb_id);
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
-                    uint64_t output_local_noc_addr = get_noc_addr(tiles_read, output_tensor_accessor);
-                    noc_async_write(output_l1_read_addr, output_local_noc_addr, page_size);
+                    noc_async_write_page(tiles_read, output_tensor_accessor, output_l1_read_addr);
                     output_l1_read_addr += page_size;
                     tiles_read++;
                 }
