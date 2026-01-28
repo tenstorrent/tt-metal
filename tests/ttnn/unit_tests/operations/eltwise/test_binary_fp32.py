@@ -434,3 +434,52 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
     assert torch.allclose(golden_tensor, output_tensor, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "op_name",
+    [
+        "eq",
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+    ],
+)
+def test_special_values(device, op_name, dtype):
+    """
+    Comprehensive test for special floating-point values: 0, -0, inf, -inf, nan
+    Tests all combinations of these values as inputs to mul and div operations.
+    """
+    torch_fn = getattr(torch, op_name)
+    ttnn_fn = getattr(ttnn, op_name)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    # Special values to test
+    special_values = [0.0, float("inf"), float("-inf"), float("nan"), 1.0, -1.0, -0.0]
+
+    # Create all combinations
+    x_vals = []
+    y_vals = []
+    for x in special_values:
+        for y in special_values:
+            x_vals.append(x)
+            y_vals.append(y)
+
+    x_torch = torch.tensor(x_vals, dtype=torch_dtype)
+    y_torch = torch.tensor(y_vals, dtype=torch_dtype)
+    z_torch = torch_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn_fn(
+        x_tt,
+        y_tt,
+    )
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out), "Mismatches found"
