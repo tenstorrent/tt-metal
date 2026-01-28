@@ -284,7 +284,6 @@ void NOCDebugState::print_aggregated_errors() const {
 
     log_error(tt::LogMetal, "========== NOC Debug Summary ==========");
 
-    // Print write barrier issues (during execution)
     for (const auto& [core_key, core_issues] : issues_by_core) {
         if (!core_issues.write_barrier_issues.empty()) {
             log_error(tt::LogMetal, "Missing write barrier/flush (same src addr written multiple times):");
@@ -304,7 +303,6 @@ void NOCDebugState::print_aggregated_errors() const {
         }
     }
 
-    // Print read barrier issues (during execution)
     bool has_read_barrier = false;
     for (const auto& [core_key, core_issues] : issues_by_core) {
         if (core_issues.has_read_barrier) {
@@ -321,7 +319,6 @@ void NOCDebugState::print_aggregated_errors() const {
         }
     }
 
-    // Print unflushed writes at kernel end
     for (const auto& [core_key, core_issues] : issues_by_core) {
         if (!core_issues.unflushed_write_issues.empty()) {
             log_error(tt::LogMetal, "Unflushed async writes at kernel end (missing noc_async_write_barrier):");
