@@ -321,6 +321,10 @@ void kernel_main() {
                                 DPRINT << "next tile that would be read" << ENDL();
                                 uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
+
+                                cb_wait_front(cb_output_id, tile_granularity);
+                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+
                                 for (uint32_t k = 0; k < tiles_to_read_in_this_step; ++k) {
                                     auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
                                         first_tile_row_in_mm_M_block,
@@ -347,63 +351,45 @@ void kernel_main() {
                                     global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     DPRINT << "predicted input_tile_id:" << global_tile_idx << " " << ENDL();
-                                    if (i == 0) {
-                                        DPRINT << "predicted output_tile_id: " << global_tile_idx << ENDL();
+
+                                    if (i < (ring_size - 1)) {
+                                        if (i == 0) {
+                                            DPRINT << "predicted output_tile_id: " << global_tile_idx << ENDL();
+                                        } else {
+                                            DPRINT << "predicted intermediate_tile_id: " << global_tile_idx << ENDL();
+                                        }
+                                        auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                            intermediate_addrgen, global_tile_idx, 0);
+                                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                            &mux_connection_handle,
+                                            pkt_unicast_hdr,
+                                            l1_read_addr,
+                                            NocUnicastCommandHeader{noc_address0});
+                                        l1_read_addr += page_size;
+                                        noc_async_writes_flushed();
                                     } else {
-                                        DPRINT << "predicted intermediate_tile_id: " << global_tile_idx << ENDL();
+                                        uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
+                                        DPRINT << "writing to final output_tile_id: " << output_tile_id << ENDL();
+                                        uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                        noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                        l1_read_addr += page_size;
                                     }
                                 }
-                            }
+                                cb_pop_front(cb_output_id, tile_granularity);
 
-                            cb_wait_front(cb_output_id, tile_granularity);
-                            // DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
-                            size_t l1_read_addr = get_read_ptr(cb_output_id);
-
-                            if (i < (ring_size - 1)) {
-                                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                    uint32_t intermediate_tile_id =
-                                        intermediate_tile_id_start + input_row_offset + direction_offset + j;
-                                    if (i == 0) {
-                                        DPRINT << "writing into output_tile_id: " << intermediate_tile_id << ENDL();
-                                    } else {
-                                        DPRINT << "writing into intermediate_tile_id: " << intermediate_tile_id
-                                               << ENDL();
-                                    }
-                                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                        intermediate_addrgen, intermediate_tile_id, 0);
-                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                if (i < (ring_size - 1)) {
+                                    uint64_t out_ready_sem_noc_addr_in_pkt =
+                                        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                                    fabric_unicast_noc_unicast_atomic_inc_with_state<
+                                        UnicastAtomicIncUpdateMask::DstAddr>(
                                         &mux_connection_handle,
-                                        pkt_unicast_hdr,
-                                        l1_read_addr,
-                                        NocUnicastCommandHeader{noc_address0});
-                                    l1_read_addr += page_size;
+                                        pkt_hdr_seminc,
+                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                                            out_ready_sem_noc_addr_in_pkt, 0});
                                     noc_async_writes_flushed();
+                                } else {
+                                    noc_async_write_barrier();
                                 }
-                                cb_pop_front(cb_output_id, tile_granularity);
-
-                                uint64_t out_ready_sem_noc_addr_in_pkt =
-                                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                // DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
-                                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                                    &mux_connection_handle,
-                                    pkt_hdr_seminc,
-                                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                                // DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
-                                noc_async_writes_flushed();
-                            } else {
-                                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                    uint32_t prev_output_tile_id =
-                                        output_tile_id_start + output_row_offset + direction_offset + j;
-                                    DPRINT << "output_tile_id_start: " << output_tile_id_start << ENDL();
-                                    uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
-                                    DPRINT << "proposed writing into output_tile_id: " << output_tile_id << ENDL();
-                                    DPRINT << "writing into final output_tile_id: " << prev_output_tile_id << ENDL();
-                                    uint64_t local_noc_addr = get_noc_addr(prev_output_tile_id, output_addrgen);
-                                    noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                                    l1_read_addr += page_size;
-                                }
-                                noc_async_write_barrier();
-                                cb_pop_front(cb_output_id, tile_granularity);
                             }
                             DPRINT << "--------------------------------" << ENDL();
                         }
