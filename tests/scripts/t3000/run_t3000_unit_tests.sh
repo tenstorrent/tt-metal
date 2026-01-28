@@ -199,7 +199,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
 
 
   # Record the end time
