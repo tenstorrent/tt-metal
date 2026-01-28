@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    // The circular buffers to read the tiles into
+    // The circular buffers to read the tiles into.
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
 
@@ -43,12 +43,12 @@ void kernel_main() {
     // Finally, construct the address generator for the second input buffer.
     const auto src1_addr_gen = TensorAccessor(src1_layout_args, src1_base_addr, tile_size_bytes_1);
 
-    // Loop over output tiles 
+    // Loop over output tiles, starting at specified offset.
     for (uint32_t output_tile = tile_offset; output_tile < tile_offset + num_output_tiles; output_tile++) {
         // Convert linear output tile ID to 2D coordinates.
         uint32_t row = output_tile / Nt;
         uint32_t col = output_tile % Nt;
-        
+
         // Read all K tiles for this output position
         for (uint32_t kt = 0; kt < Kt; kt++) {
             // First make sure there is space for one tile in each of the circular buffers to be written to.
@@ -61,12 +61,13 @@ void kernel_main() {
             uint32_t cb_in1_addr = get_write_ptr(cb_in1);
             // Read the tiles from DRAM into the circular buffers.
 
-            // Read A's tile at (mt, kt). A has MtxKt tiles, so we stride by Kt
+            // Read A's tile at (row, kt). A has MtxKt tiles, so we stride by Kt.
             uint32_t a_tile_index = row * Kt + kt;
-            // Read B's tile at (kt, nt). B has KtxNt tiles, so we stride by Nt
+            // Read B's tile at (kt, col). B has KtxNt tiles, so we stride by Nt.
             uint32_t b_tile_index = kt * Nt + col;
+
             // Recall that src0_addr_gen and src1_addr_gen are address generators for the input buffers.
-            // They are used to determine the address to read the tiles from. i is the index of the tile to read.
+            // They are used to determine the address to read the tiles from.
             // cb_in0_addr and cb_in1_addr are the circular buffer addresses to write the tiles to.
             // These are non-blocking calls, so they both proceed in parallel.
             noc_async_read_tile(a_tile_index, src0_addr_gen, cb_in0_addr);

@@ -25,8 +25,8 @@ void MAIN {
     // Note that indices have to be in sync with the writer kernel.
     constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;
 
-    // FPU has a destination register, which is an array that can fit multiple tiles (details vary on data type).
-    // For our case, FPU will add two tiles and produce a result that is a single tile.
+    // FPU has a destination register, which is an array that can fit multiple tiles (details vary by data type).
+    // For our case, FPU will multiply two tiles and produce a result that is a single tile.
     // We will instruct FPU to store the result in the destination register array at index 0.
     constexpr uint32_t dst_reg_idx = 0;
 
@@ -70,7 +70,7 @@ void MAIN {
         tile_regs_wait();
         // Make sure there is space in the output circular buffer to write result to.
         cb_reserve_back(cb_out0, 1);
-        // Copy the result of addition from destination register to the output circular buffer.
+        // Copy the result of matrix multiplication from destination register to the output circular buffer.
         pack_tile(dst_reg_idx, cb_out0);
         // Mark the tile in the output circular buffer as ready.
         cb_push_back(cb_out0, 1);

@@ -31,7 +31,7 @@ void kernel_main() {
     // It will be used in the loop below to determine the address to write the tiles to.
     const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
 
-    // Loop over all the tiles and write them to the output buffer.
+    // Loop over all the tiles and write them to the output buffer, starting at specified offset.
     uint32_t tile_index = tile_offset;
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         // Make sure there is a tile ready in the circular buffer. This is a blocking call.
@@ -40,7 +40,7 @@ void kernel_main() {
         // Write the tile to device memory. This is a non-blocking call.
         noc_async_write_tile(tile_index, out0_addr_gen, cb_out0_addr);
         tile_index++;
-        
+
         // Wait until the write is done. This is a blocking call.
         noc_async_write_barrier();
         // Mark the tile in the circular buffer as consumed, freeing up space for the next tile.

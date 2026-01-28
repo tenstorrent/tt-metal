@@ -89,7 +89,6 @@ void reference_matmul(
 struct ProgramState {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     Program program;
-    tt::tt_metal::CoreCoord core;
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range;
     distributed::MeshCommandQueue& cq;
@@ -97,13 +96,11 @@ struct ProgramState {
     ProgramState(
         std::shared_ptr<distributed::MeshDevice> mesh_device,
         Program program,
-        tt::tt_metal::CoreCoord core,
         distributed::MeshWorkload workload,
         distributed::MeshCoordinateRange device_range,
         distributed::MeshCommandQueue& cq) :
         mesh_device(std::move(mesh_device)),
         program(std::move(program)),
-        core(core),
         workload(std::move(workload)),
         device_range(std::move(device_range)),
         cq(cq) {}
@@ -111,7 +108,7 @@ struct ProgramState {
 
 // clang-format off
 /**
- * Initialize program state for single-core execution.
+ * Initialize program state for multi core execution.
  * Creates a unit mesh device, sets up command queue, workload, device range, and program.
  * This program uses only a single Tensix core at [0, 0].
  *
@@ -130,14 +127,11 @@ ProgramState init_program() {
     // Each program in the workload is associated with a range of devices where it should run.
     // In our case, we have a single program running on our entire (unit) mesh.
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    // This program uses only a single Tensix core at [0, 0].
-    tt::tt_metal::CoreCoord core({0, 0});
     // Create a program object. A program is a collection of kernels that are executed on the device.
     // Kernels will be specified later.
     Program program = CreateProgram();
 
-    return ProgramState(
-        std::move(mesh_device), std::move(program), core, std::move(workload), std::move(device_range), cq);
+    return ProgramState(std::move(mesh_device), std::move(program), std::move(workload), std::move(device_range), cq);
 }
 
 // clang-format off
@@ -145,12 +139,12 @@ ProgramState init_program() {
  * Helper function to create a circular buffer with the specified number of tiles and CB index.
  * Page size is set to the size of a single tile.
  *
- * | Argument  | Description                                               |
- * |-----------|-----------------------------------------------------------|
- * | program   | The program to which the circular buffer will be added    |
- * | core      | Core coordinate where the circular buffer will be created |
- * | num_tiles | Number of tiles to allocate in the circular buffer        |
- * | cb_index  | Circular buffer index (c_0 to c_31)                       |
+ * | Argument  | Description                                                 |
+ * |-----------|-------------------------------------------------------------|
+ * | program   | The program to which the circular buffer will be added      |
+ * | core_spec | One or more cores where the circular buffer will be created |
+ * | num_tiles | Number of tiles to allocate in the circular buffer          |
+ * | cb_index  | Circular buffer index (c_0 to c_31)                         |
  */
 // clang-format on
 void create_cb(Program& program, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec, uint32_t num_tiles, tt::CBIndex cb_index) {
@@ -165,7 +159,7 @@ void create_cb(Program& program, const std::variant<CoreCoord, CoreRange, CoreRa
 
 // clang-format off
 /**
- * Matrix multiplication using the Tensix device.
+ * Matrix multiplication using multiple cores on the Tensix device.
  * The input a is of size MxK, input b is of size KxN, and the output c is of size MxN.
  * This function assumes that TILE_HEIGHT == TILE_WIDTH, and that M, N and K are divisible
  * by TILE_HEIGHT.
@@ -178,12 +172,8 @@ void create_cb(Program& program, const std::variant<CoreCoord, CoreRange, CoreRa
  * | M                     | Number of rows in matrix A and output matrix C                      |
  * | N                     | Number of columns in matrix B and output matrix C                   |
  * | K                     | Number of columns in matrix A and rows in matrix B                  |
- * | core_reduction_factor | Reduction factor for core usage                                     |
- * |                         (e.g. 3 for 1/3 of cores, 1 for all cores)                          |
- * |                         Integer division is applied to the y dimension of the core grid,    |
- * |                         so that the number of cores is reduced by the factor specified.     |
- * |                         However, integer division means that the number of cores is rounded |
- * |                         down                                                                |
+ * | core_grid             | Number of cores to use in the compute grid                          |
+ * |                         (e.g. core_grid.x = 10, core_grid.y = 10 means 100 cores)           |
  * | prog_state            | Program state containing device, program, and execution context     |
  */
 // clang-format on
@@ -217,14 +207,14 @@ void matmul_multi_core(
     // Create output tensor on device (no initialization needed - kernel will write into it).
     Tensor dst_tensor = create_device_tensor(dst_spec, prog_state.mesh_device.get());
 
-
+    // Figure out how many cores are available on the device.
     CoreCoord max_core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
     log_info(tt::LogAlways, "Using {} ({} x {}) cores out of available {} ({} x {}) cores",
         core_grid.x * core_grid.y, core_grid.x, core_grid.y, max_core_grid.x * max_core_grid.y, max_core_grid.x, max_core_grid.y);
     TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size.");
 
+    // Figure out how to split the work across the cores in the compute grid.
     uint32_t num_output_tiles = (Mt * Nt);
-
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
         tt::tt_metal::split_work_to_cores(core_grid, num_output_tiles);
 
@@ -309,20 +299,23 @@ void matmul_multi_core(
     uint32_t src1_addr = src1_mesh_buffer->address();
     uint32_t dst_addr = dst_mesh_buffer->address();
 
-    // This is a naive approach with two loops that is easier to understand..
-    // A more compact approach is possible. See tt_metal/programming_examples/matmul/matmul_multi_core/matmul_multi_core.cpp    
+    // This is a naive approach with two loops that is easier to understand.
+    // A more compact approach is possible. See
+    // tt_metal/programming_examples/matmul/matmul_multi_core/matmul_multi_core.cpp.
     uint32_t tile_offset = 0;
     for (const auto& core_range : core_group_1.ranges()) {
         for (const CoreCoord& core : core_range) {
+            // Pass appropriate offsets and work per core to the kernels.
             tt_metal::SetRuntimeArgs(prog_state.program, reader_id, core, {src0_addr, src1_addr, Kt, Nt, work_per_core_1, tile_offset});
             tt_metal::SetRuntimeArgs(prog_state.program, writer_id, core, {dst_addr, work_per_core_1, tile_offset});
             tt_metal::SetRuntimeArgs(prog_state.program, compute_id, core, {work_per_core_1});
             tile_offset += work_per_core_1;
         }
     }
-    
+
     for (const auto& core_range : core_group_2.ranges()) {
         for (const CoreCoord& core : core_range) {
+            // Pass appropriate offsets and work per core to the kernels.
             tt_metal::SetRuntimeArgs(prog_state.program, reader_id, core, {src0_addr, src1_addr, Kt, Nt, work_per_core_2, tile_offset});
             tt_metal::SetRuntimeArgs(prog_state.program, writer_id, core, {dst_addr, work_per_core_2, tile_offset});
             tt_metal::SetRuntimeArgs(prog_state.program, compute_id, core, {work_per_core_2});
@@ -343,7 +336,7 @@ void matmul_multi_core(
 
 // clang-format off
 /**
- * Main function that demonstrates single-core matrix multiplication using ttnn::Tensor API.
+ * Main function that demonstrates multi core matrix multiplication using ttnn::Tensor API.
  * Creates test data, runs a reference implementation on host CPU, executes matmul on Tensix device,
  * and verifies results.
  *
@@ -402,8 +395,7 @@ int main() {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
-            float relative_error = (expected == 0.0f) ? std::abs(actual) 
-                : std::abs(actual - expected) / expected;
+            float relative_error = (expected == 0.0f) ? std::abs(actual) : std::abs(actual - expected) / expected;
             if (relative_error > RELTOL) {
                 log_error(tt::LogAlways, "Mismatch at index {}: {} vs expected {}", i, actual, expected);
                 log_error(tt::LogAlways, "Expected relative tolerance: {} actual relative error: {}", RELTOL, relative_error);

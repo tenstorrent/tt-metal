@@ -17,16 +17,6 @@ void kernel_main() {
     uint32_t tile_offset_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_offset_col = get_arg_val<uint32_t>(arg_idx++);
 
-    // Example computation: Mt = 9, Nt = 6
-    // M_block_tiles = 3, N_block_tiles = 3
-    // tile_offset_row = 6, tile_offset_col = 3
-    // starting index = 6 * 6 + 3 = 39
-    // As we iterate over the tiles, index can't be simply incremented.
-    // Here's a simple method:
-    // effective_row = tile_offset_row + block_row
-    // effective_col = tile_offset_col + block_col
-    // effective_index = effective_row * Nt + effective_col
-
     // The circular buffer that contains the result, which this kernel will
     // read from and then write to device memory.
     constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;
@@ -47,6 +37,20 @@ void kernel_main() {
     const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
 
     // Loop over all the tiles and write them to the output buffer.
+    // Need to figure out the index for each tile in the C_block.
+    //
+    // Example computation: Mt = 9, Nt = 6
+    // M_block_tiles = 3, N_block_tiles = 3
+    // Consider an example C_block at tile_offset_row = 6, tile_offset_col = 3
+    //
+    // Starting index for this C_block is 6 * 6 + 3 = 39
+    // As we iterate over the tiles, index can't be simply incremented.
+    // It needs to go 39, 40, 41, 45, 46, 47, 51, 52, 53
+    // Here's a simple method:
+    // effective_row = tile_offset_row + block_row
+    // effective_col = tile_offset_col + block_col
+    // effective_index = effective_row * Nt + effective_col
+
     for (uint32_t block_row = 0; block_row < M_block_tiles; block_row++) {
         uint32_t effective_row = tile_offset_row + block_row;
         for (uint32_t block_col = 0; block_col < N_block_tiles; block_col++) {
