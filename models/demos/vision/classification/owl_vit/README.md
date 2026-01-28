@@ -64,7 +64,7 @@ HuggingFace Model: [google/owlvit-base-patch32](https://huggingface.co/google/ow
 ### 1. Run PyTorch Reference Demo (CPU)
 Validate the reference implementation and generate baseline outputs:
 ```bash
-python models/demos/wormhole/owl_vit/demo/demo_owl_vit_pytorch.py
+python models/demos/vision/classification/owl_vit/demo/demo_owl_vit_pytorch.py
 ```
 Output saved to `demo/outputs/detection_result_pytorch.png`.
 
@@ -73,10 +73,10 @@ Run the optimized TTNN implementation on Tenstorrent hardware:
 
 ```bash
 # Run with default image (cats)
-python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py
+python models/demos/vision/classification/owl_vit/demo/demo_owl_vit_inference.py
 
 # Run with custom image and queries
-python models/demos/wormhole/owl_vit/demo/demo_owl_vit_inference.py \
+python models/demos/vision/classification/owl_vit/demo/demo_owl_vit_inference.py \
   --image "http://images.cocodataset.org/val2017/000000000285.jpg" \
   --queries "a bear" "video game" "grass" \
   --output "bear_detection.png"
@@ -87,16 +87,16 @@ Run the comprehensive test suite (unit tests and end-to-end PCC validation):
 
 ```bash
 # Run all tests
-pytest models/demos/wormhole/owl_vit/tests/ -v
+pytest models/demos/vision/classification/owl_vit/tests/ -v
 
 # Run specific end-to-end detection test
-pytest models/demos/wormhole/owl_vit/tests/test_end_to_end.py -v
+pytest models/demos/vision/classification/owl_vit/tests/test_end_to_end.py -v
 ```
 
 ## Directory Structure
 
 ```
-models/demos/wormhole/owl_vit/
+models/demos/vision/classification/owl_vit/
 ├── README.md                           # This file
 ├── __init__.py                         # Package exports
 ├── reference/
@@ -153,7 +153,7 @@ Profiling results on N300 (Wormhole B0, 56 cores):
 ### Optimization Configuration
 
 ```python
-from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
+from models.demos.vision.classification.owl_vit.tt.ttnn_owl_vit import (
     OwlViTTTNNConfig,
     run_vision_encoder_layer_sharded,  # Optimized version
 )

@@ -23,7 +23,7 @@ from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
-from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
+from models.demos.vision.classification.owl_vit.tt.ttnn_owl_vit import OwlViTTTNNConfig
 
 # Test constants
 MODEL_NAME = "google/owlvit-base-patch32"
