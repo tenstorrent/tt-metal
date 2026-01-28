@@ -462,7 +462,6 @@ class DeepseekMinimalAllReduce:
                     program,
                     1,  # kernel_idx for sender_writer
                     sender_core,
-                    ttnn.FabricApiType.Linear,
                 )
                 sender_writer_rt_args_ref.extend(sender_fabric_args)
 
@@ -475,7 +474,6 @@ class DeepseekMinimalAllReduce:
                     program,
                     2,  # kernel_idx for receiver_reader
                     receiver_core,
-                    ttnn.FabricApiType.Linear,
                 )
                 receiver_reader_rt_args_ref.extend(receiver_fabric_args)
 
