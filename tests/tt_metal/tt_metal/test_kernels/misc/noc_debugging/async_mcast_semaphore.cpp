@@ -18,8 +18,8 @@ void kernel_main() {
     noc_async_write_multicast_loopback_src(
         L1_BUFFER_ADDR, multicast_noc_addr | L1_BUFFER_ADDR, WRITE_SIZE, NUM_DEST_CORES, false);
 
-#if defined(USE_WRITE_MCAST_BARRIER)
-    noc_async_write_barrier();
+#if defined(USE_WRITE_MCAST_FLUSH)
+    noc_async_writes_flushed();
 #endif
 
     *semaphore_ptr = 1;
@@ -27,7 +27,7 @@ void kernel_main() {
     noc_semaphore_set_multicast_loopback_src(
         semaphore_addr, multicast_noc_addr | semaphore_addr, NUM_DEST_CORES, false);
 
-#if defined(USE_SEMAPHORE_MCAST_BARRIER)
-    noc_async_write_barrier();
+#if defined(USE_SEMAPHORE_MCAST_FLUSH)
+    noc_async_writes_flushed();
 #endif
 }

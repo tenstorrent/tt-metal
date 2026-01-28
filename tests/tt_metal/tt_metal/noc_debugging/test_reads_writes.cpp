@@ -349,8 +349,8 @@ TEST_F(NOCDebuggingFixture, InterleavedReadsWritesWithBarrier) {
 void RunMcastTest(
     NOCDebuggingFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    bool use_write_mcast_barrier,
-    bool use_semaphore_mcast_barrier) {
+    bool use_write_mcast_flush,
+    bool use_semaphore_mcast_flush) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
 
     CoreCoord sender_core = {0, 0};
@@ -386,11 +386,11 @@ void RunMcastTest(
         {"WRITE_SIZE", std::to_string(buffer_page_size)},
     };
 
-    if (use_write_mcast_barrier) {
-        defines["USE_WRITE_MCAST_BARRIER"] = "1";
+    if (use_write_mcast_flush) {
+        defines["USE_WRITE_MCAST_FLUSH"] = "1";
     }
-    if (use_semaphore_mcast_barrier) {
-        defines["USE_SEMAPHORE_MCAST_BARRIER"] = "1";
+    if (use_semaphore_mcast_flush) {
+        defines["USE_SEMAPHORE_MCAST_FLUSH"] = "1";
     }
 
     tt_metal::CreateKernel(
@@ -415,7 +415,7 @@ void RunMcastTest(
     bool has_write_mcast_issue =
         fixture->has_unflushed_write_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
 
-    if (use_write_mcast_barrier) {
+    if (use_write_mcast_flush) {
         EXPECT_FALSE(has_write_mcast_issue)
             << "With write mcast barrier, should NOT have unflushed write mcast issue at device " << device_id
             << " core " << sender_core_virtual.str();
@@ -428,7 +428,7 @@ void RunMcastTest(
     bool has_semaphore_mcast_issue =
         fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
 
-    if (use_semaphore_mcast_barrier) {
+    if (use_semaphore_mcast_flush) {
         EXPECT_FALSE(has_semaphore_mcast_issue)
             << "With semaphore mcast barrier, should NOT have unflushed semaphore mcast issue at device " << device_id
             << " core " << sender_core_virtual.str();
@@ -439,34 +439,32 @@ void RunMcastTest(
     }
 }
 
-TEST_F(NOCDebuggingFixture, McastNoBarriers) {
+TEST_F(NOCDebuggingFixture, McastNoFlushes) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunMcastTest(
-                    fixture, mesh_device, /*use_write_mcast_barrier=*/false, /*use_semaphore_mcast_barrier=*/false);
+                    fixture, mesh_device, /*use_write_mcast_flush=*/false, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
     }
 }
 
-TEST_F(NOCDebuggingFixture, McastOnlyWriteBarrier) {
+TEST_F(NOCDebuggingFixture, McastOnlyWriteFlush) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunMcastTest(
-                    fixture, mesh_device, /*use_write_mcast_barrier=*/true, /*use_semaphore_mcast_barrier=*/false);
+                RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/false);
             },
             mesh_device);
     }
 }
 
-TEST_F(NOCDebuggingFixture, McastWithAllBarriers) {
+TEST_F(NOCDebuggingFixture, McastWithAllFlushes) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunMcastTest(
-                    fixture, mesh_device, /*use_write_mcast_barrier=*/true, /*use_semaphore_mcast_barrier=*/true);
+                RunMcastTest(fixture, mesh_device, /*use_write_mcast_flush=*/true, /*use_semaphore_mcast_flush=*/true);
             },
             mesh_device);
     }
