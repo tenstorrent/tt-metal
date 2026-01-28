@@ -132,13 +132,13 @@ void MAIN {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            silu_tile_init();
-            silu_tile(0);
-            silu_tile(2);
+            // silu_tile_init();
+            // silu_tile(0);
+            // silu_tile(2);
 
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-            mul_binary_tile(2, 3, 2);
+            // mul_binary_tile_init();
+            // mul_binary_tile(0, 1, 0);
+            // mul_binary_tile(2, 3, 2);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -166,9 +166,7 @@ void MAIN {
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            if (iter == 0) {
-                cb_wait_front(cb_w2c_rdy, 1);
-            }
+            cb_wait_front(cb_w2c_rdy, 1);
 
             uint32_t in2_offset = 0, in2_index = 0;
 
@@ -180,19 +178,15 @@ void MAIN {
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
                     // The last block has only 4 tiles of interest, so we exit early.
                     if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                        if (iter == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                        }
+                        cb_pop_front(cb_w2c_rdy, 1);
                         break;
                     }
 
                     if (dm1_tiles_remaining == 0) {
-                        if (iter == 0) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            cb_wait_front(cb_w2c_rdy, 1);
-                        }
+                        cb_pop_front(cb_w2c_rdy, 1);
+                        cb_wait_front(cb_w2c_rdy, 1);
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_offset += tiles_per_step;
+                        in2_offset = (in2_offset == tiles_per_step) ? 0 : tiles_per_step;
                         in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;

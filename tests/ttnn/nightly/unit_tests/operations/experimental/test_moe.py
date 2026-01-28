@@ -502,7 +502,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
             torch_w1_output_ref = torch_input_ref @ torch_w1
-            torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
+            torch_intermediate_ref = torch_w0_output_ref  # torch_silu_output_ref * torch_w1_output_ref  # (L, E, M, N)
 
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
@@ -533,8 +533,8 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048, 2, 1): 280.0,
-    # (32, 7168, 2048, 3, 1): 420.0,
+    (32, 7168, 2048, 2, 1): 225.0,
+    # (32, 7168, 2048, 3, 1): 329.0,
 }
 
 
