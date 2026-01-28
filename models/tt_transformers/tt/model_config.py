@@ -466,19 +466,6 @@ class ModelArgs:
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
         self.prefetcher = prefetcher
         self.device_name = determine_device_name(self.mesh_device)
-        self.start_core = ttnn.CoreCoord(1, 0)
-        self.sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(10, 7)),
-            ]
-        )
-
-        self.sub_core_grid_topk = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-            ]
-        )
 
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
@@ -2125,7 +2112,9 @@ class ModelArgs:
         LLAMA_VOCAB_SIZE = 128256
         NUM_LM_HEAD_CORES = 48
         NUM_LM_HEAD_COLUMNS = 8
-        max_columns_per_device = 668 * core_grid.num_cores
+        max_columns_per_device = (
+            668 * core_grid.num_cores
+        )  # 668 columns per core is close to the L1 limit in LM head matmul.
         if is_blackhole():
             if self.num_devices == 4:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
