@@ -75,7 +75,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest models/demos/falcon7b_common/tests -m models_performance_bare_metal
+          commands: pytest models/demos/nlp/llms/falcon7b/common/tests -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
       - name: Run vanilla_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}

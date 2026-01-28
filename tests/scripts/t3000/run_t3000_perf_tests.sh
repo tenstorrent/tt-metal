@@ -10,7 +10,7 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest models/demos/falcon7b_common/tests -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/nlp/llms/falcon7b/common/tests -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

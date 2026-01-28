@@ -21,7 +21,7 @@ run_async_test() {
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-        python -m tracy -v -r -p -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p -m "pytest -svv models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then

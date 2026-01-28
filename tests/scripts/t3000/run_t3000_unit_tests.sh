@@ -178,10 +178,10 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
-  pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
-  pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
-  #pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
+  pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
+  pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
+  pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
+  #pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
 
   # Record the end time
   end_time=$(date +%s)
