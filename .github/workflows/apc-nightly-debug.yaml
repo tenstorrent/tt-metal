@@ -26,7 +26,7 @@ jobs:
     name: apc nightly debug run (${{ matrix.platform }})
     strategy:
       matrix:
-        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04", "Fedora 43"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:

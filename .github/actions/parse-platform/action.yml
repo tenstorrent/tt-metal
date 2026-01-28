@@ -3,7 +3,7 @@ description: 'Parses platform dropdown (e.g., "Ubuntu 22.04") into distro, versi
 
 inputs:
   platform:
-    description: 'Platform string (e.g., "Ubuntu 22.04", "Ubuntu 24.04")'
+    description: 'Platform string (e.g., "Ubuntu 22.04", "Ubuntu 24.04", "Fedora 43")'
     required: false
     default: ''
   distro:
@@ -29,10 +29,10 @@ inputs:
 
 outputs:
   distro:
-    description: 'Parsed distribution (ubuntu)'
+    description: 'Parsed distribution (ubuntu, fedora)'
     value: ${{ steps.parse.outputs.distro }}
   version:
-    description: 'Parsed version (22.04, 24.04)'
+    description: 'Parsed version (22.04, 24.04, 43)'
     value: ${{ steps.parse.outputs.version }}
   toolchain:
     description: 'Appropriate toolchain for the platform'
@@ -74,11 +74,17 @@ runs:
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
+            "Fedora 43")
+              echo "distro=fedora" >> "$GITHUB_OUTPUT"
+              echo "version=43" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+              ;;
             *)
               # Unknown platform, use legacy fallback
               echo "distro=${{ inputs.default-distro }}" >> "$GITHUB_OUTPUT"
               echo "version=${{ inputs.default-version }}" >> "$GITHUB_OUTPUT"
-              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
           esac
@@ -93,7 +99,10 @@ runs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           # Determine toolchain based on distro
-          if [ "$DISTRO" = "ubuntu" ]; then
+          if [ "$DISTRO" = "fedora" ]; then
+            echo "toolchain=cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+            output_enable_lto "false"
+          elif [ "$DISTRO" = "ubuntu" ]; then
             if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"

@@ -12,6 +12,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed/multiprocess
 )
+tt_set_runtime_rpath(distributed_multiprocess_tests)
 target_link_libraries(distributed_multiprocess_tests PRIVATE test_metal_common_libs)
 target_include_directories(
     distributed_multiprocess_tests

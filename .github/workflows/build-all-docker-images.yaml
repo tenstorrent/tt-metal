@@ -44,6 +44,22 @@ on:
       ubuntu-2404-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 24.04 Basic TTNN Runtime image"
         value: ${{ jobs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+      # Fedora 43 images
+      fedora-43-ci-build-tag:
+        description: "Docker tag for Fedora 43 CI Build image"
+        value: ${{ jobs.check-images.outputs.fedora-43-ci-build-tag }}
+      fedora-43-ci-test-tag:
+        description: "Docker tag for Fedora 43 CI Test image"
+        value: ${{ jobs.check-images.outputs.fedora-43-ci-test-tag }}
+      fedora-43-dev-tag:
+        description: "Docker tag for Fedora 43 Dev image"
+        value: ${{ jobs.check-images.outputs.fedora-43-dev-tag }}
+      fedora-43-basic-dev-tag:
+        description: "Docker tag for Fedora 43 Basic Dev image"
+        value: ${{ jobs.check-images.outputs.fedora-43-basic-dev-tag }}
+      fedora-43-basic-ttnn-runtime-tag:
+        description: "Docker tag for Fedora 43 Basic TTNN Runtime image"
+        value: ${{ jobs.check-images.outputs.fedora-43-basic-ttnn-runtime-tag }}
       # ManyLinux image (shared)
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
@@ -72,6 +88,13 @@ jobs:
       ubuntu-2404-basic-dev-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-dev-tag }}
       ubuntu-2404-basic-ttnn-runtime-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-ttnn-runtime-tag }}
       ubuntu-2404-needs-build: ${{ steps.ubuntu-2404-check.outputs.needs-build }}
+      # Fedora 43
+      fedora-43-ci-build-tag: ${{ steps.fedora-43-tags.outputs.ci-build-tag }}
+      fedora-43-ci-test-tag: ${{ steps.fedora-43-tags.outputs.ci-test-tag }}
+      fedora-43-dev-tag: ${{ steps.fedora-43-tags.outputs.dev-tag }}
+      fedora-43-basic-dev-tag: ${{ steps.fedora-43-tags.outputs.basic-dev-tag }}
+      fedora-43-basic-ttnn-runtime-tag: ${{ steps.fedora-43-tags.outputs.basic-ttnn-runtime-tag }}
+      fedora-43-needs-build: ${{ steps.fedora-43-check.outputs.needs-build }}
       # ManyLinux
       manylinux-tag: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
       manylinux-needs-build: ${{ steps.manylinux-check.outputs.needs-build }}
@@ -137,6 +160,35 @@ jobs:
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
             echo "Ubuntu 24.04 images need to be built"
+            echo "needs-build=true" >> $GITHUB_OUTPUT
+          fi
+
+      # Compute Fedora 43 tags
+      - name: Compute Fedora 43 tags
+        id: fedora-43-tags
+        run: |
+          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
+
+          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora $EXTRA_FILES)
+          ARCH="amd64"
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora)
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora)
+          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+
+      - name: Check Fedora 43 images exist
+        id: fedora-43-check
+        run: |
+          if docker manifest inspect ${{ steps.fedora-43-tags.outputs.dev-tag }} > /dev/null 2>&1; then
+            echo "Fedora 43 images exist"
+            echo "needs-build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Fedora 43 images need to be built"
             echo "needs-build=true" >> $GITHUB_OUTPUT
           fi
 
@@ -308,6 +360,80 @@ jobs:
           cache-to: type=inline
           pull: true
 
+  # Build Fedora 43 images
+  build-fedora-43:
+    name: "🐳 Fedora 43"
+    needs: check-images
+    if: needs.check-images.outputs.fedora-43-needs-build == 'true'
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push CI Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: ci-build
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-ci-build-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+      - name: Build and push CI Test image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: ci-test
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-ci-test-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: dev
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-dev-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-dev
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-basic-dev-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic TTNN runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-ttnn-runtime
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-basic-ttnn-runtime-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+
   # Build ManyLinux image
   build-manylinux:
     name: "🐳 ManyLinux"
@@ -339,7 +465,7 @@ jobs:
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
-    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux]
+    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-fedora-43, build-manylinux]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -357,6 +483,13 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest Fedora 43 Dev tag"
+        if: needs.check-images.outputs.fedora-43-needs-build != 'true' || needs.build-fedora-43.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-images.outputs.fedora-43-dev-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest ManyLinux tag"

@@ -39,6 +39,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
+          - "Fedora 43"
         description: "Platform to build and test"
       enable-lto:
         required: false

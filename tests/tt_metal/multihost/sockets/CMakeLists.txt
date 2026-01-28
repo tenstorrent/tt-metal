@@ -28,6 +28,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(multi_host_socket_tests)
 
 # Link the object library to the executable
 target_link_libraries(multi_host_socket_tests PRIVATE multi_host_sockets)

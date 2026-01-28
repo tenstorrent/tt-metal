@@ -17,6 +17,9 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 # Install uv with version pinning (centralized in install-uv.sh)
 COPY scripts/install-uv.sh /tmp/install-uv.sh
 RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
+ENV PYTHON_VERSION="3.10"
+
+RUN umask 000 && uv python install ${PYTHON_VERSION}
 
 #############################################################
 
@@ -35,13 +38,15 @@ RUN mkdir -p /tmp/doxygen \
     && make -C /tmp/doxygen install \
     && rm -rf /tmp/doxygen
 
-RUN mkdir -p /tmp/cba \
-    && wget -O /tmp/cba/cba.tar.gz https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v1.6.0.tar.gz \
-    && tar -xzf /tmp/cba/cba.tar.gz -C /tmp/cba --strip-components=1 \
-    && cmake -S /tmp/cba/ -B /tmp/cba/build -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build /tmp/cba/build \
-    && cmake --install /tmp/cba/build \
-    && rm -rf /tmp/cba
+# Copy installation script
+# This centralizes version, hash, and installation logic to avoid drift between Dockerfiles
+COPY dockerfile/install-clang-build-analyzer.sh /tmp/install-clang-build-analyzer.sh
+RUN chmod +x /tmp/install-clang-build-analyzer.sh
+
+# Install ClangBuildAnalyzer from source
+# Pin to specific version with SHA256 verification for supply chain security
+# Installation logic, version, and hash are all in install-clang-build-analyzer.sh
+RUN /tmp/install-clang-build-analyzer.sh
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
@@ -68,12 +73,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set up virtual environment using uv
 # Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --relocatable --python $PYTHON_VERSION $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -203,7 +210,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN  umask 000 && uv venv --relocatable --python $PYTHON_VERSION $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -246,7 +253,7 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
+    && ./create_venv.sh --python-version ${PYTHON_VERSION} \
     && source $PYTHON_ENV_DIR/bin/activate \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 

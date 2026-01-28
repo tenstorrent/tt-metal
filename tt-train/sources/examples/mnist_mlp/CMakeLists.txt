@@ -11,5 +11,6 @@ include_directories(${mnist_dataset_SOURCE_DIR}/include)
 # Add executable and link libraries
 add_executable(mnist_mlp ${SOURCES})
 target_link_libraries(mnist_mlp PRIVATE ttml)
+tt_train_set_executable_rpath(mnist_mlp TTNN)
 target_compile_definitions(mnist_mlp PRIVATE MNIST_DATA_LOCATION="${mnist_dataset_SOURCE_DIR}/")
 add_definitions(-DCONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs")

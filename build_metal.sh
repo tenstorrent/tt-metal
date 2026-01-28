@@ -2,15 +2,17 @@
 
 set -eo pipefail
 
-FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 ARCH=`uname -m`
 
-# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
+# Source /etc/os-release to get distribution info (sets ID, VERSION_ID, etc.)
+# ID will be "ubuntu", "fedora", etc.
 source /etc/os-release
+
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
 VERSION="unknown-version"
-if [[ -v "$VERSION_ID" ]]; then
+if [[ -n "${VERSION_ID:-}" ]]; then
     VERSION="${VERSION_ID}"
-elif [[ -v "$BUILD_ID" ]]; then
+elif [[ -n "${BUILD_ID:-}" ]]; then
     VERSION="${BUILD_ID}"
 fi
 
@@ -84,8 +86,17 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
+# Select default toolchain based on distribution
+# ID is set from /etc/os-release (fedora, ubuntu, etc.)
+if [[ "$ID" == "fedora" ]]; then
+    toolchain_path="cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake"
+elif [[ "$ID" == "ubuntu" && "$VERSION" == "20.04" ]]; then
+    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
+    toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+else
+    toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+fi
 
 configure_only="OFF"
 enable_distributed="ON"

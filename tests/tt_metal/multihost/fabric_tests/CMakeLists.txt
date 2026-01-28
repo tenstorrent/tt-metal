@@ -57,6 +57,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(multi_host_fabric_tests)
 
 # Link the object library to the executable
 target_link_libraries(multi_host_fabric_tests PRIVATE multi_host_fabric)
@@ -69,6 +70,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(test_mesh_socket_main)
 
 # Link the mesh socket test main with required libraries
 target_link_libraries(

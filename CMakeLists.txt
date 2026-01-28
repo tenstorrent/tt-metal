@@ -25,6 +25,16 @@ endif()
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
+
+# Ensure version variables are set - fallback if git describe failed
+if(NOT VERSION_NUMERIC)
+    message(WARNING "VERSION_NUMERIC not set by ParseGitDescribe(), using fallback 0.0.0")
+    set(VERSION_NUMERIC "0.0.0")
+    set(VERSION_FULL "0.0.0+unknown")
+    set(VERSION_DEB "0.0.0+unknown")
+    set(VERSION_RPM "0.0.0.unknown")
+endif()
+
 project(
     Metalium
     VERSION ${VERSION_NUMERIC}
@@ -61,6 +71,14 @@ endif()
 include(project_options)
 include(unity)
 include(clang-tidy)
+include(rpath)
+
+# Prevent link directories from being added to INSTALL_RPATH automatically.
+# This is crucial for Fedora's brp-check-rpaths which requires $ORIGIN to be first in RPATH.
+# Without this, CMake would add library directories from imported targets (e.g., MPI::MPI_C)
+# to the RPATH, causing $ORIGIN to be in the wrong position.
+# We explicitly control RPATH via target properties (INSTALL_RPATH) in tt_metal/CMakeLists.txt
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -217,6 +235,34 @@ include(GNUInstallDirs)
 string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
 string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAKE_INSTALL_DOCDIR})
 
+# Create lib directory and symlink lib64 -> lib to unify library locations
+# This ensures libraries can be found regardless of whether they're built to lib or lib64
+# (some dependencies use CMAKE_INSTALL_LIBDIR which may be lib64 on Fedora/RHEL,
+# while our main libraries are forced to lib for CI tar artifacts)
+# This runs at configure time, before any libraries are built
+#file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+#if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+#    # Create symlink lib64 -> lib so libraries in lib are accessible via lib64 path
+#    # This allows install(TARGETS) and other tools to find libraries regardless of which path they check
+#    # If lib64 already exists as a directory, the symlink creation will fail, which is acceptable
+#    # (libraries will just be split between lib and lib64 in that case)
+#    execute_process(
+#        COMMAND
+#            ${CMAKE_COMMAND} -E create_symlink lib lib64
+#        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+#        RESULT_VARIABLE symlink_result
+#        ERROR_QUIET
+#        OUTPUT_QUIET
+#    )
+#    if(symlink_result EQUAL 0)
+#        message(STATUS "Created symlink lib64 -> lib for unified library location")
+#    else()
+#        # lib64 may already exist as a directory (created by dependencies)
+#        # This is fine - libraries will be split between lib and lib64
+#        message(STATUS "lib64 already exists, libraries may be split between lib and lib64")
+#    endif()
+#endif()
+
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
@@ -276,14 +322,13 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
+# Using install(FILES) workaround for CMake bug with LIBRARY_OUTPUT_DIRECTORY
 install(
-    TARGETS
-        tt_metal
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
+    FILES
+        $<TARGET_FILE:tt_metal>
+        $<TARGET_FILE:tt_stl>
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tar
 )
 
 if(NOT TT_USE_SYSTEM_SFPI)
@@ -294,6 +339,12 @@ if(NOT TT_USE_SYSTEM_SFPI)
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
         USE_SOURCE_PERMISSIONS
         COMPONENT jit-build
+        # Exclude libtool archive files (.la) - they are build-time metadata not needed at runtime,
+        # and often contain symlinks that break when staged, causing RPM packaging to fail with
+        # "file not found" errors.
+        PATTERN
+        "*.la"
+            EXCLUDE
     )
 endif()
 

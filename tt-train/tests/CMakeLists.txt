@@ -68,6 +68,10 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+# Set relocatable RPATH using the consolidated tt-train helper
+tt_train_set_executable_rpath(ttml_tests TTNN)
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location

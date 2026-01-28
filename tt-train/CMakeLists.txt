@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18...3.30)
 include(cmake/compilers.cmake)
+include(GNUInstallDirs)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     message(STATUS "Setting C and C++ compiler from environment variables")
@@ -33,6 +34,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+
+# Include RPATH helper for tt-train executables
+include(cmake/rpath.cmake)
 
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 

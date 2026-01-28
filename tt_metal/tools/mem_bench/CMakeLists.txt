@@ -37,5 +37,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+tt_set_runtime_rpath(mem_bench)
 
 target_precompile_headers(mem_bench REUSE_FROM TT::CommonPCH)

@@ -42,6 +42,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
+tt_set_runtime_rpath(distributed_unit_tests)
 
 add_executable(distributed_benchmarks)
 target_sources(
@@ -73,5 +74,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
+tt_set_runtime_rpath(distributed_benchmarks)
 
 add_subdirectory(multiprocess)

@@ -14,3 +14,4 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/ttnn/tracy/
 )
+tt_set_runtime_rpath(test_get_programs_perf_data TTNN)

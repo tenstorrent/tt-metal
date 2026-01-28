@@ -37,6 +37,7 @@ function(create_unit_test_executable)
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal
     )
+    tt_set_runtime_rpath(${exec_name})
 endfunction()
 
 create_unit_test_executable()

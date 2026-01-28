@@ -95,6 +95,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
+          - "Fedora 43"
         description: "Platform to analyze"
       build-type:
         required: false

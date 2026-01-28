@@ -37,6 +37,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
+          - "Fedora 43"
         default: "Ubuntu 22.04"
       build-type:
         description: "Build type"

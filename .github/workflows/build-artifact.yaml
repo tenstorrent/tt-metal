@@ -206,6 +206,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
+          - "Fedora 43"
         description: "Target Platform"
       build-type:
         required: false
@@ -492,6 +493,18 @@ jobs:
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
 
+      - name: ✅ Validate RPATH/RUNPATH
+        timeout-minutes: 5
+        run: |
+          echo "Validating RPATH/RUNPATH in built libraries..."
+          if [ -f build/lib/libtt_metal.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_metal.so
+          elif [ -f build/lib/libtt_stl.so ]; then
+            ./tests/scripts/validate_rpath.sh build libtt_stl.so
+          else
+            echo "No libraries found for RPATH validation (this may be expected for some build configurations)"
+          fi
+
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
         run: |
@@ -517,8 +530,9 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: ☁️ Upload packages
-        if: ${{ inputs.publish-package }}
+        # TODO: VALIDATE POST MERGE
+      - name: ☁️ Upload packages (DEB)
+        if: ${{ inputs.publish-package && (needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu') != 'fedora' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -526,6 +540,17 @@ jobs:
           path: |
             /work/build/*.deb
             /work/build/*.ddeb
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: ☁️ Upload packages (RPM)
+        if: ${{ inputs.publish-package && (needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu') == 'fedora' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            /work/build/*.rpm
           compression-level: 0
           if-no-files-found: error
 

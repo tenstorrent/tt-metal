@@ -26,5 +26,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/scale_out/4x_bh_quietbox
 )
+tt_set_runtime_rpath(test_4x_bh_sanity)
 
 target_link_libraries(test_4x_bh_sanity PRIVATE TT::ScaleoutTools)

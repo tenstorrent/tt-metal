@@ -26,7 +26,10 @@ endif()
 # Configure package version with build config suffix
 # A release build is assumed and this draws attention if it's anything else.
 set(CPACK_DEBIAN_PACKAGE_VERSION "@VERSION_DEB@")
+set(CPACK_RPM_PACKAGE_VERSION "@VERSION_RPM@")
 if(NOT BUILD_CONFIG_LOWER STREQUAL "release")
     set(CPACK_DEBIAN_PACKAGE_VERSION "@VERSION_DEB@~${BUILD_CONFIG_LOWER}")
+    set(CPACK_RPM_PACKAGE_VERSION "@VERSION_RPM@.${BUILD_CONFIG_LOWER}")
 endif()
-message(STATUS "Package version: ${CPACK_DEBIAN_PACKAGE_VERSION}")
+message(STATUS "DEB Package version: ${CPACK_DEBIAN_PACKAGE_VERSION}")
+message(STATUS "RPM Package version: ${CPACK_RPM_PACKAGE_VERSION}")

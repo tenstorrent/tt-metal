@@ -13,6 +13,7 @@ function(setup_multiprocess_unit_test target_name test_source)
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/ttnn/multiprocess
     )
+    tt_set_runtime_rpath(${target_name} TTNN)
     target_link_libraries(
         ${target_name}
         PRIVATE

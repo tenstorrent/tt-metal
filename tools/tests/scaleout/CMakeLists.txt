@@ -6,6 +6,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
+tt_set_runtime_rpath(test_factory_system_descriptor)
 
 # Add the protobuf generated headers directory for tests
 target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
@@ -61,6 +62,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
+tt_set_runtime_rpath(test_link_retraining)
 
 target_include_directories(
     test_link_retraining
@@ -98,6 +100,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
+tt_set_runtime_rpath(test_cabling_descriptor_mgd_generation)
 
 target_include_directories(
     test_cabling_descriptor_mgd_generation

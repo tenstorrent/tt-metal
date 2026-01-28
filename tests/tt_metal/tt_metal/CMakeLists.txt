@@ -57,6 +57,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(unit_tests_legacy)
 list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 
 # Standalone test_clean_init executable (not a gtest - requires custom main with skip-teardown handling)
@@ -77,6 +78,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(test_clean_init)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)

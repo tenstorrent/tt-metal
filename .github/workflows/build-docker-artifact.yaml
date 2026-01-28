@@ -59,6 +59,7 @@ on:
         options:
             - "Ubuntu 22.04"
             - "Ubuntu 24.04"
+            - "Fedora 43"
         description: "Platform to build Docker images for"
       architecture:
         required: false
@@ -114,8 +115,17 @@ jobs:
         id: tags
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
+          # TODO: VALIDATE POST MERGE
+          DISTRO="${{ steps.platform.outputs.distro }}"
 
-          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
+          # Select dockerfile based on distro
+          if [[ "$DISTRO" == "fedora" ]]; then
+            DOCKERFILE="dockerfile/Dockerfile.fedora"
+          else
+            DOCKERFILE="dockerfile/Dockerfile"
+          fi
+
+          HASH=$(.github/scripts/dockerfile-hash.sh "$DOCKERFILE" $EXTRA_FILES)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
@@ -247,7 +257,86 @@ jobs:
           cache-to: type=inline
           pull: true
 
-  # Build ManyLinux image (runs in parallel with Ubuntu)
+  # Build Fedora images (runs in parallel with Ubuntu and ManyLinux)
+  build-fedora-images:
+    name: "🐳️ Build Fedora images"
+    needs: check-docker-images
+    if: needs.check-docker-images.outputs.distro == 'fedora' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push CI Build image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: ci-build
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push CI Test image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: ci-test
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Dev image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.dev-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic TTNN runtime image
+        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-ttnn-runtime
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+
+  # Build ManyLinux image (runs in parallel with Ubuntu and Fedora)
   build-manylinux-image:
     name: "🐳️ Build ManyLinux image"
     needs: check-docker-images

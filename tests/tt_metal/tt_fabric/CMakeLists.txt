@@ -51,6 +51,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(fabric_unit_tests)
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/physical_discovery/test_physical_system_descriptor.cpp
@@ -81,6 +82,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(test_physical_discovery)
 
 # Fabric Elastic Channels Test
 add_executable(fabric_elastic_channels_host_test)
@@ -114,6 +116,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(fabric_elastic_channels_host_test)
 
 add_library(test_system_health_smoke OBJECT)
 add_library(TT::SystemHealth::Smoke ALIAS test_system_health_smoke)
@@ -142,6 +145,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(test_system_health)
 target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
 
 add_library(test_fabric_smoke OBJECT)
@@ -175,6 +179,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(fabric_smoke_tests)
 
 # ---- Bench: unicast ----
 add_executable(
@@ -212,6 +217,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+tt_set_runtime_rpath(bench_unicast)
 
 # ---- Test: addrgen_write (unified test for all addrgen variants) ----
 add_executable(
@@ -286,3 +292,5 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+tt_set_runtime_rpath(test_bandwidth_telemetry_validation)

@@ -28,6 +28,14 @@ on:
         required: false
         type: string
         default: ""
+      fedora-43-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      fedora-43-dev-tag:
+        required: false
+        type: string
+        default: ""
       # Single-platform build options (alternative to matrix build with docker tags)
       platform:
         required: false
@@ -53,6 +61,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
+          - "Fedora 43"
         description: "Platform to target"
       build-type:
         required: false
@@ -127,6 +136,10 @@ jobs:
           - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
+          - platform: "Fedora 43"
+            toolchain: "cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            enable-lto: true
     with:
       platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
@@ -140,9 +153,11 @@ jobs:
       # Pass pre-built docker image tags based on platform
       ci-build-docker-image: ${{
         (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
+        (matrix.config.platform == 'Fedora 43' && inputs.fedora-43-ci-build-tag) ||
         inputs.ubuntu-2204-ci-build-tag }}
       dev-docker-image: ${{
         (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
+        (matrix.config.platform == 'Fedora 43' && inputs.fedora-43-ci-dev-tag) ||
         inputs.ubuntu-2204-dev-tag }}
       manylinux-docker-image: ${{
         (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||

@@ -9,6 +9,11 @@ set_target_properties(
     PROPERTIES
         EXPORT_NAME
             Metalium
+        # Prevent CMake from automatically adding library directories to INSTALL_RPATH
+        # This must be set before linking to any targets (especially MPI) to ensure
+        # $ORIGIN is first in RPATH (required by RPM's brp-check-rpaths)
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
 )
 
 include(flatbuffers)
@@ -275,10 +280,8 @@ add_dependencies(tt_metal hw_toolchain)
 set_target_properties(
     tt_metal
     PROPERTIES
-        INSTALL_RPATH
-            "/opt/openmpi-v5.0.7-ulfm/lib;${PROJECT_BINARY_DIR}/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
-            "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
+            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR};${PROJECT_BINARY_DIR}/obj"
 )
 
 if(BUILD_PROGRAMMING_EXAMPLES)
@@ -302,7 +305,47 @@ add_subdirectory(llrt)
 add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
+
+# Configure MPI before distributed subdirectory so variables are available in both scopes
+# This sets USE_MPI, TT_METAL_USING_ULFM, TT_METAL_MPI_LIB_DIR, and creates OpenMPI::MPI target
+include(mpi-config)
+tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI)
+
 add_subdirectory(distributed)
+
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts
+# This prevents ODR violations in multiprocess tests where different processes
+# might load the library from different locations (original vs copied)
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
+)
+
+# Build INSTALL_RPATH - $ORIGIN must come first for RPM's brp-check-rpaths
+set(TT_METAL_INSTALL_RPATH "$ORIGIN")
+
+# Add MPI library directory to RPATH so tests can find libmpi.so at runtime
+# TT_METAL_MPI_LIB_DIR is set by cmake/mpi-config.cmake for both ULFM and system MPI
+if(TT_METAL_MPI_LIB_DIR)
+    list(APPEND TT_METAL_INSTALL_RPATH "${TT_METAL_MPI_LIB_DIR}")
+endif()
+
+# Use BUILD_WITH_INSTALL_RPATH=TRUE so library has correct RPATH at build time.
+# install(FILES) copies the library as-is, so RPATH must be correct before install.
+# We include MPI paths in INSTALL_RPATH so tests can find libmpi.so at runtime.
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        BUILD_WITH_INSTALL_RPATH
+            TRUE
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
+        INSTALL_RPATH
+            "${TT_METAL_INSTALL_RPATH}"
+)
+
 add_subdirectory(fabric)
 add_subdirectory(experimental/udm)
 add_subdirectory(experimental/dataflow_buffer)
@@ -311,17 +354,23 @@ if(TT_METAL_BUILD_TESTS)
 endif()
 
 if(TT_INSTALL)
+    # Export target and headers (NOT library - see below)
+    # Using install(FILES) workaround because install(TARGETS ... LIBRARY) has a CMake bug
+    # where it can't find the library when LIBRARY_OUTPUT_DIRECTORY is set (on Ubuntu).
     install(
         TARGETS
             tt_metal
         EXPORT Metalium
-        LIBRARY
-            COMPONENT metalium-runtime
         FILE_SET
         api
             DESTINATION COMPONENT
             metalium-dev
     )
+
+    # Install library using generator expression (workaround for CMake bug)
+    # Since BUILD_WITH_INSTALL_RPATH=TRUE, library already has correct RPATH
+    install(FILES $<TARGET_FILE:tt_metal> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
+
     install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
 
     install(

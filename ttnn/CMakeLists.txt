@@ -2,6 +2,8 @@
 # Build TTNN and TTNNCPP
 ####################################################################################################
 
+include(GNUInstallDirs)
+
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
 
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
@@ -455,6 +457,9 @@ add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: r
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
+# Set RPATH for build-time linking and installation layouts
+tt_set_installable_library_rpath(ttnncpp)
+
 set_target_properties(
     ttnncpp
     PROPERTIES
@@ -462,10 +467,6 @@ set_target_properties(
             TTNN
         PREFIX
             "_"
-        BUILD_RPATH
-            "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-        INSTALL_RPATH
-            "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
         CXX_VISIBILITY_PRESET
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
@@ -676,11 +677,26 @@ if(TT_INSTALL)
     )
 endif()
 
+# Install ttnncpp to source tree for CI tar artifact
+# The tar artifact includes ttnn/ttnn/*.so, so ttnncpp must be there too
+# for executables (like ttml_tests) that link against it
+install(
+    TARGETS
+        ttnncpp
+        DESTINATION
+        ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+        COMPONENT
+        tt_pybinds
+)
+
 if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
     TT_ENABLE_UNITY_BUILD(ttnn)
+
+    # Set RPATH for build-time linking and installation layouts
+    tt_set_installable_library_rpath(ttnn)
 
     set_target_properties(
         ttnn
@@ -689,10 +705,6 @@ if(WITH_PYTHON_BINDINGS)
                 Python
             PREFIX
                 "_"
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
             CXX_VISIBILITY_PRESET
                 "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
             ADDITIONAL_CLEAN_FILES

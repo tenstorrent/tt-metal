@@ -1,0 +1,278 @@
+# TT-Metalium Dockerfile for Fedora
+
+#############################################################
+
+# Accept an argument to specify the Fedora version
+ARG FEDORA_VERSION=43
+FROM mirror.gcr.io/fedora:${FEDORA_VERSION} AS base
+
+# Configure dnf for reliable mirror selection and faster downloads
+# - fastestmirror: Tests mirrors and picks the fastest responding ones
+# - max_parallel_downloads: Allows parallel package downloads
+# - retries: Increase retries for transient failures
+# - timeout: Shorter timeout to quickly skip unresponsive mirrors
+# - minrate: Skip mirrors that are too slow
+RUN echo -e '\n\
+fastestmirror=1\n\
+max_parallel_downloads=10\n\
+retries=3\n\
+timeout=10\n\
+minrate=100k\n\
+' >> /etc/dnf/dnf.conf
+
+# Install uv early so all stages can use it (Fedora has uv in its repos)
+RUN dnf install -y uv python3-devel && dnf clean all
+
+# Install runtime deps
+COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
+RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh && \
+    /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
+
+# Fedora installs OpenMPI to non-standard paths under /usr/lib64/openmpi/
+# Set environment variables so compilers and linkers can find it
+ENV PATH="/usr/lib64/openmpi/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib"
+ENV C_INCLUDE_PATH="/usr/lib64/openmpi/include"
+ENV CPLUS_INCLUDE_PATH="/usr/lib64/openmpi/include"
+
+#############################################################
+
+FROM base AS ci-build
+
+# Re-declare ARG to make it available in this stage
+ARG FEDORA_VERSION
+
+# Copy installation script
+# This centralizes version, hash, and installation logic to avoid drift between Dockerfiles
+COPY dockerfile/install-clang-build-analyzer.sh /tmp/install-clang-build-analyzer.sh
+RUN chmod +x /tmp/install-clang-build-analyzer.sh
+
+# Install ClangBuildAnalyzer from source (not packaged in Fedora)
+# Pin to specific version with SHA256 verification for supply chain security
+# Installation logic, version, and hash are all in install-clang-build-analyzer.sh
+RUN /tmp/install-clang-build-analyzer.sh
+
+# Install CI requirements - Fedora packages
+# ccache, doxygen, mold available as dnf packages
+# libxml2, libxslt, patch, which for build requirements
+# doxygen/graphviz have openh264 in dependency chain - exclude it explicitly
+# Reference: https://rpmfusion.org/Configuration
+RUN dnf install -y \
+    bc \
+    ccache \
+    compiler-rt \
+    gtest-devel \
+    jq \
+    libxml2 \
+    libxml2-devel \
+    libxslt \
+    libxslt-devel \
+    libuuid-devel \
+    mold \
+    patch \
+    sudo \
+    wget \
+    which \
+    zstd \
+    rpm-build \
+    && dnf install -y --setopt=install_weak_deps=False --exclude=openh264* doxygen graphviz \
+    && dnf clean all
+
+# Copy Python version configuration for consistent version across all stages
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN FEDORA_VERSION=$FEDORA_VERSION . /tmp/python-version.conf && \
+    umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+# Numpy needed for tt-train to build
+RUN uv pip install --no-cache build numpy setuptools
+
+RUN git config --global --add safe.directory '*'
+
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+#############################################################
+
+FROM ci-build AS ci-test
+
+ARG FEDORA_VERSION
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Create directories for infra
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+# Copy requirements from tt-metal folders with requirements.txt docs
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
+# Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Configure PyTorch CPU index and install Python packages using uv
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# that are not explicitly listed in the requirements.txt files
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
+COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
+# Install the debugger (tt-exalens) via script (uses uv with fallback to pip)
+RUN ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
+
+#############################################################
+
+FROM ci-test AS dev
+
+ARG FEDORA_VERSION
+
+# Install dev deps - Fedora packages
+# mesa-libGL is the Fedora equivalent of libgl1
+RUN dnf install -y \
+    acl \
+    emacs \
+    gdb \
+    less \
+    mpfr-devel \
+    nano \
+    openssh-server \
+    vim \
+    mesa-libGL \
+    ipmitool \
+    bash-completion \
+    htop \
+    sqlite \
+    && dnf clean all
+
+# Fedora has modern gdb by default, no need to build from source
+
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+#############################################################
+
+FROM base AS release
+
+# Re-declare ARG to make it available in this stage
+ARG FEDORA_VERSION
+
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN FEDORA_VERSION=$FEDORA_VERSION . /tmp/python-version.conf && \
+    uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+
+ARG WHEEL_FILENAME
+ADD $WHEEL_FILENAME $WHEEL_FILENAME
+RUN uv pip install $WHEEL_FILENAME
+
+#############################################################
+
+FROM base AS release-models
+
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+# Accept git reference argument
+ARG GIT_REF=main
+
+# Clone tt-metal
+RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
+    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
+    && cd ${TT_METAL_HOME} \
+    && git checkout ${GIT_REF} \
+    && git submodule update --init --recursive"
+
+WORKDIR /tt-metal
+
+# Build tt-metal and venv, then clear cache
+RUN /bin/bash -c "./build_metal.sh \
+    && ./create_venv.sh \
+    && source $PYTHON_ENV_DIR/bin/activate \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+# Extra system deps - Fedora packages
+RUN dnf install -y \
+    gosu \
+    mesa-libGL \
+    libsndfile \
+    && dnf clean all
+
+#############################################################
+
+FROM base AS basic-dev
+
+# Minimal build environment for basic development tasks
+# Similar to Ubuntu's Dockerfile.basic-dev base target
+RUN dnf install -y \
+    cmake \
+    ninja-build \
+    gcc-c++ \
+    make \
+    && dnf clean all
+
+#############################################################
+
+FROM base AS basic-ttnn-runtime
+
+# Re-declare ARG to make it available in this stage
+ARG FEDORA_VERSION
+
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN FEDORA_VERSION=$FEDORA_VERSION . /tmp/python-version.conf && \
+    uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+# Add PyTorch CPU wheels to pip config
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
