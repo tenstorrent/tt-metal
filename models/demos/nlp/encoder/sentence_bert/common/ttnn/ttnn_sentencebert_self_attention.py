@@ -12,7 +12,7 @@ if is_blackhole():
         softmax_config,
     )
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import (
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import (
         pre_softmax_config,
         query_key_value_matmul_program_config,
         softmax_config,

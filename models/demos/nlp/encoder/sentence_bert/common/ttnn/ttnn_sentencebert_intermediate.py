@@ -8,7 +8,7 @@ from models.common.utility_functions import is_blackhole
 if is_blackhole():
     from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import ff1_matmul_program_config
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import ff1_matmul_program_config
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import ff1_matmul_program_config
 
 
 class TtnnSentenceBertIntermediate:

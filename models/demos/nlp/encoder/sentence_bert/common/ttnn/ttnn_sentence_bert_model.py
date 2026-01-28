@@ -12,7 +12,7 @@ from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_pooler
 if is_blackhole():
     from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import ttnn_mean_pooling
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import ttnn_mean_pooling
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import ttnn_mean_pooling
 
 
 class TtnnSentenceBertModel:
