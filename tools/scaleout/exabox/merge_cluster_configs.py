@@ -4,9 +4,17 @@ Merge two cluster configurations (cabling + deployment descriptors).
 
 Usage:
     ./merge_cluster_configs.py \
-        --cabling1 <path> --cabling2 <path> \
-        --deployment1 <path> --deployment2 <path> \
-        --output-dir <path>
+        --cabling1 <path> \
+        --cabling2 <path> \
+        --deployment1 <path> \
+        --deployment2 <path> \
+        --output-dir <path> \
+        [--temp-dir <path>]
+
+Generates in output-dir:
+    - merged_fsd.textproto
+    - merged_cabling_descriptor.textproto
+    - merged_deployment_descriptor.textproto
 """
 
 import argparse
