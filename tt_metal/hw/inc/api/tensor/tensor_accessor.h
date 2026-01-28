@@ -316,12 +316,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>(
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>(
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
 
     // Locality APIs
     FORCE_INLINE
