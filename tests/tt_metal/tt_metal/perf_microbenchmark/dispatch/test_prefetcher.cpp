@@ -326,7 +326,8 @@ HostMemDeviceCommand build_prefetch_relay_paged_packed(
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_linear_packed(
     const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
-    uint32_t noc_xy,
+    uint32_t src_noc_xy,
+    uint32_t dst_noc_xy,
     uint32_t addr,
     uint64_t total_length) {
     const uint32_t n_sub_cmds = sub_cmds.size();
@@ -341,14 +342,14 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed(
 
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,             // num_mcast_dests
-        noc_xy,        // NOC coordinates
+        dst_noc_xy,    // NOC coordinates for DESTINATION (dispatcher writes here)
         addr,          // destination address
         total_length,  // data size
         nullptr        // payload data
     );
 
-    // Add the prefetch relay linear packed
-    cmd.add_prefetch_relay_linear_packed(noc_xy, total_length, sub_cmds, n_sub_cmds);
+    // Add the prefetch relay linear packed - uses SOURCE NOC coordinates (prefetcher reads from here)
+    cmd.add_prefetch_relay_linear_packed(src_noc_xy, total_length, sub_cmds, n_sub_cmds);
 
     return cmd;
 }
@@ -891,12 +892,19 @@ protected:
         // Source: L1 on worker core (pre-populated with data)
         uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         
+        // Source NOC address: worker core where L1 data is located
+        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t src_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        
         // Destination: DRAM bank 0
+        // Use the same approach as RelayLinearHTest for DRAM NOC addressing
         uint32_t dest_bank_id = 0;
-        CoreCoord dest_dram_core = device_->logical_core_from_dram_channel(
-            device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id));
-        CoreCoord dest_virt_core = device_->virtual_core_from_logical_core(dest_dram_core, CoreType::DRAM);
-        uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_virt_core);
+        uint32_t dest_dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
+        CoreCoord dest_dram_physical_core = MetalContext::instance()
+                                                .get_cluster()
+                                                .get_soc_desc(device_->id())
+                                                .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
+        uint32_t dst_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
         
         // Use much larger size since we're writing to DRAM now
         uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
@@ -940,14 +948,15 @@ protected:
             }
 
             // Get destination DRAM address
-            uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_core, dest_bank_id);
+            CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
+            uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
 
             // Create n_sub_cmds
             std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses, n_sub_cmds);
 
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
-                    sub_cmds, noc_xy, dram_dest_addr, total_length);
+                    sub_cmds, src_noc_xy, dst_noc_xy, dram_dest_addr, total_length);
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -959,7 +968,7 @@ protected:
                 uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 // The prefetcher reads these values and dispatcher writes them sequentially to DRAM destination
                 for (uint32_t j = 0; j < length_words; j++) {
-                    device_data.push_one(dest_dram_core, dest_bank_id, offset_words + j);
+                    device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
                 }
             }
 
@@ -2012,9 +2021,21 @@ TEST_P(PrefetcherLinearPackedReadTestFixture, LinearPackedReadTest) {
     MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
     MetalContext::instance().get_cluster().l1_barrier(device_->id());
 
-    // DeviceData constructor automatically pre-populates DRAM with test data
+    // Initialize destination DRAM with sentinel pattern to verify writes occur
+    {
+        const uint32_t sentinel_pattern = 0x99999999;
+        std::vector<uint32_t> dirty_data(dram_data_size_words, sentinel_pattern);
+        const uint32_t num_banks = device_->allocator()->get_num_banks(BufferType::DRAM);
+        
+        for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+            tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, bank_id, dram_base_, dirty_data);
+        }
+        MetalContext::instance().get_cluster().dram_barrier(device_->id());
+    }
+
+    // DeviceData constructor - do NOT pre-populate DRAM (pass 0) since we're writing to it
     Common::DeviceData device_data(
-        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+        device_, worker_range, l1_base, dram_base_, nullptr, false, 0 /* don't prepopulate DRAM */, cfg_);
 
     // PHASE 1: Generate linear packed read command metadata
     // Source addresses are arbitrary L1 addresses (can overlap)
