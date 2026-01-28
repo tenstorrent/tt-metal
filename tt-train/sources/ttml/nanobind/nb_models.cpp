@@ -135,20 +135,18 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         auto py_llama_module = m.def_submodule("llama");
         nb::class_<models::llama::LlamaConfig>(py_llama_module, "LlamaConfig");
         nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
-        py_llama_module.def(
-            "create_llama_model",
-            [](const models::llama::LlamaConfig& config) { return models::llama::create(config); },
-            nb::call_guard<nb::gil_scoped_release>());
+        py_llama_module.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
+            return models::llama::create(config);
+        });
     }
 
     {
         auto py_qwen3_module = m.def_submodule("qwen3");
         nb::class_<models::qwen3::Qwen3Config>(py_qwen3_module, "Qwen3Config");
         nb::class_<models::qwen3::Qwen3, models::BaseTransformer>(py_qwen3_module, "Qwen3");
-        py_qwen3_module.def(
-            "create_qwen3_model",
-            [](const models::qwen3::Qwen3Config& config) { return models::qwen3::create(config); },
-            nb::call_guard<nb::gil_scoped_release>());
+        py_qwen3_module.def("create_qwen3_model", [](const models::qwen3::Qwen3Config& config) {
+            return models::qwen3::create(config);
+        });
     }
 
     {
@@ -165,10 +163,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
     {
         auto py_base_transformer =
             static_cast<nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>>(m.attr("BaseTransformer"));
-        py_base_transformer.def(
-            "load_from_safetensors",
-            &models::BaseTransformer::load_from_safetensors,
-            nb::call_guard<nb::gil_scoped_release>());
+        py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
     }
 
     {
@@ -176,8 +171,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_gpt2_module.def(
             "create_gpt2_model",
             [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); },
-            "Create GPT2 model",
-            nb::call_guard<nb::gil_scoped_release>());
+            "Create GPT2 model");
 
         auto py_gpt2_transformer_config_experimental =
             static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
@@ -220,10 +214,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
     {
         auto py_linear_regression_module = static_cast<nb::module_>(m.attr("linear_regression"));
         py_linear_regression_module.def(
-            "create_linear_regression_model",
-            &models::linear_regression::create,
-            "Create linear regression model",
-            nb::call_guard<nb::gil_scoped_release>());
+            "create_linear_regression_model", &models::linear_regression::create, "Create linear regression model");
     }
 
     {
@@ -235,15 +226,13 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             [](const models::gpt2::TransformerConfig& config) {
                 return ttml::models::distributed::gpt2::create(config);
             },
-            "Create GPT2 model",
-            nb::call_guard<nb::gil_scoped_release>());
+            "Create GPT2 model");
 
         auto py_distributed_llama = py_distributed.def_submodule("llama");
         py_distributed_llama.def(
             "create_llama_model",
             [](const models::llama::LlamaConfig& config) { return ttml::models::distributed::llama::create(config); },
-            "Create Llama model",
-            nb::call_guard<nb::gil_scoped_release>());
+            "Create Llama model");
 
         auto py_distributed_pp = py_distributed.def_submodule("pipeline_parallel");
         auto py_distributed_pp_llama = py_distributed_pp.def_submodule("llama");
@@ -258,8 +247,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             nb::arg("config"),
             nb::arg("pipeline_parallel_config"),
             nb::arg("is_tensor_parallel") = false,
-            "Create Pipeline Parallel Llama model",
-            nb::call_guard<nb::gil_scoped_release>());
+            "Create Pipeline Parallel Llama model");
         auto py_distributed_pp_llama_cfg =
             static_cast<nb::class_<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig>>(
                 py_distributed_pp_llama.attr("PipelineParallelConfig"));
@@ -282,10 +270,8 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads, "Number of heads");
         py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups, "Number of groups");
         py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim, "Embedding dimensions");
-        py_llama_config.def(
-            "set_intermediate_dim",
-            [](models::llama::LlamaConfig& c, uint32_t v) { c.intermediate_dim = std::make_optional(v); },
-            "Set intermediate dimensions");
+        py_llama_config.def_rw(
+            "intermediate_dim", &models::llama::LlamaConfig::intermediate_dim, "Intermediate dimensions");
         py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob, "Dropout probability");
         py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta, "Theta");
         py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks, "Number of blocks");
@@ -397,10 +383,9 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     {
         auto py_mlp_module = static_cast<nb::module_>(m.attr("mlp"));
-        py_mlp_module.def(
-            "create_mlp_model",
-            [](const ttml::modules::MultiLayerPerceptronParameters& config) { return models::mlp::create(config); },
-            nb::call_guard<nb::gil_scoped_release>());
+        py_mlp_module.def("create_mlp_model", [](const ttml::modules::MultiLayerPerceptronParameters& config) {
+            return models::mlp::create(config);
+        });
 
         auto py_mlp_params = static_cast<nb::class_<ttml::modules::MultiLayerPerceptronParameters>>(
             py_mlp_module.attr("MultiLayerPerceptronParameters"));
