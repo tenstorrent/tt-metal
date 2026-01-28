@@ -26,5 +26,5 @@ void kernel_main() {
         *point = 0;
 }
 #if defined(COMPILE_FOR_TRISC)
-} // namespace NAMESPACE
+}  // namespace NAMESPACE
 #endif

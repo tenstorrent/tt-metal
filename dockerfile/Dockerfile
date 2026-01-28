@@ -44,15 +44,15 @@ RUN mkdir -p /tmp/cba \
     && rm -rf /tmp/cba
 
 # Install extra ci apt requirements
+# Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
-    libclang-17-dev \
     libclang-20-dev \
     libclang-rt-20-dev \
-    clang-tidy-17 \
     clang-tidy-20 \
     clang-20 \
+    llvm-20 \
     curl \
     dialog \
     file \
@@ -166,7 +166,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # RUN mkdir -p /tmp/iwyu \
 #     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
 #     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
 #     && cmake --build /tmp/iwyu/build --parallel \
 #     && cmake --install /tmp/iwyu/build \
 #     && rm -rf /tmp/iwyu

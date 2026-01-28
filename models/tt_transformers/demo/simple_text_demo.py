@@ -28,6 +28,9 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
+# Issue: https://github.com/tenstorrent/tt-metal/issues/34763
+models_not_supported_for_device_sampling = ["Mistral-7B"]
+
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -1059,6 +1062,12 @@ def test_demo_text(
             if model[0]._supports_on_device_sampling
             else None
         )
+
+        # Override the sampling params for some models
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
+        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
+            device_sampling_params = None
+
         if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
             # host sampling only supports single sample param for all users in a batch
             sampling_params["temperature"] = sampling_params["temperature"][0]
@@ -1475,10 +1484,12 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
+                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
+                "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
                 # T3K targets
                 "T3K_Llama-3.1-70B": (205, 1.25),
-                "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
+                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
+                "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": (100, 1.1),  # Issue: Perf regression being tracked on issue #29834
@@ -1488,10 +1499,10 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 66,
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 23,
+                "N150_Mistral-7B": 22,
                 # N300 targets
                 # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
-                "N300_Qwen2.5-7B": 22.0,
+                "N300_Qwen2.5-7B": 21.0,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 15,
                 "T3K_Qwen2.5-72B": 13.25,

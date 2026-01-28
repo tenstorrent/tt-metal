@@ -28,6 +28,10 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
@@ -66,6 +70,7 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -275,6 +280,8 @@ class RunTimeOptions {
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
+    // Dispatch kernel progress update period in milliseconds (default 100ms)
+    uint32_t dispatch_progress_update_ms = 100;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -524,6 +531,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    void set_experimental_device_debug_dump_enabled(bool enabled);
     bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
@@ -623,6 +631,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -651,12 +660,20 @@ public:
             runtime_target_device_ = tt::TargetDevice::Mock;
         }
     }
+    void clear_mock_cluster_desc() {
+        mock_cluster_desc_path.clear();
+        // Only reset to Silicon if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Silicon;
+        }
+    }
 
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
+    uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -679,11 +696,19 @@ public:
         }
     }
 
+    // Resolve FabricNodeIds to physical chip IDs using the control plane.
+    // This must be called after the control plane is initialized, since during
+    // rtoptions parsing we don't have access to the control plane yet.
+    void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
+
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    bool ParseFeatureChipIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if chips are specified
+    bool ParseFeatureNodeIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if nodes are specified
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);

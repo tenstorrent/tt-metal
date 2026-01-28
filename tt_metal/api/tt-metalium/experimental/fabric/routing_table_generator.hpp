@@ -53,7 +53,7 @@ private:
     // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
     std::vector<std::vector<std::vector<ChipId>>> exit_node_lut_;
 
-    std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> get_paths_to_all_meshes(
+    std::vector<std::vector<std::pair<ChipId, MeshId>>> get_first_hops_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;
     void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
     // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to

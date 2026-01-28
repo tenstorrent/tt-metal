@@ -67,8 +67,7 @@ void calc_numeric_stable(
     cb_wait_front(cb_out, Wt);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -322,4 +321,3 @@ void MAIN {
     // cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
     // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
 }
-}  // namespace NAMESPACE

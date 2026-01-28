@@ -98,8 +98,9 @@ AllToAllAsyncGenericProgram::create_at(
     std::vector<Tensor> output_tensors = {tensor_return_value};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
-    const size_t num_senders_per_link = 1;
-    const auto* topology_type = operation_attributes.topology == ttnn::ccl::Topology::Ring ? "RING" : "LINEAR";
+    const bool is_ring = operation_attributes.topology == ttnn::ccl::Topology::Ring;
+    const size_t num_senders_per_link = (is_ring && operation_attributes.num_devices % 2 == 0) ? 2 : 1;
+    const auto* topology_type = is_ring ? "RING" : "LINEAR";
 
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
@@ -129,11 +130,7 @@ AllToAllAsyncGenericProgram::create_at(
     CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     const auto input_shape = get_tiled_shape(tensor_args.input_tensor);
-    uint32_t src_out_dims = 1;
     uint32_t src_in_dims = 1;
-    for (uint32_t i = 0; i < operation_attributes.out_dim; ++i) {
-        src_out_dims *= input_shape[i];
-    }
 
     for (uint32_t i = operation_attributes.out_dim + 1; i < input_shape.size(); ++i) {
         src_in_dims *= input_shape[i];
@@ -155,20 +152,30 @@ AllToAllAsyncGenericProgram::create_at(
         dst_in_dims *= output_shape[i];
     }
 
+    const uint32_t concat_num_half_tiles =
+        output_shape[operation_attributes.in_dim] * 2 / operation_attributes.num_devices;
+    const uint32_t concat_num_tiles = (concat_num_half_tiles + 1) / 2;
+    const uint32_t num_blocks = dst_out_dims * dst_in_dims * concat_num_tiles;
+
+    const uint32_t num_blocks_devices = num_senders_per_link;
+    const uint32_t num_cores_per_blocks = operation_attributes.num_links;
+    const uint32_t devices_per_core = operation_attributes.num_devices / num_blocks_devices;
+    const uint32_t blocks_per_core = num_blocks / num_cores_per_blocks;
+
     auto sender_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    sender_reader_kernel_config.defines.emplace("TOPOLOGY", topology_type);
     sender_reader_kernel_config.compile_args = {
         tt::CB::c_in0,                              // cb0_id
         page_size,                                  // tensor0_page_size
         device_index,                               // device_index
         operation_attributes.num_devices,           // num_devices
-        src_out_dims,                               // outer_dims_size
         input_shape[operation_attributes.out_dim],  // split_dim_size
         src_in_dims,                                // inner_dims_size
         input_shape[input_shape.size() - 1],        // last_dim_sizes
         number_pages_per_packet,                    // number_pages_per_packet
         reader_has_extra_half_tile,                 // has_reader_tail
         writer_has_extra_half_tile,                 // has_writer_tail
+        devices_per_core,                           // num_devices_per_core
+        blocks_per_core,                            // num_blocks_per_core
     };
 
     tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer())
@@ -187,16 +194,31 @@ AllToAllAsyncGenericProgram::create_at(
         tt::CB::c_in0,                              // cb0_id
         device_index,                               // device_index
         operation_attributes.num_devices,           // num_devices
-        dst_out_dims,                               // outer_dims_size
         output_shape[operation_attributes.in_dim],  // concat_dim_size
         dst_in_dims,                                // inner_dims_size
         number_pages_per_packet,                    // number_pages_per_packet
         writer_has_extra_half_tile,                 // has_writer_tail
         page_size,                                  // intermediate_page_size
-        reserved_packet_header_CB_index,
+        reserved_packet_header_CB_index,            // reserved_packet_header_cb_id
+        devices_per_core,                           // num_devices_per_core
+        blocks_per_core,                            // num_blocks_per_core
+        num_cores_per_blocks,                       // num_cores_per_blocks
     };
 
     tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_kernel_config.compile_args);
+    std::vector<int32_t> device_offsets;
+    if (is_ring) {
+        for (int d = operation_attributes.num_devices - 1; d >= 0; --d) {
+            int distance = (d + 1) / 2;
+            int device_offset = (d % 2 == 0) ? distance : -distance;
+            device_offsets.push_back(device_offset);
+        }
+    } else {
+        // Linear topology
+        for (uint32_t i = 0; i < operation_attributes.num_devices; ++i) {
+            device_offsets.push_back(i - device_index);
+        }
+    }
 
     auto sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -205,43 +227,81 @@ AllToAllAsyncGenericProgram::create_at(
         sender_worker_core_range,
         sender_writer_kernel_config);
 
-    std::vector<uint32_t> sender_reader_rt_args = {tensor_args.input_tensor.buffer()->address()};
-    tt::tt_metal::SetRuntimeArgs(program, sender_reader_kernel_id, sender_worker_core_range, sender_reader_rt_args);
+    CoreRange sender_box = sender_worker_core_range.bounding_box();
+    // Swap start and end coord
+    const uint32_t mcast_dest_noc_start_x = device->worker_core_from_logical_core(sender_box.end_coord).x;
+    const uint32_t mcast_dest_noc_end_x = device->worker_core_from_logical_core(sender_box.start_coord).x;
+    const uint32_t mcast_dest_noc_start_y = device->worker_core_from_logical_core(sender_box.end_coord).y;
+    const uint32_t mcast_dest_noc_end_y = device->worker_core_from_logical_core(sender_box.start_coord).y;
+    const uint32_t mcast_size = sender_box.size();
 
-    auto drain_sync_core = device->worker_core_from_logical_core({sender_worker_cores[0]});
-    std::vector<uint32_t> sender_writer_rt_args = {
-        tensor_return_value.buffer()->address(),
-        init_barrier_semaphore.address(),
-        final_barrier_semaphore.address(),
-        drain_sync_core.x,
-        drain_sync_core.y};
-    sender_writer_rt_args.push_back(forward_coord.has_value());
+    auto drain_sync_core = device->worker_core_from_logical_core(sender_worker_cores[0]);
 
-    if (forward_coord.has_value()) {
-        const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
-        const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_device_fabric_node_id,
-            forward_device_fabric_node_id,
-            0,
-            program,
-            {sender_worker_cores[0]},
-            sender_writer_rt_args);
+    for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
+        const auto& core = sender_worker_cores[core_id];
+        std::vector<uint32_t> sender_reader_rt_args = {
+            tensor_args.input_tensor.buffer()->address(),
+            (core_id / num_blocks_devices) * blocks_per_core,
+        };
+        for (auto d : device_offsets) {
+            if (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0 && d >= 0) ||
+                (core_id % num_blocks_devices == 1 && d < 0)) {
+                sender_reader_rt_args.push_back(d);
+            }
+        }
+        tt::tt_metal::SetRuntimeArgs(program, sender_reader_kernel_id, {core}, sender_reader_rt_args);
+
+        std::vector<uint32_t> sender_writer_rt_args = {
+            tensor_return_value.buffer()->address(),
+            init_barrier_semaphore.address(),
+            final_barrier_semaphore.address(),
+            (core_id % num_blocks_devices) * devices_per_core,
+            (core_id / num_blocks_devices) * blocks_per_core,
+            mcast_dest_noc_start_x,
+            mcast_dest_noc_start_y,
+            mcast_dest_noc_end_x,
+            mcast_dest_noc_end_y,
+            mcast_size,
+            drain_sync_core.x,
+            drain_sync_core.y};
+        for (auto d : device_offsets) {
+            if (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0 && d >= 0) ||
+                (core_id % num_blocks_devices == 1 && d < 0)) {
+                sender_writer_rt_args.push_back(d);
+            }
+        }
+        bool with_forward =
+            (num_senders_per_link == 1 || (core_id % num_blocks_devices == 0)) && forward_coord.has_value();
+        bool with_backward =
+            (num_senders_per_link == 1 || (core_id % num_blocks_devices == 1)) && backward_coord.has_value();
+        sender_writer_rt_args.push_back(with_forward);
+
+        if (with_forward) {
+            const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
+            const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device_fabric_node_id,
+                forward_device_fabric_node_id,
+                core_id / num_senders_per_link,
+                program,
+                {core},
+                sender_writer_rt_args);
+        }
+
+        sender_writer_rt_args.push_back(with_backward);
+        if (with_backward) {
+            const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
+            const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                sender_device_fabric_node_id,
+                backward_device_fabric_node_id,
+                core_id / num_senders_per_link,
+                program,
+                {core},
+                sender_writer_rt_args);
+        }
+        tt::tt_metal::SetRuntimeArgs(program, sender_writer_kernel_id, {core}, sender_writer_rt_args);
     }
-
-    sender_writer_rt_args.push_back(backward_coord.has_value());
-    if (backward_coord.has_value()) {
-        const auto sender_device_fabric_node_id = device->get_fabric_node_id(mesh_coordinate);
-        const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_device_fabric_node_id,
-            backward_device_fabric_node_id,
-            0,
-            program,
-            {sender_worker_cores[0]},
-            sender_writer_rt_args);
-    }
-    tt::tt_metal::SetRuntimeArgs(program, sender_writer_kernel_id, sender_worker_core_range, sender_writer_rt_args);
 
     return {
         std::move(program),

@@ -13,8 +13,7 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "../accumulation_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
     const AccumulationOp accumulation_op = static_cast<AccumulationOp>(get_arg_val<uint32_t>(2));
@@ -91,5 +90,3 @@ void MAIN {
 
     cb_pop_front(cb_start, ONE_TILE);
 }
-
-}  // namespace NAMESPACE

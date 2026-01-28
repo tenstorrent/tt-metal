@@ -7,8 +7,8 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
-from models.demos.deepseek_v3.utils.config_dataclass import OpConfigBase, ReduceScatterAsyncMinimalConfig
-from models.demos.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY
+from models.demos.deepseek_v3.utils.config_dataclass import ReduceScatterAsyncMinimalConfig
+from models.demos.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY, ModelDecodeConfig, ModelPrefillConfig
 
 
 class Embedding2D(Embedding1D):
@@ -16,20 +16,43 @@ class Embedding2D(Embedding1D):
     Uses DRAM-sharded weights split over rows and replicated over columns"""
 
     @classmethod
-    def _embedding_config(
-        cls,
-        hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
-        memory_config: ttnn.MemoryConfig,
-        output_dtype: ttnn.DataType,
-    ) -> dict[str, OpConfigBase]:
-        """Config for the Embedding module."""
-        cfg = super()._embedding_config(hf_config, mesh_device, memory_config, output_dtype)
+    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelPrefillConfig:
+        """Prefill model config for an embedding with 2D tensor parallelism.
+        Does not specify a mode because we override forward to handle both.
+
+        Returns:
+            Dict containing operator configurations for prefill mode
+        """
+        cfg = super().prefill_model_config(hf_config, mesh_device)
+
         assert "reduce_scatter" not in cfg
         cfg["reduce_scatter"] = ReduceScatterAsyncMinimalConfig(
             cluster_axis=0,
             dim=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
+        assert "reduce_scatter_scale" not in cfg
+        cfg["reduce_scatter_scale"] = 1.0 / mesh_device.shape[0]
+
+        return cfg
+
+    @classmethod
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelDecodeConfig:
+        """Generate decode operator configuration for this embedding layer.
+        Does not specify a mode because we override forward to handle both.
+
+        Returns:
+            Dict containing operator configurations for decode mode
+        """
+        cfg = super().decode_model_config(hf_config, mesh_device)
+
+        assert "reduce_scatter" not in cfg
+        cfg["reduce_scatter"] = ReduceScatterAsyncMinimalConfig(
+            cluster_axis=0,
+            dim=2,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 

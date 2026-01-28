@@ -51,8 +51,20 @@ class DeepseekV3LMHead(nn.Module):
     [
         ("decode", 32),
     ]
-    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
+    + [
+        ("prefill", seq_len)
+        if seq_len == 128
+        else pytest.param(
+            "prefill",
+            seq_len,
+            marks=pytest.mark.skip(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
+        )
+        for seq_len in PREFILL_SEQ_LENS
+    ],
 )
+@pytest.mark.requires_device(["TG"])
 def test_forward_pass(
     mode: str,
     seq_len: int,
@@ -62,11 +74,6 @@ def test_forward_pass(
     cache_path: Path,
     set_deterministic_env: Any,
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
     reference_model = DeepseekV3LMHead(hf_config).eval()

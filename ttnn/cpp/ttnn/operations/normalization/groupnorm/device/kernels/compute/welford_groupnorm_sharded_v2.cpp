@@ -22,8 +22,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
 
@@ -455,4 +454,3 @@ void MAIN {
     untilize_uninit(cb_untilize_in);
 #endif
 }
-}  // namespace NAMESPACE

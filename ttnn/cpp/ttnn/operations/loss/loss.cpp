@@ -26,7 +26,7 @@ Tensor loss_function(
     const LossFunction loss_kind,
     const LossReductionMode reduce_mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor) {
     std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
         case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
@@ -58,9 +58,8 @@ Tensor MseLossOperation::invoke(
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return loss_utils::loss_function(
-        ref, prediction, LossFunction::MSE, mode, memory_config, std::move(optional_output_tensor));
+    const std::optional<Tensor>& optional_output_tensor) {
+    return loss_utils::loss_function(ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
 Tensor MaeLossOperation::invoke(
@@ -68,9 +67,8 @@ Tensor MaeLossOperation::invoke(
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return loss_utils::loss_function(
-        ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
+    const std::optional<Tensor>& optional_output_tensor) {
+    return loss_utils::loss_function(ref, prediction, LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::loss

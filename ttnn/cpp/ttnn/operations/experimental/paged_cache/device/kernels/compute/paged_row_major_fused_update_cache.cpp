@@ -8,8 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t rt_args_idx = 0;
     const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
     if (!has_work) {
@@ -66,4 +65,3 @@ void MAIN {
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }
-}  // namespace NAMESPACE

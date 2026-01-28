@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
         (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # V out
         (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b),  # Out
         # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
+        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Dense MLP: W_up (out_w=2)
         (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
         (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
     ],

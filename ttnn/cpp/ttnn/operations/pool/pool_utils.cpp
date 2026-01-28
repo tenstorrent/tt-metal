@@ -4,6 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
@@ -508,6 +509,14 @@ void validate_input_params(
         effective_kernel_w,
         padded_input_h,
         padded_input_w);
+}
+
+uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
+    const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
+    const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return tt::round_up(stick_nbytes, alignment);
 }
 
 }  // namespace ttnn::operations::pool

@@ -166,6 +166,7 @@ def run_flash_mla_decode_impl(
     dtype,
     use_paged_attention=False,
     block_size=ttnn.TILE_SIZE,
+    reuse_k=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -206,6 +207,7 @@ def run_flash_mla_decode_impl(
 
     # Page-related setup
     tt_k_torch = k
+    tt_v_torch = v
     tt_page_table = None
     if paged_attention_cfg:
         page_table = page_table_setup(batch, paged_attention_cfg)
@@ -220,6 +222,18 @@ def run_flash_mla_decode_impl(
             paged_attention_cfg,
         )
         assert torch.all(tt_k_torch_og == k), "Paged cache conversion for K failed."
+
+        tt_v_torch = to_paged_cache(
+            v,
+            page_table,
+            paged_attention_cfg,
+        )
+        tt_v_torch_og = from_paged_cache(
+            tt_v_torch,
+            page_table,
+            paged_attention_cfg,
+        )
+        assert torch.all(tt_v_torch_og == v), "Paged cache conversion for V failed."
 
         tt_page_table = ttnn.from_torch(
             page_table,
@@ -307,6 +321,17 @@ def run_flash_mla_decode_impl(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_v = (
+        ttnn.from_torch(
+            tt_v_torch,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if not reuse_k
+        else None
+    )
 
     tt_start_indices = ttnn.from_torch(
         torch.tensor(start_indices),
@@ -326,6 +351,7 @@ def run_flash_mla_decode_impl(
             tt_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
                 tt_q,
                 tt_k,
+                tt_v,
                 head_dim_v=kv_lora_rank,
                 page_table_tensor=tt_page_table,
                 cur_pos_tensor=tt_start_indices,
@@ -338,6 +364,7 @@ def run_flash_mla_decode_impl(
             tt_out = ttnn.transformer.flash_multi_latent_attention_decode(
                 tt_q,
                 tt_k,
+                tt_v,
                 head_dim_v=kv_lora_rank,
                 cur_pos_tensor=tt_start_indices,
                 scale=scale,
@@ -432,6 +459,13 @@ def run_flash_mla_decode_impl(
         128,
     ],
 )
+@pytest.mark.parametrize(
+    "reuse_k",
+    [
+        # False,
+        True,
+    ],
+)
 def test_flash_mla_decode(
     device,
     batch,
@@ -445,6 +479,7 @@ def test_flash_mla_decode(
     dtype,
     use_paged_attention,
     block_size,
+    reuse_k,
     function_level_defaults,
     reset_seeds,
 ):
@@ -461,4 +496,5 @@ def test_flash_mla_decode(
         dtype,
         use_paged_attention,
         block_size,
+        reuse_k,
     )

@@ -237,7 +237,7 @@ void BandwidthResultsManager::append_to_csv(const TestConfig& config, const Band
         return;
     }
 
-    csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+    csv_stream << config.parametrized_name << "," << ftype_str << "," << ntype_str << ","
                << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
                << result.device_id << "," << config.fabric_setup.num_links << ","
                << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","

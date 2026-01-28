@@ -7,8 +7,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
@@ -48,4 +47,3 @@ void MAIN {
     }
     reduce_uninit();
 }
-}  // namespace NAMESPACE

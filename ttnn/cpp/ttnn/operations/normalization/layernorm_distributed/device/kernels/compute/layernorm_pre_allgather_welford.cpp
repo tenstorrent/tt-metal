@@ -25,7 +25,6 @@
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 
-namespace NAMESPACE {
 template <typename To, typename From>
 inline To _bit_cast_(const From& from) noexcept {
     static_assert(sizeof(To) == sizeof(From), "Types must have same size");
@@ -40,7 +39,7 @@ inline To _bit_cast_(const From& from) noexcept {
     u.f = from;
     return u.t;
 }
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     namespace kutil = norm::kernel_util;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -113,4 +112,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

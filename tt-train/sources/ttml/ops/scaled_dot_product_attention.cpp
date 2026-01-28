@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -245,15 +246,16 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    float dropout_probability,
-    bool fp32_dest_acc_en) {
+    float dropout_probability) {
     validate_qkv_shapes(query, key, value);
 
     // Get mask tensor if provided
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
     std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
     if (mask.has_value()) {
         mask_tensor = mask.value()->get_value();
+        mask_type = ttml::metal::AttentionMaskType::Arbitrary;
     }
 
     // ========== Forward Pass using sdpa_fw kernel ==========
@@ -261,6 +263,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         query->get_value(),
         key->get_value(),
         value->get_value(),
+        mask_type,
         mask_tensor,
         dropout_probability,
         /*return_intermediates=*/true);  // Need intermediates for backward pass
@@ -272,7 +275,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
     ttml::autograd::GradFunction grad =
-        [query, key, value, mask_tensor, out, attn_output, intermediates, dropout_probability, fp32_dest_acc_en]() {
+        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
             auto grad_output = out->get_grad();
 
             // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
@@ -285,10 +288,10 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
                 query->get_value(),
                 key->get_value(),
                 value->get_value(),
-                mask_tensor,
                 intermediates,
-                dropout_probability,
-                fp32_dest_acc_en);
+                mask_type,
+                mask_tensor,
+                dropout_probability);
 
             query->add_grad(dL_dQ);
             key->add_grad(dL_dK);

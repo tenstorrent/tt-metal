@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
+#include "llk_math_reduce_api.h"
 #include "llk_math_reduce_custom_api.h"
 #endif
 
@@ -97,18 +98,22 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
- * | Param Type | Name | Description                                      | Type | Valid Range | Required |
- * |------------|------|--------------------------------------------------|------|-------------|----------|
- * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | clear_fp32_accumulation   | Whether to clear FP32 accumulation state                                                | bool      | {true, false}                                  | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A. Required when clear_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
 template <bool clear_fp32_accumulation = false>
-ALWI void reduce_block_max_row_uninit() {
-    if constexpr (clear_fp32_accumulation) {
-        // CAN BE OMITTED FOR SOME REASON?
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
-    }
+ALWI void reduce_block_max_row_uninit(uint32_t icb) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_uninit<clear_fp32_accumulation>()));
+#else
+    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
+    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
+    // See _llk_math_reduce_init_ for more details
+    MATH((llk_math_reduce_uninit<clear_fp32_accumulation>(icb)));
+#endif
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
 }

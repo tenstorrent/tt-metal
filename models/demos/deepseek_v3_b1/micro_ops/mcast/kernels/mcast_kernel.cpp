@@ -20,7 +20,7 @@ struct Core {
     static constexpr bool is_receiver_core = get_named_compile_time_arg_val("is_receiver_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
     using Mcast = deepseek_b1_ops::Mcast;
 
 // ============================================================================
@@ -97,4 +97,3 @@ KERNEL_ENTRY {
     mcast(mcast_args);
     mcast.teardown();
 }
-KERNEL_END

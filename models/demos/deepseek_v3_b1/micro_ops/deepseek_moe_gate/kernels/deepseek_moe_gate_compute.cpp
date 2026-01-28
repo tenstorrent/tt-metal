@@ -15,9 +15,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t bias_cb = get_compile_time_arg_val(1);
     constexpr uint32_t input_indices_cb = get_compile_time_arg_val(2);
@@ -65,4 +63,3 @@ void MAIN {
 
     tile_regs_release();
 }
-}  // namespace NAMESPACE

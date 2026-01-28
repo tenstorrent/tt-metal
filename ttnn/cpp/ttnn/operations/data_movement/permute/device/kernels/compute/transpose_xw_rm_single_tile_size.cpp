@@ -10,8 +10,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
 
@@ -63,4 +62,3 @@ void MAIN {
         cb_pop_front(cb_tilize, 1);
     }
 }
-}  // namespace NAMESPACE

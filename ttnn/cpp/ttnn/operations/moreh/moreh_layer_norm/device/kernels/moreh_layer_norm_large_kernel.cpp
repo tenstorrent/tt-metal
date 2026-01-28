@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
     constexpr uint32_t origin_W = get_compile_time_arg_val(2);
@@ -505,5 +504,4 @@ void MAIN {
     if (do_mask_w) {
         cb_pop_front(cb_mask_w, onetile);
     }
-}  // void MAIN
-}  // namespace NAMESPACE
+}

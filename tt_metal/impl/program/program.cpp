@@ -577,6 +577,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             uint32_t max_local_cb_end_index = 0;
             uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
             uint32_t local_cb_mask = 0;
+            uint32_t num_dfbs = 0;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : cores) {
@@ -657,6 +658,16 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                             min_remote_cb_start_index = std::min(
                                 min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
                         }
+
+                        if (not hal.get_supports_dfbs(programmable_core_type_index)) {
+                            continue;
+                        }
+                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
+                        // KernelGroup to hold value of number of dfbs
+                        auto local_dfb_val = per_core_num_dfbs_.find(core);
+                        if (local_dfb_val != per_core_num_dfbs_.end()) {
+                            num_dfbs += local_dfb_val->second;
+                        }
                     }
                 }
             }
@@ -668,6 +679,13 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
+            TT_FATAL(
+                !(local_cb_mask != 0 && num_dfbs != 0),
+                "Cannot use both circular buffers and dataflow buffers on the same core. "
+                "local_cb_mask: {}, num_dfbs: {}",
+                local_cb_mask,
+                num_dfbs);
+            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
@@ -1649,6 +1667,8 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.cb_offset = state.cb_offset;
     program_config.cb_size = state.cb_size;
     program_config.local_cb_size = state.local_cb_size;
+    program_config.dfb_offset = state.dfb_offset;
+    program_config.dfb_size = state.dfb_size;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -1667,6 +1687,8 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+using DataflowBuffersGetter =
+    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
 
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
@@ -1685,12 +1707,17 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
+    DataflowBuffersGetter dataflow_buffers_getter =
+        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
+        return this->dataflow_buffers_;
+    };
+
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
 
     set_finalized();
 }
@@ -1702,6 +1729,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
+    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
@@ -1727,6 +1755,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         state.offset = program_dispatch::finalize_cbs(
             index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
+            index,
+            kernel_groups_getter(index),
+            dataflow_buffers_getter(),
+            state.offset,
+            state.dfb_offset,
+            state.dfb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

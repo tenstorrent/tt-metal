@@ -15,8 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 
 // SPLIT REDUCE across Cores
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -437,5 +436,3 @@ void MAIN {
         cb_wait_front(cb_out, num_tiles_per_block);
     }
 }
-
-}  // namespace NAMESPACE

@@ -13,8 +13,7 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/eltwise_unary/comp.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t packed_scalar = get_arg_val<uint32_t>(0);
     const auto lambd = reinterpret_cast<const float*>(&packed_scalar);
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -78,4 +77,3 @@ void MAIN {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

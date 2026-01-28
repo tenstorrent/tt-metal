@@ -136,7 +136,9 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             // const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
             // const auto& fabric_context = control_plane.get_fabric_context();
             device_cq_addr_sizes_[dev_addr_idx] = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * 128;
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
+        } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
@@ -151,6 +153,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
         } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);

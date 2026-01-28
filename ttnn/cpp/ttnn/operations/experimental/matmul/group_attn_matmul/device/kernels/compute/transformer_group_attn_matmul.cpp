@@ -12,8 +12,7 @@ using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t i = 0;
 
     uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
@@ -172,4 +171,3 @@ void MAIN {
     }  // batch
 
 }
-} // NAMESPACE

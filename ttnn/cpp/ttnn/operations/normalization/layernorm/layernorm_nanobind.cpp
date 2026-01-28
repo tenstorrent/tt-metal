@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
@@ -64,10 +64,7 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 }
 
 void bind_normalization_layernorm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::layer_norm,
-        R"doc(
+    const auto* doc = R"doc(
         Computes layer norm over :attr:`input_tensor`.
         See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
@@ -147,9 +144,21 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
 
-        )doc",
+        )doc";
 
-        ttnn::nanobind_arguments_t{
+    ttnn::bind_function<"layer_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                float,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<ttnn::MemoryConfig>&,
+                const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
+                std::optional<const ttnn::DeviceComputeKernelConfig>>(&ttnn::layer_norm),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("epsilon") = 1e-12,
@@ -158,7 +167,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {

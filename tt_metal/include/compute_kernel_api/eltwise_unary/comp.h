@@ -313,7 +313,9 @@ ALWI void gtz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(greater_than_zero, RC,
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gtz_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, greater_than_zero, RC, APPROX, idst)); }
+ALWI void gtz_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, greater_than_zero, RC, APPROX, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -350,7 +352,9 @@ ALWI void nez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(not_equal_zero, RC, AP
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void nez_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, not_equal_zero, RC, APPROX, idst)); }
+ALWI void nez_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, not_equal_zero, RC, APPROX, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -387,7 +391,9 @@ ALWI void gez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(greater_than_equal_zer
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gez_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, greater_than_equal_zero, RC, APPROX, idst)); }
+ALWI void gez_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, greater_than_equal_zero, RC, APPROX, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -424,7 +430,9 @@ ALWI void ltz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(less_than_zero, RC, AP
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void ltz_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, less_than_zero, RC, APPROX, idst)); }
+ALWI void ltz_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, less_than_zero, RC, APPROX, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -461,7 +469,9 @@ ALWI void eqz_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(equal_zero, RC, APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void eqz_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, equal_zero, RC, APPROX, idst)); }
+ALWI void eqz_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, equal_zero, RC, APPROX, idst));
+}
 
 // clang-format off
 /**
@@ -477,7 +487,9 @@ ALWI void eqz_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, equal_
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void eqz_tile_uint16(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(uint16, equal_zero, RC, APPROX, idst)); }
+ALWI void eqz_tile_uint16(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_uint16, equal_zero, RC, APPROX, idst));
+}
 
 // clang-format off
 
@@ -533,7 +545,9 @@ ALWI void lez_tile(uint32_t idst) { MATH(SFPU_ZERO_KERNEL(less_than_equal_zero, 
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void lez_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, less_than_equal_zero, RC, APPROX, idst)); }
+ALWI void lez_tile_int32(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_int, less_than_equal_zero, RC, APPROX, idst));
+}
 
 // clang-format off
 /**
@@ -549,7 +563,9 @@ ALWI void lez_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, less_t
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void nez_tile_uint16(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(uint16, not_equal_zero, RC, APPROX, idst)); }
+ALWI void nez_tile_uint16(uint32_t idst) {
+    MATH(SFPU_ZERO_KERNEL_TYPE(calculate_comp_uint16, not_equal_zero, RC, APPROX, idst));
+}
 
 // clang-format off
 /**

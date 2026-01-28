@@ -6,8 +6,7 @@
 #include "compute_kernel_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {
         DeviceZoneScopedN("TEST-FULL");
         DeviceTimestampedData("TEST", i + ((uint64_t)1 << 32));
@@ -19,4 +18,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE
