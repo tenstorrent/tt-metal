@@ -400,17 +400,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_npages);
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
-    if (return_indices) {
+    if (return_indices || params.is_wide_reduction) {
         // for return indices we use 1 whole tile per reduction to simplify logic
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
         in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
     } else {
-        if (params.is_wide_reduction) {
-            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-            in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
-        } else {
-            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        }
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     // reader output == input to tilize
@@ -912,11 +908,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug(tt::LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
         log_debug(tt::LogOp, "in_reader_indices_addr: {}", reader_indices_storage.get_buffer()->address());
-        if (scalar_config_storage.is_allocated()) {
-            log_debug(tt::LogOp, "scalar_config_addr: {}", scalar_config_storage.get_buffer()->address());
-        } else {
-            log_debug(tt::LogOp, "scalar_config_addr: not set");
-        }
+        log_debug(
+            tt::LogOp,
+            "scalar_config_addr: {}",
+            scalar_config_storage.is_allocated() ? std::to_string(scalar_config_storage.get_buffer()->address())
+                                                 : "not set");
         log_debug(tt::LogOp, "kernel_h: {}", kernel_h);
         log_debug(tt::LogOp, "kernel_w: {}", kernel_w);
         log_debug(tt::LogOp, "stride_h: {}", stride_h);

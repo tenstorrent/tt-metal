@@ -232,14 +232,11 @@ uint32_t calculate_L1_usage(
     uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
     uint32_t in_cb_sz = 0;
-    if (return_indices) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+    if (return_indices || params.is_wide_reduction) {
+        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
     } else {
-        if (params.is_wide_reduction) {
-            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        } else {
-            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        }
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
@@ -348,7 +345,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
 
     struct l1_usage_config {
         uint32_t l1_usage{};
-        std::optional<ParallelConfig> config;
+        std::optional<ParallelConfig> config{};
     };
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
