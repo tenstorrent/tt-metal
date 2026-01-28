@@ -36,7 +36,9 @@
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    distributed::MeshDevice* device,
+    std::unique_ptr<AllocatorImpl>&& global_allocator,
+    tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
     TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
@@ -63,20 +65,12 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
-    // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
-    // when MeshCommandQueue + CommandQueue are unified under the same API
-    if (dynamic_cast<distributed::MeshDevice*>(device_)) {
-        // Multi CQ support for MeshDevice is not currently available
-        distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-        for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
-            mesh_device->mesh_command_queue(cq_id).reset_worker_state(
-                cq_id == 0,
-                num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
-        }
-    } else {
-        TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
+    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
+        device_->mesh_command_queue(cq_id).reset_worker_state(
+            cq_id == 0,
+            num_sub_devices,
+            sub_device_manager->noc_mcast_unicast_data(),
+            sub_device_manager->get_core_go_message_mapping());
     }
     sub_device_manager->reset_sub_device_stall_group();
 }

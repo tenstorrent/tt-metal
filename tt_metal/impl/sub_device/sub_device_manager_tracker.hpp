@@ -13,8 +13,9 @@
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
-
-class IDevice;
+namespace distributed {
+class MeshDevice;
+}
 
 class Allocator;
 class SubDeviceManager;
@@ -25,7 +26,9 @@ public:
     // TODO: Potentially move the global allocator creation into here instead of from the device
     // This creates the SubDeviceManagerTracker with a default SubDeviceManager that has the entire grid as a sub-device
     SubDeviceManagerTracker(
-        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+        distributed::MeshDevice* device,
+        std::unique_ptr<AllocatorImpl>&& global_allocator,
+        tt::stl::Span<const SubDevice> sub_devices);
 
     SubDeviceManagerTracker(const SubDeviceManagerTracker& other) = delete;
     SubDeviceManagerTracker& operator=(const SubDeviceManagerTracker& other) = delete;
@@ -60,7 +63,7 @@ public:
 private:
     void reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager);
 
-    IDevice* device_ = nullptr;
+    distributed::MeshDevice* device_ = nullptr;
 
     std::unordered_map<SubDeviceManagerId, std::unique_ptr<SubDeviceManager>> sub_device_managers_;
     SubDeviceManager* active_sub_device_manager_ = nullptr;
