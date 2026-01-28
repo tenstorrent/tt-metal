@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+*.code-workspace
+.vscode/
+
+# Downloaded datasets (large, can be re-downloaded)
+tests/benchmark/data/downloads/
+tests/benchmark/data/lfw_home/
+
+# Temporary files
+*.tmp
+*.log

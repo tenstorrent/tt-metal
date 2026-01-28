@@ -1,0 +1,6 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6
+Pillow>=9.0.0
+numpy>=1.21.0,<2  # ttnn requires numpy<2
+torch>=2.0.0
