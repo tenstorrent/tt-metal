@@ -18,7 +18,12 @@ import re
 import psycopg2
 
 # Connection string from environment (supports both CI and local env var names)
-NEON_URL = os.environ.get("TTNN_OPS_DATABASE_URL") or os.environ.get("NEON_CONNECTION_STRING", "postgresql://...")
+NEON_URL = os.environ.get("TTNN_OPS_DATABASE_URL") or os.environ.get("NEON_CONNECTION_STRING")
+if not NEON_URL:
+    raise ValueError(
+        "Database connection string not found. Please set either "
+        "TTNN_OPS_DATABASE_URL or NEON_CONNECTION_STRING environment variable."
+    )
 JSON_PATH = "model_tracer/traced_operations/ttnn_operations_master.json"
 
 
