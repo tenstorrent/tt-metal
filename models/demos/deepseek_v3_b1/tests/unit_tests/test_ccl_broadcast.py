@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("num_iters", [20])
@@ -72,7 +71,6 @@ def test_ccl_broadcast_dual_axis(
     input_dtype,
     cluster_axis,
     secondary_cluster_axis,
-    topology,
     using_persistent_buffers,
     num_iters,
 ):
@@ -163,7 +161,6 @@ def test_ccl_broadcast_dual_axis(
         sender_coord,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        topology=topology,
         using_persistent_buffers=using_persistent_buffers,
         semaphores=semaphores,
     )
@@ -186,12 +183,12 @@ def test_ccl_broadcast_dual_axis(
         assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
 
         if not torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3):
-            logger.error(f"Output mismatch for device {device_idx} (iteration {iter_idx+1})")
+            logger.error(f"Output mismatch for device {device_idx}")
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED")
 
-    assert all_passed, f"Not all devices received the correct broadcast data (iteration {iter_idx+1})"
+    assert all_passed, f"Not all devices received the correct broadcast data)"
 
     # Cleanup
     submesh.reset_sub_device_stall_group()
