@@ -64,11 +64,13 @@ inline bool is_row3_sender(const MeshCoordinate& coord) { return coord[0] == 3; 
 
 // Helper struct to hold bottom core information
 struct BottomCoresInfo {
-    std::unordered_map<uint32_t, CoreCoord> column_to_bottom_core;
+    std::unordered_map<uint32_t, CoreCoord> column_to_bottom_core;  // x_coord -> bottom core
     std::unordered_set<CoreCoord> bottom_cores_lookup;
     std::vector<CoreCoord> bottom_cores_vec;
     std::vector<CoreCoord> non_bottom_cores_vec;
     std::unordered_map<CoreCoord, uint32_t> bottom_core_to_link;
+    std::unordered_map<uint32_t, uint32_t> column_x_to_idx;    // x_coord -> column index (0, 1, ...)
+    std::unordered_map<CoreCoord, uint32_t> core_to_slot_idx;  // non-bottom core -> slot index within column
 };
 
 // Build bottom core information from shard cores
@@ -76,7 +78,7 @@ struct BottomCoresInfo {
 inline BottomCoresInfo build_bottom_cores_info(const std::vector<CoreCoord>& all_coord_cores, uint32_t num_links = 2) {
     BottomCoresInfo info;
 
-    // Build map from column to bottom core (core with max y in each column)
+    // Build map from column (x value) to bottom core (core with max y in each column)
     for (const auto& core : all_coord_cores) {
         auto it = info.column_to_bottom_core.find(core.x);
         if (it == info.column_to_bottom_core.end() || core.y > it->second.y) {
@@ -89,12 +91,29 @@ inline BottomCoresInfo build_bottom_cores_info(const std::vector<CoreCoord>& all
         info.bottom_cores_lookup.insert(bottom_core);
     }
 
-    // Separate bottom cores from non-bottom cores
+    // Map each x coordinate to a column index (0, 1, 2, ...)
+    uint32_t col_idx = 0;
+    for (const auto& [x_coord, _] : info.column_to_bottom_core) {
+        info.column_x_to_idx[x_coord] = col_idx++;
+    }
+
+    // Separate bottom cores from non-bottom cores, and assign slot indices
+    // Group non-bottom cores by column for slot assignment
+    std::unordered_map<uint32_t, std::vector<CoreCoord>> column_workers;  // x_coord -> workers in that column
     for (const auto& core : all_coord_cores) {
         if (info.bottom_cores_lookup.count(core)) {
             info.bottom_cores_vec.push_back(core);
         } else {
             info.non_bottom_cores_vec.push_back(core);
+            column_workers[core.x].push_back(core);
+        }
+    }
+
+    // Assign slot indices within each column (sorted by y for determinism)
+    for (auto& [x_coord, workers] : column_workers) {
+        std::sort(workers.begin(), workers.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.y < b.y; });
+        for (uint32_t slot = 0; slot < workers.size(); slot++) {
+            info.core_to_slot_idx[workers[slot]] = slot;
         }
     }
 
@@ -207,6 +226,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto& bottom_cores_vec = bottom_cores_info.bottom_cores_vec;
     const auto& non_bottom_cores_vec = bottom_cores_info.non_bottom_cores_vec;
     const auto& bottom_core_to_link = bottom_cores_info.bottom_core_to_link;
+    const auto& column_x_to_idx = bottom_cores_info.column_x_to_idx;
+    const auto& core_to_slot_idx = bottom_cores_info.core_to_slot_idx;
     CoreRangeSet bottom_cores_set = CoreRangeSet(bottom_cores_vec);
     CoreRangeSet non_bottom_cores_set = CoreRangeSet(non_bottom_cores_vec);
 
@@ -391,11 +412,11 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Create worker semaphores per column on all cores
     // Each worker increments its specific semaphore on the bottom core
     // Bottom core waits on each of the local semaphores
-    // worker_sems[col][worker_idx] = semaphore address
+    // worker_sems[col_idx][worker_idx] = semaphore address (col_idx is 0, 1, 2, ...)
     std::vector<std::vector<uint32_t>> worker_sems(num_columns);
-    for (uint32_t col = 0; col < num_columns; col++) {
+    for (uint32_t col_idx = 0; col_idx < num_columns; col_idx++) {
         for (uint32_t worker_idx = 0; worker_idx < num_worker_slots; worker_idx++) {
-            worker_sems[col].push_back(CreateSemaphore(program, all_cores, 0));
+            worker_sems[col_idx].push_back(CreateSemaphore(program, all_cores, 0));
         }
     }
 
@@ -404,6 +425,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         auto core_noc_x = phys_core.x;
         auto core_noc_y = phys_core.y;
 
+        // Get this core's column index and bottom core (works with any core layout)
+        uint32_t my_col_idx = column_x_to_idx.at(c.x);
         CoreCoord my_bottom_core = column_to_bottom_core.at(c.x);
         auto bottom_phys = device->worker_core_from_logical_core(my_bottom_core);
 
@@ -426,7 +449,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
             // Append worker semaphore addresses (for this column)
             for (uint32_t worker_idx = 0; worker_idx < num_worker_slots; worker_idx++) {
-                fabric_rt_args.push_back(worker_sems[c.x][worker_idx]);
+                fabric_rt_args.push_back(worker_sems[my_col_idx][worker_idx]);
             }
 
             // Append raw fabric connection args - all devices send (ROOT1 sends to exit_coord)
@@ -438,14 +461,14 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
         } else {
             // Worker writer runtime args
-            // Calculate slot index: rows 0,1,2 map to slots 0,1,2
-            uint32_t my_slot_idx = c.y;  // Row 0,1,2 -> slot 0,1,2
+            // Get slot index from core_to_slot_idx (works with any core layout)
+            uint32_t my_slot_idx = core_to_slot_idx.at(c);
 
             std::vector<uint32_t> worker_rt_args = {
                 bottom_phys.x,
                 bottom_phys.y,
                 my_slot_idx,
-                worker_sems[c.x][my_slot_idx],  // This worker's semaphore on bottom core
+                worker_sems[my_col_idx][my_slot_idx],  // This worker's semaphore on bottom core
                 slot_size_bytes,
                 num_hops,
                 core_noc_x,  // Worker's own NOC X (same position on dest device)

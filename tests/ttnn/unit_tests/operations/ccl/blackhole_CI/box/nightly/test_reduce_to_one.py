@@ -59,13 +59,15 @@ def test_reduce_to_one(bh_2d_mesh_device):
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((1, 32))  # Tiny tile for (1, N) tensors
 
-    # Shard config - 8 cores in 2 columns x 4 rows
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
-        }
-    )
+    # Get optimal cores for DRAM access
+    compute_cores = submesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+    logger.info(f"Using {num_cores} optimal DRAM cores: {compute_cores[:8]}")
+
+    # Build shard grid from optimal cores (use first 8 cores)
+    num_shard_cores = 8
+    shard_cores = compute_cores[:num_shard_cores]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in shard_cores})
 
     # Each core gets 7168/8 = 896 elements width
     shard_shape = [1, 896]
