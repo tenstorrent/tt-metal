@@ -9,8 +9,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.bert.reference import torch_bert
-from models.demos.bert.tt import ttnn_optimized_sharded_bert
+from models.demos.nlp.encoder.bert.reference import torch_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_sharded_bert
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

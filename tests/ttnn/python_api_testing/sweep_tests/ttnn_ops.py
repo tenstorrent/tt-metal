@@ -7,7 +7,7 @@ import ttnn
 
 from ttnn.model_preprocessing import preprocess_model, preprocess_model_parameters
 import transformers
-from models.demos.bert.tt import ttnn_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_bert
 
 
 from tests.tt_eager.python_api_testing.sweep_tests.model_tests import (
