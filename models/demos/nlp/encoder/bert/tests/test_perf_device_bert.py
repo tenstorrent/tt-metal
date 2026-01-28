@@ -18,8 +18,8 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "ttnn_bert"
     num_iterations = 3
     margin = 0.03
-    # command = f"pytest models/demos/bert/demo/demo.py::test_demo_squadv2[{test}]"
-    command = f"pytest models/demos/bert/tests/test_ttnn_optimized_bert.py::test_bert_for_question_answering[{test}]"
+    # command = f"pytest models/demos/nlp/encoder/bert/demo/demo.py::test_demo_squadv2[{test}]"
+    command = f"pytest models/demos/nlp/encoder/bert/tests/test_ttnn_optimized_bert.py::test_bert_for_question_answering[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
