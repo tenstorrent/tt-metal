@@ -337,6 +337,7 @@ jobs:
           $build_command
 
       - name: 🛠️ Compile
+        timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
@@ -349,6 +350,7 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
+        timeout-minutes: 10
         run: |
           cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true

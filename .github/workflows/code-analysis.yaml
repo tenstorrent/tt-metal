@@ -107,6 +107,7 @@ jobs:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
+    timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -192,6 +193,7 @@ jobs:
 
       - name: 🛠️ Baseline Build
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        timeout-minutes: 60
         run: |
           cmake --build --preset clang-tidy
 
@@ -224,6 +226,7 @@ jobs:
           ccache -z
 
       - name: 🔍 Analyze code with clang-tidy
+        timeout-minutes: 120
         run: |
           cmake --build --preset clang-tidy
 
@@ -238,6 +241,7 @@ jobs:
     name: 🔬 Clang Static Analyzer
     needs: [ build-docker-image ]
     if: ${{ inputs.enable-static-analysis == true || github.event_name == 'schedule' }}
+    timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
