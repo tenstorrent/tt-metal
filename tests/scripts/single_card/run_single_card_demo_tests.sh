@@ -167,7 +167,7 @@ run_vgg_func() {
 
 run_bert_tiny_func() {
 
-  pytest models/demos/wormhole/bert_tiny/demo/demo.py
+  pytest models/demos/nlp/encoder/bert_tiny/demo/demo.py
 
 }
 
