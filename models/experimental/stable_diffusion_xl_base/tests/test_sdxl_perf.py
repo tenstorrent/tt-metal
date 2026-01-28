@@ -17,15 +17,17 @@ CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
@@ -39,6 +41,7 @@ def test_unet(
 ):
     run_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,
@@ -53,15 +56,17 @@ def test_unet(
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_refiner_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
@@ -75,6 +80,7 @@ def test_refiner_unet(
 ):
     run_refiner_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,

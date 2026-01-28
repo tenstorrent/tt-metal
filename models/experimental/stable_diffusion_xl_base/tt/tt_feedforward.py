@@ -32,6 +32,9 @@ class TtFeedForward(LightweightModule):
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
         self.ff2_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.net.2")
 
+        # Debug
+        self.module_path = module_path
+
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
 

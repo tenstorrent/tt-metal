@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -70,6 +70,7 @@ def prepare_ttnn_tensors(
 
 def run_refiner_unet_model(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
@@ -98,7 +99,7 @@ def run_refiner_unet_model(
 
     torch_unet = unet
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
@@ -190,14 +191,16 @@ def run_refiner_unet_model(
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
@@ -211,6 +214,7 @@ def test_unet(
 ):
     run_refiner_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,

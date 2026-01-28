@@ -162,6 +162,14 @@ class TtResnetBlock2D(LightweightModule):
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        print(f"hidden_states: {hidden_states.shape}")
+        print(f"tt_conv1_weights: {self.tt_conv1_weights.shape}")
+        print(f"tt_conv1_bias: {self.tt_conv1_bias.shape}")
+        print(f"conv1_params: {self.conv1_params}")
+        print(f"conv1_config: {self.conv1_config}")
+        print(f"compute1_config: {self.compute1_config}")
+        print(f"slice_config: {ttnn.Conv2dL1FullSliceConfig}")
+        print(f"groups: {self.groups}")
         [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,

@@ -72,6 +72,9 @@ class TtTransformer2DModel(LightweightModule):
         self.compute_config_out = model_config.get_mm_compute_config(f"{module_path}.proj_out")
         self.memory_config_out = model_config.get_mm_output_memory_config(f"{module_path}.proj_out")
 
+        # Debug
+        self.module_path = module_path
+
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
 

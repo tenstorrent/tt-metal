@@ -18,6 +18,7 @@ import ttnn
 
 @dataclass
 class TtSDXLImg2ImgPipelineConfig(TtSDXLPipelineConfig):
+    image_resolution: tuple
     strength: float = 0.3
     aesthetic_score: float = 6.0
     negative_aesthetic_score: float = 2.5

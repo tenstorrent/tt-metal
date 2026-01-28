@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class ModelOptimisations:
+class ModelOptimisations512x512:
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -115,7 +115,7 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=32,
         )
-        # endregion
+        # endregion HEIGHT SHARDED
 
         # region BLOCK SHARDED
         override_output_sharding_config = not force_full_grid
@@ -298,32 +298,20 @@ class ModelOptimisations:
             override_output_sharding_config=override_output_sharding_config,
             core_grid=override_output_core_grid,
         )
-        # endregion
+        # endregion BLOCK SHARDED
 
-        # region DEFAULT CONF
+        # region DEFAULT
         self.conv_configs["DEFAULT"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=None,
             deallocate_activation=True,
             enable_act_double_buffer=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=False,
             act_block_w_div=1,
             act_block_h_override=0,
         )
-
-        # DRAM CONF
-        self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
-            weights_dtype=conv_w_dtype,
-            shard_layout=None,
-            deallocate_activation=False,
-            enable_act_double_buffer=False,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=0,
-            output_layout=ttnn.TILE_LAYOUT,
-        )
-        # endregion
-        # endregion
+        # endregion DEFAULT
+        # endregion CONV2D CONFIGS
 
         # region MATMUL CONFIGS
         self.matmul_versions = {
@@ -402,7 +390,7 @@ class ModelOptimisations:
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=5,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=1,
                     out_subblock_w=4,
@@ -1141,73 +1129,76 @@ class ModelOptimisations:
         if conv_path is None:
             return None
 
+        # CONV IN
         if "conv_in" == conv_path:
-            return self.conv_configs["ABH_256_ADB"]
+            return self.conv_configs["DEFAULT"]
 
         # DOWN BLOCK 0
-        elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
-        elif "down_blocks.0.resnets" in conv_path:
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
+        elif "down_blocks.0.resnets.0" in conv_path:
+            return self.conv_configs["DEFAULT"]
+        elif "down_blocks.0.resnets.1" in conv_path:
+            return self.conv_configs["DEFAULT"]
         elif "down_blocks.0.downsamplers.0" == conv_path:
-            return self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"]
+            return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
 
         # DOWN BLOCK 1
         elif "down_blocks.1.resnets.0.conv1" == conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif ("down_blocks.1.resnets.0.conv2" == conv_path) or ("down_blocks.1.resnets.1" in conv_path):
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif "down_blocks.1.downsamplers.0" == conv_path:
             return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
 
         # DOWN BLOCK 2
-        elif "down_blocks.2.resnets.1.conv1" == conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
         elif "down_blocks.2.resnets.0.conv1" == conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
-        elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1.conv2" == conv_path):
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
+        elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1" in conv_path):
+            return self.conv_configs["DEFAULT"]
 
         # MID BLOCK
         elif "mid_block" in conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
 
         # UP BLOCK 0
         elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
-            return self.conv_configs["ABH_64_ADB_WDB_BS"]
-        elif "up_blocks.0.upsamplers.0" == conv_path:
-            return self.conv_configs["ABH_128_ADB_WDB_BS"]
-        elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif "up_blocks.0.resnets.2.conv1" == conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
+        elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["DEFAULT"]
+        elif "up_blocks.0.upsamplers.0" == conv_path:
+            return self.conv_configs["DEFAULT"]
 
         # UP BLOCK 1
         elif "up_blocks.1.resnets.0.conv1" == conv_path:
-            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif "up_blocks.1.resnets.1.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif "up_blocks.1.resnets.2.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
         elif "up_blocks.1.upsamplers.0" == conv_path:
-            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+            return self.conv_configs["DEFAULT"]
 
         # UP BLOCK 2
         elif "up_blocks.2.resnets.0.conv1" == conv_path:
-            return self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"]
-        elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
-        elif "up_blocks.2.resnets.1.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
-        elif "up_blocks.2.resnets.2.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
-
-        elif "conv_out" == conv_path:
-            return self.conv_configs["ABH_128_NO_ADB_HS"]
-        else:
             return self.conv_configs["DEFAULT"]
+        elif "up_blocks.2.resnets.1.conv1" == conv_path:
+            return self.conv_configs["DEFAULT"]
+        elif "up_blocks.2.resnets.2.conv1" == conv_path:
+            return self.conv_configs["DEFAULT"]
+        elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["DEFAULT"]
+
+        # CONV IN
+        elif "conv_out" == conv_path:
+            return self.conv_configs["DEFAULT"]
+
+        # ERROR
+        else:
+            raise ValueError(f"Unknown conv path: {conv_path}")
+            # return self.conv_configs["DEFAULT"]
 
     def get_conv_compute_config(self, module_path):
         if "conv_in" in module_path or "conv_out" in module_path:
@@ -1223,18 +1214,18 @@ class ModelOptimisations:
             conv2_no_fp32 = {"down_blocks.2.resnets", "down_blocks.0", "up_blocks.0", "mid_block"}
 
             if "conv1" in module_path and any(s in module_path for s in conv1_no_fp32):
-                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
             if "conv2" in module_path and any(s in module_path for s in conv2_no_fp32):
-                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
 
-            return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+            return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
         if "upsamplers" in module_path:
             if "up_blocks.0" in module_path:
-                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
             else:
-                return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
 
-        return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+        return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
