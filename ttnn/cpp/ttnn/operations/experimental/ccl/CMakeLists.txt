@@ -17,7 +17,6 @@ file(
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
     all_to_all_async/device/kernels/*
-    all_to_all_dispatch_metadata/device/kernels/*
     all_to_all_dispatch_selective_tilize/device/kernels/*
     llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
@@ -123,9 +122,6 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
-        all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
-        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
-        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

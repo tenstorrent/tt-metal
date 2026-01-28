@@ -27,7 +27,6 @@
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/all_to_all_dispatch_selective_tilize_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -54,7 +53,6 @@ void py_module(nb::module_& mod) {
     ccl::bind_neighbor_pad_async(mod);
     ccl::bind_slice_reshard_async(mod);
     ccl::bind_deepseek_minimal_broadcast(mod);
-    ccl::bind_all_to_all_dispatch_metadata(mod);
     ccl::bind_all_to_all_dispatch_selective_tilize(mod);
 }
 
