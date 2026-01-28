@@ -15,6 +15,7 @@ class DummyNoOpModel:
         self.mesh_device = mesh_device
         self.max_batch_size = max_batch_size
         self.vocab_size = vocab_size
+        self.decode_out = torch.ones(max_batch_size, 1, dtype=torch.int32)
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, **kwargs):
@@ -28,7 +29,9 @@ class DummyNoOpModel:
 
     def decode_forward(self, *args, **kwargs):
         # Run nothing for decode forward in this dummy model
-        return torch.ones(self.max_batch_size, 1, 1, dtype=torch.int32)
+        tokens = kwargs.get("tokens")
+        assert tokens.shape[0] == self.max_batch_size, "Batch size mismatch"
+        return self.decode_out
 
     def allocate_kv_cache(self, *args, **kwargs):
         return None
