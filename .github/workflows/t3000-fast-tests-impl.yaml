@@ -150,6 +150,25 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+      - name: Check for latency data
+        id: check-latency-data
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        shell: bash
+        run: |
+          if [ -f "generated/fabric/latency_results_wormhole_b0.csv" ]; then
+            echo "has_latency_data=true" >> $GITHUB_OUTPUT
+            echo "Latency files found, will upload to database"
+          else
+            echo "has_latency_data=false" >> $GITHUB_OUTPUT
+            echo "Latency files not found, database upload will be skipped"
+          fi
+      - name: Upload latency data
+        ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-latency-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
