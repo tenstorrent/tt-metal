@@ -1,5 +1,4 @@
-# filepath: /localdev/nardo/tt-metal/models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/op.py
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -54,7 +53,6 @@ class DeepseekMinimalAllReduce:
         intermediate_tensor,
         semaphores,
         cluster_axis=0,
-        topology=None,
         num_links=2,
         persistent_output_tensor=None,
         residual_tensor_mesh=None,
@@ -67,7 +65,6 @@ class DeepseekMinimalAllReduce:
             intermediate_tensor: Pre-allocated intermediate tensor mesh for receiving data
                                  Must have standard tiles (32x32)
             cluster_axis: Axis for all-reduce (default 0)
-            topology: Topology for all-reduce (default Linear)
             num_links: Number of links to use (default 2 for all-reduce)
             persistent_output_tensor: Optional pre-allocated output tensor mesh.
             residual_tensor_mesh: Optional tensor mesh for residuals.
@@ -76,28 +73,17 @@ class DeepseekMinimalAllReduce:
         Returns:
             Output tensor with all-reduced data on all devices
         """
-        if topology is None:
-            topology = ttnn.Topology.Linear
 
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
 
-        ring_size = mesh_rows if cluster_axis == 0 else mesh_cols
-
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
         if residual_tensor_mesh is not None:
             residual_tensors_per_device = ttnn.get_device_tensors(residual_tensor_mesh)
-        else:
-            residual_tensors_per_device = [None] * len(input_tensors_per_device)
-
-        # Create global semaphores
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_cores = grid.x * grid.y
-        available_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
         semaphore1 = semaphores[0]
         semaphore2 = semaphores[1]
