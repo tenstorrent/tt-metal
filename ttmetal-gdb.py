@@ -1,7 +1,6 @@
-# GDB Pretty Printers for TT-Metal
-# Copyright (C) 2026
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 #
-# This file implements GDB pretty printers for TT-Metal types.
+# SPDX-License-Identifier: Apache-2.0
 
 import gdb
 import gdb.printing
