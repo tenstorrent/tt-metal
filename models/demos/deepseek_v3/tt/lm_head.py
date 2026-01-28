@@ -29,7 +29,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
-    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -40,6 +39,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class LMHead(AbstractModule):
@@ -80,25 +80,28 @@ class LMHead(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
-            1, 0
+        weight_tensor = state_dict["weight"]
+        assert weight_tensor.shape == (
+            vocab_size,
+            hidden_dim,
         )  # In torch the weights are in (out_features, in_features) format
-        assert weight_tensor.shape == (hidden_dim, vocab_size)
+
+        # Compute memory config
+        memory_config = dram_sharded_weight_config(
+            hidden_dim,
+            even_int_div(vocab_size, mesh_device.get_num_devices()),
+            mesh_device.dram_grid_size(),
+        )
 
         return {
             "linear": {
-                "input_tensor_b": shard_and_save(
-                    output_path / "linear.input_tensor_b",
-                    weight_tensor,
+                "input_tensor_b": WeightSpec(
+                    torch_tensor=weight_tensor,
                     shard_dims=(-1, -1),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=dram_sharded_weight_config(
-                        hidden_dim,
-                        even_int_div(vocab_size, mesh_device.get_num_devices()),
-                        mesh_device.dram_grid_size(),
-                    ),
+                    memory_config=memory_config,
+                    preprocessor=lambda t: t.permute(1, 0),  # Convert to (in_features, out_features)
                 )
             }
         }
