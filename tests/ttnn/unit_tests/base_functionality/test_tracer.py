@@ -13,8 +13,8 @@ from ttnn.tracer import trace, visualize, get_graph
 
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 

@@ -7,8 +7,8 @@ import pytest
 import torch
 import transformers
 
-from models.demos.bert.reference import torch_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.nlp.encoder.bert.reference import torch_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_bert
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
