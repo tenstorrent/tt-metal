@@ -118,7 +118,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         # Use default pattern when TT_METAL_CACHE is not set
         base_path = f"{Path.home()}/.cache"
 
-    # Apply consistent rank suffix pattern to both user-provided and default paths
+    # Apply consistent suffix pattern to both user-provided and default paths
     cache_path = f"{base_path}_{hostname}"
 
     env = {
