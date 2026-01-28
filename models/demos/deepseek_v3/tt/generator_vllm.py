@@ -162,6 +162,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             lens_min = int(lens_t.min().item()) if lens_t.numel() else 0
             lens_max = int(lens_t.max().item()) if lens_t.numel() else 0
             empty_summary = None
+            stride_guess = None
             if empty_slots is not None and len(empty_slots) > 0:
                 empty_summary = {
                     "len": len(empty_slots),
@@ -169,14 +170,20 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     "max": int(max(empty_slots)),
                     "head": [int(x) for x in empty_slots[: min(16, len(empty_slots))]],
                 }
+                # Guess stride by detecting first discontinuity
+                for i in range(1, len(empty_slots)):
+                    if empty_slots[i] != empty_slots[i - 1] + 1:
+                        stride_guess = int(empty_slots[i])
+                        break
             logger.info(
-                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} global_stride={} page_table_shape={}",
+                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} global_stride={} stride_guess={} page_table_shape={}",
                 tuple(tokens.shape),
                 num_of_users,
                 lens_min,
                 lens_max,
                 empty_summary,
                 global_stride,
+                stride_guess,
                 None if page_table is None else tuple(page_table.shape),
             )
         stride = None
