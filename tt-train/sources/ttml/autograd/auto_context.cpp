@@ -133,16 +133,25 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return m_parallelism_context;
 }
 
-void ParallelismContext::configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp) {
+void ParallelismContext::configure(
+    ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp, bool enable_cp) {
     TT_FATAL(
-        (uint32_t)enable_dp + (uint32_t)enable_tp <= mesh_device->shape().dims(),
+        !(enable_dp && enable_cp),
+        "DP and CP cannot be enabled simultaneously. This combination is not currently supported.");
+
+    TT_FATAL(
+        (uint32_t)enable_dp + (uint32_t)enable_cp + (uint32_t)enable_tp <= mesh_device->shape().dims(),
         "Mesh shape dimensions must be greater than the number of parallelization axes");
 
     m_mesh_device = mesh_device;
 
+    // Axis assignment order: DP -> CP -> TP
     uint32_t axis = 0;
     if (enable_dp) {
         m_dp_axis = axis++;
+    }
+    if (enable_cp) {
+        m_cp_axis = axis++;
     }
     if (enable_tp) {
         m_tp_axis = axis++;
@@ -154,6 +163,13 @@ uint32_t ParallelismContext::get_dp_size() const {
         return 1U;
     }
     return m_mesh_device->shape()[m_dp_axis.value()];
+}
+
+uint32_t ParallelismContext::get_cp_size() const {
+    if (!m_cp_axis.has_value() || m_mesh_device == nullptr) {
+        return 1U;
+    }
+    return m_mesh_device->shape()[m_cp_axis.value()];
 }
 
 uint32_t ParallelismContext::get_tp_size() const {

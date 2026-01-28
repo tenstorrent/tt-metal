@@ -21,10 +21,14 @@ enum class GradMode { ENABLED, DISABLED };
 class ParallelismContext {
 public:
     // Configure from device config flags
-    // For TP+DP: dp_axis=0, tp_axis=1
+    // Axis assignment order: DP -> CP -> TP
+    // For DP+TP: dp_axis=0, tp_axis=1
+    // For CP+TP: cp_axis=0, tp_axis=1
     // For TP only: tp_axis=0
     // For DP only: dp_axis=0
-    void configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp);
+    // For CP only: cp_axis=0
+    // Note: DP+CP is not currently supported
+    void configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp, bool enable_cp = false);
 
     // Mesh device access
     [[nodiscard]] ttnn::distributed::MeshDevice* get_mesh_device() const {
@@ -35,12 +39,16 @@ public:
     [[nodiscard]] std::optional<uint32_t> get_dp_axis() const {
         return m_dp_axis;
     }
+    [[nodiscard]] std::optional<uint32_t> get_cp_axis() const {
+        return m_cp_axis;
+    }
     [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
         return m_tp_axis;
     }
 
     // Size queries (computed from mesh_device->shape())
     [[nodiscard]] uint32_t get_dp_size() const;
+    [[nodiscard]] uint32_t get_cp_size() const;
     [[nodiscard]] uint32_t get_tp_size() const;
 
     [[nodiscard]] bool is_tp_enabled() const {
@@ -49,10 +57,14 @@ public:
     [[nodiscard]] bool is_dp_enabled() const {
         return m_dp_axis.has_value();
     }
+    [[nodiscard]] bool is_cp_enabled() const {
+        return m_cp_axis.has_value();
+    }
 
 private:
     ttnn::distributed::MeshDevice* m_mesh_device = nullptr;
     std::optional<uint32_t> m_dp_axis = std::nullopt;
+    std::optional<uint32_t> m_cp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
 };
 

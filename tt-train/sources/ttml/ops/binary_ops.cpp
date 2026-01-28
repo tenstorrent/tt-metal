@@ -105,10 +105,33 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting
-        a->add_grad(out->get_grad());
-        b->add_grad(ttnn::neg(out->get_grad()));
+        auto grad_a = out->get_grad();
+        auto grad_b = ttnn::neg(out->get_grad());
+
+        // Handle broadcasting: reduce gradient along broadcasted dimensions
+        if (was_broadcasted(a, grad_a)) {
+            a->add_grad(ttnn::moreh_sum(
+                grad_a,
+                get_broadcast_dimensions(a, grad_a),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(grad_a);
+        }
+
+        if (was_broadcasted(b, grad_b)) {
+            b->add_grad(ttnn::moreh_sum(
+                grad_b,
+                get_broadcast_dimensions(b, grad_b),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(grad_b);
+        }
     };
     auto links = autograd::get_links(a, b);
 
@@ -122,13 +145,34 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting (or not)
+        // d/da (a * b) = b, d/db (a * b) = a
         auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
         auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
 
-        a->add_grad(a_grad);
-        b->add_grad(b_grad);
+        // Handle broadcasting: reduce gradient along broadcasted dimensions
+        if (was_broadcasted(a, a_grad)) {
+            a->add_grad(ttnn::moreh_sum(
+                a_grad,
+                get_broadcast_dimensions(a, a_grad),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(a_grad);
+        }
+
+        if (was_broadcasted(b, b_grad)) {
+            b->add_grad(ttnn::moreh_sum(
+                b_grad,
+                get_broadcast_dimensions(b, b_grad),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(b_grad);
+        }
     };
     auto links = autograd::get_links(a, b);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
@@ -149,14 +193,63 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     return out;
 }
 
+autograd::TensorPtr operator+(const autograd::TensorPtr& a, float b) {
+    auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
+    autograd::GradFunction grad = [a, out]() {
+        // d/da (a + b) = 1
+        a->add_grad(out->get_grad());
+    };
+    auto links = autograd::get_links(a);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+autograd::TensorPtr operator-(const autograd::TensorPtr& a, float b) {
+    auto out = autograd::create_tensor(ttnn::subtract(a->get_value(), b));
+    autograd::GradFunction grad = [a, out]() {
+        // d/da (a - b) = 1
+        a->add_grad(out->get_grad());
+    };
+    auto links = autograd::get_links(a);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         auto res = ttnn::div_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0].value());
-        b->add_grad(res[1].value());
+        auto grad_a = res[0].value();
+        auto grad_b = res[1].value();
+
+        // Handle broadcasting: reduce gradient along broadcasted dimensions
+        if (was_broadcasted(a, grad_a)) {
+            a->add_grad(ttnn::moreh_sum(
+                grad_a,
+                get_broadcast_dimensions(a, grad_a),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(grad_a);
+        }
+
+        if (was_broadcasted(b, grad_b)) {
+            b->add_grad(ttnn::moreh_sum(
+                grad_b,
+                get_broadcast_dimensions(b, grad_b),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(grad_b);
+        }
     };
     auto links = autograd::get_links(a, b);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
