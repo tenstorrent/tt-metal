@@ -36,12 +36,14 @@ class TtnnC3:
             shard_layout=shard_layout,
         )
 
+        # Use same shard_layout as cv1/cv2 when block sharding so conv picks L1-fitting program (Wormhole L1 1499136 B)
         self.cv3 = TtYOLOv5xConv2D(
             device,
             parameters.cv3.conv,
             self.conv_pt.cv3.conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            auto_shard=True if use_block_shard else False,
+            shard_layout=shard_layout,
+            auto_shard=False,
         )
 
         self.m = [
