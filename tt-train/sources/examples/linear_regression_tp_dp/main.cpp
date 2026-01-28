@@ -70,12 +70,16 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 1;
-    uint32_t mesh_cols = 1;
+    uint32_t mesh_rows = 4;
+    uint32_t mesh_cols = 8;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 8x4\n", mesh_shape_str);
         return 1;
     }
+
+    TT_FATAL(
+        mesh_rows > 0 && mesh_cols > 0 && mesh_rows * mesh_cols == 32,
+        "mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy).");
 
     // - DP groups (data parallelism) along mesh dimension 0
     // - TP devices per group (tensor parallelism) along mesh dimension 1
@@ -95,7 +99,7 @@ int main(int argc, char** argv) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Initialize parallelism context for TP+DP
-    ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/true);
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_dp = true, .enable_tp = true});
 
     // Get parallelism parameters from context
     const auto& pctx = ttml::autograd::ctx().get_parallelism_context();

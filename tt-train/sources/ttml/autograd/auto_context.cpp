@@ -130,17 +130,17 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 }
 
 ParallelismContext::ParallelismContext(
-    const ttnn::distributed::MeshDevice& mesh_device, bool enable_ddp, bool enable_tp) {
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
     TT_FATAL(
-        (uint32_t)enable_ddp + (uint32_t)enable_tp <= mesh_device.shape().dims(),
+        (uint32_t)config.enable_dp + (uint32_t)config.enable_tp <= mesh_device.shape().dims(),
         "Mesh shape dimensions must be greater than the number of parallelization axes");
 
     uint32_t axis = 0;
-    if (enable_ddp) {
+    if (config.enable_dp) {
         m_ddp_axis = axis++;
         m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
     }
-    if (enable_tp) {
+    if (config.enable_tp) {
         m_tp_axis = axis++;
         m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
     }
@@ -152,11 +152,11 @@ ParallelismContext::ParallelismContext(
     return *m_parallelism_context;
 }
 
-void AutoContext::initialize_parallelism_context(bool enable_ddp, bool enable_tp) {
+void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
     if (m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
-    m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), enable_ddp, enable_tp);
+    m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {

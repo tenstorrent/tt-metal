@@ -429,7 +429,8 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
 
     // Configure parallelization context from device config
-    ttml::autograd::ctx().initialize_parallelism_context(device_config.enable_ddp, device_config.enable_tp);
+    ttml::autograd::ctx().initialize_parallelism_context(
+        {.enable_dp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
 
     struct CachedHostData {
         std::vector<uint32_t> data;

@@ -10,7 +10,7 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: false # TODO: enable this when TP is supported
+  use_clip_grad_norm: false # TODO: fix clip grad norm when TP is enabled
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/llama8b_galaxy_tp_dp.yaml"
 

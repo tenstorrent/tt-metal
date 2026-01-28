@@ -35,6 +35,7 @@ import argparse
 import math
 import numpy as np
 from typing import Optional
+from ttml.autograd import DistributedConfig
 
 import ttnn
 import ttml
@@ -75,7 +76,7 @@ class RowParallelLinear(ttml.modules.ModuleBase):
         if shard_dim is not None:
             self.tp_size = device.shape[shard_dim]
         else:
-            self.tp_size = device.num_devices()
+            self.tp_size = device.get_num_devices()
 
         # Each device has a shard of the weight matrix
         # TTML weight shape convention: [1, 1, out_features, in_features]
@@ -160,7 +161,7 @@ class ColumnParallelLinear(ttml.modules.ModuleBase):
         if shard_dim is not None:
             self.tp_size = device.shape[shard_dim]
         else:
-            self.tp_size = device.num_devices()
+            self.tp_size = device.get_num_devices()
 
         # Each device has a shard of the weight matrix
         # TTML weight shape convention: [1, 1, out_features, in_features]
@@ -288,6 +289,12 @@ def main():
         print(f"Error: invalid --mesh_shape '{args.mesh_shape}', expected RxC like 8x4")
         return 1
 
+    if mesh_rows <= 0 or mesh_cols <= 0 or mesh_rows * mesh_cols != 32:
+        print(
+            f"Error: mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy)."
+        )
+        return 1
+
     # Mesh configuration
     # - DP groups (data parallelism) along mesh dimension 0
     # - TP devices per group (tensor parallelism) along mesh dimension 1
@@ -312,7 +319,9 @@ def main():
     device = autograd_ctx.get_device()
 
     # Initialize parallelism context for TP+DP
-    autograd_ctx.initialize_parallelism_context(enable_ddp=True, enable_tp=True)
+    autograd_ctx.initialize_parallelism_context(
+        DistributedConfig(enable_dp=True, enable_tp=True)
+    )
 
     # Get parallelism parameters from context
     pctx = autograd_ctx.get_parallelism_context()

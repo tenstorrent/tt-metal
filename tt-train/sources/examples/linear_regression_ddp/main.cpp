@@ -65,12 +65,16 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 1;
-    uint32_t mesh_cols = 1;
+    uint32_t mesh_rows = 4;
+    uint32_t mesh_cols = 8;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 32x1\n", mesh_shape_str);
         return 1;
     }
+
+    TT_FATAL(
+        mesh_rows > 0 && mesh_cols > 0 && mesh_rows * mesh_cols == 32,
+        "mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy).");
 
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
     const auto num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
@@ -79,7 +83,7 @@ int main(int argc, char** argv) {
     ttml::autograd::ctx().open_device(logical_mesh_shape);
 
     // Initialize parallelism context for DDP only
-    ttml::autograd::ctx().initialize_parallelism_context(/*enable_ddp=*/true, /*enable_tp=*/false);
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_dp = true, .enable_tp = false});
 
     // Get parallelism parameters from context
     const auto& pctx = ttml::autograd::ctx().get_parallelism_context();

@@ -18,13 +18,18 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+struct DistributedConfig {
+    bool enable_dp = false;
+    bool enable_tp = false;
+};
+
 class ParallelismContext {
 public:
     // Configure from device config flags
     // For TP+DP: dp_axis=0, tp_axis=1
     // For TP only: tp_axis=0
     // For DP only: dp_axis=0
-    ParallelismContext(const ttnn::distributed::MeshDevice& mesh_device, bool enable_ddp, bool enable_tp);
+    ParallelismContext(const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config);
 
     // Axis queries
     [[nodiscard]] std::optional<uint32_t> get_ddp_axis() const {
@@ -105,7 +110,7 @@ public:
 
     [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
 
-    void initialize_parallelism_context(bool enable_ddp, bool enable_tp);
+    void initialize_parallelism_context(const DistributedConfig& config);
 
 private:
     AutoContext();
