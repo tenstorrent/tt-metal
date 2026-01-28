@@ -696,19 +696,6 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     uint32_t pool_phase_size = halo_output_size + pool_cb_usage;
     uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
 
-    printf(
-        "Pool2D L1 Usage Calculation: halo_input=%u, halo_output=%u, halo_cb_overhead=%u, pool_cb=%u, "
-        "output_tensor=%u, "
-        "halo_phase=%u, pool_phase=%u, total=%u\n",
-        halo_input_size,
-        halo_output_size,
-        halo_cb_overhead,
-        pool_cb_usage,
-        output_tensor_size,
-        halo_phase_size,
-        pool_phase_size,
-        total_size);
-
     log_trace(
         tt::LogOp,
         "Pool2D L1 Usage Calculation: halo_input={}, halo_output={}, halo_cb_overhead={}, pool_cb={}, "

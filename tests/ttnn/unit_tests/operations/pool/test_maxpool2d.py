@@ -44,6 +44,10 @@ parameters = {
             [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight, False],
             [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth, True],
             [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth, False],
+            # Autosharded
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceHeight, False],
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, SliceWidth, False],
+            [1, 128, 600, 600, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, None, None, False],
             # large kernel tests
             [1, 700, 700, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, True],
             [1, 700, 70, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, True],
