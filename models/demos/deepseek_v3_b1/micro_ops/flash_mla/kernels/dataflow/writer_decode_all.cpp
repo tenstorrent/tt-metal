@@ -364,9 +364,11 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* brisc_ncrisc_sync_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_addr);
 
-        // Use the word after the sync semaphore to read K buffer address from BRISC
+        // Use words after the sync semaphore to read K buffer addresses from BRISC
+        // Two slots for double-buffered transaction IDs to avoid race condition
         volatile tt_l1_ptr uint32_t* k_addr_from_brisc_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_addr + 4);
+        // k_addr_from_brisc_ptr[0] for trid 1 (even pages), k_addr_from_brisc_ptr[1] for trid 2 (odd pages)
 
         // Set up multicast addresses
         // Must use NOC_0 for multicast due to grid wrapping requirements
@@ -388,13 +390,14 @@ void kernel_main() {
 
                 if constexpr (kv_is_sharded) {
                     // Sharded: page-level pipelining - multicast each page as it arrives
+                    // Double buffering uses 2 trids cycling 1,2,1,2... so slot = page % 2
                     for (uint32_t page = 0; page < k_num_pages; ++page) {
                         // Wait for BRISC to signal this page is ready
                         ++sync_count;
                         noc_semaphore_wait(brisc_ncrisc_sync_ptr, sync_count);
 
-                        // Read page address from shared L1 (written by BRISC before signaling)
-                        uint32_t page_addr = *k_addr_from_brisc_ptr;
+                        // Read page address from correct slot (page % 2 matches trid - 1)
+                        uint32_t page_addr = k_addr_from_brisc_ptr[page % 2];
 
                         // Multicast this page immediately to other cores in S block
                         uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;

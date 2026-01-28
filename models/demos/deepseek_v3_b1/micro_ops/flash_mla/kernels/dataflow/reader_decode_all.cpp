@@ -198,9 +198,11 @@ void kernel_main() {
     const uint32_t brisc_ncrisc_sync_l1_addr = get_semaphore(brisc_ncrisc_sync_semaphore_id);
     const uint64_t brisc_ncrisc_sync_noc_addr = get_noc_addr(brisc_ncrisc_sync_l1_addr);
 
-    // Use the word after the sync semaphore to communicate K buffer address from BRISC to NCRISC
+    // Use words after the sync semaphore to communicate K buffer addresses from BRISC to NCRISC
+    // Two slots for double-buffered transaction IDs to avoid race condition
     volatile tt_l1_ptr uint32_t* k_addr_for_ncrisc_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_l1_addr + 4);
+    // k_addr_for_ncrisc_ptr[0] for trid 1, k_addr_for_ncrisc_ptr[1] for trid 2
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -233,12 +235,10 @@ void kernel_main() {
 
                         // Transaction ID pipelining: issue 2 reads before waiting (double buffering)
                         // This overlaps DRAM read N+1 with multicast of page N
+                        // Pattern matches dram_streaming_matmul and prefetcher kernels
                         constexpr uint32_t NUM_TRIDS = 2;  // Double buffering
 
-                        // src_base_addr is the local address within DRAM (low 32 bits of NOC addr)
-                        // src_offset starts at 0 and increments by page_size for each page
-                        uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
-                        uint32_t src_offset = 0;
+                        uint32_t src_addr_lo = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
                         uint32_t dst_addr = k_write_ptr;
 
                         // Track addresses for each in-flight trid
@@ -249,12 +249,13 @@ void kernel_main() {
                         uint32_t pages_completed = 0;
 
                         // Issue first NUM_TRIDS reads (fill pipeline)
+                        // Use noc_async_read_set_trid + noc_async_read_one_packet_with_state
+                        // (NOT _with_trid variant which has different internal behavior)
                         for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < k_num_pages; ++i) {
                             noc_async_read_set_trid(curr_trid);
                             dst_addrs[curr_trid - 1] = dst_addr;
-                            noc_async_read_one_packet_with_state_with_trid(
-                                src_base_addr, src_offset, dst_addr, curr_trid);
-                            src_offset += k_page_size;
+                            noc_async_read_one_packet_with_state(src_addr_lo, dst_addr, vc);
+                            src_addr_lo += k_page_size;
                             dst_addr += k_page_size;
                             curr_trid = (curr_trid % NUM_TRIDS) + 1;
                             pages_issued++;
@@ -266,7 +267,8 @@ void kernel_main() {
                             noc_async_read_barrier_with_trid(wait_trid);
 
                             // Signal NCRISC that this page is ready
-                            *k_addr_for_ncrisc_ptr = dst_addrs[wait_trid - 1];
+                            // Write to slot[wait_trid - 1] to avoid race with next iteration
+                            k_addr_for_ncrisc_ptr[wait_trid - 1] = dst_addrs[wait_trid - 1];
                             noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
                             pages_completed++;
 
@@ -274,9 +276,8 @@ void kernel_main() {
                             if (pages_issued < k_num_pages) {
                                 noc_async_read_set_trid(curr_trid);
                                 dst_addrs[curr_trid - 1] = dst_addr;
-                                noc_async_read_one_packet_with_state_with_trid(
-                                    src_base_addr, src_offset, dst_addr, curr_trid);
-                                src_offset += k_page_size;
+                                noc_async_read_one_packet_with_state(src_addr_lo, dst_addr, vc);
+                                src_addr_lo += k_page_size;
                                 dst_addr += k_page_size;
                                 curr_trid = (curr_trid % NUM_TRIDS) + 1;
                                 pages_issued++;
