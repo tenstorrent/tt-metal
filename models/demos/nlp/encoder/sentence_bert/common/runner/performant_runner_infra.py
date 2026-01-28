@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 if is_blackhole():
     from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import custom_preprocessor
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import custom_preprocessor
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import custom_preprocessor
 
 
 def load_ttnn_model(device, torch_model, config):

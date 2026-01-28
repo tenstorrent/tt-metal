@@ -11,7 +11,7 @@ import ttnn
 from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
 from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertLayer
 from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
-from models.demos.wormhole.sentence_bert.ttnn.common import custom_preprocessor
+from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
