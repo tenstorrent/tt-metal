@@ -231,7 +231,7 @@ run_t3000_falcon7b_tests(){
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/t3000/input_data_t3000.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

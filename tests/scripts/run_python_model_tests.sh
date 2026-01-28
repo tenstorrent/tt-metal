@@ -24,9 +24,9 @@ run_python_model_tests_grayskull() {
     pytest models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k "in0_L1 and batch_9"
 
     # Falcon tests
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py
+    pytest models/demos/nlp/llms/falcon7b/common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
+    pytest models/demos/nlp/llms/falcon7b/common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
+    pytest models/demos/nlp/llms/falcon7b/common/tests/unit_tests/test_falcon_attn_matmul.py
 }
 
 run_python_model_tests_wormhole_b0() {
@@ -36,9 +36,9 @@ run_python_model_tests_wormhole_b0() {
 
     # Falcon tests
     # attn_matmul_from_cache is currently not used in falcon7b
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
+    pytest models/demos/nlp/llms/falcon7b/common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
     # higher sequence lengths and different formats trigger memory issues
-    pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
+    pytest models/demos/nlp/llms/falcon7b/common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
     # Unet Shallow
