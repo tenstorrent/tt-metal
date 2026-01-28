@@ -123,6 +123,7 @@ struct RMSNorm {
 
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
+            DPRINT << "RMSNorm TRISC" << ENDL();
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
             {
                 // Square the input

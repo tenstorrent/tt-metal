@@ -16,6 +16,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reg_api.h"
+#include "compute_kernel_api/pack.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -106,7 +107,8 @@ struct Rope {
             cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles
 
             // ================================================================
-            // Initialize matmul and binary ops (done once before loop)
+            // Initialize matmul (packer configured for rotated_in_interm_cb)
+            // Binary ops will be initialized before each step
             // ================================================================
             mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
             binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
@@ -122,7 +124,9 @@ struct Rope {
                 cb_reserve_back(args.out_cb, Wt);
 
                 // Signal input row is ready (sharded tensor)
+                DPRINT << "rope trisc op wait front in_cb " << args.in_cb << " " << Wt << ENDL();
                 cb_wait_front(args.in_cb, Wt);
+                DPRINT << "rope trisc op done wait front in_cb" << ENDL();
 
                 // ============================================================
                 // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
@@ -171,29 +175,39 @@ struct Rope {
                     pack_tile(j, args.cos_interm_cb, j);
                 }
                 tile_regs_release();
+                DPRINT << " pushed back cos_interm_cb " << args.cos_interm_cb << " " << Wt << ENDL();
                 cb_push_back(args.cos_interm_cb, Wt);
+                DPRINT << " pushed back cos_interm_cb done " << ENDL();
                 cb_pop_front(args.in_cb, Wt);
 
                 // ============================================================
                 // Step 4: output = cos_interm + sin_interm (add)
                 // ============================================================
+                DPRINT << "rope trisc op wait front sin_interm_cb " << args.sin_interm_cb << " " << Wt << ENDL();
                 cb_wait_front(args.sin_interm_cb, Wt);
+                DPRINT << "rope trisc op wait front cos_interm_cb " << args.cos_interm_cb << " " << Wt << ENDL();
                 cb_wait_front(args.cos_interm_cb, Wt);
+                DPRINT << " rope cos done wait front " << ENDL();
                 add_tiles_init(args.cos_interm_cb, args.sin_interm_cb);
                 tile_regs_acquire();
+                DPRINT << " acquired tiles " << ENDL();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     add_tiles(args.cos_interm_cb, args.sin_interm_cb, j, j, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+                DPRINT << " committed tiles " << ENDL();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     pack_tile(j, args.out_cb, j);
                 }
+                DPRINT << " packed tiles " << ENDL();
                 tile_regs_release();
+                DPRINT << " released tiles " << ENDL();
                 cb_push_back(args.out_cb, Wt);
                 cb_pop_front(args.sin_interm_cb, Wt);
                 cb_pop_front(args.cos_interm_cb, Wt);
             }
+            DPRINT << "done loop " << ENDL();
 
             // ================================================================
             // Cleanup: pop sin/cos (trans_mat is reused, not popped)

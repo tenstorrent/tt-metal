@@ -71,7 +71,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
     # Use tiny tiles: tile height = num_heads (no padding to 32)
     tiny_tile = ttnn.Tile((num_heads, ttnn.TILE_SIZE))
     # Create core grid from grid_size parameter
-    start_x, start_y = 0, 0  # Starting offset
+    start_x, start_y = 8, 8  # Starting offset
     end_x = start_x + grid_size[0] - 1
     end_y = start_y + grid_size[1] - 1
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y))})

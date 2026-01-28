@@ -21,11 +21,15 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
     std::uint16_t tiles_received;
+    DPRINT << "operand " << operand << " tiles received ptr " << (std::uint32_t)tiles_received_ptr << ENDL();
+    DPRINT << "operand " << operand << " tiles acked " << get_local_cb_interface(input).tiles_acked << ENDL();
 
     uint16_t num_tiles_recv;
     do {
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
+        // DPRINT << "operand " << operand << " tiles received " << tiles_received << " " << num_tiles_recv << " " <<
+        // num_tiles_u << ENDL();
     } while (num_tiles_recv < num_tiles_u);
 }
 

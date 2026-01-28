@@ -22,10 +22,11 @@
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
 struct Core {
-    static constexpr bool is_dkv_matmul_core = get_named_compile_time_arg_val("is_dkv_matmul_core") == 1;
-    static constexpr bool is_kv_rmsnorm_core = get_named_compile_time_arg_val("is_kv_rmsnorm_core") == 1;
-    static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
-    static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 2;  // Temporary disable
+    static constexpr bool is_dkv_matmul_core = get_named_compile_time_arg_val("is_dkv_matmul_core") == 2 and
+                                               get_named_compile_time_arg_val("is_krope_core") == 0;
+    static constexpr bool is_kv_rmsnorm_core = get_named_compile_time_arg_val("is_kv_rmsnorm_core") == 2;
+    static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 2;
+    static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;  // Temporary disable
 };
 
 KERNEL_ENTRY {
@@ -187,10 +188,16 @@ KERNEL_ENTRY {
         unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
     }
     if constexpr (Core::is_krope_core) {
+        constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
         constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
         constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
         constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
         constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+        DPRINT << "setup sharded buffer in_cb " << in_cb << " " << Wt << ENDL();
+        DPRINT << "setup sharded buffer cos_cb " << cos_cb << " " << Wt << ENDL();
+        DPRINT << "setup sharded buffer sin_cb " << sin_cb << " " << Wt << ENDL();
+        DPRINT << "setup sharded buffer trans_mat_cb " << trans_mat_cb << " " << 1 << ENDL();
+        unified_kernels::setup_sharded_buffer(in_cb, Wt);
         unified_kernels::setup_sharded_buffer(cos_cb, Wt);
         unified_kernels::setup_sharded_buffer(sin_cb, Wt);
         unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
@@ -200,12 +207,14 @@ KERNEL_ENTRY {
     // ========================================================================
     // DKV Matmul
     // ========================================================================
+    DPRINT << "DKV_MATMUL" << ENDL();
     {
         DeviceZoneScopedN("DKV_MATMUL");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, true, false> dkv_matmul;
         dkv_matmul(dkv_matmul_args);
     }
+    DPRINT << "DKV_GATHER" << ENDL();
     // ========================================================================
     // Gather: dkv matmul cores (senders) -> input core (receiver)
     // NCRISC sends from knope grid of dkv matmul cores, BRISC receives on rmsnorm grid, TRISC no-op
@@ -215,7 +224,7 @@ KERNEL_ENTRY {
         deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
         dkv_gather(dkv_gather_args);
     }
-
+    DPRINT << " KV_RMSNORM" << ENDL();
     // ========================================================================
     // RMSNorm: Apply RMSNorm to the gathered data
     {
@@ -223,7 +232,7 @@ KERNEL_ENTRY {
         deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
         kv_rmsnorm(kv_rmsnorm_args);
     }
-
+    DPRINT << "K_ROPE" << ENDL();
     // ========================================================================
     // Rope: Apply Rope to the gathered data
     // ========================================================================
@@ -232,5 +241,6 @@ KERNEL_ENTRY {
         deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
         k_rope(k_rope_args);
     }
+    DPRINT << "KV_CACHE_BRANCH done" << ENDL();
 }
 KERNEL_END

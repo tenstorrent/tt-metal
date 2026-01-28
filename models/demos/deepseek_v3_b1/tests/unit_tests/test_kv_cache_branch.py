@@ -82,6 +82,9 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
             )
         }
     )
+    print(spec_crs)
+    print(rms_crs)
+    print(rope_crs)
 
     # Validate grid fits within device
     device_grid_size = device.compute_with_storage_grid_size()
@@ -137,14 +140,13 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
     # Original shard order: [0, 1, ..., 7, 8, 9, ..., 15, 16, 17]
     # New shard order:      [0, 1, ..., 7, 16, 8, 9, ..., 15, 17]
     # This puts shard 16 (cols 512-543) at position 8 (R core in row 0)
-    num_shards = 18
-    shard_width = 32
-    new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
-    torch_W_dkv_rope_shards = torch_W_dkv_rope.reshape(7168, num_shards, shard_width)
-    torch_W_dkv_rope_shuffled = torch_W_dkv_rope_shards[:, new_shard_order, :].reshape(7168, 576)
-
+    # num_shards = 18
+    # shard_width = 32
+    # new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
+    # torch_W_dkv_rope_shards = torch_W_dkv_rope.reshape(7168, num_shards, shard_width)
+    # torch_W_dkv_rope_shuffled = torch_W_dkv_rope_shards[:, new_shard_order, :].reshape(7168, 576)
     ttnn_W_dkv_rope = ttnn.from_torch(
-        torch_W_dkv_rope_shuffled,
+        torch_W_dkv_rope,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -175,11 +177,39 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
     cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)
     sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)
+    rope_test_input = torch.randn(1, 1, 1, 64, dtype=torch.bfloat16).float()
 
+    rope_test_input_shard_spec = ttnn.ShardSpec(
+        rope_crs,
+        (1, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    rope_test_input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, rope_test_input_shard_spec
+    )
+    rope_test_input_ttnn = ttnn.from_torch(
+        rope_test_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=rope_test_input_mem_config,
+        tile=rope_tile,
+    )
+    # Create output tensor with same sharded memory config and tiny tile as input
+    test_rope_output_zeros = torch.zeros_like(rope_test_input, dtype=torch.bfloat16)
+    test_rope_output_ttnn = ttnn.from_torch(
+        test_rope_output_zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=rope_test_input_mem_config,
+        tile=rope_tile,
+    )
+    num_rope_cores = rope_crs.num_cores()
     # Use same tiny tile as input - data in row 0, rows 1+ are padding
     cos_sin_shard_spec = ttnn.ShardSpec(
         rope_crs,
-        (rope_num_heads, rope_head_dim // 2),
+        (rope_num_heads, rope_head_dim // num_rope_cores),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     cos_sin_mem_config = ttnn.MemoryConfig(
@@ -205,7 +235,6 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
 
     # Transformation matrix - replicate 32x32 for each rope core
     trans_mat = get_rot_transformation_mat()  # (1, 1, 32, 32)
-    num_rope_cores = rope_crs.num_cores()
     trans_mat_replicated = trans_mat.repeat(1, 1, batch, num_rope_cores)  # (1, 1, batch*32, 32*num_rope_cores)
     trans_shard_spec = ttnn.ShardSpec(
         rope_crs,
@@ -254,7 +283,9 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
         tt_cos,
         tt_sin,
         tt_trans_replicated,
+        rope_test_input_ttnn,
         ttnn_output,
+        test_rope_output_ttnn,
     )
 
     # TODO: Convert back to torch for verification

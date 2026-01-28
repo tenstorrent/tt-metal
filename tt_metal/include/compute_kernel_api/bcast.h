@@ -394,7 +394,7 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
 ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
-    MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>()));
+    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }

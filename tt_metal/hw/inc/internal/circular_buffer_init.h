@@ -172,6 +172,9 @@ inline void setup_remote_cb_interfaces(
 
     for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
         uint32_t config_addr = circular_buffer_config_addr[0];
+        if (config_addr == 0) {
+            continue;
+        }
         uint32_t page_size = circular_buffer_config_addr[1];
         volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);

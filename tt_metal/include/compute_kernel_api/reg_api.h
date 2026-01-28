@@ -27,8 +27,9 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
+    DPRINT << "acquire_dst " << ENDL();
     MATH((llk_math_wait_for_dest_available()));
-
+    DPRINT << "acquire_dst done " << ENDL();
     PACK((llk_packer_wait_for_math_done()));
 }
 

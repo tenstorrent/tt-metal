@@ -48,6 +48,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
         (volatile tt_l1_ptr std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) &
                                             0x3ffff);
 
+    DPRINT << "operand " << operand << " tiles received ptr " << (std::uint32_t)tiles_received_ptr_tensix << ENDL();
     // get_local_cb_interface(output).tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it becasue tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
     // to avoid synchronization with packer cb_reserve_back must used the most recent value of tiles_received (cannot
@@ -56,6 +57,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     // no additional synchronization is needed
     get_local_cb_interface(output).tiles_received += num_tiles;
     uint16_t tiles_received_new = get_local_cb_interface(output).tiles_received;
+    DPRINT << "operand " << operand << " tiles received new " << tiles_received_new << ENDL();
 
     // Update the value at tiles_received_ptr with tiles_received_new only after the packer has finished packing
     // We need to use a Tensix instruction to do the update, which runs only after STALLWAIT has finished
@@ -65,6 +67,13 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     TT_SETDMAREG(0, tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
     TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, (uint32_t)&tiles_received_ptr_tensix[0]);
+
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+
+    std::uint16_t tiles_received;
+    DPRINT << "operand " << operand << " tiles received ptr " << (std::uint32_t)tiles_received_ptr << ENDL();
+    tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
+    DPRINT << " AFTER PACKER " << tiles_received << ENDL();
 }
 
 // Push N tiles to stream buffer (increment write pointer)

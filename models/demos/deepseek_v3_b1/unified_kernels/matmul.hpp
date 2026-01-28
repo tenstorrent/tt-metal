@@ -89,6 +89,7 @@ struct Matmul {
     private:
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_TRISC)
+            DPRINT << "Matmul TRISC" << ENDL();
             // ================================================================
             // TRISC (Compute)
             // ================================================================

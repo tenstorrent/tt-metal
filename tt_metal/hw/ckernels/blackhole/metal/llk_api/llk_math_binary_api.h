@@ -34,6 +34,7 @@ inline void llk_math_eltwise_binary_init_with_operands(
     const std::uint32_t operand_id =
         get_operand_id(operand_A);  // operand_id is used to extract tile dim data which is the same for both operands
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    DPRINT << "llk_math_eltwise_binary_init_with_operands start " << num_faces << ENDL();
 
     _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(
         num_faces, acc_to_dest);
