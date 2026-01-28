@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
 
 
@@ -38,6 +39,47 @@ def load_hf_state_dict(ckpt_dir):
         if not os.path.exists(safetensor_path):
             raise FileNotFoundError(f"Neither model.safetensors.index.json nor model.safetensors found in {ckpt_dir}")
         loaded_weights = safetensors_load_file(safetensor_path)
+
+    return loaded_weights
+
+
+def load_hf_state_dict_filtered(ckpt_dir, key_prefixes):
+    """
+    Load only the subset of HF checkpoint weights that match the given key prefixes.
+    Uses safetensors safe_open to avoid loading unrelated tensors into memory.
+    """
+    prefixes = tuple(key_prefixes)
+    if not prefixes:
+        return {}
+
+    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    loaded_weights = {}
+
+    if os.path.exists(index_path):
+        with open(index_path, "r") as f:
+            index_data = json.load(f)
+
+        weight_map = index_data["weight_map"]
+        file_to_keys = {}
+        for key, file in weight_map.items():
+            if key.startswith(prefixes):
+                file_to_keys.setdefault(file, []).append(key)
+
+        for file, keys in file_to_keys.items():
+            safetensor_path = os.path.join(ckpt_dir, file)
+            if not os.path.exists(safetensor_path):
+                raise FileNotFoundError(f"Missing safetensors shard {safetensor_path}")
+            with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                for key in keys:
+                    loaded_weights[key] = f.get_tensor(key)
+    else:
+        safetensor_path = os.path.join(ckpt_dir, "model.safetensors")
+        if not os.path.exists(safetensor_path):
+            raise FileNotFoundError(f"Neither model.safetensors.index.json nor model.safetensors found in {ckpt_dir}")
+        with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                if key.startswith(prefixes):
+                    loaded_weights[key] = f.get_tensor(key)
 
     return loaded_weights
 

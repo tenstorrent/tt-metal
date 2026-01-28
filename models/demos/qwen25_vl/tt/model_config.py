@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
 
 class ModelOptimizations:
@@ -104,13 +105,33 @@ class VisionModelArgs(ModelArgs):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
         from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
             Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+            Qwen2_5_VisionTransformerPretrainedModel,
         )
 
         print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
-        return model.visual
+        vision_model = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
+
+        if self.dummy_weights:
+            return vision_model
+
+        # Load only vision weights to reduce host memory usage.
+        vision_state_dict = load_hf_state_dict_filtered(self.CKPT_DIR, ("visual.", "model.visual."))
+        if vision_state_dict:
+            filtered_state_dict = {}
+            for key, value in vision_state_dict.items():
+                if key.startswith("model.visual."):
+                    key = key[len("model.visual.") :]
+                elif key.startswith("visual."):
+                    key = key[len("visual.") :]
+                filtered_state_dict[key] = value
+
+            model_keys = set(vision_model.state_dict().keys())
+            filtered_state_dict = {k: v for k, v in filtered_state_dict.items() if k in model_keys}
+            vision_model.load_state_dict(filtered_state_dict, strict=False)
+
+        return vision_model
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]
