@@ -165,9 +165,10 @@ run_t3000_qwq3_tests() {
   echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
 
   echo "LOG_METAL: Running run_t3000_qwq3_tests"
-  qwq32b=/mnt/MLPerf/tt_dnn-models/qwen/QwQ-32B
+  qwq32b=Qwen/QwQ-32B
+  tt_cache_qwq32b=$TT_CACHE_HOME/$qwq32b
 
-  HF_MODEL=$qwq32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
+  HF_MODEL=$qwq32b TT_CACHE_PATH=$tt_cache_qwq32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
