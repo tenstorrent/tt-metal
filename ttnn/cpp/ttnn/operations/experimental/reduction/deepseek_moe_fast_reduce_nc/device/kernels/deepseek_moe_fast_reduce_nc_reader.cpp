@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 
 constexpr uint32_t compute_input_cb_id_0 = get_compile_time_arg_val(0);
 constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(1);

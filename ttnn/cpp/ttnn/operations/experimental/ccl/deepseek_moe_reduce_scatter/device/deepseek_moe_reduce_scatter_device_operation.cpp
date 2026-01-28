@@ -41,7 +41,6 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
-    const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
     uint32_t dim = operation_attributes.dim;
     uint32_t num_links = operation_attributes.num_links;
     std::optional<uint32_t> cluster_axis = operation_attributes.cluster_axis;
@@ -143,9 +142,6 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
         dim == input_tensor_rank - 1,
         "deepseek_moe_reduce_scatter only supports scattering on the last dim, but has dim {}",
         dim);
-
-    // output memory config
-    TT_FATAL(!output_memory_config.is_sharded(), "deepseek_moe_reduce_scatter only supports interleaved output tensor");
 }
 
 std::vector<ttnn::TensorSpec> DeepseekMoEReduceScatterDeviceOperation::compute_output_specs(

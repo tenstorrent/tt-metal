@@ -118,7 +118,15 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
                     ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
                 ),
             ),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 32]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
             3,
             4,
         ),  # four_links_partial_deepseek (forward core on last link not used) (shape used in deepseek)
