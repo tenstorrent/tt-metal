@@ -23,7 +23,7 @@ echo "[CONFIG] PYTEST_CMD=${PYTEST_CMD}"
 
 run_falcon7b_func() {
 
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -279,7 +279,7 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/common/demo/input_data.json' models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py
 
 }
 

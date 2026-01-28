@@ -32,7 +32,7 @@ The following models have been traced and their configurations are available in 
 | stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 | gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/multimodal/gemma3/demo/text_demo.py` |
-| falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
+| falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py` |
 | sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
 | segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py` |
 

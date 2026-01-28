@@ -204,7 +204,7 @@
 
 ## August 26, 2024
 
-### [Falcon7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b_common)
+### [Falcon7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/falcon7b/common)
 - Added data parallel demo for a single Galaxy (32 chips)
 - Refactored all modules and tests to use ttnn multi-device tensors
 
