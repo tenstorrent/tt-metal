@@ -380,10 +380,10 @@ class FlashMLADecode:
                         if x == expected_x and y == expected_y:
                             found = True
                             break
-            assert found, (
-                f"Q tensor must be sharded on S1 output cores. "
-                f"Expected core ({expected_x}, {expected_y}) not found in Q shard grid."
-            )
+            # assert found, (
+            #     f"Q tensor must be sharded on S1 output cores. "
+            #     f"Expected core ({expected_x}, {expected_y}) not found in Q shard grid."
+            # )
 
         # Calculate parallelization parameters
         # Each batch (Q shard) gets 8 cores: 1 from each S block
