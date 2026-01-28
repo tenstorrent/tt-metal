@@ -141,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04", "Fedora 43"]
     with:
       platform: ${{ matrix.platform }}
       dry-run: ${{ inputs.dry-run || false }}
