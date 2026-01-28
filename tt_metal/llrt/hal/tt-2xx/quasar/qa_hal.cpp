@@ -231,7 +231,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:

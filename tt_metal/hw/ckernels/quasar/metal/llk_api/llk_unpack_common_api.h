@@ -9,11 +9,11 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "api/debug/waypoint.h"
-#include "llk_lib/llk_defs.h"
+#include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
-#include "llk_lib/llk_unpack_common.h"
+#include "llk_unpack_common.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_lib/llk_unpack_matmul.h"
+#include "llk_unpack_matmul.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************

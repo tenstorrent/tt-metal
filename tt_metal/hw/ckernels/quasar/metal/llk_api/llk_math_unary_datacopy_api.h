@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "llk_lib/llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_operands.h"
 
 /*************************************************************************

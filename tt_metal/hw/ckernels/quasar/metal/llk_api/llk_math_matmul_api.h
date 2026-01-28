@@ -12,7 +12,7 @@
 
 template <int NUM_FIDELITY_PHASES, bool EN_DI = false, bool EN_X2 = false>
 inline void llk_math_matmul_init(const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_init_<NUM_FIDELITY_PHASES, EN_DI, EN_X2>(ct_dim, rt_dim);
+    _llk_math_matmul_init_<static_cast<ckernel::MathFidelity>(NUM_FIDELITY_PHASES), EN_DI, EN_X2>(ct_dim, rt_dim);
 }
 
 inline void llk_math_matmul(
