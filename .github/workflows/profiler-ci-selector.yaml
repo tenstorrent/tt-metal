@@ -31,30 +31,11 @@ on:
         required: false
         type: boolean
         default: true
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      enable-lto:
+      debug_build:
+        description: "Use RelWithDebInfo build (instead of Release)."
         required: false
         type: boolean
         default: false
-        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       run_t3k_profiler:
@@ -82,21 +63,11 @@ on:
         required: false
         type: boolean
         default: false
-      platform:
-        required: false
-        type: string
-        default: "Ubuntu 22.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration"
-      enable-lto:
+      debug_build:
+        description: "Use RelWithDebInfo build (instead of Release)."
         required: false
         type: boolean
         default: false
-        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact-profiler:
@@ -117,11 +88,19 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: >-
+        ${{
+          (
+            (
+              (github.event_name == 'workflow_call' && inputs.debug_build) ||
+              (github.event_name == 'workflow_dispatch' && (github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true))
+            )
+            && 'RelWithDebInfo'
+          ) || 'Release'
+        }}
       tracy: true
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      version: "22.04"
 
   t3k-profiler-tests:
     if: >-

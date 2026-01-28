@@ -63,29 +63,6 @@ on:
         required: false
         default: true
         type: boolean
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      build-type:
-        description: 'Build type for the workflow'
-        required: false
-        default: Release
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-      enable-lto:
-        default: false
-        type: boolean
-        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -94,10 +71,8 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      version: 22.04
       tracy: true
       skip-tt-train: true
 
