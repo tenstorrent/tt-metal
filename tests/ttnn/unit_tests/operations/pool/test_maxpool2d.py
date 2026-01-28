@@ -184,239 +184,239 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
     )
 
 
-# @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
-# @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
-# def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
+@pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
+def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
 
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         in_dtype,
-#         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-#         ceil_mode=ceil_mode,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
-
-
-# @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
-# @pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
-# def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
-
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         in_dtype,
-#         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-#         ceil_mode=ceil_mode,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        in_dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
 
 
-# @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
-# @pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
-# def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
+@pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
+def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
 
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         in_dtype,
-#         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-#         ceil_mode=ceil_mode,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
-
-
-# @pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
-# @pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
-# @pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
-# def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
-
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         in_dtype,
-#         out_memory_config=out_memory_config,
-#         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-#         ceil_mode=ceil_mode,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        in_dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
 
 
-# @pytest.mark.parametrize("input_spec", parameters["tiled_out_tests"]["input_specs"])
-# @pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
-# @pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
-# def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
-#     output_layout = ttnn.TILE_LAYOUT
+@pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
+def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
 
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
-
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         in_dtype,
-#         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-#         ceil_mode=ceil_mode,
-#         output_layout=output_layout,
-#         out_dtype=out_dtype,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        in_dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
 
 
-# @pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
-# @pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
-# def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
-#     (
-#         in_n,
-#         in_c,
-#         in_h,
-#         in_w,
-#         kernel_h,
-#         kernel_w,
-#         stride_h,
-#         stride_w,
-#         pad_h,
-#         pad_w,
-#         dilation_h,
-#         dilation_w,
-#         ceil_mode,
-#     ) = input_spec
+@pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
+@pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
 
-#     (cores_x, cores_y) = cores
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        in_dtype,
+        out_memory_config=out_memory_config,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
 
-#     # shard shape calculations are only accurate for height sharded tensors
-#     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-#     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-#     in_nhw = in_n * in_h * in_w
-#     num_cores = cores_x * cores_y
-#     # we use tile shape to mimic tile based tensors passed from other ops like conv2d
-#     shard_height = math.ceil(math.ceil(in_nhw / num_cores) / 32) * 32
-#     shard_width = math.ceil(in_c / 32) * 32
 
-#     in_memory_config = ttnn.MemoryConfig(
-#         memory_layout=shard_scheme,
-#         buffer_type=ttnn.BufferType.L1,
-#         shard_spec=ttnn.ShardSpec(
-#             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))}),
-#             [shard_height, shard_width],
-#             shard_orientation,
-#         ),
-#     )
+@pytest.mark.parametrize("input_spec", parameters["tiled_out_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
+@pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
+def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
+    output_layout = ttnn.TILE_LAYOUT
 
-#     run_max_pool2d(
-#         [in_n, in_c, in_h, in_w],
-#         (kernel_h, kernel_w),
-#         (pad_h, pad_w),
-#         (stride_h, stride_w),
-#         (dilation_h, dilation_w),
-#         device,
-#         tensor_map,
-#         ttnn.bfloat16,
-#         in_memory_config=in_memory_config,
-#         ceil_mode=ceil_mode,
-#         nightly_skips=False,
-#         config_tensor_in_dram=True,
-#     )
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        in_dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        output_layout=output_layout,
+        out_dtype=out_dtype,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
+
+
+@pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
+@pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
+def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+
+    (cores_x, cores_y) = cores
+
+    # shard shape calculations are only accurate for height sharded tensors
+    shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    in_nhw = in_n * in_h * in_w
+    num_cores = cores_x * cores_y
+    # we use tile shape to mimic tile based tensors passed from other ops like conv2d
+    shard_height = math.ceil(math.ceil(in_nhw / num_cores) / 32) * 32
+    shard_width = math.ceil(in_c / 32) * 32
+
+    in_memory_config = ttnn.MemoryConfig(
+        memory_layout=shard_scheme,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))}),
+            [shard_height, shard_width],
+            shard_orientation,
+        ),
+    )
+
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        ttnn.bfloat16,
+        in_memory_config=in_memory_config,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
