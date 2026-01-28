@@ -45,6 +45,7 @@ class DeepseekMinimalBroadcast:
         input_tensor_mesh,
         output_tensor,
         sender_coord,
+        semaphores,
         cluster_axis=0,
         secondary_cluster_axis=None,
         topology=None,
@@ -62,6 +63,8 @@ class DeepseekMinimalBroadcast:
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
             topology: Topology for broadcast (default Linear)
             num_links: Number of links to use (default 1)
+            using_persistent_buffers: Whether to use persistent buffers (default True)
+            semaphores: List of pre-created semaphores
 
         Returns:
             Output tensor with broadcast data on all devices
@@ -84,14 +87,12 @@ class DeepseekMinimalBroadcast:
 
         # Create global semaphores
         grid = mesh_device.compute_with_storage_grid_size()
-        num_cores = grid.x * grid.y
-        available_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
-        out_ready_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        barrier_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        secondary_sync_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
+        out_ready_semaphore = semaphores[0]
+        barrier_semaphore = semaphores[1]
+        secondary_sync_semaphore = semaphores[2]
 
-        ttnn.synchronize_device(mesh_device)
+        # ttnn.synchronize_device(mesh_device)
 
         out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
         barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
