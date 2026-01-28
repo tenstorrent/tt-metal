@@ -502,7 +502,7 @@ if __name__ == "__main__":
         "--mesh-shape",
         required=False,
         type=str,
-        help="Filter configurations to specific mesh shape (e.g., '2x4', '1x1'). Only effective with --use-db.",
+        help="Filter configurations to specific mesh shape (e.g., '2x4', '1x1').",
     )
 
     args = parser.parse_args(sys.argv[1:])
