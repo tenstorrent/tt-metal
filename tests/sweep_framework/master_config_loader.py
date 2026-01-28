@@ -197,6 +197,11 @@ class MasterConfigLoader:
 
             if MasterConfigLoader._use_database or os.path.exists(reconstructed_path):
                 master_file_path = reconstructed_path
+            elif MasterConfigLoader._use_database:
+                print(
+                    "❌ Reconstructed JSON from database not found. Direct database querying is not yet implemented. Resorting to original master_file_path."
+                )
+                master_file_path = original_path
             else:
                 master_file_path = original_path
         self.master_file_path = master_file_path
