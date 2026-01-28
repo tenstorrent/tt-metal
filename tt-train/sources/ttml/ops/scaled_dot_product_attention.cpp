@@ -276,7 +276,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
     ttml::autograd::GradFunction grad =
-        [query, key, value, mask_tensor, out, attn_output, intermediates, dropout_probability, fp32_dest_acc_en]() {
+        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
             auto grad_output = out->get_grad();
 
             // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
@@ -289,10 +289,10 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
                 query->get_value(),
                 key->get_value(),
                 value->get_value(),
-                mask_tensor,
                 intermediates,
-                dropout_probability,
-                fp32_dest_acc_en);
+                mask_type,
+                mask_tensor,
+                dropout_probability);
 
             query->add_grad(dL_dQ);
             key->add_grad(dL_dK);

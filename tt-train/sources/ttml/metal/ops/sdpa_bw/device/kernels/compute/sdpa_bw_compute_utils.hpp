@@ -22,12 +22,6 @@
 
 constexpr uint32_t onetile = 1U;
 
-#ifdef FP32_DEST_ACC_EN
-constexpr uint32_t dst_reg_number = 4U;
-#else
-constexpr uint32_t dst_reg_number = 8U;
-#endif
-
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
 // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
@@ -37,6 +31,10 @@ constexpr uint32_t dst_reg_number = 8U;
 //   masked ones.
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
+//
+// Template parameter pop_mask: if true, pops the mask tile after use (default for arbitrary masks).
+// For causal mask, set to false to reuse the same mask tile across multiple calls.
+template <bool pop_mask = true>
 void apply_mask_on_reg(
     const uint32_t register_idx,
     const uint32_t cb_attn_mask,
@@ -69,7 +67,9 @@ void apply_mask_on_reg(
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
 
-    cb_pop_front(cb_attn_mask, onetile);
+    if constexpr (pop_mask) {
+        cb_pop_front(cb_attn_mask, onetile);
+    }
 }
 
 // Recomputes attention weights from pre-softmax scores using stored statistics.
