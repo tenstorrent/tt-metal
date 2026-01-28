@@ -286,7 +286,7 @@ if(TT_ENABLE_LTO)
         add_link_options(
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-fwhole-program-vtables>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-jobs=all>
-            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-cache-dir="${LTO_CACHE_DIR}">
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-cache-dir=${LTO_CACHE_DIR}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=${LTO_CACHE_MAX_FILES}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:Clang>>:-Wl,-plugin-opt=-import-instr-limit=40>
         )
@@ -296,7 +296,7 @@ if(TT_ENABLE_LTO)
         add_compile_options(
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-partition=1to1>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fuse-linker-plugin>
-            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental="${LTO_CACHE_DIR}">
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental=${LTO_CACHE_DIR}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental-cache-size=${LTO_CACHE_MAX_FILES}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-speculatively>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-at-ltrans>
@@ -305,7 +305,7 @@ if(TT_ENABLE_LTO)
         add_link_options(
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-partition=1to1>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fuse-linker-plugin>
-            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental="${LTO_CACHE_DIR}">
+            $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental=${LTO_CACHE_DIR}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-flto-incremental-cache-size=${LTO_CACHE_MAX_FILES}>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-speculatively>
             $<$<AND:$<CONFIG:Release,RelWithDebInfo>,$<CXX_COMPILER_ID:GNU>>:-fdevirtualize-at-ltrans>

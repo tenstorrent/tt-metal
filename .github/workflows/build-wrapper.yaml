@@ -92,7 +92,7 @@ jobs:
     secrets: inherit
     with:
       platform: ${{ inputs.platform }}
-      build-type: "Release"
+      build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       publish-artifact: false
       publish-package: false
@@ -131,8 +131,8 @@ jobs:
       platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
-      # Enable LTO for Release builds
-      enable-lto: ${{ matrix.config.build-type == 'Release' || matrix.config.enable-lto || false }}
+      # Enable LTO only when explicitly set in the matrix config
+      enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
