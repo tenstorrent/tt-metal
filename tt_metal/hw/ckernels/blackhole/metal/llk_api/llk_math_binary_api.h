@@ -47,7 +47,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t num_faces = 4;
-
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "Destination index exceeds maximum allowed for the given tile shape and accumulation mode.");
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,
@@ -70,7 +72,9 @@ inline void llk_math_eltwise_binary(
     const bool clear_fp32_dst_acc) {
     const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "Destination index exceeds maximum allowed for the given tile shape and accumulation mode.");
     _llk_math_eltwise_binary_<
         eltwise_binary_type,
         src_b_bcast_type,

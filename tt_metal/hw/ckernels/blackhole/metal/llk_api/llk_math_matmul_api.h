@@ -33,5 +33,10 @@ inline void llk_math_matmul_init(
 
 template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
 inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+    static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
+    LLK_ASSERT(
+        (get_max_dst_index_for_matmul(dst_index, ct_dim, rt_dim) <
+         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        "Destination index out of bounds for the given ct_dim and rt_dim.");
     _llk_math_matmul_<NUM_FIDELITY_PHASES, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
