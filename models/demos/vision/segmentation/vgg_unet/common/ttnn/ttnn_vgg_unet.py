@@ -6,7 +6,8 @@ import ttnn
 
 
 # shard concat function
-def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+# expected input tensors to be in fp16, RM, same (h*w)
+def sharded_concat(input_tensors, num_cores=64, dim=3):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
     in_shard_width = input_tensors[0].shape[-1]
     shard_height = ((input_tensors[0].shape[2]) + num_cores - 1) // num_cores
@@ -360,6 +361,6 @@ class Tt_vgg_unet:
             use_height_and_width_as_shard_shape=True,
         )
 
-        x = ttnn.sigmoid_accurate(x, memory_config=sharded_memory_config)
+        x = ttnn.sigmoid(x, memory_config=sharded_memory_config)
 
         return x
