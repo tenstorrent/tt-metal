@@ -64,6 +64,7 @@ class RMSNorm(LightweightModule):
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
+        self.weight_dtype = weight_dtype
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -159,7 +160,9 @@ class RMSNorm(LightweightModule):
 
         xnorm = ttnn.multiply(inp, xnorm)
 
+        weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
         weight = ttnn.reshape(weight, [1, 1, 1, -1])
+        weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT, dtype=self.weight_dtype)
 
         output = ttnn.multiply(xnorm, weight)
 

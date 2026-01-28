@@ -97,7 +97,7 @@ ALWI void mm_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
@@ -226,7 +226,7 @@ ALWI void mm_block_init(
     MATH((throttled_mop_status = 0));
 #endif
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }

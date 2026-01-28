@@ -11,11 +11,15 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class StatsReporter:
-    def __init__(self, dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, output_dir, arch):
+    def __init__(
+        self, dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, output_dir, arch, metadata_loader=None
+    ):
         self.dm_stats = dm_stats
         self.aggregate_stats = aggregate_stats
         self.test_id_to_name = test_id_to_name
         self.test_type_attributes = test_type_attributes
+        self.metadata_loader = metadata_loader
+        self.arch = arch
         # Create architecture-specific subdirectory
         self.output_dir = os.path.join(output_dir, arch)
 
@@ -75,16 +79,43 @@ class StatsReporter:
             with open(csv_file, mode="w", newline="") as csvfile:
                 writer = csv.writer(csvfile)
 
-                # Base header
+                # Get test metadata if metadata loader is available
+                test_metadata = None
+                if self.metadata_loader is not None:
+                    try:
+                        test_metadata = self.metadata_loader.get_test_metadata(test_id, self.arch)
+                    except Exception as e:
+                        # If metadata not found, log warning and continue without it
+                        logger.warning(f"Could not load metadata for test ID {test_id}: {e}")
+
                 header = [
-                    "RISC-V Processor",
-                    "Kernel",
-                    "Run Host ID",
                     "Transaction Size (bytes)",
                     "Number of Transactions",
-                    "Latency (cycles)",
-                    "Bandwidth (bytes/cycle)",
                 ]
+
+                # Add metadata columns for NOC estimator consumption
+                # All metadata fields are automatically included (except 'name' and 'comment')
+                if test_metadata is not None:
+                    # Standard metadata fields in specific order for csv_reader.cpp compatibility
+                    standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                    for field in standard_fields:
+                        if field in test_metadata:
+                            column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                            header.append(column_name)
+
+                    # Add any additional optional fields in alphabetical order
+                    optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                    for field in optional_fields:
+                        column_name = self.metadata_loader.metadata_field_to_column_name(field)
+                        header.append(column_name)
+
+                header.extend(
+                    [
+                        "RISC-V Processor",
+                        "Run Host ID",
+                    ]
+                )
+
                 # Add test-specific headers
                 for test_type, test_type_attributes in self.test_type_attributes.items():
                     if test_type.replace("_", " ").title() in test_name:
@@ -92,6 +123,15 @@ class StatsReporter:
                         if test_type == "multicast_schemes":
                             header.append("Grid Dimensions")
                         break
+
+                # Add performance metrics at the end
+                header.extend(
+                    [
+                        "Latency (cycles)",
+                        "Bandwidth (bytes/cycle)",
+                    ]
+                )
+
                 writer.writerow(header)
 
                 for riscv in self.aggregate_stats.keys():
@@ -100,16 +140,36 @@ class StatsReporter:
                         if attributes.get("Test id") != test_id:
                             continue
 
-                        # Base row data
+                        # Base row data - configuration columns first
                         row = [
-                            riscv,
-                            "Receiver" if riscv == "riscv_1" else "Sender",
-                            run_host_id,
                             run_stats.get("transaction_size"),
                             run_stats.get("num_transactions"),
-                            run_stats["duration_cycles"],
-                            run_stats["bandwidth"],
                         ]
+
+                        # Add metadata columns
+                        if test_metadata is not None:
+                            # Standard metadata fields in specific order
+                            standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
+                            for field in standard_fields:
+                                if field in test_metadata:
+                                    row.append(test_metadata[field])
+
+                            # Add any additional optional fields in alphabetical order
+                            optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                            for field in optional_fields:
+                                value = test_metadata[field]
+                                # If we have profiled data and it's not set in the test_information
+                                if field == "num_subordinates" and value == "":
+                                    value = run_stats.get("num_subordinates", 0)
+                                if field == "same_axis" and value == "":
+                                    value = bool(run_stats.get("same_axis", 0))
+                                row.append(value)
+                        row.extend(
+                            [
+                                riscv,
+                                run_host_id,
+                            ]
+                        )
 
                         # Add test-specific data
                         for test_type, test_type_attributes in self.test_type_attributes.items():
@@ -118,6 +178,15 @@ class StatsReporter:
                                 if test_type == "multicast_schemes":
                                     row.append(run_stats.get("grid_dimensions"))
                                 break
+
+                        # Add performance metrics at the end
+                        row.extend(
+                            [
+                                run_stats["duration_cycles"],
+                                run_stats["bandwidth"],
+                            ]
+                        )
+
                         writer.writerow(row)
 
             logger.info(f"CSV report for test id {test_id} saved at {csv_file}")

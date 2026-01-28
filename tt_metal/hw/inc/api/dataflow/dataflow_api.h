@@ -1490,18 +1490,29 @@ FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
 inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size_bytes);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_REMOTE,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size_bytes,
+        NOC_UNICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr,
-        4 /* size in bytes */,
+        size_bytes,
         NOC_UNICAST_WRITE_VC,
         false,
         false,
         1,
-        true);
+        /*multicast_path_reserve=*/true,
+        /*posted=*/false);
     WAYPOINT("NSSD");
 }
 
@@ -1540,18 +1551,31 @@ inline void noc_semaphore_set_multicast(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        /*multicast_path_reserve=*/true,
+        /*posted=*/false);
     WAYPOINT("NSND");
 }
 // clang-format off
@@ -1589,18 +1613,30 @@ inline void noc_semaphore_set_multicast_loopback_src(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false,
+        noc);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
         num_dests,
-        true /* multicast_path_reserve */);
+        /*multicast_path_reserve=*/true);
     WAYPOINT("NSLD");
 }
 

@@ -358,13 +358,13 @@ Key points will be highlighted in this text. Detailed comments are provided in t
 Exercise 2: Running the Example Program
 =======================================
 
-If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
-Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
+If you haven't already done so, follow the instructions at
+https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#source to clone the TT-Metalium repository and build from source.
+Once the build is complete, set the environment variable and run the example program:
 
 .. code-block:: bash
 
    export TT_METAL_HOME=$PWD
-   ./build_metal.sh
    ./build/ttnn/examples/example_lab_eltwise_binary
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
@@ -916,7 +916,7 @@ by running the following from the ``tt-metal`` directory:
    ./create_venv.sh
    source python_env/bin/activate
    scripts/install_debugger.sh
-   pip install -r tools/triage/requirements.txt
+   uv pip install -r tools/triage/requirements.txt
 
 Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate``
 if you open a new terminal later.
