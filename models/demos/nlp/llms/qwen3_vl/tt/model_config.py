@@ -7,7 +7,7 @@ import math
 from loguru import logger
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.demos.nlp.llms.qwen3_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
