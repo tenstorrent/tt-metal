@@ -266,7 +266,7 @@ The agents leverage the kernel helper library at `ttnn/cpp/ttnn/kernel_lib/`:
 
 - **tilize_helpers.hpp**: Unified `tilize()` - handles simple/activation/fast/DT patterns
 - **untilize_helpers.hpp**: Unified `untilize()` - auto-dispatches based on width/datatype
-- **reduce_helpers.hpp**: Unified `reduce()` - handles ROW/COL/SCALAR with streaming or preloaded input
+- **reduce_helpers_compute.hpp**: Unified `reduce()` - handles ROW/COL/SCALAR with various input policies
 - **dest_helpers.hpp**: Auto-detects DEST register limits based on sync/accum mode
 
 These helpers encapsulate CB management, DST register handling, and init/uninit sequences, allowing kernel writers to focus on the computation logic rather than low-level synchronization.
