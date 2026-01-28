@@ -5,7 +5,7 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
-#include "llk_math_mul_reduce_scalar.h"
+#include "experimental/llk_math_mul_reduce_scalar.h"
 
 /*************************************************************************
  * LLK MUL REDUCE SCALAR - Fused multiply and scalar reduction
@@ -43,50 +43,19 @@ inline void llk_math_mul_reduce_scalar_eltwise(uint dst_index, const bool clear_
         binary_reuse_dest>(num_faces, dst_index, clear_fp32_dst_acc);
 }
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    int num_fidelity_phases = 0,
-    bool enforce_fp32_accumulation = false>
+template <bool is_fp32_dest_acc_en, int num_fidelity_phases = 0, bool enforce_fp32_accumulation = false>
 inline void llk_math_mul_reduce_scalar_reduce_init() {
-    _llk_math_mul_reduce_scalar_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
+    _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    int num_fidelity_phases = 0,
-    bool is_int_fpu_en = false,
-    bool enforce_fp32_accumulation = false>
-inline void llk_math_mul_reduce_scalar_column(const uint dst_index, const uint num_faces = 4) {
-    _llk_math_mul_reduce_scalar_column_<
-        type,
-        dim,
-        is_fp32_dest_acc_en,
-        num_fidelity_phases,
-        is_int_fpu_en,
-        enforce_fp32_accumulation,
-        false>(dst_index, false, num_faces);
+template <int num_fidelity_phases = 0>
+inline void llk_math_mul_reduce_column(const uint dst_index, const uint num_faces = 4) {
+    _llk_math_mul_reduce_column_<num_fidelity_phases>(dst_index, false, num_faces);
 }
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    int num_fidelity_phases = 0,
-    bool is_int_fpu_en = false,
-    bool enforce_fp32_accumulation = false>
-inline void llk_math_mul_reduce_scalar_final(const uint dst_index, const uint num_faces = 4) {
-    _llk_math_mul_reduce_scalar_final_<
-        type,
-        dim,
-        is_fp32_dest_acc_en,
-        num_fidelity_phases,
-        is_int_fpu_en,
-        enforce_fp32_accumulation,
-        false>(dst_index, false, num_faces);
+template <int num_fidelity_phases = 0>
+inline void llk_math_mul_reduce_scalar() {
+    _llk_math_mul_reduce_scalar_<num_fidelity_phases>();
 }
 
 inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
