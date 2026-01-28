@@ -231,8 +231,8 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
 
 }  // namespace ttnn::operations::matmul::utilities
 
-namespace ttnn::prim {
-namespace dram_sharded_helpers {
+
+namespace ttnn::prim::dram_sharded_helpers {
 
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
     ttnn::distributed::MeshDevice* device = a.device();
