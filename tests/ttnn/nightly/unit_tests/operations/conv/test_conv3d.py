@@ -36,8 +36,43 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
 @pytest.mark.parametrize(
     "padding",
     [
+        (1, 1, 1),
+    ],
+    ids=[
+        "padding_111",
+    ],
+)
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+    input_shape = (B, C_in, T, H, W)
+    out_channels = C_out
+    kernel_size = kernel_size
+    stride = stride
+    padding = padding
+    padding_mode = padding_mode
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+
+
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("C_in", [64])
+@pytest.mark.parametrize("C_out", [64])
+@pytest.mark.parametrize("T", [5])
+@pytest.mark.parametrize("H", [6])
+@pytest.mark.parametrize("W", [7])
+@pytest.mark.parametrize("kernel_size", [(3, 3, 3)], ids=["kernel_333"])
+@pytest.mark.parametrize(
+    "stride",
+    [
+        (1, 1, 1),
+    ],
+    ids=["stride_111"],
+)
+@pytest.mark.parametrize(
+    "padding",
+    [
         (0, 0, 0),
-        (0, 1, 1),
+        (1, 1, 1),
         (1, 0, 0),
         (1, 1, 1),
         (2, 0, 1),
@@ -55,7 +90,7 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     ],
 )
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_padding(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     if padding == (0, 0, 0) and padding_mode == "replicate":
         pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
     input_shape = (B, C_in, T, H, W)
