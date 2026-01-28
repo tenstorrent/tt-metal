@@ -886,26 +886,34 @@ protected:
 
     std::vector<HostMemDeviceCommand> generate_linear_packed_read_commands(
         const CoreCoord first_worker, const uint32_t l1_alignment, Common::DeviceData& device_data) {
-        // Compute NOC encoding once
-        const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        // Source: L1 on worker core (pre-populated with data)
         uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-        uint32_t cumulative_l1_offset = 0;  // Track offset across all commands
+        
+        // Destination: DRAM bank 0
+        uint32_t dest_bank_id = 0;
+        CoreCoord dest_dram_core = device_->logical_core_from_dram_channel(
+            device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id));
+        CoreCoord dest_virt_core = device_->virtual_core_from_logical_core(dest_dram_core, CoreType::DRAM);
+        uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_virt_core);
+        
+        // Use much larger size since we're writing to DRAM now
+        uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
+        // Limit max read size per sub-command since we're reading from L1 which has limited data
+        constexpr uint32_t MAX_SUB_CMD_SIZE = 256 * 1024;  // 256KB per sub-command
 
         while (remaining_bytes > 0) {
             uint32_t n_sub_cmds =
                 payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
-            uint32_t max_read_size = remaining_bytes;
+            uint32_t max_read_size = std::min(remaining_bytes, MAX_SUB_CMD_SIZE);
 
             std::vector<uint64_t> lengths;
             std::vector<uint64_t> addresses;
             lengths.reserve(n_sub_cmds);
             addresses.reserve(n_sub_cmds);
             uint64_t total_length = 0;
+            fmt::println(stderr, "n_sub_cmds: {}", n_sub_cmds);
 
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
                 // limit the length to min and max read size
@@ -914,26 +922,32 @@ protected:
                 uint64_t length = tt::align(clamped, l1_alignment);
                 total_length += length;
                 lengths.push_back(length);
+                fmt::println(stderr, "length: {}", length);
 
-                // Linear address in L1 - read from already written data
-                uint64_t addr = l1_base + cumulative_l1_offset;
+                // Linear address in L1 - read from already written data (can overlap)
+                // Generate arbitrary L1 address that's a multiple of L1 alignment
+                uint32_t max_l1_offset = DEVICE_DATA_SIZE - length;
+                uint32_t random_offset = payload_generator_->get_rand<uint32_t>(0, max_l1_offset);
+                random_offset = tt::align(random_offset, l1_alignment);
+                uint64_t addr = l1_base + random_offset;
                 addresses.push_back(addr);
-                cumulative_l1_offset += length;
             }
 
-            // If we're about to exceed DEVICE_DATA_SIZE, then exit
-            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+            // If we're about to exceed size limit, then exit
+            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE_LARGE) {
+                fmt::println(stderr, "total_length: {}, skipping", total_length);
                 break;
             }
 
-            uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+            // Get destination DRAM address
+            uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_core, dest_bank_id);
 
             // Create n_sub_cmds
             std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses, n_sub_cmds);
 
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
-                    sub_cmds, noc_xy, l1_addr, total_length);
+                    sub_cmds, noc_xy, dram_dest_addr, total_length);
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -943,9 +957,9 @@ protected:
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
                 uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 uint32_t length_words = lengths[i] / sizeof(uint32_t);
-                // The prefetcher reads these values and dispatcher writes them sequentially to destination
+                // The prefetcher reads these values and dispatcher writes them sequentially to DRAM destination
                 for (uint32_t j = 0; j < length_words; j++) {
-                    device_data.push_one(first_worker, offset_words + j);
+                    device_data.push_one(dest_dram_core, dest_bank_id, offset_words + j);
                 }
             }
 
@@ -1998,13 +2012,17 @@ TEST_P(PrefetcherLinearPackedReadTestFixture, LinearPackedReadTest) {
     MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
     MetalContext::instance().get_cluster().l1_barrier(device_->id());
 
+    // DeviceData constructor automatically pre-populates DRAM with test data
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
 
     // PHASE 1: Generate linear packed read command metadata
+    // Source addresses are arbitrary L1 addresses (can overlap)
+    // Destination addresses are in DRAM bank 0
     auto commands_per_iteration = generate_linear_packed_read_commands(first_worker, l1_alignment, device_data);
 
     // PHASE 2, 3, 4: Execute and Validate
+    // Note: validation now checks DRAM bank 0 instead of worker L1
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
