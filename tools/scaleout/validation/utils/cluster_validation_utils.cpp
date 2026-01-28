@@ -14,6 +14,7 @@
 #include <chrono>
 #include <exception>
 #include <unordered_set>
+#include <thread>
 
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -262,13 +263,9 @@ void configure_local_kernels(
     }
 
     // Parallelize write_core calls
-    constexpr size_t MAX_CONCURRENT_WRITES = 32;
-    execute_parallel_batches(write_tasks, MAX_CONCURRENT_WRITES, [&cluster](const WriteTask& task) {
+    const size_t max_concurrent_writes = std::thread::hardware_concurrency();
+    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
         cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
-    });
-
-    // Execute barriers per chip (wait for all writes to chip, then barrier)
-    std::for_each(chips_with_writes.begin(), chips_with_writes.end(), [&cluster](ChipId chip_id) {
         cluster.l1_barrier(chip_id);
     });
 
@@ -384,11 +381,10 @@ void configure_cross_host_kernels(
     }
 
     // Parallelize write_core calls
-    constexpr size_t MAX_CONCURRENT_WRITES = 32;
-    execute_parallel_batches(write_tasks, MAX_CONCURRENT_WRITES, [&cluster](const WriteTask& task) {
+    const size_t max_concurrent_writes = std::thread::hardware_concurrency();
+    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
         cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
     });
-
     // Execute barriers per chip (wait for all writes to chip, then barrier)
     std::for_each(chips_with_writes.begin(), chips_with_writes.end(), [&cluster](ChipId chip_id) {
         cluster.l1_barrier(chip_id);
@@ -739,13 +735,13 @@ void dump_link_stats(
     }
 
     // Parallelize read_core calls and compute mismatch counts in worker threads
-    constexpr size_t MAX_CONCURRENT_READS = 32;
+    const size_t max_concurrent_reads = std::thread::hardware_concurrency();
     std::vector<uint32_t> num_mismatched_words(links.size(), 0);
     if (data_size > 0) {
         execute_parallel_batches(
             links,
             num_mismatched_words,
-            MAX_CONCURRENT_READS,
+            max_concurrent_reads,
             [&cluster, src_eth_l1_byte_address, data_size, &inputs](const LinkInfo& link) {
                 const auto result_vec =
                     cluster.read_core(link.chip_id, link.ethernet_core, src_eth_l1_byte_address, data_size);
