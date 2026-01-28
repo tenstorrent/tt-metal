@@ -28,6 +28,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
 
     get_local_cb_interface(operand).tiles_received += num_tiles;
     get_local_cb_interface(operand).fifo_wr_ptr += num_words;
+    get_local_cb_interface(operand).fifo_wr_tile_ptr = 0;
 
     if (get_local_cb_interface(operand).fifo_wr_ptr >= get_local_cb_interface(operand).fifo_limit) {
         get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
