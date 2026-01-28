@@ -16,60 +16,6 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::all_gather_minimal_matmul_async {
-namespace helpers {
-void override_program_parameters(
-    const ttnn::operations::experimental::all_gather_minimal_matmul_async::
-        all_gather_minimal_matmul_async_override_variables_t& override_variables,
-    const void* operation,
-    tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    auto in0_addr = output_tensors.at(0).buffer()->address();
-    auto in1_addr = input_tensors.at(1).buffer()->address();
-    auto output_addr = output_tensors.at(1).buffer()->address();
-    auto in2_addr =
-        optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-    auto in3_addr = input_tensors.at(0).buffer()->address();
-    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
-    auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
-    auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
-    auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
-
-    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
-        CoreCoord core = override_variables.cores.at(i);
-        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
-        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
-        if (in1_idx == 0) {
-            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-            // TODO FIX THIS AFTER MIGRATING TO NEW OP INFRA
-            //	    const auto& out_ready_semaphore = override_variables.semaphore.at(0);
-            in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = output_addr;
-            in0_sender_args[2] = in2_addr;
-            in0_sender_args[3] = in3_addr;
-            //	    in0_sender_args[20] = out_ready_semaphore.address();
-        } else {
-            auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[1] = output_addr;
-            in0_receiver_args[2] = in2_addr;
-        }
-        if (in0_idx == 0) {
-            auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-            in1_sender_args[0] = in1_addr;
-            in1_sender_args[1] = output_addr;
-            in1_sender_args[2] = in2_addr;
-        } else {
-            auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[1] = output_addr;
-            in1_receiver_args[2] = in2_addr;
-        }
-    }
-}
-
-}  // namespace helpers
-
 namespace detail {
 
 static inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
@@ -205,90 +151,27 @@ static inline void append_accessors(
     }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_factory(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
-    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
-    const Tensor& mm_output_tensor,
-    const Tensor& ag_output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const bool force_transpose,
-    const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
-    ttnn::operations::experimental::all_gather_minimal_matmul_async::
-        all_gather_minimal_matmul_async_override_variables_t shared_vars =
-            all_gather_minimal_matmul_async_factory_helper(
-                program,
-                input_tensor,
-                weight_tensor,
-                bias_tensor,
-                fused_activation,
-                config,
-                mm_output_tensor,
-                ag_output_tensor,
-                compute_kernel_config,
-                sender_device_coord,
-                forward_coord,
-                backward_coord,
-                num_links,
-                ring_size,
-                ring_index,
-                topology,
-                semaphore,
-                barrier_semaphore,
-                using_persistent_buffers,
-                force_transpose,
-                num_workers_per_link,
-                num_buffers_per_channel);
-
-    auto override_runtime_arguments_callback =
-        [shared_vars](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            helpers::override_program_parameters(
-                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
-
-ttnn::operations::experimental::all_gather_minimal_matmul_async::all_gather_minimal_matmul_async_override_variables_t
+ttnn::experimental::prim::AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t
 all_gather_minimal_matmul_async_factory_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
-    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig>& config,
     const Tensor& mm_output_tensor,
     const Tensor& ag_output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const ttnn::MeshCoordinate& sender_device_coord,
+    const std::optional<ttnn::MeshCoordinate>& forward_coord,
+    const std::optional<ttnn::MeshCoordinate>& backward_coord,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    //    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    //    bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
@@ -474,8 +357,8 @@ all_gather_minimal_matmul_async_factory_helper(
 
     // Mux
     auto [num_targets_forward, num_targets_backward] =
-        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
+    auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, device);
 
     auto full_grid_size = device->compute_with_storage_grid_size();
@@ -972,16 +855,187 @@ all_gather_minimal_matmul_async_factory_helper(
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 
-    return ttnn::operations::experimental::all_gather_minimal_matmul_async::
-        all_gather_minimal_matmul_async_override_variables_t{
-            num_cores,
-            cores,
-            in0_sender_kernels_id,
-            in0_receiver_kernels_id,
-            in1_sender_kernels_id,
-            in1_receiver_kernels_id,
-            transpose_core_grid};
+    return {
+        num_cores,
+        cores,
+        in0_sender_kernels_id,
+        in0_receiver_kernels_id,
+        in1_sender_kernels_id,
+        in1_receiver_kernels_id,
+        transpose_core_grid};
 }
 
 }  // namespace detail
-}  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async
+
+namespace ttnn::experimental::prim {
+
+AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
+AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
+    const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const AllGatherMinimalMatmulAsyncParams& attributes,
+    const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor) {
+    const auto& out_ready_semaphore_backward = attributes.semaphore.at(0);
+    const auto& out_ready_semaphore_forward = attributes.semaphore.at(1);
+
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        auto in0_addr = output_tensor.at(0).buffer()->address();
+        auto in1_addr = tensor_args.weight_tensor.buffer()->address();
+        auto output_addr = output_tensor.at(1).buffer()->address();
+        auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+        auto in3_addr = tensor_args.input_tensor.buffer()->address();
+        auto& in0_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in0_sender_kernels_id);
+        auto& in0_receiver_runtime_args = GetRuntimeArgs(program, shared_variables.in0_receiver_kernels_id);
+        auto& in1_sender_runtime_args = GetRuntimeArgs(program, shared_variables.in1_sender_kernels_id);
+        auto& in1_receiver_runtime_args = GetRuntimeArgs(program, shared_variables.in1_receiver_kernels_id);
+
+        for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
+            CoreCoord core = shared_variables.cores.at(i);
+            uint32_t in0_idx = shared_variables.transpose_core_grid ? core.x : core.y;
+            uint32_t in1_idx = shared_variables.transpose_core_grid ? core.y : core.x;
+            if (in1_idx == 0) {
+                auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
+                in0_sender_args[0] = in0_addr;
+                in0_sender_args[1] = output_addr;
+                in0_sender_args[2] = in2_addr;
+                in0_sender_args[3] = in3_addr;
+                in0_sender_args[21] = out_ready_semaphore_backward.address();
+                in0_sender_args[22] = out_ready_semaphore_forward.address();
+            } else {
+                auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
+                in0_receiver_args[0] = in0_addr;
+                in0_receiver_args[1] = output_addr;
+                in0_receiver_args[2] = in2_addr;
+                in0_receiver_args[3] = in3_addr;
+                in0_receiver_args[21] = out_ready_semaphore_backward.address();
+                in0_receiver_args[22] = out_ready_semaphore_forward.address();
+            }
+            if (in0_idx == 0) {
+                auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
+                in1_sender_args[0] = in1_addr;
+                in1_sender_args[1] = output_addr;
+                in1_sender_args[2] = in2_addr;
+            } else {
+                auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
+                in1_receiver_args[1] = output_addr;
+                in1_receiver_args[2] = in2_addr;
+            }
+        }
+    }
+}
+
+ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
+all_gather_minimal_matmul_async_factory(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
+    const Tensor& mm_output_tensor,
+    const Tensor& ag_output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    // const std::optional<GlobalSemaphore>& barrier_semaphore,
+    // bool using_persistent_buffers,
+    const bool force_transpose,
+    const uint32_t num_workers_per_link,
+    const uint32_t num_buffers_per_channel) {
+    tt::tt_metal::Program program{};
+
+    return {
+        std::move(program),
+        ::detail::all_gather_minimal_matmul_async_factory_helper(
+            program,
+            input_tensor,
+            weight_tensor,
+            bias_tensor,
+            fused_activation,
+            config,
+            mm_output_tensor,
+            ag_output_tensor,
+            compute_kernel_config,
+            sender_device_coord,
+            forward_coord,
+            backward_coord,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            semaphore,
+            // barrier_semaphore,
+            // using_persistent_buffers,
+            force_transpose,
+            num_workers_per_link,
+            num_buffers_per_channel)};
+}
+
+ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
+AllGatherMinimalMatmulAsyncProgramFactory::create_at(
+    const AllGatherMinimalMatmulAsyncParams& attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor) {
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, attributes.topology, attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
+
+    const auto& act_tensor = tensor_args.input_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& bias_tensor = tensor_args.bias_tensor;
+    const auto& ag_output_tensor = output_tensor.at(0);
+    const auto& mm_output_tensor = output_tensor.at(1);
+
+    return all_gather_minimal_matmul_async_factory(
+        act_tensor,
+        weight_tensor,
+        bias_tensor,
+        attributes.fused_activation,
+        attributes.config,
+        mm_output_tensor,
+        ag_output_tensor,
+        attributes.compute_kernel_config,
+        mesh_coordinate,
+        forward_coord,
+        backward_coord,
+        attributes.num_links,
+        attributes.ring_size,
+        device_index,
+        attributes.topology,
+        attributes.semaphore,
+        // attributes.barrier_semaphore,
+        // attributes.using_persistent_buffers,
+        attributes.force_transpose,
+        attributes.num_workers_per_link,
+        attributes.num_buffers_per_channel);
+}
+
+}  // namespace ttnn::experimental::prim

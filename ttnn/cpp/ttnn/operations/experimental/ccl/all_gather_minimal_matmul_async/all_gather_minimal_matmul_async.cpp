@@ -6,7 +6,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
@@ -18,7 +17,7 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<unary::UnaryWithParam> fused_activation,
-    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::optional<const ::ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig>& config,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
     const std::optional<MemoryConfig>& memory_config,
@@ -31,43 +30,24 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
     const bool force_transpose,
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel) {
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+    return ttnn::prim::all_gather_minimal_matmul_async(
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        fused_activation,
+        config,
+        multi_device_global_semaphore,
+        topology,
+        memory_config,
+        dtype,
         compute_kernel_config,
-        MathFidelity::HiFi2,
-        false /*approx_mode*/,
-        true /*fp32_acc*/,
-        true /*packer_acc*/);
-
-    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
-
-    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
-
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-
-    return operation::run(
-               AllGatherMinimalMatmulAsyncOp{
-                   config,
-                   std::move(fused_activation),
-                   memory_config,
-                   dtype,
-                   kernel_config_val,
-                   num_links,
-                   num_devices,
-                   topology_,
-                   multi_device_global_semaphore,
-                   cluster_axis,
-                   barrier_semaphore,
-                   using_persistent_buffers,
-                   force_transpose,
-                   num_workers_per_link,
-                   num_buffers_per_channel},
-               {input_tensor, weight_tensor},
-               {bias_tensor},
-               {optional_output_tensors})
-        .at(1);
+        persistent_output_buffer,
+        num_links,
+        cluster_axis,
+        barrier_semaphore,
+        force_transpose,
+        num_workers_per_link,
+        num_buffers_per_channel);
 }
 
 }  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async

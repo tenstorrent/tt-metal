@@ -68,7 +68,6 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.strided_all_gather_async_struct.output_mem_config,
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis,
-        attributes.strided_all_gather_async_struct.tiles_per_chunk,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
         attributes.strided_all_gather_async_struct.mm_cores_y,

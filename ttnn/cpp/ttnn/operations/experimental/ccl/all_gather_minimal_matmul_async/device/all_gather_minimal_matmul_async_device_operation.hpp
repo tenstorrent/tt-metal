@@ -17,149 +17,51 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::experimental::all_gather_minimal_matmul_async {
+#include "all_gather_minimal_matmul_async_device_operation_types.hpp"
+#include "all_gather_minimal_matmul_async_program_factory.hpp"
 
-struct all_gather_minimal_matmul_async_override_variables_t {
-    uint32_t num_cores;
-    std::vector<CoreCoord> cores;
-    tt::tt_metal::KernelHandle in0_sender_kernels_id;
-    tt::tt_metal::KernelHandle in0_receiver_kernels_id;
-    tt::tt_metal::KernelHandle in1_sender_kernels_id;
-    tt::tt_metal::KernelHandle in1_receiver_kernels_id;
-    bool transpose_core_grid;
-};
-
-struct AllGatherMinimalMatmulAsyncConfig {
-    AllGatherMinimalMatmulAsyncConfig(
-        uint32_t M_block_size_ = 1,
-        uint32_t K_block_size_ = 1,
-        uint32_t N_block_size_ = 1,
-        uint32_t subblock_h_ = 1,
-        uint32_t subblock_w_ = 1,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
-        M_block_size(M_block_size_),
-        K_block_size(K_block_size_),
-        N_block_size(N_block_size_),
-        subblock_h(subblock_h_),
-        subblock_w(subblock_w_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
-
-    uint32_t M_block_size;
-    uint32_t K_block_size;
-    uint32_t N_block_size;
-    uint32_t subblock_h;
-    uint32_t subblock_w;
-
-    CoreCoord compute_with_storage_grid_size;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w", "compute_with_storage_grid_size");
-
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->M_block_size,
-            this->K_block_size,
-            this->N_block_size,
-            this->subblock_h,
-            this->subblock_w,
-            this->compute_with_storage_grid_size);
-    }
-};
+namespace ttnn::experimental::prim {
 
 struct AllGatherMinimalMatmulAsyncOp {
-    std::optional<const AllGatherMinimalMatmulAsyncConfig> config;
-    std::optional<unary::UnaryWithParam> fused_activation;
-    std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
-    std::optional<tt::tt_metal::DataType> output_dtype;
-    DeviceComputeKernelConfig compute_kernel_config;
-    uint32_t num_links;
-    uint32_t ring_size;
-    ttnn::ccl::Topology topology;
-    std::vector<GlobalSemaphore> semaphore;
-    std::optional<uint32_t> cluster_axis;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
-    bool using_persistent_buffers;
-    bool force_transpose;
-    uint32_t num_workers_per_link;
-    uint32_t num_buffers_per_channel;
+    using operation_attributes_t = AllGatherMinimalMatmulAsyncParams;
+    using tensor_args_t = AllGatherMinimalMatmulAsyncInputs;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
-    AllGatherMinimalMatmulAsyncOp(
-        std::optional<const AllGatherMinimalMatmulAsyncConfig> config,
-        std::optional<unary::UnaryWithParam> fused_activation,
-        std::optional<tt::tt_metal::MemoryConfig> output_mem_config,
-        std::optional<tt::tt_metal::DataType> output_dtype,
-        DeviceComputeKernelConfig compute_kernel_config,
-        uint32_t num_links,
-        uint32_t ring_size,
-        ttnn::ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
-        bool using_persistent_buffers,
-        bool force_transpose,
-        uint32_t num_workers_per_link,
-        uint32_t num_buffers_per_channel) :
-        config(config),
-        fused_activation(fused_activation),
-        output_mem_config(output_mem_config),
-        output_dtype(output_dtype),
-        compute_kernel_config(compute_kernel_config),
-        num_links(num_links),
-        ring_size(ring_size),
-        topology(topology),
-        semaphore(std::move(semaphore)),
-        cluster_axis(cluster_axis),
-        barrier_semaphore(barrier_semaphore),
-        using_persistent_buffers(using_persistent_buffers),
-        force_transpose(force_transpose),
-        num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+    using program_factory_t = std::variant<AllGatherMinimalMatmulAsyncProgramFactory>;
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "num_links",
-        "ring_size",
-        "topology",
-        "barrier_semaphore",
-        "using_persistent_buffers",
-        "cluster_axis",
-        "semaphore",
-        "force_transpose",
-        "num_workers_per_link",
-        "num_buffers_per_channel");
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->num_links,
-            this->ring_size,
-            this->topology,
-            this->barrier_semaphore,
-            this->using_persistent_buffers,
-            this->cluster_axis,
-            this->semaphore,
-            this->force_transpose,
-            this->num_workers_per_link,
-            this->num_buffers_per_channel);
-    }
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
-
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::Tensor all_gather_minimal_matmul_async(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const experimental::prim::AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const ttnn::ccl::Topology topology,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t num_links,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const bool force_transpose,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel);
+
+}  // namespace ttnn::prim

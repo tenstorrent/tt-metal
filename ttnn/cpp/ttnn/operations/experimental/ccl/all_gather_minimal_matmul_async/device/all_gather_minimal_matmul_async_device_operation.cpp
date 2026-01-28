@@ -17,18 +17,24 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::all_gather_minimal_matmul_async {
+namespace ttnn::experimental::prim {
 
-void AllGatherMinimalMatmulAsyncOp::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(
-        input_tensors.size() == 2, "all_gather_minimal_matmul_async expects exactly 2 inputs: activation and weight");
+AllGatherMinimalMatmulAsyncOp::program_factory_t AllGatherMinimalMatmulAsyncOp::select_program_factory(
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return AllGatherMinimalMatmulAsyncProgramFactory{};
+}
 
-    const auto& act_tensor = input_tensors.at(0);
-    const auto& weight_tensor = input_tensors.at(1);
-    const bool has_bias = (optional_input_tensors.size() == 1) && optional_input_tensors.at(0).has_value();
-    const Tensor* bias_ptr = has_bias ? &optional_input_tensors.at(0).value() : nullptr;
+void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_hit(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(attributes, tensor_args);
+}
+
+void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const bool has_bias = tensor_args.bias_tensor.has_value();
+    const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
 
     // Basic device/storage checks
     TT_FATAL(
@@ -89,7 +95,7 @@ void AllGatherMinimalMatmulAsyncOp::validate(
     }
 
     const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1] * this->ring_size;
+    const uint32_t K = a_logical[-1] * attributes.ring_size;
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
@@ -126,8 +132,8 @@ void AllGatherMinimalMatmulAsyncOp::validate(
     }
 
     // Config constraints
-    if (config.has_value()) {
-        const auto& cfg = config.value();
+    if (attributes.config.has_value()) {
+        const auto& cfg = attributes.config.value();
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
         TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");
         TT_FATAL(
@@ -153,43 +159,43 @@ void AllGatherMinimalMatmulAsyncOp::validate(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
-        const uint32_t max_dest_volume = get_dest_reg_count(this->compute_kernel_config);
+        const uint32_t max_dest_volume = get_dest_reg_count(attributes.compute_kernel_config);
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
     }
 }
 
-std::vector<TensorSpec> AllGatherMinimalMatmulAsyncOp::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& in0_input_tensor = input_tensors.at(0);
-    const auto& in1_input_tensor = input_tensors.at(1);
+AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp::compute_output_specs(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& in0_input_tensor = tensor_args.input_tensor;
+    const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
     uint32_t N = in1_input_tensor_shape[-1];
 
     ttnn::Shape intermediate_shape(in0_input_tensor_shape);
-    intermediate_shape[-1] = intermediate_shape[-1] * this->ring_size;
+    intermediate_shape[-1] = intermediate_shape[-1] * attributes.ring_size;
 
     ttnn::Shape output_shape(in0_input_tensor_shape);
     output_shape[-1] = N;
 
-    const auto& memory_config = this->output_mem_config.value_or(in0_input_tensor.memory_config());
-    auto dtype = this->output_dtype.value_or(in0_input_tensor.dtype());
+    const auto& memory_config = attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
+    auto dtype = attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
     return {
         TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)),
         TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 
-std::vector<Tensor> AllGatherMinimalMatmulAsyncOp::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsyncOp::create_output_tensors(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     std::vector<Tensor> output_tensors;
-    const auto& device = input_tensors.at(0).device();
-    const auto& output_specs = this->compute_output_specs(input_tensors);
+    const auto& device = tensor_args.input_tensor.device();
+    const auto& output_specs = compute_output_specs(attributes, tensor_args);
     output_tensors.reserve(output_specs.size());
 
-    if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
-        output_tensors.emplace_back(optional_output_tensors[0].value());
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        output_tensors.emplace_back(tensor_args.persistent_output_buffer.value());
         output_tensors.emplace_back(create_device_tensor(output_specs[1], device));
     } else {
         for (const auto& output_spec : output_specs) {
@@ -200,58 +206,84 @@ std::vector<Tensor> AllGatherMinimalMatmulAsyncOp::create_output_tensors(
     return output_tensors;
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMinimalMatmulAsyncOp::create_mesh_workload(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    return ccl::create_mesh_workload_from_programs(
-        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
-        });
+tt::tt_metal::operation::Hash AllGatherMinimalMatmulAsyncOp::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "AllGatherMinimalMatmulAsyncOp::compute_program_hash is called");
+
+    auto program_factory = select_program_factory(attributes, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<AllGatherMinimalMatmulAsyncOp>(
+        attributes.num_links,
+        attributes.ring_size,
+        attributes.output_mem_config,
+        attributes.topology,
+        attributes.cluster_axis,
+        attributes.force_transpose,
+        attributes.num_workers_per_link,
+        attributes.num_buffers_per_channel,
+        tensor_args,
+        program_factory.index());
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherMinimalMatmulAsyncOp::create_program_at(
-    const MeshCoordinate& coord,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
+}  // namespace ttnn::experimental::prim
 
-    std::optional<MeshCoordinate> forward_coord =
-        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
+namespace ttnn::prim {
 
-    std::optional<MeshCoordinate> backward_coord =
-        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+ttnn::Tensor all_gather_minimal_matmul_async(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const experimental::prim::AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const ttnn::ccl::Topology topology,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t num_links,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const bool force_transpose,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel) {
+    using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
-    const auto& act_tensor = input_tensors.at(0);
-    const auto& weight_tensor = input_tensors.at(1);
-    const auto& bias_tensor = optional_input_tensors.at(0);
-    const auto& ag_output_tensor = output_tensors.at(0);
-    const auto& mm_output_tensor = output_tensors.at(1);
-    return detail::all_gather_minimal_matmul_async_factory(
-        act_tensor,
-        weight_tensor,
-        bias_tensor,
-        this->fused_activation,
-        this->config,
-        mm_output_tensor,
-        ag_output_tensor,
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
         compute_kernel_config,
-        coord,
-        forward_coord,
-        backward_coord,
-        this->num_links,
-        this->ring_size,
-        device_index,
-        this->topology,
-        this->semaphore,
-        this->barrier_semaphore,
-        this->using_persistent_buffers,
-        this->force_transpose,
-        this->num_workers_per_link,
-        this->num_buffers_per_channel);
+        MathFidelity::HiFi2,
+        false /*approx_mode*/,
+        true /*fp32_acc*/,
+        true /*packer_acc*/);
+
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
+
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
+
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        config,
+        std::move(fused_activation),
+        memory_config,
+        dtype,
+        kernel_config_val,
+        num_links,
+        num_devices,
+        topology_,
+        multi_device_global_semaphore,
+        cluster_axis,
+        barrier_semaphore,
+        using_persistent_buffers,
+        force_transpose,
+        num_workers_per_link,
+        num_buffers_per_channel};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, weight_tensor, bias_tensor, persistent_output_buffer};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).at(1);
 }
 
-}  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async
+}  // namespace ttnn::prim
