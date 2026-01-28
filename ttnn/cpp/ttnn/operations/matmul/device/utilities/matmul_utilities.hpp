@@ -155,9 +155,7 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
 
 }  // namespace ttnn::operations::matmul::utilities
 
-namespace ttnn::prim {
-namespace dram_sharded_helpers {
-
+namespace ttnn::prim::dram_sharded_helpers {
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
@@ -175,5 +173,4 @@ void get_optimal_dram_bank_to_reader_assignment(
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
-}  // namespace dram_sharded_helpers
-}  // namespace ttnn::prim
+}  // namespace ttnn::prim::dram_sharded_helpers
