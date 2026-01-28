@@ -74,7 +74,7 @@ def test_cross_attention_transformer_text_inference(
     batch,
     mesh_device,
     reset_seeds,
-    is_ci_env=True,
+    is_ci_env,
 ):
     dtype = ttnn.bfloat8_b
     prefill_pcc_required = 0.98
