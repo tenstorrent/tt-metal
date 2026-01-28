@@ -13,11 +13,11 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 ## How to Run
 - Run the demo:
 ```
-pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo
+pytest --disable-warnings models/demos/nlp/encoder/bert_tiny/demo/demo.py::test_demo
 ```
 
 ## Details
-- The entry point to  bert model is bert_for_question_answering in `models/demos/wormhole/bert_tiny/tt/bert_tiny.py`. The model picks up certain configs and weights from huggingface pretrained model. We have used `mrm8488/bert-tiny-finetuned-squadv2` version from huggingface as our reference.
+- The entry point to  bert model is bert_for_question_answering in `models/demos/nlp/encoder/bert_tiny/tt/bert_tiny.py`. The model picks up certain configs and weights from huggingface pretrained model. We have used `mrm8488/bert-tiny-finetuned-squadv2` version from huggingface as our reference.
 
 ### Inputs
 - Inputs by default are provided from `input_data.json`.
