@@ -14,6 +14,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/cb_api.h"
 #endif
 
 namespace deepseek_b1_ops {

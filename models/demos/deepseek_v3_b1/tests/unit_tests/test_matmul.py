@@ -35,34 +35,40 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
 
 
 @pytest.mark.parametrize(
-    "M, K, N, in0_dtype, in1_dtype",
+    "M, K, N, in0_dtype, in1_dtype, b_tile_width",
     [
         # Before SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down + K down
-        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b),  # Q down with split inner dim
-        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # Q up
-        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # Q nope
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # Q down + K down
+        (1, 3584, 32, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # Q down with split inner dim
+        (1, 1536, 128, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # Q up
+        (1, 128, 512, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # Q nope
         # SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=256)
-        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA Q @ K.T (KV_chunk_size=512)
-        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=256)
-        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b),  # SDPA S @ V (KV_chunk_size=512)
+        (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # SDPA Q @ K.T (KV_chunk_size=256)
+        (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # SDPA Q @ K.T (KV_chunk_size=512)
+        (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # SDPA S @ V (KV_chunk_size=256)
+        (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # SDPA S @ V (KV_chunk_size=512)
         # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
-        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b),  # V out
-        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b),  # Out
+        (1, 512, 128, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # V out
+        (1, 8192, 64, ttnn.bfloat16, ttnn.bfloat8_b, 32),  # Out
         # MoE (bfloat16 srcB/in0, bfloat8_b srcA/in1 - potentially bfloat4_b if accurate enough)
-        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Dense MLP: W_up (out_w=2)
-        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
-        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
+        (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b, 32),  # Dense MLP: W_up (out_w=2)
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, 32),  # Gate proj + up proj
+        (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b, 32),  # Down proj
+        # Tests with b_tile_width=16, bfp4b
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b, 16),  # Dense MLP: W_gate/W_up
+        (1, 7168, 48, ttnn.bfloat16, ttnn.bfloat4_b, 16),  # Dense MLP: W_gate/W_up
+        # Tests with b_tile_width=16, bfp8b
+        (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat8_b, 16),  # Q down + K down (narrow B tile)
+        (1, 7168, 48, ttnn.bfloat16, ttnn.bfloat8_b, 16),  # 3 tiles of 16-wide (out_w=3)
     ],
 )
-def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
+def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, b_tile_width):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # Tile height matches M for A
-    b_tile = ttnn.Tile([32, 32])  # Standard tile for B
-    out_tile = ttnn.Tile([M, 32])  # Tile height matches M for output
+    b_tile = ttnn.Tile([32, b_tile_width])  # Tile for B (width can be 16 or 32)
+    out_tile = ttnn.Tile([M, b_tile_width])  # Tile height matches M, width matches B tile
 
     # Single core
     core = ttnn.CoreCoord(0, 0)
@@ -73,7 +79,9 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
     num_tiles_k = K // a_tile.tile_shape[1]
     num_tiles_n = N // b_tile.tile_shape[1]
 
-    logger.info(f"Testing single-core matmul with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}")
+    logger.info(
+        f"Testing single-core matmul with shape [{M}, {K}] x [{K}, {N}], in0={in0_dtype}, in1={in1_dtype}, b_tile_width={b_tile_width}"
+    )
     logger.info(f"Tiles: M={num_tiles_m}, K={num_tiles_k}, N={num_tiles_n}")
 
     # Create input A and input B PyTorch tensors
