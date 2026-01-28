@@ -28,7 +28,7 @@ void MAIN {
     cb16.reserve_back(1);
 
     // Initialize the multiply + reduce scalar operation
-    ckernel::mul_reduce_scalar_init<REDUCE_OP>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    ckernel::mul_reduce_scalar_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
 
     tile_regs_acquire();
 
@@ -36,8 +36,6 @@ void MAIN {
     ckernel::mul_reduce_scalar_tile<REDUCE_OP>(
         tt::CBIndex::c_0,  // Input A circular buffer
         tt::CBIndex::c_1,  // Input B circular buffer
-        0,                 // Input A tile index
-        0,                 // Input B tile index
         num_tiles);        // Number of tiles to process
 
     tile_regs_commit();
