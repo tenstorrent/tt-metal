@@ -29,7 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void remainder_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_TWO_PARAM_KERNEL(remainder, RC, APPROX, idst, param0, param1));
+    MATH(SFPU_UNARY_TWO_PARAM_KERNEL_FN(calculate_remainder, RC, APPROX, idst, param0, param1));
 }
 
 /**

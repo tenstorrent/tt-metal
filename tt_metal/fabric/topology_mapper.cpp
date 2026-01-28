@@ -23,6 +23,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
+#include <fmt/format.h>
 #include <cmath>
 #include <chrono>
 #include <thread>
@@ -648,12 +649,30 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         asic_id_to_mesh_rank,
         config);
 
+    // Build informative error message with MGD path and details
+    std::string mgd_path_info;
+    auto mgd_path_opt = mesh_graph_.get_mesh_graph_descriptor_path();
+    if (mgd_path_opt.has_value()) {
+        const auto& mgd_path = mgd_path_opt.value();
+        mgd_path_info = fmt::format("The Mesh Graph Descriptor (MGD) file is located at: {}. ", mgd_path.string());
+    } else {
+        mgd_path_info = "The Mesh Graph Descriptor (MGD) was generated programmatically (not from a file). ";
+    }
+
     TT_FATAL(
         result.success,
-        "Graph specified in MGD could not fit in the discovered physical topology for mesh {}. {}. "
-        "Either relax pinnings or modify the MGD. If this is unexpected, run "
-        "./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
+        "The logical graph specified in the Mesh Graph Descriptor (MGD) could not fit in the discovered physical "
+        "topology for mesh {}.\n"
+        "{}\n"
+        "{}\n"
+        "Expected: The logical graph topology from the MGD.\n"
+        "Found: The physical topology discovered from the system.\n"
+        "Either relax pinnings in the MGD or modify the MGD to match the physical topology.\n"
+        "To debug this issue, you can run with TT_METAL_LOGGER_LEVEL=debug to view the logical and physical adjacency "
+        "graphs.\n"
+        "If this is unexpected, run ./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
         mesh_id.get(),
+        mgd_path_info,
         result.error_message);
 
     // Update MappedChipInfo entries from the result

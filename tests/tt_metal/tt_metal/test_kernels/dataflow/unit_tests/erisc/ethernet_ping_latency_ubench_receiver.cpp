@@ -7,6 +7,7 @@
 #include "eth_l1_address_map.h"
 #include "internal/ethernet/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
@@ -20,52 +21,67 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 
 static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 
+// Stream IDs for credit management (using unused stream registers)
+static constexpr uint32_t RECEIVER_CREDIT_STREAM_ID = 0;
+static constexpr uint32_t TXQ_ID = 0;
+
 template <bool MEASURE>
 FORCE_INLINE void run_loop_iteration(
-    std::array<uint32_t, NUM_CHANNELS> const& channel_addrs,
-    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs) {
+    const std::array<uint32_t, NUM_CHANNELS>& channel_addrs,
+    const std::array<volatile eth_channel_sync_t*, NUM_CHANNELS>& channel_sync_addrs,
+    int32_t& expected_credits,
+    uint32_t full_payload_size) {
     if constexpr (MEASURE) {
         DeviceZoneScopedN("RECEIVER-LOOP-ITER");
-        while (channel_sync_addrs[0]->bytes_sent == 0) {
+        // Wait for credit from sender (check stream register)
+        while (get_ptr_val<RECEIVER_CREDIT_STREAM_ID>() < expected_credits) {
         }
 
         {
             DeviceZoneScopedN("PING-REPLIES");
             for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-                while (channel_sync_addrs[i]->bytes_sent == 0) {
-                }
+                // Consume the credit
+                increment_local_update_ptr_val<RECEIVER_CREDIT_STREAM_ID>(-1);
+                expected_credits--;
 
+                // Clear flags and send credit back to sender
                 channel_sync_addrs[i]->bytes_sent = 0;
                 channel_sync_addrs[i]->receiver_ack = 0;
 
-                // wait for txq to be ready, otherwise we'll
-                // hit a context switch in the send command
-                eth_send_bytes_over_channel_payload_only(
-                    reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-                    reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-                    sizeof(eth_channel_sync_t),
-                    sizeof(eth_channel_sync_t),
-                    sizeof(eth_channel_sync_t) >> 4);
+                // Wait for txq to be ready before sending (outside the API call for better performance)
+                while (internal_::eth_txq_is_busy(TXQ_ID)) {
+                }
+                // Send back same sized packet (echo the full payload)
+                internal_::eth_send_packet_bytes_unsafe(TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
+                // Send credit update to sender via stream register
+                while (internal_::eth_txq_is_busy(TXQ_ID)) {
+                }
+                remote_update_ptr_val<RECEIVER_CREDIT_STREAM_ID, TXQ_ID>(1);
             }
         }
     } else {
-        while (channel_sync_addrs[0]->bytes_sent == 0) {
+        // Wait for credit from sender (check stream register)
+        while (get_ptr_val<RECEIVER_CREDIT_STREAM_ID>() < expected_credits) {
         }
 
         {
             for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-                while (channel_sync_addrs[i]->bytes_sent == 0) {
-                }
+                // Consume the credit
+                increment_local_update_ptr_val<RECEIVER_CREDIT_STREAM_ID>(-1);
+                expected_credits--;
 
+                // Clear flags and send credit back to sender
                 channel_sync_addrs[i]->bytes_sent = 0;
                 channel_sync_addrs[i]->receiver_ack = 0;
 
-                eth_send_bytes_over_channel_payload_only(
-                    reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-                    reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-                    sizeof(eth_channel_sync_t),
-                    sizeof(eth_channel_sync_t),
-                    sizeof(eth_channel_sync_t) >> 4);
+                while (internal_::eth_txq_is_busy(TXQ_ID)) {
+                }
+                // Send back same sized packet (echo the full payload)
+                internal_::eth_send_packet_bytes_unsafe(TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
+                // Send credit update to sender via stream register
+                while (internal_::eth_txq_is_busy(TXQ_ID)) {
+                }
+                remote_update_ptr_val<RECEIVER_CREDIT_STREAM_ID, TXQ_ID>(1);
             }
         }
     }
@@ -92,19 +108,24 @@ void kernel_main() {
         }
     }
 
-    // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
-    for (uint32_t i = 0; i < 2000000000; i++) {
-        asm volatile("nop");
-    }
+    // Initialize stream registers for credit management before handshake
+    // This ensures registers are initialized before the remote side can access them
+    init_ptr_val<RECEIVER_CREDIT_STREAM_ID>(0);
 
     eth_setup_handshake(handshake_addr, false);
 
-    run_loop_iteration<false>(channel_addrs, channel_sync_addrs);
+    // Calculate full payload size (same as sender)
+    const uint32_t full_payload_size = message_size + sizeof(eth_channel_sync_t);
+
+    // Track expected credits for stream register checking
+    int32_t expected_credits = NUM_CHANNELS;
+
+    run_loop_iteration<false>(channel_addrs, channel_sync_addrs, expected_credits, full_payload_size);
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
-        uint32_t i = 0;
         for (uint32_t i = 0; i < num_messages; i++) {
-            run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
+            expected_credits += NUM_CHANNELS;
+            run_loop_iteration<true>(channel_addrs, channel_sync_addrs, expected_credits, full_payload_size);
         }
     }
 }
