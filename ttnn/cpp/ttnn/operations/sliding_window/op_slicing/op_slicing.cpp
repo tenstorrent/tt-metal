@@ -7,6 +7,7 @@
 #include <ttnn/operations/creation.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
 #include <ttnn/operations/data_movement/tilize/tilize.hpp>
+#include <ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp>
 #include <ttnn/operations/functions.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
@@ -341,6 +342,7 @@ void run_sliced_op(
             ttnn::untilize(input_tensor, tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
 
         // Step 2: Create ROW_MAJOR output tensors (will be BFloat16 for BFloat8 inputs)
+        // Use the original logical shape - ROW_MAJOR layout doesn't need tile padding
         std::vector<ttnn::Tensor> row_major_outputs;
         row_major_outputs.reserve(num_output_tensors);
         for (auto& output_tensor_ref : output_tensors) {
@@ -348,6 +350,7 @@ void run_sliced_op(
             auto original_dtype = output_tensor.dtype();
             DataType row_major_dtype = (original_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : original_dtype;
 
+            // Create with logical shape - Pool2D will produce the correct number of elements
             row_major_outputs.push_back(ttnn::empty(
                 output_tensor.logical_shape(),
                 row_major_dtype,
@@ -370,7 +373,7 @@ void run_sliced_op(
 
         log_info(tt::LogOp, "ROW_MAJOR slicing completed successfully, now tilizing outputs back to TILE layout");
 
-        // Step 5: Tilize the ROW_MAJOR outputs and assign back to original TILE output references
+        // Step 5: Tilize the ROW_MAJOR outputs back to TILE layout with automatic padding
         for (uint32_t i = 0; i < num_output_tensors; i++) {
             auto& row_major_output = row_major_outputs[i];
             auto& original_output = output_tensors[i].get();
@@ -383,12 +386,10 @@ void run_sliced_op(
                 row_major_output.dtype(),
                 original_output.dtype());
 
-            // Tilize expects the physical shape to be tile-aligned (multiples of 32)
-            // The output tensor should already have proper padding in its physical shape
-            output_tensors[i].get() = ttnn::tilize(
-                row_major_output,
-                original_output.memory_config(),
-                original_output.dtype());  // Specify target dtype for BFloat8 conversion
+            // Use tilize_with_zero_padding which automatically pads to tile boundaries (e.g., 232x22 -> 256x32)
+            // and converts dtype if needed (BFloat16 -> BFloat8)
+            output_tensors[i].get() = ttnn::tilize_with_zero_padding(
+                row_major_output, original_output.memory_config(), original_output.dtype());
         }
 
         return;
