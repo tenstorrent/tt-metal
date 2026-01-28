@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.ttnn.ttnn_bge_model import TtnnBGEModel
-from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.wormhole.bge_large_en.tests.pcc.utils import assert_with_pcc
 
 if is_blackhole():

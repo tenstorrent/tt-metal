@@ -84,7 +84,7 @@ run_t3000_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
-  pytest models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/nlp/encoder/sentence_bert/t3000/tests/test_sentence_bert_e2e_performant.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

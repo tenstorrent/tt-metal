@@ -33,7 +33,7 @@ The following models have been traced and their configurations are available in 
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 | gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/multimodal/gemma3/demo/text_demo.py` |
 | falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py` |
-| sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
+| sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py` |
 | segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py` |
 
 **T3K Machine:**

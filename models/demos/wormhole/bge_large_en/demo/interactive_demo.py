@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
-from models.demos.sentence_bert.reference.sentence_bert import custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import custom_extended_mask
 from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH
 
 # Instruction prefix recommended for BGE retrieval tasks
