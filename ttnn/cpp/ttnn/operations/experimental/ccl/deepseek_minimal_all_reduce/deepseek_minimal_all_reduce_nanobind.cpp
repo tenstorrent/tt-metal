@@ -31,15 +31,24 @@ void bind_deepseek_minimal_all_reduce_op(nb::module_ mod, const ccl_operation_t&
                std::optional<uint32_t> cluster_axis,
                const std::optional<ttnn::Tensor>& intermediate_tensor,
                const std::optional<ttnn::Tensor>& residual_tensor,
+               const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const uint32_t num_links,
                const tt::tt_fabric::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, num_links, topology, cluster_axis, intermediate_tensor, residual_tensor);
+                return self(
+                    input_tensor,
+                    num_links,
+                    topology,
+                    cluster_axis,
+                    intermediate_tensor,
+                    residual_tensor,
+                    persistent_output_tensor);
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("intermediate_tensor") = nb::none(),
             nb::arg("residual_tensor") = nb::none(),
+            nb::arg("persistent_output_tensor") = nb::none(),
             nb::arg("num_links") = 2,
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }

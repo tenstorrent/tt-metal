@@ -12,11 +12,14 @@
 #include "ttnn/operations/creation.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
-namespace ttnn::operations::normalization {
-Tensor ExecuteSoftmax::invoke(
-    const ttnn::Tensor& input_tensor,
+namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
+
+namespace ttnn {
+
+Tensor softmax(
+    const Tensor& input_tensor,
     int dim,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
     // Constants
@@ -43,14 +46,14 @@ Tensor ExecuteSoftmax::invoke(
     auto output_tensor = prim::softmax(
         input_tensor, static_cast<int8_t>(dim_calculated), mem_config, compute_kernel_config, numeric_stable);
 
-    return ttnn::reshape(output_tensor, input_shape);
+    return reshape(output_tensor, input_shape);
 }
 
-Tensor ExecuteScaleMaskSoftmax::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor scale_mask_softmax(
+    const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
@@ -80,11 +83,11 @@ Tensor ExecuteScaleMaskSoftmax::invoke(
         compute_kernel_config,
         numeric_stable);
 
-    return ttnn::reshape(output_tensor, input_shape);
+    return reshape(output_tensor, input_shape);
 }
 
-Tensor ExecuteSoftmaxInPlace::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor softmax_in_place(
+    const Tensor& input_tensor,
     int dim,
     const SoftmaxProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
@@ -108,11 +111,11 @@ Tensor ExecuteSoftmaxInPlace::invoke(
     auto output_tensor = prim::softmax_in_place(
         input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
 
-    return ttnn::reshape(output_tensor, input_shape);
+    return reshape(output_tensor, input_shape);
 }
 
-Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor scale_mask_softmax_in_place(
+    const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
     const SoftmaxProgramConfig& program_config,
@@ -134,11 +137,11 @@ Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     auto output_tensor = prim::scale_mask_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
 
-    return ttnn::reshape(output_tensor, input_shape);
+    return reshape(output_tensor, input_shape);
 }
 
-Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor scale_causal_mask_hw_dims_softmax_in_place(
+    const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
     const SoftmaxProgramConfig& program_config,
@@ -159,6 +162,7 @@ Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     auto output_tensor = prim::scale_causal_mask_hw_dims_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
 
-    return ttnn::reshape(output_tensor, input_shape);
+    return reshape(output_tensor, input_shape);
 }
-}  // namespace ttnn::operations::normalization
+
+}  // namespace ttnn
