@@ -2560,6 +2560,7 @@ void kernel_main() {
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    // add here improves perf
     asm volatile("nop");
     asm volatile("nop");
     asm volatile("nop");
