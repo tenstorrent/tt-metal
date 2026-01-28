@@ -18,6 +18,7 @@ namespace ttnn::operations::experimental::reduction {
 std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
+    uint64_t split_size,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
@@ -29,7 +30,8 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
 
     uint32_t rank = input_tensor.padded_shape().rank();
     uint32_t normalized_dim = (dim < 0) ? dim + rank : (uint32_t)dim;
-    return ttnn::prim::deepseek_moe_fast_reduce_nc(input_tensor, normalized_dim, output_memory_config, config);
+    return ttnn::prim::deepseek_moe_fast_reduce_nc(
+        input_tensor, normalized_dim, split_size, output_memory_config, config);
 }
 
 }  // namespace ttnn::operations::experimental::reduction

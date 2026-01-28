@@ -39,6 +39,7 @@ namespace ttnn::prim {
 std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
+    uint64_t split_size,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 

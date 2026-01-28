@@ -29,6 +29,7 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
             dim (int): dimension along which to reduce
 
         Keyword Args:
+            split_size (int): size of last dim of each output split tensor
             output_memory_config (ttnn.MemoryConfig): output memory configuration
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): configuration for the reduction
 
@@ -39,13 +40,15 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                int32_t dim,
+               uint64_t split_size,
                const tt::tt_metal::MemoryConfig& output_memory_config,
                const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(input_tensor, dim, output_memory_config, compute_kernel_config);
+                return self(input_tensor, dim, split_size, output_memory_config, compute_kernel_config);
             },
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::kw_only(),
+            nb::arg("split_size"),
             nb::arg("output_memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 }
