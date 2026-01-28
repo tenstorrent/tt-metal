@@ -629,9 +629,9 @@ class TtTransformer(LightweightModule):
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
                 # Re-create global CB for decode (if it was not already created)
                 if self.use_prefetcher:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
                     self.prefetcher_setup.create_global_cb()
 
         else:
