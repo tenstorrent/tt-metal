@@ -13,7 +13,7 @@
 - Added support for on device sampling for parameters: temperature, top-k, top-p, presence / frequency / repetition penalties, and seed.
 - Added support for executing prefill with TT-NN tracing.
 
-### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/qwen25_vl)
 - Integrated Qwen2.5-VL with vLLM V1 in the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
 ### [GPT-OSS](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gpt_oss)
@@ -44,7 +44,7 @@
 ### [Phi-4](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for Phi-4 on Wormhole N300 to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
 
-### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/qwen25_vl)
 - Added support for windowed SDPA in the vision attention module.
 
 ### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
@@ -60,7 +60,7 @@
 
 ## August 18, 2025
 
-### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/qwen25_vl)
 - Integrated Qwen2.5-VL into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
 ### [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
@@ -68,7 +68,7 @@
 
 ## August 6, 2025
 
-### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/qwen25_vl)
 - Added support for the Qwen2.5-VL family of models on Wormhole devices.
 
 ## July 21, 2025

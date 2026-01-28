@@ -9,9 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
-from models.demos.qwen25_vl.tt.model import VisionTransformer
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.nlp.llms.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.nlp.llms.qwen25_vl.tt.model import VisionTransformer
+from models.demos.nlp.llms.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,

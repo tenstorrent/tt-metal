@@ -520,7 +520,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  uv pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -530,7 +530,7 @@ run_t3000_qwen25_vl_unit_tests() {
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
 
   # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/tests/ --ignore=models/demos/nlp/llms/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llms/qwen25_vl/tests/conftest.py
 
   # Record the end time
   end_time=$(date +%s)
