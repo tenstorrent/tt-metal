@@ -441,16 +441,13 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     static uint32_t inflight_head = 0U;
 
     // Reserve trid 0/1 for other traffic (0 is the default; 1 is used by exec_buf DRAM reads).
-    // PCIe reads issued via read_from_pcie use trids [MIN_PREFETCH_TRID..PREFETCH_TRID_MASK] (e.g., 9-15).
-    static constexpr uint32_t MIN_PREFETCH_TRID = 9U;
-    static constexpr uint32_t MAX_PREFETCH_TRIAD = 16U;
-    static_assert((MAX_PREFETCH_TRIAD & (MAX_PREFETCH_TRIAD - 1U)) == 0U);  // power-of-two for masking
-    static constexpr uint32_t PREFETCH_TRID_MASK = MAX_PREFETCH_TRIAD - 1U;
-    static_assert(
-        MAX_OUTSTANDING_READS < MAX_PREFETCH_TRIAD - MIN_PREFETCH_TRID,
-        "MAX_OUTSTANDING_READS must be < number of rotating trids (to avoid TRID reuse while a read is outstanding)");
+    // Keep TRIDs unique across in-flight reads so retirement barriers only wait for the oldest read.
+    static constexpr std::array<uint32_t, 4> PREFETCH_TRIDS = {{2U, 3U, 4U, 5U}};
+    static_assert((PREFETCH_TRIDS.size() & (PREFETCH_TRIDS.size() - 1U)) == 0U);  // power-of-two for masking
+    static_assert(MAX_OUTSTANDING_READS <= PREFETCH_TRIDS.size());
 
-    static uint32_t next_trid = MIN_PREFETCH_TRID;
+
+    static uint32_t next_trid_idx = 0U;
 
     // End of reserved (possibly-not-yet-committed) region in cmddat_q for issued reads.
     // `fence` remains the committed boundary used for cmd_ready checks.
@@ -460,8 +457,9 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     static constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
 
     while (true) {
-        const uint32_t inflight_tail = (inflight_head + inflight_count) & INFLIGHT_MASK;
 #if ENABLE_PREFETCH_DPRINTS
+        const uint32_t inflight_tail = (inflight_head + inflight_count) & INFLIGHT_MASK;
+        const uint32_t next_trid = PREFETCH_TRIDS[next_trid_idx];
         DPRINT << "fetch_q_get_cmds: ENTER stall_state=" << static_cast<uint32_t>(stall_state)
                << " inflight_count=" << inflight_count << " inflight_head=" << inflight_head
                << " inflight_tail=" << inflight_tail << " next_trid=" << next_trid << " fence=" << fence
@@ -470,7 +468,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 #endif
 
         if (stall_state == STALLED) {
-            ASSERT(inflight_count == 0);  // Before stalling, all reads must have been completed.
+            ASSERT(inflight_count == 0U);  // Before stalling, all reads must have been completed.
             ASSERT(issue_fence == fence);
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "fetch_q_get_cmds: EXIT (STALLED)" << ENDL();
@@ -509,43 +507,9 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
         while ((fetch_size != 0U) && (inflight_count < MAX_OUTSTANDING_READS)) {
-            // IMPORTANT: This kernel historically assumes cmddat_q does NOT contain unread commands across a wrap.
-            // So we must NOT wrap the producer pointer unless the queue is empty (no cmds ready, no reads in flight).
-            // If a fetch would require wrapping, break and let the consumer drain to the fence first.
-            if (issue_fence < fence) {
-#if ENABLE_PREFETCH_DPRINTS
-                DPRINT << "fetch_q_get_cmds: ISSUE_BLOCKED (issue_fence wrapped while cmds remain) fence=" << fence
-                       << " issue_fence=" << issue_fence << " cmd_ptr=" << cmd_ptr
-                       << " inflight_count=" << inflight_count << " fetch_size=" << fetch_size << ENDL();
-#endif
-                break;
-            }
-
-            const uint32_t this_trid = next_trid;
+            const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
             uint32_t total_size = 0U;
             const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
-            const uint32_t needed_bytes = fetch_size + preamble_size;
-
-            // Prevent producer wrap unless the queue is completely empty.
-            if (issue_fence + needed_bytes > cmddat_q_end) {
-                const bool queue_empty = (inflight_count == 0U) && (cmd_ptr == fence) && (issue_fence == fence);
-                if (queue_empty) {
-#if ENABLE_PREFETCH_DPRINTS
-                    DPRINT << "fetch_q_get_cmds: WRAP cmddat_q (empty) issue_fence=" << issue_fence << " -> "
-                           << cmddat_q_base << ENDL();
-#endif
-                    fence = cmddat_q_base;
-                    cmd_ptr = cmddat_q_base;
-                    issue_fence = cmddat_q_base;
-                } else {
-#if ENABLE_PREFETCH_DPRINTS
-                    DPRINT << "fetch_q_get_cmds: ISSUE_BLOCKED_WRAP issue_fence=" << issue_fence
-                           << " needed_bytes=" << needed_bytes << " cmddat_q_end=" << cmddat_q_end << " fence=" << fence
-                           << " cmd_ptr=" << cmd_ptr << " inflight_count=" << inflight_count << ENDL();
-#endif
-                    break;
-                }
-            }
 
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "fetch_q_get_cmds: ISSUE_ATTEMPT idx=" << idx << " trid=" << this_trid
@@ -580,16 +544,13 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // Advance reservation pointer for the next issue.
             issue_fence += total_size;
 
-            // Cycle through [MIN_PREFETCH_TRID..PREFETCH_TRID_MASK] (reserve 0/1).
-            next_trid = (next_trid + 1U) & PREFETCH_TRID_MASK;
-            if (next_trid < MIN_PREFETCH_TRID) {
-                next_trid = MIN_PREFETCH_TRID;
-            }
+            // Cycle through PREFETCH_TRIDS.
+            next_trid_idx = (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
 
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "fetch_q_get_cmds: ISSUE_OK trid=" << this_trid << " read_fence=" << read_fence
                    << " read_size=" << fetch_size << " total_size=" << total_size << " new_issue_fence=" << issue_fence
-                   << " inflight_count=" << inflight_count << " next_trid=" << next_trid << ENDL();
+                   << " inflight_count=" << inflight_count << " next_trid=" << PREFETCH_TRIDS[next_trid_idx] << ENDL();
 #endif
 
             // Stop issuing reads beyond a stall entry. We'll stall when this read is retired.
@@ -671,7 +632,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                     if (stall_flag) {
                         // Legacy behavior: append the exec_buf command (no preamble/header gap), then stall
                         // immediately.
-                        const uint32_t this_trid = next_trid;
+                        const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
 #if ENABLE_PREFETCH_DPRINTS
                         DPRINT << "fetch_q_get_cmds: RE_CHECK_STALL_ISSUE<0> trid=" << this_trid
                                << " fetch_size=" << fetch_size << " fence=" << fence << " cmd_ptr=" << cmd_ptr
@@ -681,11 +642,9 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                         uint32_t pending_read_size =
                             read_from_pcie<0>(prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid);
                         if (pending_read_size != 0U) {
-                            ++next_trid;
-                            next_trid &= PREFETCH_TRID_MASK;
-                            if (next_trid < MIN_PREFETCH_TRID) {
-                                next_trid = MIN_PREFETCH_TRID;
-                            }
+                            // Cycle through PREFETCH_TRIDS.
+                            next_trid_idx =
+                                (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
                             issue_fence = fence;  // keep reservation pointer aligned
 #if ENABLE_PREFETCH_DPRINTS
                             DPRINT << "fetch_q_get_cmds: RE_CHECK_STALL -> barrier_and_stall trid=" << this_trid
@@ -702,7 +661,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                         }
                     } else {
                         // Issue one more read (with preamble) to overlap with command processing.
-                        const uint32_t this_trid = next_trid;
+                        const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                         uint32_t total_size2 = 0U;
                         const uint32_t idx2 = (inflight_head + inflight_count) & INFLIGHT_MASK;  // == inflight_head
 #if ENABLE_PREFETCH_DPRINTS
@@ -723,17 +682,17 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                             inflight[idx2].flags = 0x0u;
                             ++inflight_count;
                             issue_fence += total_size2;
-                            ++next_trid;
-                            next_trid &= PREFETCH_TRID_MASK;
-                            if (next_trid < MIN_PREFETCH_TRID) {
-                                next_trid = MIN_PREFETCH_TRID;
-                            }
+
+                            // Cycle through PREFETCH_TRIDS.
+                            next_trid_idx =
+                                (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
 
 #if ENABLE_PREFETCH_DPRINTS
                             DPRINT << "fetch_q_get_cmds: RE_CHECK_ISSUE_OK trid=" << this_trid
                                    << " read_fence=" << read_fence2 << " read_size=" << fetch_size
                                    << " total_size=" << total_size2 << " new_issue_fence=" << issue_fence
-                                   << " inflight_count=" << inflight_count << " next_trid=" << next_trid << ENDL();
+                                   << " inflight_count=" << inflight_count
+                                   << " next_trid=" << PREFETCH_TRIDS[next_trid_idx] << ENDL();
 #endif
                         } else {
 #if ENABLE_PREFETCH_DPRINTS
