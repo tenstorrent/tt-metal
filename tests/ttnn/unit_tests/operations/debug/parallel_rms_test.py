@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Performance benchmark comparing sequential vs parallel RMS norm execution.
+Performance comparison: ttnn.rms_norm (direct) vs launch_composite() with single/multiple branches.
 
-This test quantifies the performance gain from running two sharded RMS norm
-operations in parallel vs sequentially using ttnn.experimental.launch_composite().
-
-Run for host timing only:
-    pytest tests/ttnn/unit_tests/operations/debug/parallel_rms_test.py -v -s
+This test compares device kernel durations for:
+- Q-only using ttnn.rms_norm (direct)
+- Q-only using launch_composite([q])
+- KV-only using ttnn.rms_norm (direct)
+- KV-only using launch_composite([kv])
+- Q+KV using launch_composite([q,kv])
 
 Run with device profiling (Tracy):
-    python -m tracy -r -m pytest \
-        tests/ttnn/unit_tests/operations/debug/parallel_rms_test.py::test_parallel_rms_performance -v -s
+    python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/debug/parallel_rms_test.py::test_parallel_rms_performance -v -s
 
 The two RMS norm operations:
     - q_norm: L1 width sharded on cores (0,0)-(3,3), shard [32,96], tensor [32,1536]
@@ -23,7 +23,8 @@ The two RMS norm operations:
 import pytest
 import torch
 import ttnn
-import time
+import pandas as pd
+from pathlib import Path
 
 from tracy import signpost
 
@@ -86,7 +87,6 @@ def create_q_norm_tensors(device):
     )
 
     # Program config for sharded RMS norm
-    # compute_with_storage_grid_size should match the core grid dimensions
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(4, 4),  # 4x4 grid
         subblock_w=shard_width // 32,  # tiles per shard width = 96/32 = 3
@@ -176,16 +176,13 @@ def create_kv_norm_tensors(device):
     }
 
 
-def run_sequential(device, q_tensors, kv_tensors, num_iterations=1, use_signpost=False):
-    """Run q_norm and kv_norm sequentially."""
-    outputs = []
-
+def run_single_q_direct(device, q_tensors, num_iterations=1, use_signpost=False):
+    """Run RMS norm on Q cores only using direct ttnn.rms_norm()."""
     if use_signpost:
-        signpost("sequential_start")
+        signpost("single_q_direct_start")
 
     for _ in range(num_iterations):
-        # Run q_norm
-        q_output = ttnn.rms_norm(
+        output = ttnn.rms_norm(
             q_tensors["input"],
             epsilon=1e-5,
             weight=q_tensors["weight"],
@@ -193,8 +190,44 @@ def run_sequential(device, q_tensors, kv_tensors, num_iterations=1, use_signpost
             program_config=q_tensors["program_config"],
         )
 
-        # Run kv_norm
-        kv_output = ttnn.rms_norm(
+    ttnn.synchronize_device(device)
+
+    if use_signpost:
+        signpost("single_q_direct_stop")
+
+    return output
+
+
+def run_single_q_via_composite(device, q_tensors, num_iterations=1, use_signpost=False):
+    """Run RMS norm on Q cores only using launch_composite() with single-element list."""
+    if use_signpost:
+        signpost("single_q_composite_start")
+
+    for _ in range(num_iterations):
+        q_branch = ttnn.experimental.programs.rms_norm(
+            q_tensors["input"],
+            epsilon=1e-5,
+            weight=q_tensors["weight"],
+            memory_config=q_tensors["memory_config"],
+            core_range_set=q_tensors["cores"],
+        )
+        output = ttnn.experimental.launch_composite([q_branch])[0]
+
+    ttnn.synchronize_device(device)
+
+    if use_signpost:
+        signpost("single_q_composite_stop")
+
+    return output
+
+
+def run_single_kv_direct(device, kv_tensors, num_iterations=1, use_signpost=False):
+    """Run RMS norm on KV cores only using direct ttnn.rms_norm()."""
+    if use_signpost:
+        signpost("single_kv_direct_start")
+
+    for _ in range(num_iterations):
+        output = ttnn.rms_norm(
             kv_tensors["input"],
             epsilon=1e-5,
             weight=kv_tensors["weight"],
@@ -202,25 +235,46 @@ def run_sequential(device, q_tensors, kv_tensors, num_iterations=1, use_signpost
             program_config=kv_tensors["program_config"],
         )
 
-        outputs = [q_output, kv_output]
+    ttnn.synchronize_device(device)
+
+    if use_signpost:
+        signpost("single_kv_direct_stop")
+
+    return output
+
+
+def run_single_kv_via_composite(device, kv_tensors, num_iterations=1, use_signpost=False):
+    """Run RMS norm on KV cores only using launch_composite() with single-element list."""
+    if use_signpost:
+        signpost("single_kv_composite_start")
+
+    for _ in range(num_iterations):
+        kv_branch = ttnn.experimental.programs.rms_norm(
+            kv_tensors["input"],
+            epsilon=1e-5,
+            weight=kv_tensors["weight"],
+            memory_config=kv_tensors["memory_config"],
+            core_range_set=kv_tensors["cores"],
+        )
+        output = ttnn.experimental.launch_composite([kv_branch])[0]
 
     ttnn.synchronize_device(device)
 
     if use_signpost:
-        signpost("sequential_stop")
+        signpost("single_kv_composite_stop")
 
-    return outputs
+    return output
 
 
-def run_parallel(device, q_tensors, kv_tensors, num_iterations=1, use_signpost=False):
-    """Run q_norm and kv_norm in parallel using ttnn.experimental.launch_composite."""
+def run_composite_qkv(device, q_tensors, kv_tensors, num_iterations=1, use_signpost=False):
+    """Run q_norm and kv_norm in parallel using launch_composite()."""
     # Create branches ONCE outside the loop (for optimal caching)
     q_branch = ttnn.experimental.programs.rms_norm(
         q_tensors["input"],
         epsilon=1e-5,
         weight=q_tensors["weight"],
         memory_config=q_tensors["memory_config"],
-        core_range_set=q_tensors["cores"],  # Optional: validates shard spec is within cores
+        core_range_set=q_tensors["cores"],
     )
 
     kv_branch = ttnn.experimental.programs.rms_norm(
@@ -228,11 +282,11 @@ def run_parallel(device, q_tensors, kv_tensors, num_iterations=1, use_signpost=F
         epsilon=1e-5,
         weight=kv_tensors["weight"],
         memory_config=kv_tensors["memory_config"],
-        core_range_set=kv_tensors["cores"],  # Optional: validates shard spec is within cores
+        core_range_set=kv_tensors["cores"],
     )
 
     if use_signpost:
-        signpost("parallel_start")
+        signpost("composite_qkv_start")
 
     # Execute in parallel - launch_composite handles caching automatically
     for _ in range(num_iterations):
@@ -242,22 +296,19 @@ def run_parallel(device, q_tensors, kv_tensors, num_iterations=1, use_signpost=F
     ttnn.synchronize_device(device)
 
     if use_signpost:
-        signpost("parallel_stop")
+        signpost("composite_qkv_stop")
 
     return outputs
 
 
 def verify_outputs(q_tensors, kv_tensors, q_output, kv_output):
     """Verify outputs against PyTorch reference."""
-    # Compute expected outputs
     q_expected = torch_rms_norm(q_tensors["torch_input"], q_tensors["torch_weight"])
     kv_expected = torch_rms_norm(kv_tensors["torch_input"], kv_tensors["torch_weight"])
 
-    # Get actual outputs
     q_actual = ttnn.to_torch(ttnn.from_device(q_output))
     kv_actual = ttnn.to_torch(ttnn.from_device(kv_output))
 
-    # Calculate PCC
     def calc_pcc(expected, actual):
         expected_flat = expected.flatten().float()
         actual_flat = actual.flatten().float()
@@ -266,27 +317,26 @@ def verify_outputs(q_tensors, kv_tensors, q_output, kv_output):
     q_pcc = calc_pcc(q_expected, q_actual)
     kv_pcc = calc_pcc(kv_expected, kv_actual)
 
-    return q_pcc, kv_pcc
+    q_close = torch.allclose(q_expected, q_actual, rtol=1e-2, atol=1e-2)
+    kv_close = torch.allclose(kv_expected, kv_actual, rtol=1e-2, atol=1e-2)
+
+    q_max_err = torch.max(torch.abs(q_expected - q_actual)).item()
+    kv_max_err = torch.max(torch.abs(kv_expected - kv_actual)).item()
+
+    return q_close, kv_close, q_pcc, kv_pcc, q_max_err, kv_max_err
 
 
-@pytest.mark.parametrize("num_iterations", [10])
+@pytest.mark.parametrize("num_iterations", [50])
 def test_parallel_rms_performance(device, num_iterations):
     """
-    Benchmark sequential vs parallel RMS norm execution.
-
-    Measures:
-    - Host time for sequential execution
-    - Host time for parallel execution
-    - Performance gain (speedup)
-
-    For device FW duration, run with Tracy:
-        TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -m pytest <this_file> -v -s
+    Compare ttnn.rms_norm (direct) vs launch_composite() with single/multiple branches.
     """
     print(f"\n{'='*80}")
-    print("PARALLEL RMS NORM PERFORMANCE BENCHMARK")
+    print("LAUNCH_COMPOSITE() COMPARISON TEST")
     print(f"{'='*80}")
 
-    # Enable program cache for optimal performance
+    # Clear program cache first
+    device.clear_program_cache()
     device.enable_program_cache()
 
     # Create tensors
@@ -302,130 +352,204 @@ def test_parallel_rms_performance(device, num_iterations):
     print("\nWarming up...")
     warmup_iters = 10
     for _ in range(warmup_iters):
-        _ = run_sequential(device, q_tensors, kv_tensors)
-        _ = run_parallel(device, q_tensors, kv_tensors)
-
-    # Benchmark sequential
-    print("Benchmarking sequential execution...")
-    num_trials = 5
-    sequential_times = []
-
-    for trial in range(num_trials):
-        start = time.perf_counter_ns()
-        seq_outputs = run_sequential(device, q_tensors, kv_tensors, num_iterations, use_signpost=(trial == 0))
-        end = time.perf_counter_ns()
-        sequential_times.append(end - start)
-
-    # Benchmark parallel
-    print("Benchmarking parallel execution...")
-    parallel_times = []
-
-    for trial in range(num_trials):
-        start = time.perf_counter_ns()
-        par_outputs = run_parallel(device, q_tensors, kv_tensors, num_iterations, use_signpost=(trial == 0))
-        end = time.perf_counter_ns()
-        parallel_times.append(end - start)
-
-    # Calculate statistics
-    def stats(times):
-        avg = sum(times) / len(times)
-        min_t = min(times)
-        max_t = max(times)
-        return avg, min_t, max_t
-
-    seq_avg, seq_min, seq_max = stats(sequential_times)
-    par_avg, par_min, par_max = stats(parallel_times)
-
-    # Per-iteration times
-    seq_per_iter = seq_avg / num_iterations
-    par_per_iter = par_avg / num_iterations
-
-    # Speedup
-    speedup = seq_avg / par_avg
-    time_saved_per_iter = seq_per_iter - par_per_iter
-    time_saved_total = seq_avg - par_avg
-
-    # Results
-    print(f"\n{'='*60}")
-    print("HOST TIME RESULTS")
-    print(f"{'='*60}")
-    print(f"\nSequential ({num_iterations} iterations):")
-    print(f"  Average: {seq_avg/1e6:.3f} ms  (per iter: {seq_per_iter/1e3:.2f} us)")
-    print(f"  Min:     {seq_min/1e6:.3f} ms")
-    print(f"  Max:     {seq_max/1e6:.3f} ms")
-
-    print(f"\nParallel ({num_iterations} iterations):")
-    print(f"  Average: {par_avg/1e6:.3f} ms  (per iter: {par_per_iter/1e3:.2f} us)")
-    print(f"  Min:     {par_min/1e6:.3f} ms")
-    print(f"  Max:     {par_max/1e6:.3f} ms")
-
-    print(f"\n{'='*60}")
-    print("PERFORMANCE GAIN")
-    print(f"{'='*60}")
-    print(f"  Speedup:           {speedup:.2f}x")
-    print(f"  Time saved/iter:   {time_saved_per_iter/1e3:.2f} us")
-    print(f"  Total time saved:  {time_saved_total/1e6:.3f} ms ({(time_saved_total/seq_avg)*100:.1f}%)")
+        _ = run_single_q_direct(device, q_tensors)
+        _ = run_single_q_via_composite(device, q_tensors)
+        _ = run_single_kv_direct(device, kv_tensors)
+        _ = run_single_kv_via_composite(device, kv_tensors)
+        _ = run_composite_qkv(device, q_tensors, kv_tensors)
 
     # Verify correctness
     print(f"\n{'='*60}")
     print("CORRECTNESS VERIFICATION")
     print(f"{'='*60}")
 
-    # Create fresh tensors for verification (to avoid any in-place modifications)
+    device.clear_program_cache()
+    device.enable_program_cache()
+
     q_tensors_fresh = create_q_norm_tensors(device)
     kv_tensors_fresh = create_kv_norm_tensors(device)
 
-    # Run once more to verify
-    par_outputs = run_parallel(device, q_tensors_fresh, kv_tensors_fresh, num_iterations=1)
-    q_pcc, kv_pcc = verify_outputs(q_tensors_fresh, kv_tensors_fresh, par_outputs[0], par_outputs[1])
+    composite_outputs = run_composite_qkv(device, q_tensors_fresh, kv_tensors_fresh, num_iterations=1)
+    q_close, kv_close, q_pcc, kv_pcc, q_max_err, kv_max_err = verify_outputs(
+        q_tensors_fresh, kv_tensors_fresh, composite_outputs[0], composite_outputs[1]
+    )
 
-    print(f"  q_norm PCC:  {q_pcc:.6f}")
-    print(f"  kv_norm PCC: {kv_pcc:.6f}")
+    print(f"  q_norm:")
+    print(f"    allclose: {q_close} (rtol=1e-2, atol=1e-2)")
+    print(f"    PCC:      {q_pcc:.6f}")
+    print(f"    Max error: {q_max_err:.6e}")
+    print(f"  kv_norm:")
+    print(f"    allclose: {kv_close} (rtol=1e-2, atol=1e-2)")
+    print(f"    PCC:      {kv_pcc:.6f}")
+    print(f"    Max error: {kv_max_err:.6e}")
 
-    assert q_pcc > 0.99, f"q_norm PCC {q_pcc} below threshold"
-    assert kv_pcc > 0.99, f"kv_norm PCC {kv_pcc} below threshold"
-    print("  ✓ All outputs verified correct!")
+    assert q_close, f"q_norm failed allclose check (max error: {q_max_err:.6e})"
+    assert kv_close, f"kv_norm failed allclose check (max error: {kv_max_err:.6e})"
+    print("  ✓ All outputs verified correct with torch.allclose!")
+
+    # Profile device kernel durations
+    print(f"\n{'='*60}")
+    print("PROFILING DEVICE KERNEL DURATIONS")
+    print(f"{'='*60}")
+
+    print("\nProfiling Q-ONLY case via direct ttnn.rms_norm()...")
+    _ = run_single_q_direct(device, q_tensors, num_iterations, use_signpost=True)
+
+    print("Profiling Q-ONLY case via launch_composite()...")
+    _ = run_single_q_via_composite(device, q_tensors, num_iterations, use_signpost=True)
+
+    print("Profiling KV-ONLY case via direct ttnn.rms_norm()...")
+    _ = run_single_kv_direct(device, kv_tensors, num_iterations, use_signpost=True)
+
+    print("Profiling KV-ONLY case via launch_composite()...")
+    _ = run_single_kv_via_composite(device, kv_tensors, num_iterations, use_signpost=True)
+
+    print("Profiling COMPOSITE Q+KV case via launch_composite()...")
+    _ = run_composite_qkv(device, q_tensors, kv_tensors, num_iterations, use_signpost=True)
 
     print(f"\n{'='*60}")
-    print("DEVICE PROFILING INSTRUCTIONS")
-    print(f"{'='*60}")
-    print("To measure device kernel duration, run:")
-    print("  python -m tracy -r -m pytest \\")
-    print("      tests/ttnn/unit_tests/operations/debug/parallel_rms_test.py::test_parallel_rms_performance -v -s")
-    print()
-    print("Look for signposts in Tracy:")
-    print("  - 'sequential_start' to 'sequential_stop': Sequential execution")
-    print("  - 'parallel_start' to 'parallel_stop': Parallel execution")
-    print()
-    print("Check the generated CSV for device kernel durations:")
-    print("  - Q kernel: LayerNormDeviceOperation entries with INPUT_0_X_PAD=1536")
-    print("  - KV kernel: LayerNormDeviceOperation entries with INPUT_0_X_PAD=512")
-    print("  - Parallel: GenericOpDeviceOperation entries")
+    print("PROFILING COMPLETE")
     print(f"{'='*60}\n")
 
-    # Assert performance gain
-    assert speedup > 1.0, f"Expected parallel to be faster than sequential! Got {speedup:.2f}x"
+    # Extract device kernel durations from Tracy CSV
+    def find_latest_tracy_csv():
+        reports_dir = Path("generated/profiler/reports")
+        if not reports_dir.exists():
+            return None
+        csv_files = list(reports_dir.glob("*/ops_perf_results_*.csv"))
+        if not csv_files:
+            return None
+        return str(max(csv_files, key=lambda p: p.stat().st_mtime))
+
+    def extract_ops_between_signposts(csv_path, op_name):
+        if not Path(csv_path).exists():
+            return {}
+        df = pd.read_csv(csv_path)
+        results = {}
+        signpost_rows = df[df["OP TYPE"] == "signpost"]
+        signpost_indices = list(signpost_rows.index)
+        for i in range(0, len(signpost_indices), 2):
+            if i + 1 < len(signpost_indices):
+                start_idx = signpost_indices[i]
+                stop_idx = signpost_indices[i + 1]
+                start_op_code = df.loc[start_idx]["OP CODE"]
+                if start_op_code.endswith("_start"):
+                    region_name = start_op_code[:-6]
+                    region_ops = df.loc[start_idx + 1 : stop_idx - 1]
+                    matching_ops = region_ops[
+                        (region_ops["OP CODE"] == op_name) & (region_ops["DEVICE KERNEL DURATION [ns]"].notna())
+                    ]
+                    if len(matching_ops) > 0:
+                        durations = matching_ops["DEVICE KERNEL DURATION [ns]"].tolist()
+                        if region_name in results:
+                            results[region_name].extend([float(d) for d in durations])
+                        else:
+                            results[region_name] = [float(d) for d in durations]
+        return results
+
+    csv_path = find_latest_tracy_csv()
+    if csv_path:
+        print(f"Extracting device kernel durations from: {csv_path}")
+
+        # Extract both GenericOpDeviceOperation (for launch_composite) and LayerNormDeviceOperation (for direct)
+        durations_generic = extract_ops_between_signposts(csv_path, "GenericOpDeviceOperation")
+        durations_layernorm = extract_ops_between_signposts(csv_path, "LayerNormDeviceOperation")
+
+        # Combine both operation types
+        def combine_durations(region_name):
+            generic = durations_generic.get(region_name, [])
+            layernorm = durations_layernorm.get(region_name, [])
+            return generic + layernorm
+
+        q_direct_durations = combine_durations("single_q_direct")
+        q_composite_durations = durations_generic.get("single_q_composite", [])
+        kv_direct_durations = combine_durations("single_kv_direct")
+        kv_composite_durations = durations_generic.get("single_kv_composite", [])
+        composite_qkv_durations = durations_generic.get("composite_qkv", [])
+
+        if (
+            q_direct_durations
+            and q_composite_durations
+            and kv_direct_durations
+            and kv_composite_durations
+            and composite_qkv_durations
+        ):
+            q_direct_avg = sum(q_direct_durations) / len(q_direct_durations)
+            q_composite_avg = sum(q_composite_durations) / len(q_composite_durations)
+            kv_direct_avg = sum(kv_direct_durations) / len(kv_direct_durations)
+            kv_composite_avg = sum(kv_composite_durations) / len(kv_composite_durations)
+            composite_qkv_avg = sum(composite_qkv_durations) / len(composite_qkv_durations)
+
+            max_single_composite = max(q_composite_avg, kv_composite_avg)
+            max_single_direct = max(q_direct_avg, kv_direct_avg)
+            efficiency_vs_composite = (max_single_composite / composite_qkv_avg) * 100 if composite_qkv_avg > 0 else 0
+            efficiency_vs_direct = (max_single_direct / composite_qkv_avg) * 100 if composite_qkv_avg > 0 else 0
+
+            print(f"\n{'='*80}")
+            print("DEVICE KERNEL DURATION COMPARISON TABLE")
+            print(f"{'='*80}")
+            print(f"{'Operation':<30} {'Method':<30} {'Duration (µs)':<18} {'Runs':<8}")
+            print(f"{'-'*86}")
+            print(
+                f"{'Q-only':<30} {'ttnn.rms_norm (direct)':<30} {q_direct_avg/1e3:>15.2f} {len(q_direct_durations):>8}"
+            )
+            print(
+                f"{'Q-only':<30} {'launch_composite([q])':<30} {q_composite_avg/1e3:>15.2f} {len(q_composite_durations):>8}"
+            )
+            print(
+                f"{'KV-only':<30} {'ttnn.rms_norm (direct)':<30} {kv_direct_avg/1e3:>15.2f} {len(kv_direct_durations):>8}"
+            )
+            print(
+                f"{'KV-only':<30} {'launch_composite([kv])':<30} {kv_composite_avg/1e3:>15.2f} {len(kv_composite_durations):>8}"
+            )
+            print(
+                f"{'Q+KV composite':<30} {'launch_composite([q,kv])':<30} {composite_qkv_avg/1e3:>15.2f} {len(composite_qkv_durations):>8}"
+            )
+            print(f"{'-'*86}")
+            print(f"\nParallelism Efficiency:")
+            print(
+                f"  vs max single (composite): {efficiency_vs_composite:.1f}% (max: {max_single_composite/1e3:.2f} µs)"
+            )
+            print(f"  vs max single (direct):     {efficiency_vs_direct:.1f}% (max: {max_single_direct/1e3:.2f} µs)")
+            print(f"\nOverhead Analysis:")
+            q_overhead = ((q_composite_avg / q_direct_avg) - 1.0) * 100 if q_direct_avg > 0 else 0
+            kv_overhead = ((kv_composite_avg / kv_direct_avg) - 1.0) * 100 if kv_direct_avg > 0 else 0
+            print(f"  Q-only: launch_composite overhead vs direct: {q_overhead:+.1f}%")
+            print(f"  KV-only: launch_composite overhead vs direct: {kv_overhead:+.1f}%")
+            print(f"{'='*80}\n")
+        else:
+            print(f"Could not extract all durations. Found:")
+            print(f"  Q-direct: {len(q_direct_durations)} entries")
+            print(f"  Q-composite: {len(q_composite_durations)} entries")
+            print(f"  KV-direct: {len(kv_direct_durations)} entries")
+            print(f"  KV-composite: {len(kv_composite_durations)} entries")
+            print(f"  Composite Q+KV: {len(composite_qkv_durations)} entries")
+            print(f"\nNote: CSV may not be generated yet. Check manually: {csv_path}\n")
 
 
 @pytest.mark.parametrize("num_iterations", [1])
 def test_parallel_rms_correctness(device, num_iterations):
     """Quick correctness test for parallel RMS norm."""
+    device.clear_program_cache()
+    device.enable_program_cache()
+
     q_tensors = create_q_norm_tensors(device)
     kv_tensors = create_kv_norm_tensors(device)
 
     # Run parallel
-    par_outputs = run_parallel(device, q_tensors, kv_tensors, num_iterations=1)
+    composite_outputs = run_composite_qkv(device, q_tensors, kv_tensors, num_iterations=1)
+    q_close, kv_close, q_pcc, kv_pcc, q_max_err, kv_max_err = verify_outputs(
+        q_tensors, kv_tensors, composite_outputs[0], composite_outputs[1]
+    )
 
-    # Verify
-    q_pcc, kv_pcc = verify_outputs(q_tensors, kv_tensors, par_outputs[0], par_outputs[1])
+    print(f"\nq_norm:")
+    print(f"  allclose: {q_close} (rtol=1e-2, atol=1e-2)")
+    print(f"  PCC:      {q_pcc:.6f}")
+    print(f"  Max error: {q_max_err:.6e}")
+    print(f"kv_norm:")
+    print(f"  allclose: {kv_close} (rtol=1e-2, atol=1e-2)")
+    print(f"  PCC:      {kv_pcc:.6f}")
+    print(f"  Max error: {kv_max_err:.6e}")
 
-    print(f"\nq_norm PCC:  {q_pcc:.6f}")
-    print(f"kv_norm PCC: {kv_pcc:.6f}")
-
-    assert q_pcc > 0.99, f"q_norm PCC {q_pcc} below threshold"
-    assert kv_pcc > 0.99, f"kv_norm PCC {kv_pcc} below threshold"
-
-
-if __name__ == "__main__":
-    # Allow running directly with pytest
-    pytest.main([__file__, "-v", "-s"])
+    assert q_close, f"q_norm failed allclose check (max error: {q_max_err:.6e})"
+    assert kv_close, f"kv_norm failed allclose check (max error: {kv_max_err:.6e})"
