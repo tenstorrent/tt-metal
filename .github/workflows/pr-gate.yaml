@@ -274,6 +274,9 @@ jobs:
 
       - name: Configure tt-train
         timeout-minutes: 10
+        env:
+          CC: clang-20
+          CXX: clang++-20
         run: |
           set -euo pipefail
 
