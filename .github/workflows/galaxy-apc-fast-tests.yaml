@@ -1,7 +1,32 @@
 name: "(Galaxy) Fast tests"
 
 on:
-  workflow_dispatch:  # Manual trigger only used to test galaxy apc fast tests
+  workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -10,7 +35,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   galaxy-apc-fast-tests:
     needs: build-artifact

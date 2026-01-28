@@ -15,11 +15,40 @@ on:
         description: "Enable Tracy ops recording for all tests (generates operations report)"
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 13,18 * * 0,1,2,3,4,5,6" # frequency of functional models
     - cron: "0 5 * * 1,3,6" # frequency of perf models
 
-run-name: "(Single-card) Demo tests${{ (inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 5 * * 1,3,6')) && ' (with perf runs)' || ' (no perf)' }}${{ inputs.enable-ops-recording && ' [ops-recording]' || '' }}"
+run-name: >-
+  (Single-card) Demo tests${{
+  (inputs.run-perf-tests
+  || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 5 * * 1,3,6'))
+  && ' (with perf runs)' || ' (no perf)' }}${{
+  inputs.enable-ops-recording && ' [ops-recording]' || '' }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -27,8 +56,10 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-demo-tests:
     needs: build-artifact

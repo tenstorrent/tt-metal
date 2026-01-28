@@ -44,6 +44,7 @@ RUN mkdir -p /tmp/cba \
     && rm -rf /tmp/cba
 
 # Install extra ci apt requirements
+# Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
@@ -51,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-rt-20-dev \
     clang-tidy-20 \
     clang-20 \
+    llvm-20 \
     curl \
     dialog \
     file \

@@ -2,6 +2,22 @@ name: "[internal] Produce data for external analysis"
 
 on:
   workflow_call:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        required: false
+        type: number
+        default: 0
+      test_workflow_run_attempt:
+        description: "Run attempt of the workflow run"
+        required: false
+        type: number
+        default: 1
+      upload_data:
+        description: "Upload data to datastore cluster for our dashboard"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       test_workflow_run_id:

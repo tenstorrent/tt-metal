@@ -7,12 +7,45 @@ on:
         required: false
         default: Release
         type: string
-      version:
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      platform:
         required: false
-        default: "22.04"
         type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      with-retries:
+        required: false
+        type: boolean
+        default: false
+        description: "Re-run failed jobs (max 3)"
+      force-test-everything:
+        required: false
+        type: boolean
+        default: true
+        description: "Force test everything regardless of file changes"
   workflow_dispatch:
     inputs:
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
+      force-test-everything:
+        default: true
+        type: boolean
+        description: "Force test everything regardless of file changes"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       build-type:
         required: false
         default: Release
@@ -23,21 +56,11 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      version:
+      enable-lto:
         required: false
-        default: "22.04"
-        type: choice
-        options:
-          - "22.04"
-          - "24.04"
-      with-retries:
         default: false
         type: boolean
-        description: "Re-run failed jobs (max 3)"
-      force-test-everything:
-        default: true
-        type: boolean
-        description: "Force test everything regardless of file changes"
+        description: "Enable Link Time Optimization (LTO)"
   push:
     branches: ["main"]
 
@@ -52,6 +75,8 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -61,8 +86,9 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
+      enable-lto: ${{ inputs.enable-lto || false }}
 
   find-changed-files:
     runs-on: ubuntu-latest
