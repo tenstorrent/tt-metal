@@ -52,6 +52,7 @@ class DeepseekMinimalAllReduce:
     def op(
         input_tensor_mesh,
         intermediate_tensor,
+        semaphores,
         cluster_axis=0,
         topology=None,
         num_links=2,
@@ -70,6 +71,7 @@ class DeepseekMinimalAllReduce:
             num_links: Number of links to use (default 2 for all-reduce)
             persistent_output_tensor: Optional pre-allocated output tensor mesh.
             residual_tensor_mesh: Optional tensor mesh for residuals.
+            semaphores: List of two global semaphores for synchronization.
 
         Returns:
             Output tensor with all-reduced data on all devices
@@ -97,9 +99,9 @@ class DeepseekMinimalAllReduce:
         num_cores = grid.x * grid.y
         available_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
-        semaphore1 = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        semaphore2 = ttnn.create_global_semaphore(mesh_device, available_cores, 0)
-        ttnn.synchronize_device(mesh_device)
+        semaphore1 = semaphores[0]
+        semaphore2 = semaphores[1]
+        # ttnn.synchronize_device(mesh_device)
 
         semaphore1_addr = ttnn.get_global_semaphore_address(semaphore1)
         semaphore2_addr = ttnn.get_global_semaphore_address(semaphore2)

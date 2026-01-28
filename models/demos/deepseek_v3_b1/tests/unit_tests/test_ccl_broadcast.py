@@ -141,6 +141,15 @@ def test_ccl_broadcast_dual_axis(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
+    # semaphores
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+
+    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
+
     # Compute expected output using golden function
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
 
@@ -156,6 +165,7 @@ def test_ccl_broadcast_dual_axis(
         secondary_cluster_axis=secondary_cluster_axis,
         topology=topology,
         using_persistent_buffers=using_persistent_buffers,
+        semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
 

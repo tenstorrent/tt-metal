@@ -184,6 +184,13 @@ def test_ccl_all_reduce(
     else:
         persistent_output_tensor = None
 
+    # semaphores
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    semaphores = [semaphore1, semaphore2]
+
     # Run all-reduce operation
     logger.info(f"Running CCL all-reduce: num_devices={num_devices}")
     ttnn_result = DeepseekMinimalAllReduce.op(
@@ -193,6 +200,7 @@ def test_ccl_all_reduce(
         topology=topology,
         persistent_output_tensor=persistent_output_tensor,
         residual_tensor_mesh=residual_tensor_mesh,
+        semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
 
