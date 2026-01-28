@@ -9,7 +9,7 @@ This demo runs the original Hugging Face OWL-ViT model on CPU for verification
 and visual comparison with the TTNN implementation.
 
 Usage:
-    python models/demos/wormhole/owl_vit/demo/demo_owl_vit_pytorch.py
+    python models/demos/vision/classification/owl_vit/demo/demo_owl_vit_pytorch.py
 """
 
 import sys
