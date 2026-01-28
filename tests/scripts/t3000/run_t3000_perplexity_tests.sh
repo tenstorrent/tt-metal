@@ -10,7 +10,7 @@ run_t3000_falcon40b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_perplexity_tests"
 
   # Falcon40B perplexity tests
-  pytest models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+  pytest models/demos/nlp/llms/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
