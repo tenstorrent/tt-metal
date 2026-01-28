@@ -30,17 +30,6 @@ private:
     void* hlk_args{nullptr};  // void ptr to user-defined hlk_args_t struct (user writes)
     size_t hlk_args_size{0};  // size of hlk_args_t in bytes (result of sizeof())
 
-    void init(uint32_t max_cbs) {
-        buf_dataformat_arr.assign(max_cbs, DataFormat::Invalid);
-        buf_num_faces_arr.assign(max_cbs, constants::TILE_HW / constants::FACE_HW);
-        buf_partial_face_arr.assign(max_cbs, 0);
-        buf_face_r_dim_arr.assign(max_cbs, constants::FACE_HEIGHT);
-        buf_narrow_tile_arr.assign(max_cbs, 0);
-        buf_tile_r_dim_arr.assign(max_cbs, constants::TILE_HEIGHT);
-        buf_tile_c_dim_arr.assign(max_cbs, constants::TILE_WIDTH);
-        buf_tile_size_arr.assign(max_cbs, constants::BFLOAT8_B_TILE_HW);
-    }
-
 public:
     std::vector<DataFormat> buf_dataformat_arr;
     std::vector<uint32_t> buf_num_faces_arr;
@@ -51,7 +40,15 @@ public:
     std::vector<uint32_t> buf_tile_c_dim_arr;
     std::vector<uint32_t> buf_tile_size_arr;
 
-    tt_hlk_desc(uint32_t max_cbs) { init(max_cbs); }
+    tt_hlk_desc(uint32_t max_cbs) :
+        buf_dataformat_arr(max_cbs, DataFormat::Invalid),
+        buf_num_faces_arr(max_cbs, constants::TILE_HW / constants::FACE_HW),
+        buf_partial_face_arr(max_cbs, 0),
+        buf_face_r_dim_arr(max_cbs, constants::FACE_HEIGHT),
+        buf_narrow_tile_arr(max_cbs, 0),
+        buf_tile_r_dim_arr(max_cbs, constants::TILE_HEIGHT),
+        buf_tile_c_dim_arr(max_cbs, constants::TILE_WIDTH),
+        buf_tile_size_arr(max_cbs, constants::BFLOAT8_B_TILE_HW) {}
 
     DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
 

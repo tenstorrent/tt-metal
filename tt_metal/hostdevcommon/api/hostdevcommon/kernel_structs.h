@@ -7,9 +7,8 @@
 
 namespace tt {
 
-// Note: Max CB count is architecture-dependent (Wormhole: 32, Blackhole: 64).
+// Note: Max CB count is architecture-dependent.
 // Use hal.get_arch_num_circular_buffers() for runtime validation.
-// CB indices c_32 through c_63 are only valid on Blackhole.
 enum CBIndex : std::uint8_t {
     c_0 = 0,
     c_1 = 1,

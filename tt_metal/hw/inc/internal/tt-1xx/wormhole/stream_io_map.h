@@ -9,9 +9,7 @@
 
 #include "internal/risc_attribs.h"
 
-// OPERAND_START_STREAM changed from 8 to 0 for consistency with Blackhole
-// Streams 0-7 were previously reserved but are now used
-// Mapping: CB/operand ID N -> stream N (0-31)
+// Stream-to-CB mapping: stream index maps directly to CB index (stream N -> CB N)
 const uint32_t OPERAND_START_STREAM = 0;
 
 // Indexed with operand = kernel operand ID (0-31) per the table above
