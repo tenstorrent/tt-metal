@@ -173,7 +173,6 @@ def test_decoder_inference(
         prefetcher=prefetcher,
     )
     if use_prefetcher:
-        model_args.build_prefetcher_configs("decode")
         tt_model.prefetcher.prefetch()
 
     seqlen = 1
@@ -209,10 +208,7 @@ def test_decoder_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            # ttnn.DRAM_MEMORY_CONFIG,
-            model_args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
-            if use_prefetcher
-            else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_decode_residual_mem_config("decode", prefetcher if use_prefetcher else None),
         )
 
         # Get cos/sin matrices for the current position of each user

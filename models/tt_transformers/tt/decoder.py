@@ -160,8 +160,6 @@ class TransformerBlock(LightweightModule):
                     weight_dtype=ttnn.bfloat16,
                     weight_key="pre_feedforward_layernorm",
                     is_distributed=self.args.is_distributed_norm,
-                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
@@ -187,8 +185,6 @@ class TransformerBlock(LightweightModule):
                     weight_dtype=ttnn.bfloat16,
                     weight_key="post_feedforward_layernorm",
                     is_distributed=self.args.is_distributed_norm,
-                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
@@ -218,13 +214,7 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        def get_skip_mem_cfg():
-            if self.prefetcher is None:
-                return self.model_config["DECODE_RESIDUAL_MEMCFG"]
-            else:
-                return self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
-
-        skip_mem_cfg = get_skip_mem_cfg() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        skip_mem_cfg = self.args.get_decode_residual_mem_config(mode, self.prefetcher)
 
         assert (
             x.memory_config() == skip_mem_cfg
@@ -236,7 +226,7 @@ class TransformerBlock(LightweightModule):
         )
 
         # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
+        attn_in = self.attention_norm(x, mode, norm_config=self.args.get_norm_config("attn", mode, self.prefetcher))
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
@@ -262,7 +252,9 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
         else:
             hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
+        hidden_states = self.ff_norm(
+            hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
+        )
 
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
@@ -284,22 +276,26 @@ class TransformerBlock(LightweightModule):
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
-            hidden_states = self.pre_ff_norm(hidden_states, mode)
+            hidden_states = self.pre_ff_norm(
+                hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
+            )
 
         ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
-            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
 
-        activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
 
         if self.post_ff_norm is not None:
-            hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
+            hidden_states = self.post_ff_norm(
+                hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
+            )  # Gathered
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,

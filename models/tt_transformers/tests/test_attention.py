@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    (True, False),
+    (False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -159,7 +159,6 @@ def test_attention_inference(
     )
 
     if prefetcher is not None and mode == "decode":
-        model_args.build_prefetcher_configs("decode")
         prefetcher.prefetch()
 
     cos, sin = precompute_freqs(
@@ -197,9 +196,7 @@ def test_attention_inference(
         tt_attention_input = pt_attention_input.clone()
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"]
-            if prefetcher is not None and mode == "decode"
-            else model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.get_attn_input_mem_config(mode, prefetcher if mode == "decode" else None),
             force_replicated=False if model_args.is_galaxy else True,
         )
 

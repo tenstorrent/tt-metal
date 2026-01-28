@@ -327,7 +327,7 @@ def test_cross_attention_transformer_text_inference(
         else:
             tt_h = model_args.prepare_residual_tensor_decode(
                 h,
-                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+                model_args.get_decode_residual_mem_config("decode"),
             )
             position_ids = position_ids.reshape(1).expand(batch)
             tt_position_id = ttnn.from_torch(

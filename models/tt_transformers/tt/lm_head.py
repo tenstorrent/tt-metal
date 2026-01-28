@@ -132,41 +132,24 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
         )
 
-        self.program_configs_prefill = [
-            args.dram_matmul_config(
-                args.tile_padded_batch_rows,
-                args.dim,
-                split_size,
-                args.lm_head_core_grid.num_cores,
-            )
-            for split_size in split_sizes_prefill
-        ]
-
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == "decode"
+        split_sizes = split_sizes_decode if use_prefetcher else split_sizes_prefill
+        program_configs = [
+            self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
+            for split_size in split_sizes
+        ]
+        output_weights = self.output_weights_decode if use_prefetcher else self.output_weights_prefill
 
-        if use_prefetcher:
-            # Fetch the program config at forward time (not cached at init) because
-            # build_prefetcher_configs() may update it after LMHead is created
-            program_configs = [
-                self.model_config["LM_HEAD_RING_PROGCFG"] for _ in range(len(self.output_weights_decode))
-            ]
-            output_weights = self.output_weights_decode
-        else:
-            program_configs = self.program_configs_prefill
-            output_weights = self.output_weights_prefill
-
-        self.lm_head_output_memory_config = (
-            self.model_config["PREFETCHER_SHARDED_LM_HEAD_OUTPUT_RING_MEMCFG"]
-            if use_prefetcher
-            else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
+            "decode" if use_prefetcher else "prefill", self.prefetcher if use_prefetcher else None
         )
 
         for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
             if use_prefetcher:
-                memory_config = self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"]
-                x = ttnn.to_memory_config(x, memory_config)
+                lm_head_input_ring_mem_cfg = self.args.get_lm_head_input_ring_mem_config(self.prefetcher)
+                x = ttnn.to_memory_config(x, lm_head_input_ring_mem_cfg)
 
             output = ttnn.linear(
                 x,
@@ -180,10 +163,12 @@ class LMHead(LightweightModule):
 
             if not use_prefetcher:
                 output = ttnn.sharded_to_interleaved(
-                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+                    output, memory_config=self.args.get_lm_head_sharded_output_mem_config(None)
                 )
             else:
-                output = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                output = ttnn.to_memory_config(
+                    output, memory_config=self.args.get_lm_head_sharded_output_mem_config(self.prefetcher)
+                )
 
             outputs.append(output)
 
@@ -201,14 +186,12 @@ class LMHead(LightweightModule):
         for output_slice in outputs:
             ttnn.deallocate(output_slice)
 
-        # Only use PREFETCHER_LM_HEAD_OUT_RING_RESHARD_MEMCFG for decode mode
+        # Only use reshard mem config for decode mode
         # Prefill has different tensor widths (32064 vs 32768) so use L1_MEMORY_CONFIG
         if use_prefetcher:
             output = ttnn.to_memory_config(
                 output,
-                memory_config=self.model_config.get(
-                    "PREFETCHER_LM_HEAD_OUT_RING_RESHARD_MEMCFG", ttnn.L1_MEMORY_CONFIG
-                ),
+                memory_config=self.args.get_lm_head_reshard_mem_config(self.prefetcher),
             )
 
         output = tt_all_reduce(

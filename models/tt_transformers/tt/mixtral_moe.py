@@ -164,7 +164,7 @@ class TtMoeLayer(LightweightModule):
             results_11BH.deallocate(True)
             output = ttnn.to_memory_config(
                 output,
-                self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                self.args.get_decode_residual_mem_config("decode"),
             )
 
         output = ttnn.to_memory_config(

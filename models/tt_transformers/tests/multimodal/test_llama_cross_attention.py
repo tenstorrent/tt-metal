@@ -204,7 +204,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                model_args.get_attn_input_mem_config("decode"),
                 force_replicated=True,
             )
 

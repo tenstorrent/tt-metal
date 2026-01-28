@@ -158,9 +158,12 @@ class Transformer(LightweightModule):
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
-        logits = self.norm(logits, mode="prefill", norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
-        if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-            logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        logits = self.norm(
+            logits, mode="prefill", norm_config=self.args.get_norm_config("lm_head", "prefill", self.prefetcher)
+        )
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config("prefill")
+        if lm_head_input_mem_cfg.is_sharded():
+            logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
         return logits
 
@@ -385,19 +388,13 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
+        decode_residual_mem_cfg = self.args.get_decode_residual_mem_config("decode", self.prefetcher)
         tt_tokens = self.embd(
             tokens,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
-            if self.prefetcher is None
-            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
         )
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        tt_tokens = ttnn.to_memory_config(
-            tt_tokens,
-            self.args.model_config["DECODE_RESIDUAL_MEMCFG"]
-            if self.prefetcher is None
-            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
-        )
+        tt_tokens = ttnn.to_memory_config(tt_tokens, decode_residual_mem_cfg)
         return tt_tokens
 
     def concat_host_output(self, tt_out, is_log_probs=False):
@@ -582,12 +579,10 @@ class Transformer(LightweightModule):
         if mode == "decode":
             if self.prefetcher is not None:
                 self.prefetcher.init("decode")
-                self.args.build_prefetcher_configs("decode")
                 self.prefetcher.prefetch()
         else:
             if self.prefetcher is not None:
                 self.prefetcher.init("prefill")
-                self.args.build_prefetcher_configs("prefill")
 
     def forward(
         self,
@@ -610,16 +605,14 @@ class Transformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
-            activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
 
             if mode == "decode" and not self.args.is_galaxy:
                 x = ttnn.to_memory_config(
                     x,
-                    self.model_config["DECODE_RESIDUAL_MEMCFG"]
-                    if self.prefetcher is None
-                    else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                    self.args.get_decode_residual_mem_config("decode", self.prefetcher),
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
@@ -652,10 +645,11 @@ class Transformer(LightweightModule):
         # Output norm
         # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=4,y=7)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 64]),grid={[(x=1,y=0) - (x=4,y=7)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
 
-        x = self.norm(x, mode=mode, norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
+        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
 
-        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-            x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(mode)
+        if mode == "prefill" and lm_head_input_mem_cfg.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
 
         x = self.lm_head(x)
         return x

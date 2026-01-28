@@ -624,7 +624,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
         S = 1
 
-        tt_h = ttnn.to_memory_config(tt_h, self.configuration.model_config["DECODE_RESIDUAL_MEMCFG"])
+        tt_h = ttnn.to_memory_config(tt_h, self.configuration.get_decode_residual_mem_config("decode"))
 
         tt_rot_mats = self.text_model.rope_setup.get_rot_mats(tt_rope_id)
 

@@ -224,6 +224,12 @@ class Prefetcher(LightweightModule):
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
         )
 
+        # Dynamic worker core grid (for easily grabbing a sub core grid that is of mulitples of 8 cores)
+        self.dynamic_worker_core_grid = lambda num_cores: ttnn.CoreRangeSet(
+            # requested number of cores MUST be multiples of 8
+            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(num_cores // 8, 7))]
+        )
+
         # Remaining worker core ranges for the worker sub device
         left_range = self.core_config._receiver_cols["left"]
         right_range = self.core_config._receiver_cols["right"]
