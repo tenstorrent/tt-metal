@@ -558,7 +558,53 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
 
     # Run the command with custom environment (always show live output now)
-    result = subprocess.run(cmd, cwd=BASE_DIR, text=True, env=env)
+    # Use a custom command wrapper with tee to capture output while showing it live
+    import tempfile
+    import re
+
+    # Create a temp file to capture output
+    tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
+    os.close(tmp_output_fd)  # Close fd, we'll open as file
+
+    try:
+        # Build command with tee to show output live AND save to file
+        # Convert cmd list to properly quoted string for shell
+        cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
+        tee_cmd = f"{cmd_str} 2>&1 | tee {tmp_output_path}"
+
+        # Run with shell=True to use tee
+        result = subprocess.run(tee_cmd, shell=True, cwd=BASE_DIR, text=True, env=env)
+
+        # Read the captured output to parse test statistics
+        with open(tmp_output_path, "r") as f:
+            output_text = f.read()
+
+        # Parse pytest results from output
+        test_stats = {"passed": 0, "failed": 0, "total": 0}
+
+        # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
+        summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
+        if summary_match:
+            test_stats["failed"] = int(summary_match.group(1))
+            test_stats["passed"] = int(summary_match.group(2))
+            test_stats["total"] = test_stats["passed"] + test_stats["failed"]
+        else:
+            # Check for only passed
+            passed_match = re.search(r"(\d+)\s+passed", output_text)
+            if passed_match:
+                test_stats["passed"] = int(passed_match.group(1))
+                test_stats["total"] = test_stats["passed"]
+            # Check for only failed
+            failed_match = re.search(r"(\d+)\s+failed", output_text)
+            if failed_match:
+                test_stats["failed"] = int(failed_match.group(1))
+                test_stats["total"] += test_stats["failed"]
+    finally:
+        # Clean up temp file
+        try:
+            os.remove(tmp_output_path)
+        except:
+            pass
 
     # Collect generated JSON files from the unique subdirectory
     json_files = collect_operation_jsons(trace_dir)
@@ -595,6 +641,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "trace_dir": trace_dir,
         "keep_traces": keep_traces,
         "output_dir": output_dir,
+        "test_stats": test_stats,
     }
 
 
@@ -694,7 +741,16 @@ Examples (Import existing traces):
         print("\n" + "=" * 50)
         print("📋 RESULTS")
         print("=" * 50)
-        print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
+
+        # Display test results if we ran tests (not from existing traces)
+        if not args.from_trace_dir and "test_stats" in result:
+            stats = result["test_stats"]
+            if stats["total"] > 0:
+                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
+            else:
+                # Fallback if we couldn't parse the output
+                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
+
         print(f"📊 Collected {len(result['trace_files'])} operation trace files")
 
         if result["trace_files"]:
@@ -845,11 +901,16 @@ Examples (Import existing traces):
                 if cleaned_count > 0:
                     print(f"✅ Cleaned up {cleaned_count} trace file(s)")
 
-                # Also remove the subdirectory if it's empty
+                # Also remove the metadata file and subdirectory
                 trace_dir = result.get("trace_dir")
                 if trace_dir and os.path.exists(trace_dir):
                     try:
-                        # Check if directory is empty
+                        # Remove metadata file if it exists
+                        metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
+                        if os.path.exists(metadata_file):
+                            os.remove(metadata_file)
+
+                        # Check if directory is empty now
                         if not os.listdir(trace_dir):
                             os.rmdir(trace_dir)
                             print(f"✅ Cleaned up trace directory: {os.path.basename(trace_dir)}")
@@ -864,7 +925,9 @@ Examples (Import existing traces):
             print(f"\n✅ Operations extracted successfully!")
             print(f"📄 Master file: {master_file}")
 
-        return 0 if result["success"] else 1
+        # Always return 0 (success) as long as we processed traces
+        # Test failures don't affect tracer success
+        return 0
 
     except Exception as e:
         print(f"❌ Error: {e}")
