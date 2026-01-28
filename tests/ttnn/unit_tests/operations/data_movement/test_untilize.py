@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -240,9 +240,7 @@ def test_untilize_single_core_interleaved_to_sharded_writer_kernel_tensor_addrge
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1467,7 +1465,7 @@ def test_untilize_fp32(device, tensor_shape, input_buffer_type, output_buffer_ty
     untilized = ttnn.untilize(tile_tensor, memory_config=output_memory_config, use_pack_untilize=True)
     result = ttnn.to_torch(untilized)
 
-    assert torch.equal(result, torch_tensor), f"untilize lost FP32 precision"
+    assert_equal(result, torch_tensor)
 
 
 @pytest.mark.xfail(
@@ -1490,7 +1488,7 @@ def test_untilize_fp32_not_use_pack_untilize(device, tensor_shape):
     untilized = ttnn.untilize(tile_tensor, use_pack_untilize=False)
     result = ttnn.to_torch(untilized)
 
-    assert torch.equal(result, torch_tensor), f"untilize lost FP32 precision"
+    assert_equal(result, torch_tensor)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1596,9 +1594,7 @@ def test_untilize_single_core_interleaved_to_nd_sharded(
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1707,9 +1703,7 @@ def test_untilize_single_core_legacy_sharded_to_nd_sharded(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1772,9 +1766,7 @@ def test_untilize_single_core_nd_sharded_to_nd_sharded(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1889,9 +1881,7 @@ def test_untilize_single_core_nd_sharded_to_legacy_sharded(
         use_multicore=False,
         use_pack_untilize=use_pack_untilize,
     )
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1937,9 +1927,7 @@ def test_untilize_single_core_nd_sharded_to_interleaved(
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2025,9 +2013,7 @@ def test_untilize_multi_core_interleaved_to_nd_sharded(
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2089,9 +2075,7 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2146,9 +2130,7 @@ def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2214,9 +2196,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2289,9 +2269,7 @@ def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs_shar
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2406,9 +2384,7 @@ def test_untilize_multicore_nd_shard_to_legacy_shard(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -2525,9 +2501,7 @@ def test_untilize_multicore_legacy_shard_to_nd_shard(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 def untilize_nd_shard_spec_to_same_shard_spec_test_helper(
@@ -2547,7 +2521,7 @@ def untilize_nd_shard_spec_to_same_shard_spec_test_helper(
     ttnn_tensor = ttnn.from_torch(torch_tensor, spec=nd_spec, device=device)
 
     untilized_tensor = ttnn.untilize(ttnn_tensor, use_pack_untilize=use_pack_untilize)
-    assert torch.equal(torch_tensor, ttnn.to_torch(untilized_tensor)), "torch and ttnn output tensors are not equal"
+    assert_equal(torch_tensor, ttnn.to_torch(untilized_tensor))
 
 
 @pytest.mark.parametrize("shape", [[4, 512, 768]])
@@ -2632,6 +2606,4 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
 
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, use_pack_untilize=use_pack_untilize)
 
-    assert torch.equal(
-        input_torch_tensor, ttnn.to_torch(ttnn_output_tensor)
-    ), "torch and ttnn output tensors are not equal"
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
