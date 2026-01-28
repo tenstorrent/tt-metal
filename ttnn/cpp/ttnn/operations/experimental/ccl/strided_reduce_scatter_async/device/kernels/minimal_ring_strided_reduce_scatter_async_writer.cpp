@@ -264,6 +264,7 @@ void kernel_main() {
 
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+
                     for (uint32_t i = 0; i < ring_size; i++) {
                         uint32_t actual_slice_idx;
                         if (direction) {
@@ -378,7 +379,6 @@ void kernel_main() {
                                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
                             noc_async_writes_flushed();
                         }
-                        DPRINT << "====================================" << ENDL();
 
                         if (direction) {
                             slice_idx--;

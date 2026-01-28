@@ -151,8 +151,6 @@ void kernel_main() {
         const uint32_t batch_offset = input_batch_num_pages * b;
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-            uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
-
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
