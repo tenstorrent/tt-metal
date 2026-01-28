@@ -57,8 +57,12 @@ ReduceToOneOp::spec_return_value_t ReduceToOneOp::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    // Intermediate tensor has the same spec as input (used as receive buffer)
-    std::vector<TensorSpec> intermediate_specs = {input_tensor.tensor_spec()};
+    // 3 intermediate tensors for 3 rounds of receiving (prevents data overwrites)
+    // - intermediate_r1: LEAF → ROOT* (round 1)
+    // - intermediate_r2: ROOT3 → ROOT2/ROOT1 (round 2)
+    // - intermediate_r3: ROOT2 → ROOT1 (round 3)
+    std::vector<TensorSpec> intermediate_specs = {
+        input_tensor.tensor_spec(), input_tensor.tensor_spec(), input_tensor.tensor_spec()};
 
     // Output tensor has the same spec as input
     std::vector<TensorSpec> final_output_specs = {input_tensor.tensor_spec()};
@@ -75,11 +79,10 @@ ReduceToOneOp::tensor_return_value_t ReduceToOneOp::create_output_tensors(
     std::vector<ttnn::Tensor> intermediate_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
 
-    // Create or use provided intermediate tensor
-    if (tensor_args.optional_intermediate_tensor.has_value()) {
-        intermediate_tensors.push_back(tensor_args.optional_intermediate_tensor.value());
-    } else {
-        intermediate_tensors.push_back(create_device_tensor(output_specs[0][0], mesh_device));
+    // Create 3 intermediate tensors for 3 rounds of receiving
+    // Note: optional_intermediate_tensor is ignored for now - always create fresh tensors
+    for (size_t i = 0; i < 3; ++i) {
+        intermediate_tensors.push_back(create_device_tensor(output_specs[0][i], mesh_device));
     }
 
     // Create or use provided output tensor

@@ -24,13 +24,17 @@ void kernel_main() {
     // Compile-time args
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
     constexpr uint32_t local_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t received_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(2);  // Round 1: LEAF → ROOT*
+    constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(3);  // Round 2: ROOT3 → ROOT2/ROOT1
+    constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(4);  // Round 3: ROOT2 → ROOT1
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t scratch_cb = get_compile_time_arg_val(6);
 
     // Senders don't receive anything - they just read local data
     if constexpr (device_role == MESH_LEAF) {
         // For senders: local_cb is already populated (in-place on input shard)
         // Just push to indicate data is ready
+        cb_reserve_back(local_cb, num_tiles);
         cb_push_back(local_cb, num_tiles);
         return;
     }
@@ -42,66 +46,33 @@ void kernel_main() {
     const uint32_t recv_sem_round3 = get_arg_val<uint32_t>(arg_idx++);
 
     // Push local data to compute (local_cb is in-place on input shard)
+    cb_reserve_back(local_cb, num_tiles);
     cb_push_back(local_cb, num_tiles);
 
-    // === Round 1: Wait for shard from sender ===
+    // === Round 1: Wait for shard from sender (LEAF → ROOT*) ===
+    cb_reserve_back(received_cb_r1, num_tiles);
     volatile tt_l1_ptr uint32_t* recv_sem1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round1);
 
-    tt_l1_ptr routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    uint16_t my_chip_id = routing_table->my_device_id;
-
-    // if constexpr (device_role == MESH_ROOT3) {
-    //     DPRINT << "reader waiting sem1 done " << my_chip_id << " device_role " << device_role << " recv_sem_round1 "
-    //     << recv_sem_round1 << " recv_sem1_ptr " << recv_sem1_ptr[0] << " x " <<(uint)my_x[0] << " y " <<
-    //     (uint)my_y[0] <<ENDL();
-    // }
-
-    noc_semaphore_wait_min(recv_sem1_ptr, 1);
-
-    if constexpr (device_role == MESH_ROOT3) {
-        DPRINT << "reader waiting sem1 done " << my_chip_id << " device_role " << device_role << " recv_sem_round1 "
-               << recv_sem_round1 << " recv_sem1_ptr " << recv_sem1_ptr[0] << ENDL();
-    }
-
-    // DPRINT << "reader got sem1!" << ENDL();
-
+    noc_semaphore_wait(recv_sem1_ptr, 1);
     // Push received data to compute
-    cb_push_back(received_cb, num_tiles);
+    cb_push_back(received_cb_r1, num_tiles);
     noc_semaphore_set(recv_sem1_ptr, 0);
 
     if constexpr (device_role == MESH_ROOT2 || device_role == MESH_ROOT1) {
-        // === Round 2: Wait for result from ROOT3 ===
+        // === Round 2: Wait for result from ROOT3 (ROOT3 → ROOT2/ROOT1) ===
+        cb_reserve_back(received_cb_r2, num_tiles);
         volatile tt_l1_ptr uint32_t* recv_sem2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round2);
-        noc_semaphore_wait_min(recv_sem2_ptr, 1);
-
-        // DPRINT << "reader wait done 2" <<ENDL();
-
-        // tt_l1_ptr routing_l1_info_t* routing_table =
-        // reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-        // uint16_t my_chip_id = routing_table->my_device_id;
-        // DPRINT << "reader wait done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
-
-        cb_push_back(received_cb, num_tiles);
+        noc_semaphore_wait(recv_sem2_ptr, 1);
+        cb_push_back(received_cb_r2, num_tiles);
         noc_semaphore_set(recv_sem2_ptr, 0);
     }
 
     if constexpr (device_role == MESH_ROOT1) {
-        // === Round 3: Wait for result from ROOT2 ===
+        // === Round 3: Wait for result from ROOT2 (ROOT2 → ROOT1) ===
+        cb_reserve_back(received_cb_r3, num_tiles);
         volatile tt_l1_ptr uint32_t* recv_sem3_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round3);
-        noc_semaphore_wait_min(recv_sem3_ptr, 1);
-
-        // if constexpr (device_role == MESH_ROOT1) {
-        //     DPRINT << "reader waiting sem3 done " << my_chip_id << " device_role " << device_role << "
-        //     recv_sem_round3 " << recv_sem_round3 << " recv_sem3_ptr " << recv_sem3_ptr[0] <<ENDL();
-        // }
-
-        cb_push_back(received_cb, num_tiles);
+        noc_semaphore_wait(recv_sem3_ptr, 1);
+        cb_push_back(received_cb_r3, num_tiles);
         noc_semaphore_set(recv_sem3_ptr, 0);
     }
-
-    // tt_l1_ptr routing_l1_info_t* routing_table =
-    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    // uint16_t my_chip_id = routing_table->my_device_id;
-    // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
 }

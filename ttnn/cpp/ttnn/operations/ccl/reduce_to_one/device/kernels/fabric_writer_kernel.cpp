@@ -42,8 +42,13 @@ void kernel_main() {
     constexpr uint32_t packet_cb = get_compile_time_arg_val(6);
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    // ROOT1: just wait for compute done and exit (sending to exit_coord not yet implemented)
+    // ROOT1: wait for compute done and exit (sending to exit_coord not yet implemented)
+    // ROOT1 compute writes to output_cb twice (stage 1 and stage 3), so we need to wait twice
     if constexpr (device_role == MESH_ROOT1) {
+        // Wait for stage 1 output, pop to free CB for stage 3
+        cb_wait_front(source_cb, num_tiles);
+        cb_pop_front(source_cb, num_tiles);
+        // Wait for final stage 3 output
         cb_wait_front(source_cb, num_tiles);
         cb_pop_front(source_cb, num_tiles);
         return;
@@ -62,7 +67,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_workers; i++) {
         worker_sem_addr[i] = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     }
-
     // Get packet buffer address from CB - this is where workers write their packets
     const uint32_t packet_buffer_addr = get_write_ptr(packet_cb);
 
@@ -73,10 +77,6 @@ void kernel_main() {
     // Destination NOC addresses for fused write+atomic_inc
     uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_l1_addr);
     uint64_t dst_sem_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr);
-
-    // Debug: print destination info
-    // DPRINT << "fabric_wr dst: noc_x=" << dst_noc_x << " noc_y=" << dst_noc_y
-    //        << " sem=" << dst_sem_addr << " l1=" << dst_l1_addr << " role=" << device_role << ENDL();
 
     // Allocate header for own shard
     auto own_route_id = PacketHeaderPool::allocate_header_n(1);
@@ -95,9 +95,8 @@ void kernel_main() {
     // Send own shard via fabric (payload first, then header)
     fabric_sender.wait_for_empty_write_slot();
     fabric_sender.send_payload_without_header_non_blocking_from_address(own_data_addr, payload_size_bytes);
-    fabric_sender.send_payload_flush_non_blocking_from_address(
+    fabric_sender.send_payload_flush_blocking_from_address(
         reinterpret_cast<uint32_t>(own_header), sizeof(PACKET_HEADER_TYPE));
-    noc_async_writes_flushed();
 
     cb_pop_front(source_cb, num_tiles);
 
@@ -113,48 +112,10 @@ void kernel_main() {
         uint32_t worker_header_addr = slot_base;
         uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
 
-        // Debug: inspect worker's packet header to verify fused atomic inc destination (LEAF only)
-        // if constexpr (device_role == MESH_LEAF) {
-        //     volatile tt_l1_ptr PACKET_HEADER_TYPE* worker_hdr =
-        //         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(worker_header_addr);
-        //     // Access fused atomic inc fields: noc_address (data dest), semaphore_noc_address (sem dest)
-        //     uint64_t hdr_noc_addr = worker_hdr->command_fields.unicast_seminc_fused.noc_address;
-        //     uint64_t hdr_sem_addr = worker_hdr->command_fields.unicast_seminc_fused.semaphore_noc_address;
-        //     uint32_t hdr_val = worker_hdr->command_fields.unicast_seminc_fused.val;
-
-        //     auto noc_address_components = get_noc_address_components(hdr_sem_addr);
-
-        //     auto x= noc_address_components.first.x;
-        //     auto y= noc_address_components.first.y;
-        //     auto dst= noc_address_components.second;
-
-        //     // fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)worker_hdr, num_hops);
-        //     // worker_hdr->to_noc_fused_unicast_write_atomic_inc(
-        //     //     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, dst_sem_noc_addr, 1, false},
-        //     //     payload_size_bytes);
-
-        //     DPRINT << "x " << (uint)x<< " y " << (uint)y << " dst " << (uint)dst<< ENDL();
-
-        //     auto noc_address_components1 = get_noc_address_components(hdr_noc_addr);
-        //     auto x1= noc_address_components1.first.x;
-        //     auto y1= noc_address_components1.first.y;
-        //     auto dst1= noc_address_components1.second;
-
-        //     DPRINT << "x1 " << (uint)x1<< " y1 " << (uint)y1 << " dst1 " << (uint)dst1<< ENDL();
-
-        //     uint64_t dst_noc_addr = get_noc_addr(x1, y1, dst1);
-        //     uint64_t dst_sem_noc_addr = get_noc_addr(x, y, dst);
-        //     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)worker_hdr, num_hops);
-        //     worker_hdr->to_noc_fused_unicast_write_atomic_inc(
-        //         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, dst_sem_noc_addr, 1, false},
-        //         payload_size_bytes);
-        // }
-
         // Forward: send payload first, then header (header already has fused atomic inc set up)
         fabric_sender.wait_for_empty_write_slot();
         fabric_sender.send_payload_without_header_non_blocking_from_address(worker_payload_addr, payload_size_bytes);
-        fabric_sender.send_payload_flush_non_blocking_from_address(worker_header_addr, sizeof(PACKET_HEADER_TYPE));
-        noc_async_writes_flushed();
+        fabric_sender.send_payload_flush_blocking_from_address(worker_header_addr, sizeof(PACKET_HEADER_TYPE));
 
         // Reset semaphore for next use
         noc_semaphore_set(worker_sem_ptr, 0);
