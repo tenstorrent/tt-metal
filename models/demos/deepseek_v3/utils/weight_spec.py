@@ -16,13 +16,12 @@ class WeightSpec:
     Compatible with cache.py for future integration.
     """
 
-    torch_tensor: torch.Tensor
-    shard_dims: tuple[int | None, int | None]
-    remove_dims: tuple[bool, bool] | bool = False
-    dtype: ttnn.DataType | None = None
-    layout: ttnn.Layout | None = None
-    memory_config: ttnn.MemoryConfig | None = None
+    name: str
+    shard_dims: tuple[int | None, int | None] = (None, None)
+    remove_dims: tuple[bool, bool] = (False, False)
+    dtype: ttnn.DataType = ttnn.bfloat16
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
 
-    # For future cache.py integration
     preprocessor: Callable[[torch.Tensor], torch.Tensor] = lambda x: x
     postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x
