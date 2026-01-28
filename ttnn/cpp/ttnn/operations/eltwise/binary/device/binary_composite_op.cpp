@@ -5,6 +5,7 @@
 #include "binary_composite_op.hpp"
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -602,6 +603,13 @@ Tensor ExecuteBinaryRemainder::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
 
+    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+    if (is_int32) {
+        return ttnn::prim::binary_ng(
+            input_a, input_b, BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
+    }
+
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
     const auto& a =
@@ -645,7 +653,15 @@ Tensor ExecuteBinaryFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
     DataType input_dtype = input_a.dtype();
+
+    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+    if (is_int32) {
+        return ttnn::prim::binary_ng(
+            input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
+    }
     Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
+
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
