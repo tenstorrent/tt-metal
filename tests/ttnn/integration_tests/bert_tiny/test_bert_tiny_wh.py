@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from transformers import BertForQuestionAnswering, BertConfig
-from models.demos.wormhole.bert_tiny.tt.bert_tiny import (
+from models.demos.nlp.encoder.bert_tiny.tt.bert_tiny import (
     bert_for_question_answering,
     bert_attention,
     bert_intermediate,
