@@ -96,7 +96,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_4x4_arch.yaml";
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
         };
     }
     return "";
