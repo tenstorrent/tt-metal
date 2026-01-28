@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::experimental::prim {
 
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -26,15 +26,15 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     if (input.is_sharded()) {
         TT_FATAL(!has_step, "Step is not supported for sharded slice_write operation");
         if (input.layout() == Layout::ROW_MAJOR) {
-            return program::SliceWriteRMShardedInputProgramFactory{};
+            return SliceWriteRMShardedInputProgramFactory{};
         }
         if (input.layout() == Layout::TILE) {
-            return program::SliceWriteTiledShardedInputProgramFactory{};
+            return SliceWriteTiledShardedInputProgramFactory{};
         }
         TT_THROW("Unsupported input memory layout for slice_write operation");
 
     } else {
-        return program::SliceWriteRMInterleavedProgramFactory{};
+        return SliceWriteRMInterleavedProgramFactory{};
     }
 }
 
@@ -109,17 +109,17 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
     return tensor_args.output;
 }
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
+Tensor slice_write(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
-    using OperationType = ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation;
+    using OperationType = ttnn::experimental::prim::SliceWriteDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .slice_start = slice_start,

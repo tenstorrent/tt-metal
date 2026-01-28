@@ -6,8 +6,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t src_cb_id = get_compile_time_arg_val(0);
     uint32_t dst_cb_id = get_compile_time_arg_val(1);
     uint32_t num_tiles = get_compile_time_arg_val(2);
@@ -26,4 +25,3 @@ void MAIN {
         cb_push_back(dst_cb_id, 1);
     }
 }
-}  // namespace NAMESPACE

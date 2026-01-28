@@ -12,16 +12,6 @@ on:
           - models-mandatory # unit tests only
           - models-extended # unit, demo, model perf tests
         default: manual
-      build-type:
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: Release
       extra-tag:
         required: true
         type: string
@@ -128,6 +118,29 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
@@ -178,8 +191,9 @@ jobs:
     secrets: inherit
     needs: determine-tests
     with:
-      version: 22.04
-      build-type: ${{ inputs.build-type }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
   t3000-unit-tests:

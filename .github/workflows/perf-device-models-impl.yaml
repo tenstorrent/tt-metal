@@ -226,9 +226,9 @@ jobs:
         with:
           device_perf_model_name: "non-civ2_tests"
           commands: |
-            pytest models/demos/mnist/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/mnist/tests -m models_device_performance_bare_metal
             pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-            pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -246,7 +246,7 @@ jobs:
         with:
           device_perf_model_name: "stable_diffusion_1_4"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+            pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion-1-4'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -264,7 +264,7 @@ jobs:
         with:
           device_perf_model_name: "vgg"
           commands: |
-            pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/vgg/tests/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['vgg'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -273,7 +273,7 @@ jobs:
         with:
           device_perf_model_name: "vgg_unet"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/vgg_unet/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vgg-unet'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -301,7 +301,7 @@ jobs:
         with:
           device_perf_model_name: "resnet50"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['resnet50'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -310,7 +310,7 @@ jobs:
         with:
           device_perf_model_name: "ufld_v2"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/ufld_v2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/ufld_v2/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ufld-v2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -355,7 +355,7 @@ jobs:
         with:
           device_perf_model_name: "mobilenetv2"
           commands: |
-            pytest models/demos/mobilenetv2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/mobilenetv2/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['mobilenetv2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -364,7 +364,7 @@ jobs:
         with:
           device_perf_model_name: "vit"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vit/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/vit/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vit'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -373,7 +373,7 @@ jobs:
         with:
           device_perf_model_name: "vanilla_unet"
           commands: |
-            pytest models/demos/vanilla_unet/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/vanilla_unet/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['vanilla-unet'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

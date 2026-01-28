@@ -7,7 +7,6 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace tt::tt_metal {
 

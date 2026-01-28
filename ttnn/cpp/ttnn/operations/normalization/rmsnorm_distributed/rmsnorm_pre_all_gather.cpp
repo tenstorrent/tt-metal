@@ -15,7 +15,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     const DataType dtype,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -30,18 +30,18 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
             std::nullopt,           // bias
             residual_input_tensor,  // residual_input_tensor
             memory_config.value_or(input_tensor.memory_config()),
-            program_config.value_or(LayerNormDefaultProgramConfig{}),
+            program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
             kernel_config_val,
             std::nullopt,  // dtype
-            LayerNormType::RMSNORM,
-            DistributedLayerNormStage::PRE_ALL_GATHER);
+            ttnn::prim::LayerNormType::RMSNORM,
+            ttnn::prim::DistributedLayerNormStage::PRE_ALL_GATHER);
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
-        LayerNormDistributedType::RMSNORM,
+        ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,
         kernel_config_val,
-        program_config.value_or(LayerNormDefaultProgramConfig{}),
+        program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
         use_2d_core_grid);
 }
 

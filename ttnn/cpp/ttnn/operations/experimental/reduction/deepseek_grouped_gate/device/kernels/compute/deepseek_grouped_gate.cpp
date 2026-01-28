@@ -21,8 +21,6 @@
 
 #include "debug/dprint_tensix.h"
 
-namespace NAMESPACE {
-
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
     // Perform sigmoid on scores
@@ -357,7 +355,7 @@ void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_sc
 
 }  // namespace blocks
 
-void MAIN {
+void kernel_main() {
     // Circular buffer indices
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
@@ -443,4 +441,3 @@ void MAIN {
         blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
     }
 }
-}  // namespace NAMESPACE

@@ -15,15 +15,15 @@
 
 #include "convert_to_hwc_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::experimental::prim {
 
 struct ConvertToHWCDeviceOperation {
-    using operation_attributes_t = CnnParams;
-    using tensor_args_t = CnnInputs;
+    using operation_attributes_t = ConvertToHwcParams;
+    using tensor_args_t = ConvertToHwcInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::ConvertToHWCProgramFactory>;
-    using shared_variables_t = program::ConvertToHWCProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<ConvertToHWCProgramFactory>;
+    using shared_variables_t = ConvertToHWCProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,11 +38,11 @@ struct ConvertToHWCDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+ttnn::experimental::prim::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
     const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype);
 
 }  // namespace ttnn::prim

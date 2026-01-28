@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 // Adapter factory that wraps the shared factory
 struct ShardedToInterleavedPartialProgramFactory {
@@ -16,15 +16,15 @@ struct ShardedToInterleavedPartialProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
-        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
-        partial_tensor_return_value_t& output);
+        const ShardedToInterleavedPartialParams& params,
+        const ShardedToInterleavedPartialInputs& tensor_args,
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
-        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
-        partial_tensor_return_value_t& output);
+        const ShardedToInterleavedPartialParams& params,
+        const ShardedToInterleavedPartialInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

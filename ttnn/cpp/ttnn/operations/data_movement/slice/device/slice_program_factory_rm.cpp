@@ -189,7 +189,9 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 
 }  // namespace
 
-namespace slice::program {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
 SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
@@ -213,8 +215,8 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
 
     constexpr uint32_t src0_cb_index = 0;
 
-    const auto [cb_page_size, num_read_per_barrier, misalignment] =
-        compute_cb_size(input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+    const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
+        input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
@@ -241,7 +243,7 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
     auto all_cores_vec = corerange_to_cores(all_cores);
-    auto all_runtime_args = get_slice_runtime_args_rm(
+    auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
         input,
         output,
         args.slice_start,
@@ -251,7 +253,7 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores_vec[i], all_runtime_args[i].first);
@@ -276,15 +278,15 @@ void SliceRmProgramFactory::override_runtime_arguments(
             : tt::tt_metal::split_work_to_cores(
                   cached_program.shared_variables.compute_with_storage_grid_size, num_unpadded_sticks);
 
-    const auto [cb_page_size, num_read_per_barrier, misalignment] =
-        compute_cb_size(src_tensor, output, slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+    const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
+        src_tensor, output, slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     const uint32_t cb_size_bytes = num_read_per_barrier * 2 * cb_page_size;
     UpdateCircularBufferTotalSize(cached_program.program, cached_program.shared_variables.cb_src0, cb_size_bytes);
     UpdateCircularBufferPageSize(cached_program.program, cached_program.shared_variables.cb_src0, 0, cb_page_size);
 
     auto all_cores_vec = corerange_to_cores(all_cores);
-    auto all_runtime_args = get_slice_runtime_args_rm(
+    auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
         src_tensor,
         output,
         slice_start,
@@ -294,7 +296,7 @@ void SliceRmProgramFactory::override_runtime_arguments(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         auto& reader_runtime_args = GetRuntimeArgs(
@@ -307,6 +309,4 @@ void SliceRmProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace slice::program
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 
 struct GridSampleParams {
     std::string mode = "bilinear";
@@ -34,4 +34,4 @@ struct GridSampleInputs {
     Tensor grid;
 };
 
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim

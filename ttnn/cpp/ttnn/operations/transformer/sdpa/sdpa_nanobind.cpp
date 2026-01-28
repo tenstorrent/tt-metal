@@ -34,7 +34,7 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
 
         Keyword args:
-            attn_mask (ttnn.Tensor, optional): Defaults to `None`. Either [b x 1 x s x s] with head broadcasting implied or [b x nqh x s x s].
+            attn_mask (ttnn.Tensor, optional): Defaults to `None`. Shape [b x nqh x s x s] where batch and head dims can each be 1 for broadcasting.
             is_causal (bool): Defaults to `true`.
             scale (float, optional): Defaults to `None`.
             sliding_window_size (int, optional): Defaults to `None`. Size of sliding window for attention. If provided && is_causal, only attends to the last `sliding_window_size` tokens. If provided && !is_causal, attends to a window of size `sliding_window_size` centered at the current position.
@@ -59,14 +59,14 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
-               std::optional<ttnn::Tensor> attn_mask,
+               const std::optional<ttnn::Tensor>& attn_mask,
                bool is_causal,
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<ttnn::Tensor> attention_sink) {
+               const std::optional<ttnn::Tensor>& attention_sink) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -134,7 +134,7 @@ void bind_sdpa(nb::module_& mod) {
                int64_t chunk_start_idx,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -204,7 +204,7 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& joint_tensor_k,
                const ttnn::Tensor& joint_tensor_v,
                const std::string& joint_strategy,
-               SDPAProgramConfig program_config,
+               const SDPAProgramConfig& program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 auto outputs = self(
@@ -295,7 +295,7 @@ void bind_sdpa(nb::module_& mod) {
                ttnn::Tensor& persistent_output_buffer_v,
                const std::string& joint_strategy,
                std::size_t logical_n,
-               SDPAProgramConfig program_config,
+               const SDPAProgramConfig& program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                int32_t dim,
@@ -388,11 +388,11 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
                const uint32_t head_dim_v,
-               std::optional<ttnn::Tensor> attn_mask,
+               const std::optional<ttnn::Tensor>& attn_mask,
                bool is_causal,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -456,7 +456,7 @@ void bind_sdpa(nb::module_& mod) {
                int64_t chunk_start_idx,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -537,7 +537,7 @@ void bind_sdpa(nb::module_& mod) {
                std::optional<uint32_t> ring_id,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::Tensor>& page_table,
                std::optional<int64_t> chunk_start_idx) {

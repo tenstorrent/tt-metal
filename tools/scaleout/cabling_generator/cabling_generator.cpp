@@ -13,7 +13,9 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <fmt/base.h>
 #include <google/protobuf/text_format.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -26,6 +28,11 @@
 namespace tt::scaleout_tools {
 
 namespace {
+
+// Helper to get source file description for error messages
+inline std::string get_source_description(const std::string& source_file) {
+    return source_file.empty() ? "merged descriptor" : source_file;
+}
 
 // Helper to load protobuf descriptors
 template <typename Descriptor>
@@ -43,6 +50,307 @@ Descriptor load_descriptor_from_textproto(const std::string& file_path) {
         throw std::runtime_error("Failed to parse textproto file: " + file_path);
     }
     return descriptor;
+}
+
+// Helper function to mark ports as used for inter-board connections
+// Only marks ports that are currently available (skips already-marked ports)
+void mark_ports_used_for_connections(Node& node) {
+    for (const auto& [port_type, connections] : node.inter_board_connections) {
+        for (const auto& [board_a, board_b] : connections) {
+            // Check if port is still available before marking (may already be marked from template)
+            const auto& available_ports_a = node.boards.at(board_a.first).get_available_port_ids(port_type);
+            if (std::find(available_ports_a.begin(), available_ports_a.end(), board_a.second) !=
+                available_ports_a.end()) {
+                node.boards.at(board_a.first).mark_port_used(port_type, board_a.second);
+            }
+            const auto& available_ports_b = node.boards.at(board_b.first).get_available_port_ids(port_type);
+            if (std::find(available_ports_b.begin(), available_ports_b.end(), board_b.second) !=
+                available_ports_b.end()) {
+                node.boards.at(board_b.first).mark_port_used(port_type, board_b.second);
+            }
+        }
+    }
+}
+
+// Helper functions for loading cluster and deployment descriptors
+cabling_generator::proto::ClusterDescriptor load_cluster_descriptor(const std::string& file_path) {
+    return load_descriptor_from_textproto<cabling_generator::proto::ClusterDescriptor>(file_path);
+}
+
+deployment::proto::DeploymentDescriptor load_deployment_descriptor(const std::string& file_path) {
+    return load_descriptor_from_textproto<deployment::proto::DeploymentDescriptor>(file_path);
+}
+
+// Build endpoint map for node template inter-board connections (validates conflicts per port type)
+std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for_port_type(
+    const std::vector<Node::BoardConnection>& connections,
+    const std::string& node_template_name,
+    PortType port_type,
+    const std::string& template_source) {
+    std::map<Node::BoardEndpoint, Node::BoardEndpoint> endpoint_to_dest;
+    std::set<Node::BoardConnection> seen_connections;
+
+    // Lambda to check for duplicate endpoint in connection map
+    auto check_duplicate_endpoint = [&](const Node::BoardEndpoint& endpoint) {
+        if (endpoint_to_dest.contains(endpoint)) {
+            throw std::runtime_error(fmt::format(
+                "Duplicate connection definition in node template '{}' for port type {} in {}: port (tray_id: {}, "
+                "port_id: {}) appears multiple times",
+                node_template_name,
+                enchantum::to_string(port_type),
+                template_source,
+                endpoint.first.get(),
+                endpoint.second.get()));
+        }
+    };
+
+    for (const auto& [endpoint_a, endpoint_b] : connections) {
+        auto normalized = normalize_node_connection(Node::BoardConnection(endpoint_a, endpoint_b));
+        if (seen_connections.contains(normalized)) {
+            continue;  // Skip duplicate
+        }
+        seen_connections.insert(normalized);
+
+        check_duplicate_endpoint(endpoint_a);
+        check_duplicate_endpoint(endpoint_b);
+
+        endpoint_to_dest[endpoint_a] = endpoint_b;
+        endpoint_to_dest[endpoint_b] = endpoint_a;
+    }
+    return endpoint_to_dest;
+}
+
+// Validate and merge node templates from another CablingGenerator
+// Helper: Validate basic node structure (motherboard, boards)
+void validate_node_structure(
+    const Node& this_template,
+    const Node& other_template,
+    const std::string& node_desc_name,
+    const std::string& new_source_file) {
+    if (this_template.motherboard != other_template.motherboard) {
+        throw std::runtime_error(fmt::format(
+            "Node template '{}' has conflicting motherboard: '{}' vs '{}' from {}",
+            node_desc_name,
+            this_template.motherboard,
+            other_template.motherboard,
+            get_source_description(new_source_file)));
+    }
+    if (this_template.boards.size() != other_template.boards.size()) {
+        throw std::runtime_error(fmt::format(
+            "Node template '{}' has conflicting board count: {} vs {} from {}",
+            node_desc_name,
+            this_template.boards.size(),
+            other_template.boards.size(),
+            get_source_description(new_source_file)));
+    }
+    for (const auto& [tray_id, this_board] : this_template.boards) {
+        if (!other_template.boards.contains(tray_id)) {
+            throw std::runtime_error(fmt::format(
+                "Node template '{}' missing board at tray_id {} from {}",
+                node_desc_name,
+                *tray_id,
+                get_source_description(new_source_file)));
+        }
+        const auto& other_board = other_template.boards.at(tray_id);
+        if (this_board.get_arch() != other_board.get_arch()) {
+            throw std::runtime_error(fmt::format(
+                "Node template '{}' board at tray_id {} has conflicting architecture from {}",
+                node_desc_name,
+                *tray_id,
+                get_source_description(new_source_file)));
+        }
+    }
+}
+
+// Helper: Validate inter_board_connections for conflicts
+void validate_inter_board_connections(
+    const Node& this_template,
+    const Node& other_template,
+    const std::string& node_desc_name,
+    const std::string& existing_source_file,
+    const std::string& new_source_file) {
+    for (const auto& [port_type, this_conns] : this_template.inter_board_connections) {
+        if (!other_template.inter_board_connections.contains(port_type)) {
+            continue;  // Port type not in other template, skip
+        }
+        const auto& other_conns = other_template.inter_board_connections.at(port_type);
+
+        // Build endpoint maps for this port type only
+        auto this_endpoint_to_dest = build_endpoint_map_for_port_type(
+            this_conns,
+            node_desc_name,
+            port_type,
+            existing_source_file.empty() ? "merged descriptor" : existing_source_file);
+        auto other_endpoint_to_dest = build_endpoint_map_for_port_type(
+            other_conns, node_desc_name, port_type, new_source_file.empty() ? "merged descriptor" : new_source_file);
+
+        // Check for conflicts between templates for this port type
+        for (const auto& [endpoint, this_dest] : this_endpoint_to_dest) {
+            if (other_endpoint_to_dest.contains(endpoint)) {
+                const auto& other_dest = other_endpoint_to_dest.at(endpoint);
+                if (this_dest != other_dest) {
+                    throw std::runtime_error(fmt::format(
+                        "Connection conflict in node template '{}' for port type {} between templates: port "
+                        "(tray_id: {}, port_id: {}) "
+                        "connected to (tray_id: {}, port_id: {}) in {} vs (tray_id: {}, port_id: {}) in {}",
+                        node_desc_name,
+                        enchantum::to_string(port_type),
+                        endpoint.first.get(),
+                        endpoint.second.get(),
+                        this_dest.first.get(),
+                        this_dest.second.get(),
+                        get_source_description(existing_source_file),
+                        other_dest.first.get(),
+                        other_dest.second.get(),
+                        get_source_description(new_source_file)));
+                }
+            }
+        }
+    }
+}
+
+// Helper: Merge inter_board_connections with deduplication
+void merge_inter_board_connections(Node& target_template, const Node& source_template) {
+    for (const auto& [port_type, source_conns] : source_template.inter_board_connections) {
+        auto& target_conns = target_template.inter_board_connections[port_type];
+
+        // Use set to deduplicate connections
+        std::set<Node::BoardConnection> connection_set;
+        for (const auto& conn : target_conns) {
+            connection_set.insert(normalize_node_connection(conn));
+        }
+        for (const auto& conn : source_conns) {
+            connection_set.insert(normalize_node_connection(conn));
+        }
+
+        // Write back deduplicated connections
+        target_conns.clear();
+        target_conns.assign(connection_set.begin(), connection_set.end());
+    }
+}
+
+// Helper: Build normalized set of node-level board connections
+std::set<Node::BoardConnection> build_normalized_board_connection_set(
+    const std::vector<Node::BoardConnection>& connections) {
+    std::set<Node::BoardConnection> normalized_set;
+    for (const auto& conn : connections) {
+        normalized_set.insert(normalize_node_connection(conn));
+    }
+    return normalized_set;
+}
+
+// Helper: Build normalized set of graph-level port connections
+std::set<PortConnection> build_normalized_graph_connection_set(const std::vector<PortConnection>& connections) {
+    std::set<PortConnection> normalized_set;
+    for (const auto& conn : connections) {
+        normalized_set.insert(normalize_graph_connection(conn));
+    }
+    return normalized_set;
+}
+
+// Helper: Check if two nodes (by template key) are torus-compatible for merging
+bool are_torus_compatible_for_merge(const std::string& desc_name_a, const std::string& desc_name_b) {
+    auto node_type_a = get_node_type_from_string(desc_name_a);
+    auto node_type_b = get_node_type_from_string(desc_name_b);
+
+    if (!is_torus(node_type_a) || !is_torus(node_type_b)) {
+        return false;
+    }
+
+    auto node_a = create_node_instance(node_type_a);
+    auto node_b = create_node_instance(node_type_b);
+
+    return node_a->get_architecture() == node_b->get_architecture();
+}
+
+// Helper to find a torus-compatible template descriptor name (returns empty optional if not found)
+std::optional<std::string> find_torus_compatible_template(
+    const std::unordered_map<std::string, Node>& templates_to_search, const std::string& missing_node_desc_name) {
+    // Look for torus-compatible template (same architecture and both torus)
+    for (const auto& [desc_name, template_node] : templates_to_search) {
+        if (are_torus_compatible_for_merge(missing_node_desc_name, desc_name)) {
+            return desc_name;  // Found compatible template
+        }
+    }
+
+    return std::nullopt;
+}
+
+// Helper: Try to find and merge torus-compatible template
+bool try_merge_torus_compatible_template(
+    std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
+    const std::string& missing_node_desc_name,
+    const Node& missing_template,
+    const std::string& existing_source_file,
+    const std::string& new_source_file) {
+    // Find a compatible template
+    auto compatible_desc_name = find_torus_compatible_template(this_node_desc_name_to_node, missing_node_desc_name);
+
+    if (!compatible_desc_name) {
+        return false;  // No compatible template found
+    }
+
+    // Found compatible template - merge connections
+    log_info(
+        tt::LogDistributed,
+        "Merging torus-compatible node templates '{}' (from {}) with '{}' (from {})",
+        missing_node_desc_name,
+        get_source_description(new_source_file),
+        *compatible_desc_name,
+        get_source_description(existing_source_file));
+
+    merge_inter_board_connections(this_node_desc_name_to_node[*compatible_desc_name], missing_template);
+
+    // Add the missing template as an alias
+    this_node_desc_name_to_node[missing_node_desc_name] = this_node_desc_name_to_node[*compatible_desc_name];
+
+    return true;
+}
+
+void validate_and_merge_node_templates(
+    std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
+    const std::unordered_map<std::string, Node>& other_node_desc_name_to_node,
+    const std::string& existing_source_file,
+    const std::string& new_source_file) {
+    // Forward pass: validate/merge templates that exist in both
+    for (const auto& [node_desc_name, other_template] : other_node_desc_name_to_node) {
+        if (this_node_desc_name_to_node.contains(node_desc_name)) {
+            // Template exists in both - validate it matches
+            const auto& this_template = this_node_desc_name_to_node.at(node_desc_name);
+            validate_node_structure(this_template, other_template, node_desc_name, new_source_file);
+            validate_inter_board_connections(
+                this_template, other_template, node_desc_name, existing_source_file, new_source_file);
+        } else {
+            // Template missing in 'this' - try torus-compatible merge or throw error
+            bool merged = try_merge_torus_compatible_template(
+                this_node_desc_name_to_node, node_desc_name, other_template, existing_source_file, new_source_file);
+
+            if (!merged) {
+                throw std::runtime_error(fmt::format(
+                    "Node template '{}' exists in {} but not in {} - structural mismatch",
+                    node_desc_name,
+                    get_source_description(new_source_file),
+                    get_source_description(existing_source_file)));
+            }
+        }
+    }
+
+    // Backward pass: check for templates in 'this' that don't exist in 'other'
+    for (const auto& [node_desc_name, this_template] : this_node_desc_name_to_node) {
+        if (!other_node_desc_name_to_node.contains(node_desc_name)) {
+            // Check if this is a torus type that can be merged with another torus variant
+            bool found_compatible =
+                find_torus_compatible_template(other_node_desc_name_to_node, node_desc_name).has_value();
+
+            if (!found_compatible) {
+                throw std::runtime_error(fmt::format(
+                    "Node template '{}' exists in {} but not in {} - structural mismatch",
+                    node_desc_name,
+                    get_source_description(existing_source_file),
+                    get_source_description(new_source_file)));
+            }
+        }
+    }
 }
 
 // Find node descriptor by name - search inline first, then fallback to file
@@ -73,14 +381,20 @@ void create_port_connection(
     const auto& available_b = board_b.get_available_port_ids(port_type);
 
     if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
-        throw std::runtime_error(
-            std::string(enchantum::to_string(port_type)) + " Port " + std::to_string(*port_a_id) +
-            " not available on board " + std::to_string(*board_a_id) + " in host " + std::to_string(*host_a_id));
+        throw std::runtime_error(fmt::format(
+            "Port not available: {} Port {} on board {} in host {}",
+            enchantum::to_string(port_type),
+            *port_a_id,
+            *board_a_id,
+            *host_a_id));
     }
     if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
-        throw std::runtime_error(
-            std::string(enchantum::to_string(port_type)) + " Port " + std::to_string(*port_b_id) +
-            " not available on board " + std::to_string(*board_b_id) + " in host " + std::to_string(*host_b_id));
+        throw std::runtime_error(fmt::format(
+            "Port not available: {} Port {} on board {} in host {}",
+            enchantum::to_string(port_type),
+            *port_b_id,
+            *board_b_id,
+            *host_b_id));
     }
 
     if (board_a.get_arch() != board_b.get_arch()) {
@@ -108,6 +422,56 @@ Node build_node(
     Node template_node;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
+
+    // Lambda to validate endpoint conflicts in connection map
+    auto validate_endpoint_conflict = [](const Node::BoardEndpoint& endpoint,
+                                         const Node::BoardEndpoint& expected_dest,
+                                         const std::map<Node::BoardEndpoint, Node::BoardEndpoint>& endpoint_to_dest,
+                                         const std::string& context_name) {
+        auto it = endpoint_to_dest.find(endpoint);
+        if (it != endpoint_to_dest.end() && it->second != expected_dest) {
+            throw std::runtime_error(fmt::format(
+                "Connection conflict in {}: port (tray_id: {}, port_id: {}) "
+                "connected to both (tray_id: {}, port_id: {}) and (tray_id: {}, port_id: {})",
+                context_name,
+                endpoint.first.get(),
+                endpoint.second.get(),
+                it->second.first.get(),
+                it->second.second.get(),
+                expected_dest.first.get(),
+                expected_dest.second.get()));
+        }
+    };
+
+    // Validate connection conflicts FIRST - this only needs the connection pairs, not boards/motherboard
+    // Add inter-board connections and validate/mark ports
+    // First, validate no conflicts (same port connected to different destinations) - per port type
+    for (const auto& [port_type_str, port_connections] : node_descriptor.port_type_connections()) {
+        auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
+        if (!port_type.has_value()) {
+            throw std::runtime_error("Invalid port type: " + port_type_str);
+        }
+
+        // Validate conflicts per port type (same port can connect to different destinations on different port types)
+        std::map<Node::BoardEndpoint, Node::BoardEndpoint> endpoint_to_dest;
+        for (const auto& conn : port_connections.connections()) {
+            TrayId board_a_id = TrayId(conn.port_a().tray_id());
+            PortId port_a_id = PortId(conn.port_a().port_id());
+            TrayId board_b_id = TrayId(conn.port_b().tray_id());
+            PortId port_b_id = PortId(conn.port_b().port_id());
+
+            Node::BoardEndpoint endpoint_a = std::make_pair(board_a_id, port_a_id);
+            Node::BoardEndpoint endpoint_b = std::make_pair(board_b_id, port_b_id);
+
+            // Check for conflicts: same endpoint connected to different destinations (within this port type)
+            validate_endpoint_conflict(endpoint_a, endpoint_b, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
+            validate_endpoint_conflict(endpoint_b, endpoint_a, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
+
+            endpoint_to_dest[endpoint_a] = endpoint_b;
+            endpoint_to_dest[endpoint_b] = endpoint_a;
+        }
+    }
+
     if (node_descriptor.motherboard().empty()) {
         throw std::runtime_error("Node descriptor " + node_descriptor_name + " missing motherboard");
     }
@@ -165,9 +529,20 @@ HostId resolve_path_from_proto(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     uint32_t index = 0) {
+    if (path.empty()) {
+        throw std::runtime_error("Empty path in connection - invalid descriptor");
+    }
+    if (index >= path.size()) {
+        throw std::runtime_error("Path index out of bounds - invalid descriptor");
+    }
     if (index == path.size() - 1) {
         // Direct node reference - look up in child_mappings
         const std::string& node_name = path[index];
+        if (!graph_instance.child_mappings().contains(node_name)) {
+            throw std::runtime_error(
+                "Node '" + node_name + "' not found in child_mappings of instance '" + graph_instance.template_name() +
+                "'");
+        }
         const auto& child_mapping = graph_instance.child_mappings().at(node_name);
 
         if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
@@ -177,6 +552,10 @@ HostId resolve_path_from_proto(
     }
     // Multi-level path - descend into subgraph
     const std::string& subgraph_name = path[index];
+    if (!graph_instance.child_mappings().contains(subgraph_name)) {
+        throw std::runtime_error(fmt::format(
+            "Child mapping not found: '{}' in instance '{}'", subgraph_name, graph_instance.template_name()));
+    }
     const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
 
     if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
@@ -186,7 +565,9 @@ HostId resolve_path_from_proto(
 }
 
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
+// Recursively build tree structure from protobuf graph instance
 // deployment_descriptor is optional - if nullptr, no validation is performed.
+// Internal implementation of build_graph_instance that handles optional deployment_descriptor
 std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
@@ -198,11 +579,18 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     resolved->instance_name = instance_name;
 
     // Get the template definition
+    if (!cluster_descriptor.graph_templates().contains(graph_instance.template_name())) {
+        throw std::runtime_error(fmt::format("Graph template not found: '{}'", graph_instance.template_name()));
+    }
     const auto& template_def = cluster_descriptor.graph_templates().at(graph_instance.template_name());
 
     // Build children based on template + instance mapping
     for (const auto& child_def : template_def.children()) {
         const std::string& child_name = child_def.name();
+        if (!graph_instance.child_mappings().contains(child_name)) {
+            throw std::runtime_error(fmt::format(
+                "Child mapping not found: '{}' in instance '{}'", child_name, graph_instance.template_name()));
+        }
         const auto& child_mapping = graph_instance.child_mappings().at(child_name);
 
         if (child_def.has_node_ref()) {
@@ -265,12 +653,24 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             HostId host_b_id = resolve_path_from_proto(path_b, graph_instance, cluster_descriptor);
 
             // Store connection with resolved HostId
-            resolved->internal_connections[*port_type].emplace_back(
+            PortConnection port_conn(
                 std::make_tuple(host_a_id, board_a_id, port_a_id), std::make_tuple(host_b_id, board_b_id, port_b_id));
+
+            // Add to this graph instance's connections
+            resolved->add_connection(*port_type, port_conn);
         }
     }
 
     return resolved;
+}
+
+// Wrapper: build graph instance without deployment descriptor
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Node>& node_templates) {
+    return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
 void populate_deployment_hosts(
@@ -280,6 +680,11 @@ void populate_deployment_hosts(
     // Store deployment hosts
     deployment_hosts.reserve(deployment_descriptor.hosts().size());
     for (const auto& proto_host : deployment_descriptor.hosts()) {
+        if (!node_templates.contains(proto_host.node_type())) {
+            throw std::runtime_error(
+                "Node type '" + proto_host.node_type() + "' from deployment descriptor host '" + proto_host.host() +
+                "' not found in cluster descriptor templates");
+        }
         deployment_hosts.emplace_back(Host{
             .hostname = proto_host.host(),
             .hall = proto_host.hall(),
@@ -313,6 +718,7 @@ void populate_deployment_hosts_from_hostnames(
     }
 }
 
+// Wrapper: build graph instance with deployment descriptor
 std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
@@ -321,14 +727,6 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     std::unordered_map<std::string, Node>& node_templates) {
     return build_graph_instance_impl(
         graph_instance, cluster_descriptor, &deployment_descriptor, instance_name, node_templates);
-}
-
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
-    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates) {
-    return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
 }  // anonymous namespace
@@ -356,38 +754,382 @@ void CablingGenerator::initialize_cluster(
     generate_logical_chip_connections();
 }
 
-// Constructor with full deployment descriptor
-CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
-    // Load descriptors from file paths
-    auto cluster_descriptor =
-        load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path);
-    auto deployment_descriptor =
-        load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
-            deployment_descriptor_path);
+std::vector<std::string> CablingGenerator::find_descriptor_files(const std::string& directory_path) {
+    std::vector<std::string> files;
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(directory_path)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".textproto") {
+                files.push_back(entry.path().string());
+            }
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        throw std::runtime_error("Error reading directory " + directory_path + ": " + e.what());
+    }
 
-    initialize_cluster(cluster_descriptor, deployment_descriptor);
+    // Sorting files so we don't have non-deterministic order of files in the directory, making errors easier to debug.
+    std::sort(files.begin(), files.end());
 
-    // Populate deployment hosts
-    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
+    if (files.empty()) {
+        throw std::runtime_error("No .textproto files found in directory: " + directory_path);
+    }
+    return files;
 }
 
-// Constructor with just hostnames (no physical location info) - wrapper around protobuf constructor
+// Helper to build from directory by merging multiple files (friend of CablingGenerator)
+template <typename DeploymentArg>
+CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg) {
+    auto descriptor_files = CablingGenerator::find_descriptor_files(dir_path);
+
+    log_info(
+        tt::LogDistributed, "Found {} cabling descriptor files in directory: {}", descriptor_files.size(), dir_path);
+    for (const auto& file : descriptor_files) {
+        log_info(tt::LogDistributed, "  - {}", file);
+    }
+
+    // Create the first CablingGenerator from the first file
+    CablingGenerator merged(descriptor_files[0], deployment_arg);
+    std::string merged_source_description = descriptor_files[0];
+
+    // Merge all remaining files into it
+    for (size_t i = 1; i < descriptor_files.size(); ++i) {
+        merged.merge(descriptor_files[i], deployment_arg, merged_source_description);
+        merged_source_description += ", " + descriptor_files[i];
+    }
+    return merged;
+}
+
+// Helper to update lookup structures when adding a connection to ResolvedGraphInstance
+void ResolvedGraphInstance::add_connection(PortType port_type, const PortConnection& conn) {
+    internal_connections[port_type].push_back(conn);
+    endpoint_to_dest[conn.first] = conn.second;
+    endpoint_to_dest[conn.second] = conn.first;
+    // Normalize for duplicate detection (smaller endpoint first)
+    auto normalized = normalize_graph_connection(conn);
+    connection_pairs.insert(normalized);
+}
+
+// Constructor with full deployment descriptor
+// cluster_descriptor_path can be a single file or a directory
 CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) :
-    CablingGenerator(
-        load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path),
-        hostnames) {}
+    const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
+    if (!std::filesystem::exists(cluster_descriptor_path)) {
+        throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
+    }
+    if (std::filesystem::is_directory(cluster_descriptor_path)) {
+        auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor_path);
+        node_templates_ = std::move(merged.node_templates_);
+        root_instance_ = std::move(merged.root_instance_);
+        host_id_to_node_ = std::move(merged.host_id_to_node_);
+        chip_connections_ = std::move(merged.chip_connections_);
+        deployment_hosts_ = std::move(merged.deployment_hosts_);
+    } else {
+        auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
+        auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
+        initialize_cluster(cluster_descriptor, deployment_descriptor);
+        populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
+    }
+}
+
+// Constructor with just hostnames (no physical location info)
+CablingGenerator::CablingGenerator(
+    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
+    if (!std::filesystem::exists(cluster_descriptor_path)) {
+        throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
+    }
+    if (std::filesystem::is_directory(cluster_descriptor_path)) {
+        auto merged = build_from_directory(cluster_descriptor_path, hostnames);
+        node_templates_ = std::move(merged.node_templates_);
+        root_instance_ = std::move(merged.root_instance_);
+        host_id_to_node_ = std::move(merged.host_id_to_node_);
+        chip_connections_ = std::move(merged.chip_connections_);
+        deployment_hosts_ = std::move(merged.deployment_hosts_);
+    } else {
+        auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
+        initialize_cluster(cluster_descriptor);
+        populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
+    }
+}
 
 // Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
 CablingGenerator::CablingGenerator(
     const cabling_generator::proto::ClusterDescriptor& cluster_descriptor, const std::vector<std::string>& hostnames) {
     initialize_cluster(cluster_descriptor);
-
-    // Populate deployment hosts from hostnames
     populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
+}
+
+// Helper to find template key for a node by matching motherboard, board count, architecture, and board type
+static std::optional<std::string> find_template_key_for_node(
+    const Node& node, const std::unordered_map<std::string, Node>& node_desc_name_to_node) {
+    for (const auto& [desc_name, template_node] : node_desc_name_to_node) {
+        if (template_node.motherboard == node.motherboard && template_node.boards.size() == node.boards.size()) {
+            // Check board architectures and types match
+            bool all_match = true;
+            for (const auto& [tray_id, board] : node.boards) {
+                if (!template_node.boards.contains(tray_id) ||
+                    template_node.boards.at(tray_id).get_arch() != board.get_arch() ||
+                    template_node.boards.at(tray_id).get_board_type() != board.get_board_type()) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if (all_match) {
+                return desc_name;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+// Helper to recreate a node from its template, resetting port availability
+// After merging descriptors, nodes may have stale port usage info. This function
+// preserves host_id and merged inter_board_connections
+static Node create_base_node_from_template(
+    const Node& source_node, const std::unordered_map<std::string, Node>& node_templates) {
+    // Find the template by matching motherboard and board structure
+    auto template_key = find_template_key_for_node(source_node, node_templates);
+
+    if (!template_key) {
+        throw std::runtime_error(fmt::format(
+            "Could not find template for node with motherboard '{}' and {} boards",
+            source_node.motherboard,
+            source_node.boards.size()));
+    }
+
+    const Node& template_node = node_templates.at(*template_key);
+
+    // Create base node from template - this resets port availability
+    // (template only has ports marked as used for inter-board connections from node descriptor)
+    Node base_node = template_node;
+    base_node.host_id = source_node.host_id;
+    // Copy inter_board_connections from source (they may have been merged from multiple files)
+    base_node.inter_board_connections = source_node.inter_board_connections;
+    // Re-mark ports as used for the merged inter-board connections
+    mark_ports_used_for_connections(base_node);
+    return base_node;
+}
+
+// Helper to merge two ResolvedGraphInstance trees
+static void merge_resolved_graph_instances(
+    ResolvedGraphInstance& target,
+    const ResolvedGraphInstance& source,
+    const std::string& existing_source_file,
+    const std::string& new_source_file,
+    const std::unordered_map<std::string, Node>& node_templates) {
+    // Validate template_name matches
+    if (target.template_name != source.template_name) {
+        throw std::runtime_error(fmt::format(
+            "Cannot merge graph instances with different template names: '{}' vs '{}' from {}",
+            target.template_name,
+            source.template_name,
+            get_source_description(new_source_file)));
+    }
+
+    // Merge nodes - if same name exists, validate host_id matches
+    // (motherboard, board count, and architecture are already validated via templates in merge())
+    for (const auto& [name, source_node] : source.nodes) {
+        if (target.nodes.contains(name)) {
+            // Node exists in both - validate host_id matches (instance-specific, not template)
+            if (target.nodes[name].host_id != source_node.host_id) {
+                throw std::runtime_error(fmt::format(
+                    "Node '{}' has conflicting host_id: {} vs {} from {}",
+                    name,
+                    target.nodes[name].host_id.get(),
+                    source_node.host_id.get(),
+                    get_source_description(new_source_file)));
+            }
+            // Validate inter_board_connections match or are torus-compatible
+            // For torus-compatible nodes, we merge the connections
+            // For non-torus nodes, we only merge internal_connections, not inter_board_connections
+
+            // Check if this is a torus-compatible merge scenario
+            auto target_template_key = find_template_key_for_node(target.nodes[name], node_templates);
+            auto source_template_key = find_template_key_for_node(source_node, node_templates);
+
+            bool is_torus_merge =
+                (target_template_key && source_template_key &&
+                 are_torus_compatible_for_merge(*target_template_key, *source_template_key));
+
+            if (is_torus_merge) {
+                // Torus-compatible merge: combine inter_board_connections
+                if (existing_source_file.empty() && new_source_file.empty()) {
+                    throw std::runtime_error("At least one source file name must be provided for merge error messages");
+                }
+                log_info(
+                    tt::LogDistributed,
+                    "Merging torus-compatible node '{}' inter_board_connections from {} and {}",
+                    name,
+                    get_source_description(existing_source_file),
+                    get_source_description(new_source_file));
+
+                // Merge connections from both nodes using helper function
+                merge_inter_board_connections(target.nodes[name], source_node);
+            } else {
+                // Non-torus: validate inter_board_connections match exactly
+                // Build normalized sets for comparison (build once per node, not per port type)
+                std::map<PortType, std::set<Node::BoardConnection>> target_sets, source_sets;
+
+                // Pre-build all sets for both target and source
+                for (const auto& [port_type, connections] : target.nodes[name].inter_board_connections) {
+                    target_sets[port_type] = build_normalized_board_connection_set(connections);
+                }
+                for (const auto& [port_type, connections] : source_node.inter_board_connections) {
+                    source_sets[port_type] = build_normalized_board_connection_set(connections);
+                }
+
+                // Now compare the sets
+                for (const auto& [port_type, target_set] : target_sets) {
+                    if (!source_sets.contains(port_type)) {
+                        throw std::runtime_error(fmt::format(
+                            "Node '{}' has port type {} in {} but not in {} - inconsistent inter_board_connections "
+                            "usage",
+                            name,
+                            enchantum::to_string(port_type),
+                            get_source_description(existing_source_file),
+                            get_source_description(new_source_file)));
+                    }
+
+                    if (target_set != source_sets[port_type]) {
+                        throw std::runtime_error(fmt::format(
+                            "Node '{}' has conflicting inter_board_connections: {} and {} have different "
+                            "inter-board connections (we only merge inter-node connections, not "
+                            "inter_board_connections)",
+                            name,
+                            get_source_description(existing_source_file),
+                            get_source_description(new_source_file)));
+                    }
+                }
+                // Also check for port types in source that don't exist in target
+                for (const auto& [port_type, connections] : source_node.inter_board_connections) {
+                    if (!target.nodes[name].inter_board_connections.contains(port_type)) {
+                        throw std::runtime_error(fmt::format(
+                            "Node '{}' has inter_board_connections for port type {} in {} but not in {}",
+                            name,
+                            enchantum::to_string(port_type),
+                            get_source_description(new_source_file),
+                            get_source_description(existing_source_file)));
+                    }
+                }
+            }
+        } else {
+            // Node exists in source but not in target
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': node '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(new_source_file),
+                get_source_description(existing_source_file)));
+        }
+    }
+
+    // Merge subgraphs recursively
+    for (const auto& [name, source_subgraph] : source.subgraphs) {
+        if (target.subgraphs.contains(name)) {
+            // Subgraph exists - merge recursively
+            merge_resolved_graph_instances(
+                *target.subgraphs[name], *source_subgraph, existing_source_file, new_source_file, node_templates);
+        } else {
+            // Subgraph exists in source but not in target
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': subgraph '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(new_source_file),
+                get_source_description(existing_source_file)));
+        }
+    }
+
+    // Backward pass: Validate that target doesn't have any children that source doesn't have
+    // This ensures graph_templates have identical children across all descriptor files
+    for (const auto& [name, _] : target.nodes) {
+        if (!source.nodes.contains(name)) {
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': node '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(existing_source_file),
+                get_source_description(new_source_file)));
+        }
+    }
+    for (const auto& [name, _] : target.subgraphs) {
+        if (!source.subgraphs.contains(name)) {
+            throw std::runtime_error(fmt::format(
+                "Cannot merge graph_template '{}': subgraph '{}' exists in {} but not in {}. "
+                "Graph templates must have identical children across all descriptor files.",
+                target.template_name,
+                name,
+                get_source_description(existing_source_file),
+                get_source_description(new_source_file)));
+        }
+    }
+
+    // Merge internal_connections using lookup structures from ResolvedGraphInstance
+    for (const auto& [port_type, source_conns] : source.internal_connections) {
+        for (const auto& conn : source_conns) {
+            // Normalize graph-level connection (smaller endpoint first)
+            auto normalized = normalize_graph_connection(conn);
+
+            if (target.connection_pairs.contains(normalized)) {
+                // Duplicate - warn but allow
+                log_warning(
+                    tt::LogDistributed,
+                    "Duplicate connection in template '{}' from {}",
+                    target.template_name,
+                    get_source_description(new_source_file));
+            } else {
+                // Add new connection
+                // Note: For inter-node connections (internal_connections), we allow a port to connect
+                // to different destinations across different descriptors. Physical port exhaustion
+                // is validated later during FSD generation, not at merge time.
+                target.add_connection(port_type, conn);
+            }
+        }
+    }
+}
+
+template <typename DeploymentArg>
+void CablingGenerator::merge(
+    const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources) {
+    // Create CablingGenerator for the new file
+    CablingGenerator other(new_file_path, deployment_arg);
+
+    // Validate and merge node_templates_ (must match exactly, except inter_board_connections can differ)
+    validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
+
+    // Merge root_instance_ trees (we know root_instance_ exists since we start with a non-empty CablingGenerator)
+    if (!root_instance_ || !other.root_instance_) {
+        throw std::runtime_error("Cannot merge: both CablingGenerators must have root_instance_");
+    }
+    merge_resolved_graph_instances(
+        *root_instance_, *other.root_instance_, existing_sources, new_file_path, node_templates_);
+
+    // Rebuild host_id_to_node_ from merged root_instance
+    populate_host_id_to_node();
+
+    // Re-validate host_id uniqueness
+    validate_host_id_uniqueness();
+
+    // Before processing connections, recreate all nodes from templates to reset port availability
+    // This is needed because nodes from individual files may have ports marked as used from
+    // graph-level connections, but we need fresh nodes with only inter-board connection ports marked as used.
+    recreate_nodes_from_templates(*root_instance_);
+
+    // Regenerate chip_connections_ from merged root_instance (this will mark ports as used)
+    generate_logical_chip_connections();
+
+    // Merge deployment_hosts_ (append unique hostnames)
+    std::set<std::string> existing_hostnames;
+    for (const auto& host : deployment_hosts_) {
+        existing_hostnames.insert(host.hostname);
+    }
+    for (const auto& other_host : other.deployment_hosts_) {
+        if (!existing_hostnames.contains(other_host.hostname)) {
+            deployment_hosts_.push_back(other_host);
+            existing_hostnames.insert(other_host.hostname);
+        }
+    }
 }
 
 // Getters for all data
@@ -480,6 +1222,164 @@ tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::genera
     return build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 }
 
+// Helper: Compare two nodes for equality (checks motherboard, boards, host_id, inter_board_connections)
+static bool compare_nodes(const Node& lhs, const Node& rhs, bool check_host_id = true) {
+    // Compare basic fields
+    if (lhs.motherboard != rhs.motherboard) {
+        return false;
+    }
+    if (check_host_id && lhs.host_id != rhs.host_id) {
+        return false;
+    }
+
+    // Compare boards
+    if (lhs.boards.size() != rhs.boards.size()) {
+        return false;
+    }
+    for (const auto& [tray_id, board] : lhs.boards) {
+        if (!rhs.boards.contains(tray_id)) {
+            return false;
+        }
+        const auto& other_board = rhs.boards.at(tray_id);
+        if (board.get_arch() != other_board.get_arch() || board.get_board_type() != other_board.get_board_type()) {
+            return false;
+        }
+    }
+
+    // Compare inter_board_connections (normalize for comparison)
+    if (lhs.inter_board_connections.size() != rhs.inter_board_connections.size()) {
+        return false;
+    }
+    for (const auto& [port_type, connections] : lhs.inter_board_connections) {
+        if (!rhs.inter_board_connections.contains(port_type)) {
+            return false;
+        }
+        const auto& other_connections = rhs.inter_board_connections.at(port_type);
+        std::set<Node::BoardConnection> lhs_set = build_normalized_board_connection_set(connections);
+        std::set<Node::BoardConnection> rhs_set = build_normalized_board_connection_set(other_connections);
+        if (lhs_set != rhs_set) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Helper to compare two ResolvedGraphInstance trees recursively
+static bool compare_resolved_graph_instances(const ResolvedGraphInstance& lhs, const ResolvedGraphInstance& rhs) {
+    if (lhs.template_name != rhs.template_name || lhs.instance_name != rhs.instance_name) {
+        return false;
+    }
+
+    // Compare nodes
+    if (lhs.nodes.size() != rhs.nodes.size()) {
+        return false;
+    }
+    for (const auto& [name, node] : lhs.nodes) {
+        if (!rhs.nodes.contains(name)) {
+            return false;
+        }
+        const auto& other_node = rhs.nodes.at(name);
+        // Compare nodes using helper
+        if (!compare_nodes(node, other_node, true)) {
+            return false;
+        }
+    }
+
+    // Compare subgraphs recursively
+    if (lhs.subgraphs.size() != rhs.subgraphs.size()) {
+        return false;
+    }
+    for (const auto& [name, subgraph] : lhs.subgraphs) {
+        if (!rhs.subgraphs.contains(name) || !rhs.subgraphs.at(name)) {
+            return false;
+        }
+        if (!compare_resolved_graph_instances(*subgraph, *rhs.subgraphs.at(name))) {
+            return false;
+        }
+    }
+
+    // Compare internal_connections (normalize for comparison)
+    if (lhs.internal_connections.size() != rhs.internal_connections.size()) {
+        return false;
+    }
+    for (const auto& [port_type, connections] : lhs.internal_connections) {
+        if (!rhs.internal_connections.contains(port_type)) {
+            return false;
+        }
+        const auto& other_connections = rhs.internal_connections.at(port_type);
+        // Build normalized sets for comparison (graph-level internal_connections)
+        std::set<PortConnection> lhs_set = build_normalized_graph_connection_set(connections);
+        std::set<PortConnection> rhs_set = build_normalized_graph_connection_set(other_connections);
+        if (lhs_set != rhs_set) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Equality comparison operator
+bool CablingGenerator::operator==(const CablingGenerator& other) const {
+    // Compare node_templates_
+    // NOTE: When merging torus types (e.g., X_TORUS + Y_TORUS), we create aliases,
+    // so we might have 2 keys (WH_GALAXY_X_TORUS, WH_GALAXY_Y_TORUS) pointing to the same merged template,
+    // while the reference has 1 key (WH_GALAXY_XY_TORUS). We need to compare the unique templates, not the keys.
+
+    // Collect unique templates by content (using motherboard + boards + connections as key)
+    auto get_unique_templates = [](const std::unordered_map<std::string, Node>& templates) {
+        std::map<std::tuple<std::string, size_t, size_t>, const Node*> unique;
+        for (const auto& [name, node] : templates) {
+            // Create a content-based key (motherboard, board count, connection count)
+            auto key = std::make_tuple(node.motherboard, node.boards.size(), node.inter_board_connections.size());
+            unique[key] = &node;
+        }
+        return unique;
+    };
+
+    auto this_unique = get_unique_templates(node_templates_);
+    auto other_unique = get_unique_templates(other.node_templates_);
+
+    if (this_unique.size() != other_unique.size()) {
+        return false;
+    }
+
+    // Compare each unique template using helper
+    for (const auto& [key, template_node] : this_unique) {
+        if (!other_unique.contains(key)) {
+            return false;
+        }
+        const auto* other_template = other_unique.at(key);
+        // Compare template nodes (don't check host_id since templates should have host_id=0)
+        if (!compare_nodes(*template_node, *other_template, false)) {
+            return false;
+        }
+    }
+
+    // Compare root_instance_ (recursive tree comparison)
+    if (!root_instance_ && !other.root_instance_) {
+        // Both null - equal
+    } else if (!root_instance_ || !other.root_instance_) {
+        return false;
+    }
+    if (root_instance_ && other.root_instance_ &&
+        !compare_resolved_graph_instances(*root_instance_, *other.root_instance_)) {
+        return false;
+    }
+
+    // Compare chip_connections_ (should be sorted, so direct comparison)
+    if (chip_connections_ != other.chip_connections_) {
+        return false;
+    }
+
+    // Compare deployment_hosts_
+    if (deployment_hosts_ != other.deployment_hosts_) {
+        return false;
+    }
+
+    return true;
+}
+
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
@@ -512,7 +1412,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
 
-    CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
+    get_all_connections_of_type({PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
         output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << std::endl;
@@ -583,11 +1483,17 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
 // Validate that each host_id is assigned to exactly one node
 void CablingGenerator::validate_host_id_uniqueness() {
     std::unordered_map<HostId, std::string> host_to_node_path;
-    collect_host_assignments(root_instance_, "", host_to_node_path);
+    collect_host_assignments(host_to_node_path);
 }
 
-// Recursively collect all host_id assignments with their node paths
-void CablingGenerator::collect_host_assignments(
+// Collect all host_id assignments (tree structure)
+void CablingGenerator::collect_host_assignments(std::unordered_map<HostId, std::string>& host_to_node_path) {
+    if (root_instance_) {
+        collect_host_assignments_from_resolved_graph(root_instance_, "", host_to_node_path);
+    }
+}
+
+void CablingGenerator::collect_host_assignments_from_resolved_graph(
     const std::unique_ptr<ResolvedGraphInstance>& graph,
     const std::string& path_prefix,
     std::unordered_map<HostId, std::string>& host_to_node_path) {
@@ -597,9 +1503,11 @@ void CablingGenerator::collect_host_assignments(
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
         if (host_to_node_path.contains(host_id)) {
-            throw std::runtime_error(
-                "Host ID " + std::to_string(*host_id) + " is assigned to multiple nodes: '" +
-                host_to_node_path[host_id] + "' and '" + full_node_path + "'");
+            throw std::runtime_error(fmt::format(
+                "Host ID is assigned to multiple nodes: {} - '{}' and '{}'",
+                *host_id,
+                host_to_node_path[host_id],
+                full_node_path));
         }
         host_to_node_path[host_id] = full_node_path;
     }
@@ -607,11 +1515,11 @@ void CablingGenerator::collect_host_assignments(
     // Recursively check subgraphs
     for (const auto& [subgraph_name, subgraph] : graph->subgraphs) {
         std::string sub_path = path_prefix.empty() ? subgraph_name : path_prefix + "/" + subgraph_name;
-        collect_host_assignments(subgraph, sub_path, host_to_node_path);
+        collect_host_assignments_from_resolved_graph(subgraph, sub_path, host_to_node_path);
     }
 }
 
-// Utility function to generate logical chip connections from cluster hierarchy
+// Utility function to generate logical chip connections from tree structure
 void CablingGenerator::generate_logical_chip_connections() {
     chip_connections_.clear();
 
@@ -689,6 +1597,16 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
             auto [host_b_id, tray_b_id, port_b_id] = conn_b;
 
             // Look up nodes using HostId
+            if (!host_id_to_node_.contains(host_a_id)) {
+                throw std::runtime_error(fmt::format(
+                    "Host ID {} referenced in connection but not found in cluster - invalid descriptor",
+                    host_a_id.get()));
+            }
+            if (!host_id_to_node_.contains(host_b_id)) {
+                throw std::runtime_error(fmt::format(
+                    "Host ID {} referenced in connection but not found in cluster - invalid descriptor",
+                    host_b_id.get()));
+            }
             Node* node_a = host_id_to_node_.at(host_a_id);
             Node* node_b = host_id_to_node_.at(host_b_id);
 
@@ -709,7 +1627,6 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
 
 void CablingGenerator::populate_host_id_to_node() {
     host_id_to_node_.clear();
-
     if (root_instance_) {
         populate_host_id_from_resolved_graph(root_instance_);
     }
@@ -727,17 +1644,38 @@ void CablingGenerator::populate_host_id_from_resolved_graph(const std::unique_pt
     }
 }
 
+void CablingGenerator::recreate_nodes_from_templates(ResolvedGraphInstance& graph) {
+    // Recreate all nodes in this graph from templates
+    // This resets port availability (template only has inter-board connection ports marked as used)
+    for (auto& [node_name, node] : graph.nodes) {
+        node = create_base_node_from_template(node, node_templates_);
+    }
+
+    // Recursively process subgraphs
+    for (auto& [subgraph_name, subgraph] : graph.subgraphs) {
+        recreate_nodes_from_templates(*subgraph);
+    }
+}
+
 void CablingGenerator::get_all_connections_of_type(
+    const std::vector<PortType>& port_types, std::vector<PortConnection>& conn_list) const {
+    if (root_instance_) {
+        get_all_connections_of_type_from_resolved_graph(root_instance_, port_types, conn_list);
+    }
+}
+
+void CablingGenerator::get_all_connections_of_type_from_resolved_graph(
     const std::unique_ptr<ResolvedGraphInstance>& instance,
     const std::vector<PortType>& port_types,
-    std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>>& conn_list) const {
+    std::vector<PortConnection>& conn_list) const {
     for (auto port_type : port_types) {
+        // Add internal connections at this graph level
         auto internal_connections = instance->internal_connections.find(port_type);
-        if (internal_connections == instance->internal_connections.end()) {
-            continue;
+        if (internal_connections != instance->internal_connections.end()) {
+            conn_list.insert(conn_list.end(), internal_connections->second.begin(), internal_connections->second.end());
         }
-        conn_list.insert(conn_list.end(), internal_connections->second.begin(), internal_connections->second.end());
 
+        // Add inter-board connections from direct nodes
         for (const auto& [child_name, child_instance] : instance->nodes) {
             auto inter_board_connections = child_instance.inter_board_connections.find(port_type);
             if (inter_board_connections == child_instance.inter_board_connections.end()) {
@@ -745,17 +1683,16 @@ void CablingGenerator::get_all_connections_of_type(
             }
             conn_list.reserve(conn_list.size() + inter_board_connections->second.size());
             for (const auto& [start, end] : inter_board_connections->second) {
-                std::tuple<HostId, TrayId, PortId> s_tuple =
-                    std::make_tuple(child_instance.host_id, start.first, start.second);
-
-                std::tuple<HostId, TrayId, PortId> e_tuple =
-                    std::make_tuple(child_instance.host_id, end.first, end.second);
+                PortEndpoint s_tuple = std::make_tuple(child_instance.host_id, start.first, start.second);
+                PortEndpoint e_tuple = std::make_tuple(child_instance.host_id, end.first, end.second);
                 conn_list.push_back(std::make_pair(s_tuple, e_tuple));
             }
         }
     }
+
+    // Recursively process subgraphs
     for (const auto& [child_name, child_instance] : instance->subgraphs) {
-        get_all_connections_of_type(child_instance, port_types, conn_list);
+        get_all_connections_of_type_from_resolved_graph(child_instance, port_types, conn_list);
     }
 }
 

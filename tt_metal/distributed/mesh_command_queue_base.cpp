@@ -19,6 +19,7 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -179,9 +180,10 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
             this->write_shard_to_device(buffer, coord, host_data, region);
         };
         for (const auto& coord : device_range) {
-            if (mesh_device_->is_local(coord)) {
+            if (mesh_device_->impl().is_local(coord)) {
                 dispatch_thread_pool_->enqueue(
-                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); },
+                    mesh_device_->impl().get_device(coord)->id());
             }
         }
         dispatch_thread_pool_->wait();
@@ -232,10 +234,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
-        if (mesh_device_->is_local(shard_coord)) {
+        if (mesh_device_->impl().is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
                 [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-                mesh_device_->get_device(shard_coord)->id());
+                mesh_device_->impl().get_device(shard_coord)->id());
         }
     }
     dispatch_thread_pool_->wait();
@@ -279,7 +281,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     bool has_pinned_memory = false;
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {
+        if (mesh_device_->impl().is_local(shard_data_transfer.shard_coord())) {
             auto pinned_memory = experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer);
             has_pinned_memory = has_pinned_memory || pinned_memory != nullptr;
             this->read_shard_from_device(

@@ -10,15 +10,15 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
     using operation_attributes_t = RotaryEmbeddingLlamaFusedQkParams;
     using tensor_args_t = RotaryEmbeddingLlamaFusedQkInputs;
-    using spec_return_value_t = rotary_embedding_llama_fused_qk::spec_return_value_t;
-    using tensor_return_value_t = rotary_embedding_llama_fused_qk::tensor_return_value_t;
-    using program_factory_t = std::variant<program::RotaryEmbeddingLlamaFusedQKProgramFactory>;
-    using shared_variables_t = program::RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
+    using spec_return_value_t = RotaryEmbeddingLlamaFusedQkResultSpec;
+    using tensor_return_value_t = RotaryEmbeddingLlamaFusedQkResult;
+    using program_factory_t = std::variant<RotaryEmbeddingLlamaFusedQKProgramFactory>;
+    using shared_variables_t = RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,11 +31,10 @@ struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::tensor_return_value_t
-rotary_embedding_llama_fused_qk(
+ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQkResult rotary_embedding_llama_fused_qk(
     const Tensor& q_input_tensor,
     const Tensor& k_input_tensor,
     const Tensor& cos_cache,

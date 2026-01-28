@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
 using namespace tt::data_movement::common;
-using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
+using ttnn::prim::detail::SegmentMapData;
 
 void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);

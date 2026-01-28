@@ -7,7 +7,7 @@
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 // Shared variables for Welford program factory
 struct LayerNormPreAllGatherWelfordSharedVariables {
@@ -23,15 +23,13 @@ struct LayerNormPreAllGatherWelfordProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
-        Tensor& output);
+        const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const Tensor& tensor_args,
         Tensor& output);
 };
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

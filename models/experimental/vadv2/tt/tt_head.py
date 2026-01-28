@@ -345,7 +345,9 @@ class TtVADHead:
             z = updated_z * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
 
             tmp_out = ttnn.concat(
-                [x, y, tmp[..., 2:4], z, tmp[..., 5:]], dim=-1  # 0  # 1  # 2:4 untouched  # 4  # 5:10 untouched
+                # 0  # 1  # 2:4 untouched  # 4  # 5:10 untouched
+                [x, y, tmp[..., 2:4], z, tmp[..., 5:]],
+                dim=-1,
             )
 
             #     # TODO: check if using sigmoid
@@ -443,7 +445,8 @@ class TtVADHead:
             if self.motion_det_score is not None:
                 motion_score = outputs_classes[-1]
                 max_motion_score = ttnn.max(max_motion_score, dim=-1)[0]
-                invalid_motion_idx = max_motion_score < self.motion_det_score  # [B, A]
+                # [B, A]
+                invalid_motion_idx = max_motion_score < self.motion_det_score
                 invalid_motion_idx = ttnn.unsqueeze(invalid_motion_idx, 2)
                 invalid_motion_idx = ttnn.repeat(invalid_motion_idx, (1, 1, self.fut_mode))
                 invalid_motion_idx = ttnn.reshape(
@@ -475,7 +478,8 @@ class TtVADHead:
                     (motion_coords.shape[0], motion_coords.shape[1] * motion_coords.shape[2], motion_coords.shape[3]),
                 )
                 map_query = ttnn.reshape(map_hs[-1], (batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1))
-                map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
+                # [B, P, pts, D] -> [B, P, D]
+                map_query = self.lane_encoder(map_query)
                 map_score = map_outputs_classes[-1]
                 map_pos = map_outputs_coords_bev[-1]
 
@@ -529,7 +533,8 @@ class TtVADHead:
             motion_hs = ttnn.reshape(motion_hs, (B, num_agent, self.fut_mode, D))  # [B, A, T, D]
             ca_motion_query = ttnn.reshape(ca_motion_query, (batch_size, num_agent, self.fut_mode, -1))  # [B, A, T, D]
 
-            motion_hs = ttnn.concat([motion_hs, ca_motion_query], dim=-1)  # [B, A, fut_mode, 2D]  #0.99
+            # [B, A, fut_mode, 2D]  #0.99
+            motion_hs = ttnn.concat([motion_hs, ca_motion_query], dim=-1)
         else:
             raise NotImplementedError("Not implement yet")
 
@@ -830,7 +835,7 @@ class TtVADHead:
         min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
         min_map_pos = ttnn.to_layout(min_map_pos, layout=ttnn.TILE_LAYOUT)
 
-        map_score = ttnn.sigmoid_accurate(map_score)
+        map_score = ttnn.sigmoid(map_score)
         map_max_score = ttnn.max(map_score, dim=-1)[0]
         map_max_score = ttnn.unsqueeze(map_max_score, 0)
         map_idx = map_max_score > map_thresh
@@ -929,7 +934,7 @@ class TtVADHead:
     def select_and_pad_query(self, query, query_pos, query_score, score_thresh=0.5, use_fix_pad=True):
         # select & pad query for different batch using score_thresh
         query_score = ttnn.to_layout(query_score, layout=ttnn.TILE_LAYOUT)
-        query_score = ttnn.sigmoid_accurate(query_score)
+        query_score = ttnn.sigmoid(query_score)
         query_score = ttnn.to_layout(query_score, layout=ttnn.ROW_MAJOR_LAYOUT)
         query_score = ttnn.add(query_score, 0.0, dtype=ttnn.float32)
         query_score = ttnn.max(query_score, dim=-1)[0]

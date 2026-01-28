@@ -31,8 +31,8 @@ test_suite_bh_umd_unit_tests() {
 # Function to run BH single PCIe small ML model tests
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
-    pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
-    pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
+    pytest --disable-warnings --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation
+    pytest models/demos/vision/classification/resnet50/blackhole/tests/upstream_pipeline
 }
 
 test_suite_bh_pcie_didt_tests() {
@@ -295,7 +295,6 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_p300"]="
@@ -307,12 +306,10 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_qb_ge"]="
 test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
-# test_suite_wh_6u_llama_demo_tests was removed because of
-# https://github.com/tenstorrent/tt-metal/issues/34990
 hw_topology_test_suites["wh_6u"]="
+test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_torus_xy_health_check_tests
 test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_metal_unit_tests

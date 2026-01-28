@@ -3,40 +3,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
-namespace ttnn::operations::reduction::generic {
+namespace ttnn::prim {
 
 ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto parallelization_strategy = detail::get_parallelization_strategy(input_tensor, operation_attributes.dim);
+    auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
-        case ReduceOpParallelizationStrategy::MULTI_CORE_H: return program::ReduceMultiCoreHProgramFactory{};
-        case ReduceOpParallelizationStrategy::MULTI_CORE_W: return program::ReduceMultiCoreWProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_H: return ReduceMultiCoreHProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_W: return ReduceMultiCoreWProgramFactory{};
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
-        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW: return program::ReduceSingleCoreHwProgramFactory{};
+        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW: return ReduceSingleCoreHwProgramFactory{};
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
-        input_tensor.storage_type() == StorageType::DEVICE,
+        tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
-        input_tensor.storage_type());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+        tensor_args.storage_type());
+    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
     TT_FATAL(
-        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32 ||
-            input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::UINT32,
+        tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+            tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
-        input_tensor.dtype());
+        tensor_args.dtype());
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_hit(
@@ -46,8 +45,7 @@ void ReduceDeviceOperation::validate_on_program_cache_hit(
 
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto output_shape = input_tensor.logical_shape();
+    auto output_shape = tensor_args.logical_shape();
     switch (operation_attributes.dim) {
         case tt::tt_metal::ReduceOpDim::H: output_shape[2] = 1; break;
         case tt::tt_metal::ReduceOpDim::W: output_shape[3] = 1; break;
@@ -78,7 +76,7 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
         if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
              operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
             nd_shard_spec.shard_shape.rank() > 1) {
-            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], input_tensor.logical_shape()[-2]);
+            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], tensor_args.logical_shape()[-2]);
         }
         return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
@@ -88,13 +86,11 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
 
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
 tt::stl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<ReduceDeviceOperation>(
@@ -106,14 +102,11 @@ tt::stl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
         program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.padded_shape());
+        tensor_args.dtype(),
+        tensor_args.memory_config(),
+        tensor_args.padded_shape());
 }
 
-}  // namespace ttnn::operations::reduction::generic
-
-namespace ttnn::prim {
 ttnn::Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
@@ -123,9 +116,8 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::reduction::generic::ReduceDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<ReduceDeviceOperation>(
+        ReduceParams{
             reduce_math,
             reduce_dim,
             scaler,
@@ -133,6 +125,7 @@ ttnn::Tensor reduce(
             output_dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             sub_core_grids},
-        OperationType::tensor_args_t{input_tensor});
+        input_tensor);
 }
+
 }  // namespace ttnn::prim

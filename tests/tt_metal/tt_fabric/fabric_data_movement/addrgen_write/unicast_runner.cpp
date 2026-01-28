@@ -22,6 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_fabric::test {
 
@@ -137,7 +138,7 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     auto view = mesh->get_view();
     auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
         for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
-            if (view.get_device(c)->id() == phys) {
+            if (view.impl().get_device(c)->id() == phys) {
                 return c;
             }
         }

@@ -18,15 +18,15 @@
 #include "unary_device_operation_types.hpp"
 
 
-namespace ttnn::operations::unary {
+namespace ttnn::prim {
 
 struct UnaryDeviceOperation {
 
-    using operation_attributes_t = unary::operation_attributes_t;
-    using tensor_args_t = unary::tensor_args_t;
+    using operation_attributes_t = UnaryParams;
+    using tensor_args_t = UnaryInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::UnaryProgramFactory, program::UnarySubCoreGridProgramFactory, program::UnaryShardedProgramFactory>;
+    using program_factory_t = std::variant<UnaryProgramFactory, UnarySubCoreGridProgramFactory, UnaryShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -42,10 +42,7 @@ struct UnaryDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
-}  // namespace ttnn::operations::unary
-
-namespace ttnn::prim {
-ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
+Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
@@ -55,4 +52,5 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-} // namespace ttnn::prim
+
+}  // namespace ttnn::prim

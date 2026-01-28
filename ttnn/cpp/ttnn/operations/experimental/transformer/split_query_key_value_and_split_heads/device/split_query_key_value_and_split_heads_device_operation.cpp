@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "split_query_key_value_and_split_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
+namespace ttnn::experimental::prim {
 
 SplitFusedQKVAndSplitHeadsDeviceOperation::program_factory_t
 SplitFusedQKVAndSplitHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.is_sharded()) {
-        return program::SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
+        return SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
     }
-    return program::SplitFusedQKVAndSplitHeadsProgramFactory{};
+    return SplitFusedQKVAndSplitHeadsProgramFactory{};
 }
 
 void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_on_program_cache_hit(
@@ -134,7 +135,7 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_tensors(
     };
 }
 
-}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
@@ -144,8 +145,7 @@ std::vector<Tensor> split_query_key_value_and_split_heads(
     const std::optional<MemoryConfig>& memory_config,
     uint32_t num_heads,
     const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
-    using OperationType = ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::
-        SplitFusedQKVAndSplitHeadsDeviceOperation;
+    using OperationType = ttnn::experimental::prim::SplitFusedQKVAndSplitHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config()), num_heads};

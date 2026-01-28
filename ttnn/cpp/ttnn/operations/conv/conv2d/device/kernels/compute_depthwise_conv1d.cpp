@@ -92,8 +92,7 @@ inline void eltwise_mul_and_add_block_v2(
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -156,5 +155,4 @@ void MAIN {
 
         }  // for in0_num_blocks_h
     }  // for in0_num_blocks_w
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

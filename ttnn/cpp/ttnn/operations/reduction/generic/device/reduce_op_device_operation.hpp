@@ -14,18 +14,16 @@
 #include "reduce_op_multi_core_h_program_factory.hpp"
 #include "reduce_op_multi_core_w_program_factory.hpp"
 
-namespace ttnn::operations::reduction::generic {
+namespace ttnn::prim {
 
 struct ReduceDeviceOperation {
-    using operation_attributes_t = GenericParams;
-    using tensor_args_t = GenericInputs;
+    using operation_attributes_t = ReduceParams;
+    using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<
-        program::ReduceSingleCoreHwProgramFactory,
-        program::ReduceMultiCoreHProgramFactory,
-        program::ReduceMultiCoreWProgramFactory>;
+    using program_factory_t =
+        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -46,9 +44,6 @@ struct ReduceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::reduction::generic
-
-namespace ttnn::prim {
 ttnn::Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
@@ -58,4 +53,5 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids);
+
 }  // namespace ttnn::prim

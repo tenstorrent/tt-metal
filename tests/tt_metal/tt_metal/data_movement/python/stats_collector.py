@@ -48,6 +48,8 @@ class StatsCollector:
         # Gather analysis stats
         # Statistics are recorded per core, but timeseries data is aggregated for all cores
         for core in cores:
+            if not "analysis" in stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]:
+                continue
             core_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]
 
             for risc in RISCV_PROCESSORS:
@@ -191,6 +193,11 @@ class StatsCollector:
                             grid_x = attributes.get("Subordinate Grid Size X", "N/A")
                             grid_y = attributes.get("Subordinate Grid Size Y", "N/A")
                             agg_data["grid_dimensions"] = f"{grid_x} x {grid_y}"
+
+                num_subordinates = attributes.get("Number of subordinates", 0)
+                same_axis = attributes.get("Same axis", 0)
+                agg_data["num_subordinates"] = num_subordinates
+                agg_data["same_axis"] = same_axis
 
                 agg[run_host_id] = agg_data
 

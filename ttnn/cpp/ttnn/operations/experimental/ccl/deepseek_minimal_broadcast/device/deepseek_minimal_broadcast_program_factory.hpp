@@ -5,7 +5,7 @@
 #pragma once
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program {
+namespace ttnn::experimental::prim {
 struct DeepseekMinimalBroadcastProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
@@ -13,7 +13,9 @@ struct DeepseekMinimalBroadcastProgramFactory {
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore semaphore;
         tt::tt_metal::GlobalSemaphore barrier_semaphore;
+        tt::tt_metal::GlobalSemaphore secondary_sync_semaphore;
         uint32_t ring_index = 0;
+        bool is_secondary_sender = false;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -39,7 +41,8 @@ private:
         const DeepseekMinimalBroadcastInputs& tensor_args,
         Tensor& output_tensor,
         const tt::tt_metal::GlobalSemaphore& semaphore,
-        const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
+        const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+        const tt::tt_metal::GlobalSemaphore& secondary_sync_semaphore);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program
+}  // namespace ttnn::experimental::prim

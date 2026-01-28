@@ -9,6 +9,7 @@ from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
@@ -82,6 +83,8 @@ class DeepseekGenerator:
         override_num_layers: int | None = None,
         single_layer: str | None = None,
         enable_trace: bool = False,
+        signpost: bool = False,
+        prefill_max_tokens: int | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -92,7 +95,7 @@ class DeepseekGenerator:
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 4096
+        self.hf_config.max_seq_len = 1024
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -104,6 +107,14 @@ class DeepseekGenerator:
                 self.hf_config.first_k_dense_replace = int(dense_layers)
             except Exception as e:
                 logger.warning(f"Failed to override first_k_dense_replace with value '{dense_layers}': {e}")
+        # Ensure first_k_dense_replace doesn't exceed num_hidden_layers
+        if hasattr(self.hf_config, "first_k_dense_replace") and hasattr(self.hf_config, "num_hidden_layers"):
+            if self.hf_config.first_k_dense_replace > self.hf_config.num_hidden_layers:
+                logger.warning(
+                    f"Clamping first_k_dense_replace from {self.hf_config.first_k_dense_replace} "
+                    f"to {self.hf_config.num_hidden_layers} (num_hidden_layers)"
+                )
+                self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
 
@@ -128,6 +139,8 @@ class DeepseekGenerator:
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
+        self.signpost = signpost
+        self.prefill_max_tokens = prefill_max_tokens
         logger.info(f"Enable trace: {self.enable_trace}")
 
         # Initialize rope_setup once
@@ -466,6 +479,8 @@ class DeepseekGenerator:
         """
         assert len(tokens_list) > 0 and len(tokens_list) <= batch_size
         max_len = max(len(t) for t in tokens_list)
+        if self.prefill_max_tokens is not None:
+            max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
         # Round up to nearest multiple of TILE_SIZE
         max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
@@ -485,8 +500,9 @@ class DeepseekGenerator:
         out = torch.full((batch_size, max_len), pad_id, dtype=torch.long)
         lengths = torch.zeros((batch_size,), dtype=torch.int32)
         for i, seq in enumerate(tokens_list):
-            out[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
-            lengths[i] = len(seq)
+            len_seq = len(seq) if self.prefill_max_tokens is None else min(self.prefill_max_tokens, len(seq))
+            out[i, :len_seq] = torch.tensor(seq[:len_seq], dtype=torch.long)
+            lengths[i] = len_seq
         return out, lengths
 
     def generate(
@@ -514,8 +530,10 @@ class DeepseekGenerator:
         profiler.start("run")
 
         prompts = list(prompts)
+        if len(prompts) > self.batch_size:
+            logger.warning(f"Supports 1..{self.batch_size} prompts. Cutton off additional prompts.")
+            prompts = prompts[: self.batch_size]
         num_of_prompts = len(prompts)
-        assert 1 <= num_of_prompts <= self.batch_size, f"Supports 1..{self.batch_size} prompts"
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -548,6 +566,8 @@ class DeepseekGenerator:
                 teacher_forcing.reset()
 
             # Prefill
+            if self.signpost:
+                signpost(header="prefill")
             profiler.start("inference_prefill")
             num_of_users = tokens_batched.shape[0]
             last_logits = []
@@ -575,6 +595,8 @@ class DeepseekGenerator:
                 self.ccl.reset_sem_counters()
             last_logits = torch.stack(last_logits)
             profiler.end("inference_prefill")
+            if self.signpost:
+                signpost(header="prefill")
 
             assert len(last_logits) == num_of_users
 
@@ -872,6 +894,10 @@ class DeepseekGenerator:
                 and self._trace_id is not None
             )
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
+
+            if self.signpost:
+                signpost(header="decode_execute_trace")
+
             host_tokens = ttnn.from_torch(
                 torch_input,
                 device=None,
@@ -909,6 +935,8 @@ class DeepseekGenerator:
                     self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                 ),
             )
+            if self.signpost:
+                signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:

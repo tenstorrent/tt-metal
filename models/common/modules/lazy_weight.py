@@ -127,8 +127,9 @@ class LazyWeight:
         # Get mesh mapper (created from config)
         if self.mesh_mapper_config is not None:
             mesh_mapper = ttnn.create_mesh_mapper(self.device, self.mesh_mapper_config)
-            # Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint
-            tensor = _auto_pad_for_sharding(tensor, self.padded_shape, pad_value=self.pad_value)
+            # Auto-pad tensor for tile alignment (only needed for TILE_LAYOUT sharding)
+            if self.layout == ttnn.TILE_LAYOUT:
+                tensor = _auto_pad_for_sharded_tiles(tensor, self.padded_shape, pad_value=self.pad_value)
         else:
             # None config means replicate
             mesh_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
@@ -143,6 +144,7 @@ class LazyWeight:
             memory_config=self.memory_config,
             mesh_mapper=mesh_mapper,
             is_replicated=is_replicated,
+            pad_value=self.pad_value,
             cache_file_name=cache_file_name,
         )
 
@@ -228,6 +230,9 @@ class LazyWeight:
         Requires device and mesh_mapper_config to be set.
 
         Note: source.shape remains the canonical unpadded shape.
+
+        Tile-alignment padding is only applied for TILE_LAYOUT. ROW_MAJOR_LAYOUT
+        does not require tile-aligned shard sizes.
         """
         assert self.is_resolved(), "LazyWeight must be resolved to compute padded_shape"
 
@@ -242,6 +247,10 @@ class LazyWeight:
         if num_devices == 1:
             return tuple(shape)
 
+        # ROW_MAJOR_LAYOUT doesn't require tile-aligned shard sizes
+        if self.layout == ttnn.ROW_MAJOR_LAYOUT:
+            return tuple(shape)
+
         shard_dims = parse_shard_dims_from_mesh_mapper_config(self.mesh_mapper_config)
         for shard_dim in shard_dims:
             if shard_dim < 0:
@@ -251,16 +260,16 @@ class LazyWeight:
         return tuple(shape)
 
 
-def _auto_pad_for_sharding(
+def _auto_pad_for_sharded_tiles(
     tensor: "torch.Tensor",
     padded_shape: tuple[int, ...],
     pad_value: float = 0.0,
 ) -> "torch.Tensor":
     """
-    Auto-pad tensor to satisfy ttnn.from_torch's tile alignment constraint for sharding.
+    Auto-pad tensor for tile-aligned sharding (TILE_LAYOUT only).
 
-    ttnn.from_torch requires physical shard shapes to be tile-aligned. This function
-    pads the global tensor to the pre-computed padded_shape.
+    ttnn.from_torch requires physical shard shapes to be tile-aligned when using
+    TILE_LAYOUT. This function pads the global tensor to the pre-computed padded_shape.
 
     Args:
         tensor: Source torch tensor
@@ -284,6 +293,7 @@ def _from_torch_and_dump(
     memory_config: Optional[ttnn.MemoryConfig],
     mesh_mapper: Optional[ttnn.CppTensorToMesh],
     is_replicated: bool,
+    pad_value: float,
     cache_file_name: Optional[str],
 ):
     """
@@ -308,6 +318,7 @@ def _from_torch_and_dump(
             mesh_mapper=local_mesh_mapper,
             memory_config=memory_config,
             device=device,
+            pad_value=pad_value,
         )
 
     tensor = ttnn.from_torch(
@@ -318,6 +329,7 @@ def _from_torch_and_dump(
         mesh_mapper=local_mesh_mapper,
         memory_config=memory_config,
         device=None,
+        pad_value=pad_value,
     )
     assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
 

@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -14,9 +15,9 @@ GridSampleOperation::program_factory_t GridSampleOperation::select_program_facto
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     const std::string mode = operation_attributes.mode;
     if (mode == "bilinear") {
-        return program::GridSampleBilinearProgramFactory{};
+        return GridSampleBilinearProgramFactory{};
     }
-    return program::GridSampleNearestProgramFactory{};
+    return GridSampleNearestProgramFactory{};
 }
 
 void GridSampleOperation::validate_on_program_cache_miss(
@@ -315,9 +316,6 @@ Tensor GridSampleOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-}  // namespace ttnn::operations::pool::grid_sample
-
-namespace ttnn::prim {
 ttnn::Tensor grid_sample(
     const Tensor& input_tensor,
     const Tensor& grid,
@@ -327,7 +325,7 @@ ttnn::Tensor grid_sample(
     bool use_precomputed_grid,
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
-    using OperationType = ttnn::operations::pool::grid_sample::GridSampleOperation;
+    using OperationType = GridSampleOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
@@ -339,4 +337,5 @@ ttnn::Tensor grid_sample(
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});
 }
+
 }  // namespace ttnn::prim

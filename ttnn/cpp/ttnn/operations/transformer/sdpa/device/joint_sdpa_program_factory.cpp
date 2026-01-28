@@ -18,11 +18,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
+namespace ttnn::prim {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const JointSDPAParams& args, const JointSDPAInputs& tensor_args, JointSDPAResult& output_tensors) {
     /*
     Q: B x NH x N x DH
     K: B x NH x N x DH
@@ -622,9 +622,9 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
 
 void JointSDPAProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const JointSDPAParams& /*args*/,
+    const JointSDPAInputs& tensor_args,
+    JointSDPAResult& output_tensors) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -672,4 +672,4 @@ void JointSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program
+}  // namespace ttnn::prim

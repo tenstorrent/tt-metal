@@ -8,7 +8,7 @@
 #include "layernorm_pre_all_gather_welford_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 // Shared variables for 1D program factory (normal)
 struct LayerNormPreAllGatherSharedVariables {
@@ -31,14 +31,12 @@ struct LayerNormPreAllGatherProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
-        Tensor& output);
+        const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const Tensor& tensor_args,
         Tensor& output);
 };
 
@@ -48,15 +46,13 @@ struct LayerNormPreAllGather2DProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
-        Tensor& output);
+        const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
+        const LayerNormPreAllGatherParams& operation_attributes,
+        const Tensor& tensor_args,
         Tensor& output);
 };
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

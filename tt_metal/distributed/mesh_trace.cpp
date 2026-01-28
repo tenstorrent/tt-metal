@@ -34,6 +34,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -52,7 +53,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
 
     for (const auto& trace_md : mesh_trace_md) {
         const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
-        auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
+        auto& sysmem_manager = mesh_device->impl().get_device(sysmem_mgr_coord)->sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
         auto& bypass_data = sysmem_manager.get_bypass_data();

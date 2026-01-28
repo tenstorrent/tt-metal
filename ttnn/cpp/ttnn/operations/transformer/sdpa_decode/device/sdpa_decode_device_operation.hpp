@@ -14,7 +14,7 @@
 #include "sdpa_decode_device_operation_types.hpp"
 #include "sdpa_decode_program_factory.hpp"
 
-namespace ttnn::operations::transformer::sdpa_decode {
+namespace ttnn::prim {
 
 struct SdpaDecodeDeviceOperation {
     using operation_attributes_t = SdpaDecodeParams;
@@ -22,8 +22,8 @@ struct SdpaDecodeDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<program::SdpaDecodeProgramFactory>;
-    using shared_variables_t = program::SdpaDecodeProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<SdpaDecodeProgramFactory>;
+    using shared_variables_t = SdpaDecodeProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -43,11 +43,7 @@ struct SdpaDecodeDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa_decode
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_return_value_t sdpa_decode(
+Tensor sdpa_decode(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,

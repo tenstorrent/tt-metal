@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::indexed_fill::program {
+namespace ttnn::prim {
 
 struct IndexedFillSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -30,4 +30,4 @@ struct IndexedFillProgramFactory {
         Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::indexed_fill::program
+}  // namespace ttnn::prim

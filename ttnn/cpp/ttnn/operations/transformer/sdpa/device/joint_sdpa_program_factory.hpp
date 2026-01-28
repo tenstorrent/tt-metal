@@ -10,7 +10,7 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
 
-namespace ttnn::operations::transformer::sdpa::joint_sdpa::program {
+namespace ttnn::prim {
 
 struct JointSDPASharedVariables {
     uint32_t num_cores = 0;
@@ -25,13 +25,13 @@ struct JointSDPAProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
+        const JointSDPAParams& args, const JointSDPAInputs& tensor_args, JointSDPAResult& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const JointSDPAParams& args,
+        const JointSDPAInputs& tensor_args,
+        JointSDPAResult& output_tensors);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa::joint_sdpa::program
+}  // namespace ttnn::prim

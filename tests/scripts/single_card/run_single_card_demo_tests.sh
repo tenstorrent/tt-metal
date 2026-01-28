@@ -47,7 +47,7 @@ run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise $PYTEST_CMD output
   export PYTEST_ADDOPTS="--tb=short"
@@ -82,14 +82,14 @@ run_ds_r1_qwen_func() {
 }
 
 run_gemma3_func() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py -k "ci-token-matching"
   echo "LOG_METAL: Gemma3 4B accuracy tests completed (text only)"
 }
 
 run_gemma3_perf() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
@@ -99,10 +99,10 @@ run_phi4_func() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  $PYTEST_CMD models/demos/segformer/demo/demo_for_semantic_segmentation.py
+  $PYTEST_CMD models/demos/vision/segmentation/segformer/demo/demo_for_semantic_segmentation.py
 
   #Segformer Classification Demo
-  $PYTEST_CMD models/demos/segformer/demo/demo_for_image_classification.py
+  $PYTEST_CMD models/demos/vision/segmentation/segformer/demo/demo_for_image_classification.py
 
 }
 
@@ -155,13 +155,13 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  $PYTEST_CMD models/demos/wormhole/ufld_v2/demo/demo.py
+  $PYTEST_CMD models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py
 }
 
 run_vgg_func() {
 
   #VGG11/VGG16
-  $PYTEST_CMD models/demos/vgg/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/vgg/demo/demo.py
 
 }
 
@@ -185,20 +185,20 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  $PYTEST_CMD models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  $PYTEST_CMD models/demos/wormhole/resnet50/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 
 }
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD  models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {
@@ -210,7 +210,7 @@ run_distilbert_func() {
 
 run_mnist_func() {
 
-  $PYTEST_CMD models/demos/mnist/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/mnist/demo/demo.py
 
 }
 
@@ -228,7 +228,7 @@ run_efficientnet_b0_func(){
 
 run_stable_diffusion_func() {
 
-  $PYTEST_CMD --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
+  $PYTEST_CMD --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
 
 }
 
@@ -292,7 +292,7 @@ run_mamba_perf() {
 run_whisper_perf() {
 
   # Whisper conditional generation
-  $PYTEST_CMD models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  $PYTEST_CMD models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
@@ -312,7 +312,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- $PYTEST_CMD models/demos/mobilenetv2/demo/demo.py
+ $PYTEST_CMD models/demos/vision/classification/mobilenetv2/demo/demo.py
 
 }
 
@@ -326,7 +326,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- $PYTEST_CMD models/demos/vanilla_unet/demo/demo.py
+ $PYTEST_CMD models/demos/vision/segmentation/vanilla_unet/demo/demo.py
 }
 
 run_swin_s_demo() {
@@ -376,7 +376,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  $PYTEST_CMD models/demos/wormhole/vgg_unet/demo/demo.py
+  $PYTEST_CMD models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py
 }
 
 
@@ -395,7 +395,7 @@ run_vovnet_demo(){
 
 run_vit_demo(){
 
- $PYTEST_CMD models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+ $PYTEST_CMD models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 

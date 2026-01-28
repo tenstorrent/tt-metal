@@ -10,7 +10,7 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
 
@@ -49,7 +49,7 @@ static KernelHandle create_kernel(
 }
 
 IsInProgramFactory::cached_program_t IsInProgramFactory::create(
-    const IsinParams& args, const IsinInputs& tensor_args, tensor_return_value_t& output_tensor) {
+    const IsinParams& args, const IsinInputs& tensor_args, Tensor& output_tensor) {
     Program program{};
 
     const auto& elements_tensor = tensor_args.elements_tensor;
@@ -115,7 +115,7 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     ] = split_work_to_cores(core_grid, subchunks_num);
     create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
     create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
-    create_cb(program, common::OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
+    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
 
     constexpr const char* READER_KERNEL_PATH =
         "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
@@ -162,7 +162,7 @@ void IsInProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const IsinParams& /*args*/,
     const IsinInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -179,4 +179,4 @@ void IsInProgramFactory::override_runtime_arguments(
         writer_runtime_args[0] = output_buffer_address;
     }
 }
-}  // namespace ttnn::operations::experimental::isin
+}  // namespace ttnn::experimental::prim

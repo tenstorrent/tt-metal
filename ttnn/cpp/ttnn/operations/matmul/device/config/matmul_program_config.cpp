@@ -957,7 +957,7 @@ MatmulProgramConfig get_program_config(
     const bool transpose_a,
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
-    const operation_attributes_t& attributes) {
+    const ttnn::prim::MatmulParams& attributes) {
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }

@@ -6,7 +6,7 @@
 #include "prod_nc_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::prod_nc::program {
+namespace ttnn::prim {
 
 struct ProdNcProgramFactory {
     struct shared_variables_t {
@@ -28,4 +28,4 @@ struct ProdNcProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::prod_nc::program
+}  // namespace ttnn::prim

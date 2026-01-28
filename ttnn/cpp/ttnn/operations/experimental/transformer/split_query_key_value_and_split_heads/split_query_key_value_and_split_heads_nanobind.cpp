@@ -40,7 +40,7 @@ void bind_split_qkv(nb::module_& mod) {
                const CoreCoord& compute_with_storage_grid_size,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const uint32_t num_heads,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
+               const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
                 return self(
                     input_tensor, compute_with_storage_grid_size, memory_config, num_heads, optional_output_tensors);
             },

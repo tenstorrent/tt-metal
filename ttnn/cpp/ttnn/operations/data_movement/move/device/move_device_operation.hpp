@@ -13,17 +13,16 @@
 #include "move_overlap_program_factory.hpp"
 #include "move_sharded_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::move {
+namespace ttnn::prim {
 
 struct MoveDeviceOperation {
     // Type aliases
-    using operation_attributes_t = move::operation_attributes_t;
-    using tensor_args_t = move::tensor_args_t;
+    using operation_attributes_t = ttnn::prim::MoveOperationAttributes;
+    using tensor_args_t = ttnn::prim::MoveTensorArgs;
     using tensor_return_value_t = Tensor;
     using spec_return_value_t = ttnn::TensorSpec;
 
-    using program_factory_t = std::
-        variant<program::MoveProgramFactory, program::MoveOverlapProgramFactory, program::MoveShardedProgramFactory>;
+    using program_factory_t = std::variant<MoveProgramFactory, MoveOverlapProgramFactory, MoveShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -46,12 +45,12 @@ struct MoveDeviceOperation {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::move
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_t move(
+ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const ttnn::operations::data_movement::move::MoveOpParallelizationStrategy& move_op_parallelization_strategy);
+    const ttnn::prim::MoveOpParallelizationStrategy& move_op_parallelization_strategy);
 }  // namespace ttnn::prim

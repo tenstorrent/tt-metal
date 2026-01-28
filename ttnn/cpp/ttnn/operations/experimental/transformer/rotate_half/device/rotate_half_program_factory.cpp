@@ -8,14 +8,12 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::rotate_half::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
 
 RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
-    const RotateHalfParams& /*operation_attributes*/,
-    const RotateHalfInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RotateHalfParams& /*operation_attributes*/, const Tensor& input, Tensor& tensor_return_value) {
     using namespace tt::constants;
 
     Program program{};
@@ -23,7 +21,6 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
     const CoreCoord core({0, 0});
     CoreRange core_range(core, core);
 
-    const Tensor& input = tensor_args.input;
     Tensor& output = tensor_return_value;
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
@@ -125,9 +122,9 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
 void RotateHalfProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const RotateHalfParams& /*operation_attributes*/,
-    const RotateHalfInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    Buffer* src_buffer = tensor_args.input.buffer();
+    const Tensor& input,
+    Tensor& tensor_return_value) {
+    Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = tensor_return_value.buffer();
 
     const auto& core = cached_program.shared_variables.core;
@@ -145,4 +142,4 @@ void RotateHalfProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotate_half::program
+}  // namespace ttnn::experimental::prim

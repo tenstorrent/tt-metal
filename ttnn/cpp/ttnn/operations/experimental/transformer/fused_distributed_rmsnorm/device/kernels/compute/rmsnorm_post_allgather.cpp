@@ -22,8 +22,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t stats_cb = get_compile_time_arg_val(1);
     constexpr uint32_t weight_cb = get_compile_time_arg_val(2);
@@ -307,4 +306,3 @@ void MAIN {
         cb_pop_front(transformation_mat_cb, 1);
     }
 }
-}  // namespace NAMESPACE

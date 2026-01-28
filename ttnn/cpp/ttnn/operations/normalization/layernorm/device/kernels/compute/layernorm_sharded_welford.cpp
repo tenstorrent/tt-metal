@@ -67,7 +67,6 @@
  *       receive the multicasted global results and perform
  *       the rest of layernorm for their row(s) width slices.
  */
-namespace NAMESPACE {
 namespace {
 // Get the set size of the next block in the Welford combine
 inline auto get_next_set_size(
@@ -95,7 +94,7 @@ inline auto get_next_set_size(
     return block == num_blocks_combine - 1 ? last_block_w : block_w;
 }
 }  // namespace
-void MAIN {
+void kernel_main() {
     // ============================================================================
     // Kernel setup
     // ============================================================================
@@ -499,5 +498,3 @@ void MAIN {
         cb_wait_front(cb_out, num_tiles_per_block);
     }
 }
-
-}  // namespace NAMESPACE

@@ -5,31 +5,33 @@
 #include "move_program_factory.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
-namespace ttnn::operations::data_movement::move::program {
+namespace ttnn::prim {
 
 MoveProgramFactory::cached_program_t MoveProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
-    using copy_attrs_t = ttnn::operations::data_movement::copy::operation_attributes_t;
-    using copy_args_t = ttnn::operations::data_movement::copy::tensor_args_t;
+    using copy_attrs_t = CopyDeviceOperation::operation_attributes_t;
+    using copy_args_t = CopyDeviceOperation::tensor_args_t;
 
     const copy_attrs_t copy_attrs{
         operation_attributes.output_mem_config, output.dtype(), operation_attributes.backwards};
     const copy_args_t copy_args{input, std::make_optional(output)};
 
-    return ttnn::operations::data_movement::copy::program::CopyProgramFactory::create(
-        copy_attrs, copy_args, tensor_return_value);
+    return ttnn::prim::CopyProgramFactory::create(copy_attrs, copy_args, tensor_return_value);
 }
 
 void MoveProgramFactory::override_runtime_arguments(
     MoveProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
-    using copy_attrs_t = ttnn::operations::data_movement::copy::operation_attributes_t;
-    using copy_args_t = ttnn::operations::data_movement::copy::tensor_args_t;
+    using copy_attrs_t = CopyDeviceOperation::operation_attributes_t;
+    using copy_args_t = CopyDeviceOperation::tensor_args_t;
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
@@ -37,8 +39,8 @@ void MoveProgramFactory::override_runtime_arguments(
         operation_attributes.output_mem_config, output.dtype(), operation_attributes.backwards};
     const copy_args_t copy_args{input, std::make_optional(output)};
 
-    ttnn::operations::data_movement::copy::program::CopyProgramFactory::override_runtime_arguments(
+    ttnn::prim::CopyProgramFactory::override_runtime_arguments(
         cached_program, copy_attrs, copy_args, tensor_return_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

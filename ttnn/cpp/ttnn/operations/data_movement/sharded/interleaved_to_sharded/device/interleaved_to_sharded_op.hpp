@@ -12,15 +12,15 @@
 #include "interleaved_to_sharded_op_types.hpp"
 #include "interleaved_to_sharded_program_factory.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct InterleavedToShardedDeviceOperation {
-    using operation_attributes_t = interleaved_to_sharded::operation_attributes_t;
-    using tensor_args_t = interleaved_to_sharded::tensor_args_t;
-    using spec_return_value_t = interleaved_to_sharded::spec_return_value_t;
-    using tensor_return_value_t = interleaved_to_sharded::tensor_return_value_t;
+    using operation_attributes_t = InterleavedToShardedParams;
+    using tensor_args_t = InterleavedToShardedInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<interleaved_to_sharded::InterleavedToShardedProgramFactory>;
+    using program_factory_t = std::variant<InterleavedToShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -41,10 +41,7 @@ struct InterleavedToShardedDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::InterleavedToShardedDeviceOperation::tensor_return_value_t interleaved_to_sharded(
+Tensor interleaved_to_sharded(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,

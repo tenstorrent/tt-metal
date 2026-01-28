@@ -15,7 +15,7 @@ import torch
 import ttnn
 from models.common.modules.lazy_weight import (
     LazyWeight,
-    _auto_pad_for_sharding,
+    _auto_pad_for_sharded_tiles,
     _from_torch_and_dump,
     resolve_lazy_weight,
 )
@@ -682,16 +682,16 @@ class TestGetDeviceWeight:
 
 
 # ============================================================================
-# Test _auto_pad_for_sharding Function
+# Test _auto_pad_for_sharded_tiles Function
 # ============================================================================
 
 
 class TestAutoPadForSharding:
-    """Tests for _auto_pad_for_sharding() function."""
+    """Tests for _auto_pad_for_sharded_tiles() function."""
 
     def test_no_padding_when_shapes_match(self, mock_tensor):
         """Test that no padding is applied when shapes match."""
-        result = _auto_pad_for_sharding(mock_tensor, tuple(mock_tensor.shape))
+        result = _auto_pad_for_sharded_tiles(mock_tensor, tuple(mock_tensor.shape))
         assert result is mock_tensor
 
     def test_padding_applied_when_shapes_differ(self):
@@ -699,7 +699,7 @@ class TestAutoPadForSharding:
         tensor = torch.randn(1, 32, 100)
         padded_shape = (1, 32, 128)
 
-        result = _auto_pad_for_sharding(tensor, padded_shape)
+        result = _auto_pad_for_sharded_tiles(tensor, padded_shape)
         assert result.shape == padded_shape
         # Original data should be preserved
         assert torch.equal(result[:, :, :100], tensor)
@@ -709,7 +709,7 @@ class TestAutoPadForSharding:
         tensor = torch.zeros(1, 32, 100)
         padded_shape = (1, 32, 128)
 
-        result = _auto_pad_for_sharding(tensor, padded_shape, pad_value=1.0)
+        result = _auto_pad_for_sharded_tiles(tensor, padded_shape, pad_value=1.0)
         assert result.shape == padded_shape
         # Padded region should have pad_value
         assert torch.allclose(result[:, :, 100:], torch.ones(1, 32, 28))
@@ -739,6 +739,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=False,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 
@@ -765,6 +766,7 @@ class TestFromTorchAndDump:
                     memory_config=mock_memory_config,
                     mesh_mapper=None,
                     is_replicated=True,
+                    pad_value=0.0,
                     cache_file_name=cache_file,
                 )
 
@@ -791,6 +793,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=True,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 
@@ -813,6 +816,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=False,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 

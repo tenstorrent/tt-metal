@@ -20,6 +20,33 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
 )
 
+# Make sure protobuf files are generated before compiling
+add_dependencies(test_factory_system_descriptor scaleout_generated_protos)
+
+# Test for descriptor merger functionality
+add_executable(test_descriptor_merger test_descriptor_merger.cpp)
+
+set_target_properties(
+    test_descriptor_merger
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_descriptor_merger
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+# Make sure protobuf files are generated before compiling descriptor merger tests
+add_dependencies(test_descriptor_merger scaleout_generated_protos)
+
 # Test for link retraining validation
 add_executable(
     test_link_retraining

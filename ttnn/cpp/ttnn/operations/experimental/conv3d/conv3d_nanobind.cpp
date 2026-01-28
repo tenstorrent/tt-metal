@@ -51,7 +51,7 @@ void bind_conv3d(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
                const std::optional<ttnn::Tensor>& bias_tensor,
-               const Conv3dConfig& config,
+               const ttnn::experimental::prim::Conv3dConfig& config,
                const tt::tt_metal::DataType& dtype,
                const uint32_t& output_channels,
                const std::array<uint32_t, 3>& kernel_size,
@@ -95,7 +95,7 @@ void bind_conv3d(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()});
 
     auto py_conv3d_config =
-        nb::class_<Conv3dConfig>(
+        nb::class_<ttnn::experimental::prim::Conv3dConfig>(
             mod,
             "Conv3dConfig",
             R"doc(
@@ -114,16 +114,18 @@ void bind_conv3d(nb::module_& mod) {
                 nb::arg("C_in_block") = 0,
                 nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
-    py_conv3d_config.def_rw("weights_dtype", &Conv3dConfig::weights_dtype, "");
-    py_conv3d_config.def_rw("output_layout", &Conv3dConfig::output_layout, "");
-    py_conv3d_config.def_rw("T_out_block", &Conv3dConfig::T_out_block, "");
-    py_conv3d_config.def_rw("W_out_block", &Conv3dConfig::W_out_block, "");
-    py_conv3d_config.def_rw("H_out_block", &Conv3dConfig::H_out_block, "");
-    py_conv3d_config.def_rw("C_out_block", &Conv3dConfig::C_out_block, "");
-    py_conv3d_config.def_rw("C_in_block", &Conv3dConfig::C_in_block, "");
-    py_conv3d_config.def_rw("compute_with_storage_grid_size", &Conv3dConfig::compute_with_storage_grid_size, "");
+    py_conv3d_config.def_rw("weights_dtype", &ttnn::experimental::prim::Conv3dConfig::weights_dtype, "");
+    py_conv3d_config.def_rw("output_layout", &ttnn::experimental::prim::Conv3dConfig::output_layout, "");
+    py_conv3d_config.def_rw("T_out_block", &ttnn::experimental::prim::Conv3dConfig::T_out_block, "");
+    py_conv3d_config.def_rw("W_out_block", &ttnn::experimental::prim::Conv3dConfig::W_out_block, "");
+    py_conv3d_config.def_rw("H_out_block", &ttnn::experimental::prim::Conv3dConfig::H_out_block, "");
+    py_conv3d_config.def_rw("C_out_block", &ttnn::experimental::prim::Conv3dConfig::C_out_block, "");
+    py_conv3d_config.def_rw("C_in_block", &ttnn::experimental::prim::Conv3dConfig::C_in_block, "");
+    py_conv3d_config.def_rw(
+        "compute_with_storage_grid_size", &ttnn::experimental::prim::Conv3dConfig::compute_with_storage_grid_size, "");
 
-    py_conv3d_config.def("__repr__", [](const Conv3dConfig& config) { return fmt::format("{}", config); });
+    py_conv3d_config.def(
+        "__repr__", [](const ttnn::experimental::prim::Conv3dConfig& config) { return fmt::format("{}", config); });
 }
 
 }  // namespace ttnn::operations::experimental::conv3d::detail

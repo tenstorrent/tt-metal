@@ -23,6 +23,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -468,6 +469,7 @@ struct SDPATestConfig {
     uint32_t key_value_dim;
     uint32_t num_query_heads;
     uint32_t num_key_heads;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;  // default: causal mask
     float dropout_prob = 0.0F;
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
@@ -515,16 +517,26 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
     const bool return_intermediates = true;
 
+    // For Causal mask_type: kernel generates mask on-the-fly, we pass std::nullopt
+    // For Arbitrary mask_type: we pass attn_mask tensor to kernel
+    // For None mask_type: no mask at all
+    std::optional<ttnn::Tensor> kernel_mask = std::nullopt;
+    if (config.mask_type == ttml::metal::AttentionMaskType::Arbitrary) {
+        kernel_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    }
+
     // Run SDPA kernel with new interface - this is our reference implementation
-    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, config.dropout_prob, return_intermediates);
+    auto result = ttml::metal::sdpa_fw(
+        query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
     xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
 
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
-    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
+    // Composite always needs the mask tensor for comparison (even when kernel generates it on-the-fly)
+    auto attn_mask_device = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask_device);
     xt::xarray<float> composite_result_xtensor = core::to_xtensor(composite_result_split[0]);  // Already (B, H, S, D)
     xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
 
@@ -585,6 +597,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch) {
         .key_value_dim = 128U,
         .num_query_heads = 2U,
         .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "SmallBatch_2H_2KV"};
     run_sdpa_test(config);
 }
@@ -597,7 +610,83 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SingleHead) {
         .key_value_dim = 128U,
         .num_query_heads = 1U,
         .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "SingleHead_1H_1KV"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// CAUSAL MASK TESTS - Testing on-the-fly causal mask generation
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
+    // Simple causal mask test with small shapes
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleHead) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_SingleHead"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
+    // Single tile test (32 seq len = 1 tile row) - everything on one core, simplest case
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_SingleTile"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+    // Multi-head attention with equal query and KV heads (standard MHA)
+    // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 256U,
+        .query_dim = 768U,  // 6 heads * 128 dim per head
+        .key_value_dim = 768U,
+        .num_query_heads = 6U,
+        .num_key_heads = 6U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_MHA_4B_256S_6H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+    // Grouped Query Attention with different query and KV heads
+    // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
+    SDPATestConfig config{
+        .batch_size = 16U,
+        .sequence_length = 512U,
+        .query_dim = 1024U,     // 8 heads * 128 dim per head
+        .key_value_dim = 512U,  // 4 heads * 128 dim per head
+        .num_query_heads = 8U,
+        .num_key_heads = 4U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "CausalMask_GQA_16B_512S_8Q_4KV"};
     run_sdpa_test(config);
 }
 
@@ -609,6 +698,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
         .key_value_dim = 64U,
         .num_query_heads = 2U,
         .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "SmallBatch_2H_1KV_Grouped"};
     run_sdpa_test(config);
 }
@@ -625,6 +715,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
         .key_value_dim = 384U,
         .num_query_heads = 12U,
         .num_key_heads = 6U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "SmallBatch_12H_6KV_Grouped"};
     run_sdpa_test(config);
 }
@@ -641,6 +732,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
         .key_value_dim = 384U,
         .num_query_heads = 12U,
         .num_key_heads = 6U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "Batch_16B_12H_6KV_Production"};
     run_sdpa_test(config);
 }
@@ -663,6 +755,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
             .key_value_dim = 32U,
             .num_query_heads = 1U,
             .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .test_name = "EdgeCase_MinDimensions"};
 
         EXPECT_NO_THROW({ run_sdpa_test(config); }) << "Should handle minimum tile dimensions correctly";
@@ -677,6 +770,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
             .key_value_dim = 64U,
             .num_query_heads = 1U,
             .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .test_name = "EdgeCase_SingleHead"};
 
         EXPECT_NO_THROW({ run_sdpa_test(config); }) << "Should handle single head attention correctly";
@@ -691,6 +785,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
             .key_value_dim = 32U,  // 1 head * 32 dim per head
             .num_query_heads = 4U,
             .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .test_name = "EdgeCase_Grouping_4to1"};
 
         EXPECT_NO_THROW({ run_sdpa_test(config); }) << "Should handle 4:1 grouping ratio correctly";
@@ -704,6 +799,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
             .key_value_dim = 32U,  // 1 head * 32 dim per head
             .num_query_heads = 8U,
             .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .test_name = "EdgeCase_MaxGrouping_8to1"};
 
         EXPECT_NO_THROW({ run_sdpa_test(config); }) << "Should handle 8:1 grouping ratio correctly";
@@ -751,7 +847,8 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false);
+        auto result =
+            ttml::metal::sdpa_fw(query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, false);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should always be present";
         EXPECT_FALSE(result[1].has_value()) << "Intermediate should be null when return_intermediates=false";
@@ -769,7 +866,8 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, true);
+        auto result =
+            ttml::metal::sdpa_fw(query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, true);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should be present";
         EXPECT_TRUE(result[1].has_value()) << "Intermediate should be present when return_intermediates=true";

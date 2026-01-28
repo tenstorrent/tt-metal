@@ -22,9 +22,9 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async {
+namespace ttnn::experimental::prim {
 
-namespace detail {
+namespace {
 // Configuration constants
 constexpr uint32_t MIN_CHUNK_GRANULARITY = 4;
 constexpr uint32_t MAX_CHUNKS_PER_SHARD = 30;
@@ -86,7 +86,7 @@ auto create_receiver_buffer(
     return CreateCircularBuffer(program, receiver_core_range, config);
 }
 
-static std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_strides_and_offsets(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_strides_and_offsets(
     uint32_t in_row_tiles, uint32_t in_col_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t in_dim) {
     uint32_t input_row_device_stride = 0;
     uint32_t input_col_device_stride = 0;
@@ -116,12 +116,12 @@ static std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ca
         input_shard_col_tiles);
 }
 
-}  // namespace detail
+}  // anonymous namespace
 
 AllToAllAsyncProgram::cached_mesh_workload_t AllToAllAsyncProgram::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllToAllAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -136,9 +136,9 @@ AllToAllAsyncProgram::cached_mesh_workload_t AllToAllAsyncProgram::create_mesh_w
 }
 
 ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> AllToAllAsyncProgram::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllToAllAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     log_debug(tt::LogOp, "DEBUG: create_at is called");
     auto* mesh_device = tensor_args.input_tensor.device();
@@ -253,14 +253,14 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t pages_per_packet = packet_size / page_size;
-    const uint32_t cb_pages = detail::TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
+    const uint32_t cb_pages = TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
 
     // Create buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
-    detail::create_receiver_buffer(program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
+    create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
+    create_receiver_buffer(program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
-    const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = detail::calculate_chunk_params(
+    const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = calculate_chunk_params(
         tensor_args.input_tensor.buffer()->num_pages() /
             operation_attributes.ring_size,  // number of pages sent between each pair of devices
         pages_per_packet);
@@ -319,19 +319,19 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
-        ring_index,                         // my_chip_id
-        operation_attributes.ring_size,     // num_chips
-        tt::CB::c_in1,                      // reserved_packet_header_cb_id
-        detail::PACKET_HEADER_BUFFER_SIZE,  // num_packet_headers_storable
-        tt::CB::c_in0,                      // cb0_id
-        pages_per_packet,                   // packet_size_in_pages
-        op_config.get_page_size(),          // tensor0_page_size
-        num_targets_forward,                // num_targets_forward_direction
-        num_targets_backward,               // num_targets_backward_direction
-        dynamic_alternate,                  // alternate
-        chunk_granularity,                  // granularity of signaling to receiver
-        contig_pages_advanced,              // contig_pages_advanced
-        N_DRAM_BANKS                        // num_dram_banks
+        ring_index,                      // my_chip_id
+        operation_attributes.ring_size,  // num_chips
+        tt::CB::c_in1,                   // reserved_packet_header_cb_id
+        PACKET_HEADER_BUFFER_SIZE,       // num_packet_headers_storable
+        tt::CB::c_in0,                   // cb0_id
+        pages_per_packet,                // packet_size_in_pages
+        op_config.get_page_size(),       // tensor0_page_size
+        num_targets_forward,             // num_targets_forward_direction
+        num_targets_backward,            // num_targets_backward_direction
+        dynamic_alternate,               // alternate
+        chunk_granularity,               // granularity of signaling to receiver
+        contig_pages_advanced,           // contig_pages_advanced
+        N_DRAM_BANKS                     // num_dram_banks
     };
     tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
         .append_to(writer_kernel_config.compile_args);
@@ -406,7 +406,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
          out_col_start,
          input_shard_row_tiles,
          input_shard_col_tiles] =
-            detail::calculate_strides_and_offsets(
+            calculate_strides_and_offsets(
                 in_row_tiles, in_col_tiles, operation_attributes.ring_size, ring_index, operation_attributes.in_dim);
 
     // Check that with this static partitioning, the final packet does not overflow the intermediate buffer
@@ -515,7 +515,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
                  receiver_out_col_start,
                  receiver_input_shard_row_tiles,
                  receiver_input_shard_col_tiles] =
-                    detail::calculate_strides_and_offsets(
+                    calculate_strides_and_offsets(
                         in_row_tiles, in_col_tiles, operation_attributes.ring_size, i, operation_attributes.in_dim);
 
             // Set receiver runtime args
@@ -571,8 +571,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
 
 void AllToAllAsyncProgram::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncParams& operation_attributes,
+    const AllToAllAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -616,4 +616,4 @@ void AllToAllAsyncProgram::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async
+}  // namespace ttnn::experimental::prim

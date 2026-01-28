@@ -19,8 +19,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // clang-format off
     // Definitions
     //   block_h: This the length of the row we wish to processes in terms of tiles
@@ -822,4 +821,3 @@ void MAIN {
     }
     // End Batch Loop
 }
-}  // namespace NAMESPACE

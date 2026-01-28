@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
 #endif
@@ -46,7 +47,8 @@ namespace ckernel {
  */
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
-ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
+ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb, icb_scaler, ocb, call_line);
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
@@ -62,17 +64,22 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
  *
- * | Param Type | Name | Description                                      | Type | Valid Range | Required |
- * |------------|------|--------------------------------------------------|------|-------------|----------|
- * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | enforce_fp32_accumulation | Must match the template parameter used in reduce_init                                   | bool      | {true, false}                                  | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init). Required when enforce_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
 template <bool enforce_fp32_accumulation = false>
-ALWI void reduce_uninit() {
-    if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
-    }
+ALWI void reduce_uninit(uint32_t icb = 0) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_uninit<enforce_fp32_accumulation>()));
+#else
+    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
+    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
+    // See _llk_math_reduce_init_ for more details
+    MATH((llk_math_reduce_uninit<enforce_fp32_accumulation>(icb)));
+#endif
     PACK((llk_pack_reduce_mask_clear()));
 }
 

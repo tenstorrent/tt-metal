@@ -18,12 +18,12 @@ ttnn::Tensor EmbeddingOperation::invoke(
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,
     const std::optional<ttnn::Layout>& layout,
-    EmbeddingsType embeddings_type,
+    ttnn::prim::EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     if (pad_token.has_value()) {
-        embeddings_type = EmbeddingsType::PADDED;
+        embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
     Tensor mutable_input_tensor = input_tensor_arg;
     Tensor mutable_weight = weight_arg;

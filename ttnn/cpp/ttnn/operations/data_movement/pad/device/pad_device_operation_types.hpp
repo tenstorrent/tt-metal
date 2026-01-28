@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::data_movement::pad {
+namespace ttnn::prim {
 
 struct PadParams {
     ttnn::Shape output_logical_shape;
@@ -25,4 +25,4 @@ struct PadInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::data_movement::pad
+}  // namespace ttnn::prim

@@ -13,7 +13,7 @@
 #include "bcast_multi_core_w_program_factory.hpp"
 #include "bcast_multi_core_hw_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::bcast {
+namespace ttnn::prim {
 
 struct BcastDeviceOperation {
     using operation_attributes_t = BcastParams;
@@ -21,11 +21,11 @@ struct BcastDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::BcastMultiCoreHProgramFactory,
-        program::BcastShardedHProgramFactory,
-        program::BcastShardedHOptimisedProgramFactory,
-        program::BcastMultiCoreWProgramFactory,
-        program::BcastMultiCoreHWProgramFactory>;
+        BcastMultiCoreHProgramFactory,
+        BcastShardedHProgramFactory,
+        BcastShardedHOptimisedProgramFactory,
+        BcastMultiCoreWProgramFactory,
+        BcastMultiCoreHWProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -51,10 +51,10 @@ struct BcastDeviceOperation {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::bcast
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_value_t bcast(
+BcastDeviceOperation::tensor_return_value_t bcast(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     ttnn::BcastOpMath bcast_op,

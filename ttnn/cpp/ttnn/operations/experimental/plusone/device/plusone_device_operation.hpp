@@ -14,14 +14,14 @@
 
 #include "plusone_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::plusone {
+namespace ttnn::experimental::prim {
 
 struct PlusOneDeviceOperation {
     using operation_attributes_t = PlusoneParams;
-    using tensor_args_t = PlusoneInputs;
-    using spec_return_value_t = plusone::spec_return_value_t;
-    using tensor_return_value_t = plusone::tensor_return_value_t;
-    using program_factory_t = std::variant<program::PlusOneProgramFactory>;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<PlusOneProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -33,10 +33,10 @@ struct PlusOneDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::plusone
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::plusone::tensor_return_value_t plus_one(
+Tensor plus_one(
     const Tensor& input_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     bool skip_negative_entries = false);

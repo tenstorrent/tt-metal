@@ -1,0 +1,112 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "internal/dataflow_buffer_interface.h"
+#include "internal/circular_buffer_interface.h"  // for cb_addr_shift
+#ifndef COMPILE_FOR_TRISC
+#include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
+#endif
+
+#include "api/debug/dprint.h"
+
+// Global DFB interface array - defined in firmware, declared here for use by setup functions
+// For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
+extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[32];
+
+namespace experimental {
+
+FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
+    uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint16_t hart_bit = 1 << hartid;
+
+    uint32_t num_dfbs =
+        local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
+    volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+
+    for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+        // Read dfb_initializer_t (shared config)
+        volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
+        // TODO: update risc mask handling for tensix
+        uint16_t risc_mask = init_ptr->risc_mask_bits.dm_mask;
+        uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+
+        // Per-risc configs start after dfb_initializer_t
+        volatile dfb_initializer_per_risc_t* per_risc_base =
+            reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
+
+        if (risc_mask & hart_bit) {
+            // Find this risc's per-risc config by counting set bits before this position
+            uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
+            volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
+
+            // Populate LocalDFBInterface from combined dfb_initializer_t + dfb_initializer_per_risc_t
+            LocalDFBInterface& dfb_interface = ::g_dfb_interface[logical_dfb_id];
+
+            // Copy per-risc fields
+            for (uint8_t i = 0; i < 4; i++) {
+                dfb_interface.base_addr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
+                dfb_interface.limit[i] = per_risc_ptr->limit[i] >> cb_addr_shift;
+                dfb_interface.rd_ptr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
+                dfb_interface.wr_ptr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
+                dfb_interface.packed_tile_counter[i] = per_risc_ptr->packed_tile_counter[i];
+            }
+            dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_to_rr;
+
+            dfb_interface.entry_size = init_ptr->entry_size;
+            dfb_interface.stride_size = init_ptr->stride_size;
+            dfb_interface.remapper_pair_index = init_ptr->remapper_pair_index;
+            dfb_interface.num_txn_ids = init_ptr->num_txn_ids;
+            for (uint8_t i = 0; i < 4; i++) {
+                dfb_interface.txn_ids[i] = init_ptr->txn_ids[i];
+            }
+            dfb_interface.num_entries_per_txn_id = init_ptr->num_entries_per_txn_id;
+            dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->num_entries_per_txn_id_per_tc;
+
+#ifndef COMPILE_FOR_TRISC
+            // Initialize TCs - only the RISC marked as responsible should do this
+            if (per_risc_ptr->should_init_tc) {  //
+                for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_to_rr; tc++) {
+                    PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
+                    uint8_t tensix_id = get_tensix_id(ptc);
+                    uint8_t tc_id = get_counter_id(ptc);
+
+                    llk_intf_reset(tensix_id, tc_id);
+                    llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                }
+                init_ptr->risc_mask_bits.tc_initialized = 1;
+            }
+#endif
+        }
+
+        // Jump to next DFB: skip dfb_initializer_t + (num_riscs * dfb_initializer_per_risc_t)
+        base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+    }
+
+    // After setting up g_dfb_interface, wait for all TCs to be initialized
+    bool all_tcs_initialized = false;
+    while (!all_tcs_initialized) {
+        all_tcs_initialized = true;
+        base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+
+        for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
+            volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
+            // TODO: update risc mask handling for tensix
+            uint16_t risc_mask = init_ptr->risc_mask_bits.dm_mask;
+            uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
+
+            // TODO: Ring buffer is in uncached region so its okay to poll value. Needs to be uplifted when caching is
+            // supported
+            all_tcs_initialized &= init_ptr->risc_mask_bits.tc_initialized;
+
+            base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
+        }
+    }
+}
+
+}  // namespace experimental

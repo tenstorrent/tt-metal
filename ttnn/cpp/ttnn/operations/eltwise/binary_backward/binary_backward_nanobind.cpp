@@ -340,7 +340,7 @@ void bind_binary_backward_bias_gelu(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
-               std::string parameter_b,
+               const std::string& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor_a, input_tensor_b, parameter_b, memory_config);
             },
@@ -356,7 +356,7 @@ void bind_binary_backward_bias_gelu(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               std::string parameter_b,
+               const std::string& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },

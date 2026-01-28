@@ -8,6 +8,7 @@
 #include "all_gather_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::ccl {
 

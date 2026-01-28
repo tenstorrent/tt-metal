@@ -158,8 +158,12 @@ The final number (`4042956046390500517`) indicates the memory report output dire
 
 * `config.json`
 * `db.sqlite`
+* `cluster_descriptor.yaml`
+* `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`
 
 Upload this entire directory to TT-NN Visualizer under the **Memory reports** section.
+
+For the `physical_chip_mesh_coordinate_mapping_1_of_1.yaml` file to be generated, you have have `TT_METAL_HOME` set. On multi-host systems, there will be multiple `physical_chip_mesh_coordinate_mapping_x_of_y.yaml` files in the report.
 
 ---
 

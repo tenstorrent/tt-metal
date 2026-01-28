@@ -189,13 +189,11 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
-    const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{
-        .fp32_dest_acc_en = fp32_dest_acc_en, .dropout_probability = dropout_probability};
+    auto operation_attributes = OperationType::operation_attributes_t{.dropout_probability = dropout_probability};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

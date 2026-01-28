@@ -58,6 +58,8 @@ public:
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
 
+    void add_prefetch_relay_linear_h(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
+
     void add_prefetch_relay_paged(
         uint8_t is_dram,
         uint8_t start_page,
