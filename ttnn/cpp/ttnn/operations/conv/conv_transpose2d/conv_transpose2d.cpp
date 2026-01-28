@@ -585,6 +585,10 @@ public:
         slice_halo_config.num_cores_nhw = get_num_cores_channels_from_parallel_config(parallel_config);
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
         slice_halo_config.snap_to_tile = true;
+        // NOTE: is_transpose is intentionally NOT set here for L1 estimation.
+        // Setting it causes get_transposed_full_input_shape() to be called with slice dimensions,
+        // which inflates L1 usage estimates and causes excessive slicing. The actual runtime
+        // (conv_transpose2d_L1) correctly uses is_transpose=true with full dimensions.
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,

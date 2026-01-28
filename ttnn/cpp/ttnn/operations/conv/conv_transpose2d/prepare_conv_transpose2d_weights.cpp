@@ -170,6 +170,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
@@ -213,8 +214,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     if (path == ConvT2dExecutionPath::L1) {
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
         // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
-        // Note: prepare_conv_transpose2d_weights is called from Python and doesn't receive output_padding,
-        // so we assume output_padding = 0 for weight preparation (the actual conv op handles output_padding)
+        // Note: output_padding doesn't affect weight preparation - it's just zero-padding added to output
         auto dims = compute_conv_transpose2d_dimensions(
             input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
 
@@ -267,7 +267,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             device);
     }
     auto [output_height, output_width] = calculate_ct2d_output_image_size(
-        {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
+        {input_height, input_width}, kernel_size, stride, padding_n4, output_padding, dilation);
     auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
         batch_size,
         input_height,
@@ -277,7 +277,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         kernel_size,
         stride,
         padding_n4,
-        {0, 0},  // output_padding assumed to be 0 for weight preparation
+        output_padding,
         dilation,
         groups,
         input_layout,
@@ -375,6 +375,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> /*output_padding*/,  // Unused: output_padding doesn't affect bias preparation
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice* device,
@@ -385,7 +386,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
     // full_input dimensions. Calculate these dimensions for bias preparation.
-    // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
+    // Note: output_padding doesn't affect bias preparation - it's just zero-padding added to output
     auto dims =
         compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
 
