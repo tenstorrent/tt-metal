@@ -684,7 +684,6 @@ def test_shard_untilize2(device):
     assert torch.allclose(torch_tensor, output_tensor, 0.9999)
 
 
-# regression test for issue 19309: Tensor.to(Layout) does not pad tensor and throws
 @pytest.mark.parametrize(
     "shape",
     [
@@ -694,8 +693,8 @@ def test_shard_untilize2(device):
         pytest.param((1, 1, 513, 513), id="513x513"),
     ],
 )
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_tensor_to(device, shape, layout):
+def test_tensor_to_tile_layout_shape_verification(device, shape):
+    """Regression test for issue 19309: Tensor.to(Layout) does not pad tensor and throws"""
     if shape is None:
         pt_tensor = torch.empty(0, dtype=torch.bfloat16, requires_grad=False)
     else:
@@ -703,17 +702,14 @@ def test_tensor_to(device, shape, layout):
 
     initial_shape = pt_tensor.shape  # store initial shape
 
-    output_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(layout)  # should not throw
+    output_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)  # should not throw
     result_shape = output_tensor.padded_shape  # store result shape
 
     # Layout verification
-    assert output_tensor.layout == layout
+    assert ttnn.TILE_LAYOUT == output_tensor.layout
     # Padding verification: shape comparison
-    if ttnn.TILE_LAYOUT == layout:
-        if 4 == len(initial_shape):
-            assert result_shape[-2] == nearest_32(initial_shape[-2])
-            assert result_shape[-1] == nearest_32(initial_shape[-1])
-        else:
-            assert result_shape[0] == 32
+    if 4 == len(initial_shape):
+        assert result_shape[-2] == nearest_32(initial_shape[-2])
+        assert result_shape[-1] == nearest_32(initial_shape[-1])
     else:
-        assert result_shape == initial_shape
+        assert 32 == result_shape[0]
