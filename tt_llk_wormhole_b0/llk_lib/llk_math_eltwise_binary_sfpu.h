@@ -32,7 +32,7 @@ inline void eltwise_binary_sfpu_configure_addrmod()
     }
         .set(ADDR_MOD_7);
 
-    if constexpr (sfpu_op == SfpuType::mul_int32)
+    if constexpr (sfpu_op == SfpuType::mul_int32 || sfpu_op == SfpuType::mul_uint16)
     {
         addr_mod_t {
             .srca = {.incr = 0},
