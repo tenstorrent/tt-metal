@@ -90,6 +90,7 @@ enum class SfpuType {
     gt,
     ge,
     le,
+    eq,
     topk_local_sort,
     topk_merge,
     topk_rebuild,

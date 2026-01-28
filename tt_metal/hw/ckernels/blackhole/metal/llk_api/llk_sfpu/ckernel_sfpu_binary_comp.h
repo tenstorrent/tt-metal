@@ -106,4 +106,36 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
+// Float32 binary comparison for eq operation
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        constexpr uint dst_tile_size_sfpi = 32;
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result = 0.0f;
+
+        if constexpr (RELATIONAL_OP == SfpuType::eq) {
+            // Standard float comparison (handles normal values and NaN correctly)
+            v_if(in0 == in1) { result = 1.0f; }
+            v_endif;
+
+            // Special handling for infinity comparison (SFPI float == doesn't work for inf == inf)
+            // Take absolute value and check if both are infinity with same bit pattern
+            sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
+            sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+            sfpi::vInt abs_in0_bits = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(in0, 0));
+
+            // Both are ±infinity AND have identical bit patterns (same sign)
+            v_if((abs_in0_bits == 0x7F800000) && (in0_bits == in1_bits)) { result = 1.0f; }
+            v_endif;
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 }  //  namespace ckernel::sfpu
