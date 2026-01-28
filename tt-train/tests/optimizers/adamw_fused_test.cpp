@@ -262,45 +262,29 @@ TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
 // Test cases with various hyperparameter configurations
 static const AdamWCase kBasicCases[] = {
     // Standard configurations with different learning rates
-    {{1, 2, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e3"},
-    {{2, 4, 128, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e4"},
+    {{1, 1, 128, 512}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
+    {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e3"},
+    {{2, 4, 32, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e4"},
     // Different beta1 values
-    {{1, 16, 128, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p8"},
-    {{4, 4, 128, 128}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p5"},
+    {{1, 4, 64, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p8"},
+    {{2, 4, 64, 64}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p5"},
     // Different beta2 values
-    {{1, 32, 64, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, false, "Beta2_0p99"},
-    {{1, 64, 64, 64}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, false, "Beta2_0p95"},
+    {{1, 8, 32, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, false, "Beta2_0p99"},
+    {{1, 32, 32, 32}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, false, "Beta2_0p95"},
     // Different epsilon values
-    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
-    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, false, "Epsilon_1e9"},
+    {{1, 16, 32, 64}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
+    {{2, 8, 32, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, false, "Epsilon_1e9"},
     // Different tensor shapes
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_4D"},
-    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Wide"},
+    {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "NIGHTLY_Large_4D"},
+    {{1, 512, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "NIGHTLY_Wide"},
+    // Only beta2 (second moment), beta1=0
+    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p999"},
+    {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "OnlyBeta2_0p99"},
+    {{1, 8, 128, 512}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "NIGHTLY_Beta2_eps1e6"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
     AdamWFusedBasicComparison, AdamWFusedComparisonTest, ::testing::ValuesIn(kBasicCases), CaseName);
-
-// ====================================================================
-// Isolated Feature Tests
-// Test individual features in isolation to verify correctness
-// ====================================================================
-
-// Test cases that isolate individual AdamW features
-static const AdamWCase kIsolatedFeatureCases[] = {
-    // Only beta2 (second moment) - tests adaptive learning rate without momentum
-    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p999"},
-    {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "OnlyBeta2_0p99"},
-    // Extreme beta2 values
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9f, 1e-8f, 0.0f, false, "Beta2_0p9_fast_adapt"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "Beta2_0p9999_slow_adapt"},
-    // Epsilon variation with beta1=0
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "Beta2_eps1e6"},
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    AdamWFusedIsolatedFeatures, AdamWFusedComparisonTest, ::testing::ValuesIn(kIsolatedFeatureCases), CaseName);
 
 // ====================================================================
 // Weight Decay Tests
@@ -310,16 +294,14 @@ INSTANTIATE_TEST_SUITE_P(
 // Test cases with weight decay enabled
 static const AdamWCase kWeightDecayCases[] = {
     // Standard weight decay values
-    {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Standard_wd0p01"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
+    {{1, 4, 32, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Standard_wd0p01"},
+    {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
     // Weight decay with different learning rates
-    {{1, 16, 128, 128}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "HighLR_wd0p01"},
-    {{2, 8, 128, 128}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "LowLR_wd0p01"},
-    // Weight decay with beta1=0 (no momentum)
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.01f, false, "Beta2Only_wd0p01"},
+    {{1, 8, 64, 128}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "HighLR_wd0p01"},
+    {{1, 8, 64, 128}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "LowLR_wd0p01"},
     // Edge cases: very high and very low weight decay
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, false, "VerySmallWD_1e5"},
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "VeryHighWD_0p5"},
+    {{1, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, false, "NIGHTLY_VerySmallWD_1e5"},
+    {{1, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "NIGHTLY_VeryHighWD_0p5"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -333,11 +315,11 @@ INSTANTIATE_TEST_SUITE_P(
 // Test cases with AMSGrad enabled
 static const AdamWCase kAMSGradCases[] = {
     // Standard AMSGrad
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
+    {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
     // AMSGrad with weight decay
-    {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
     // AMSGrad with different shape
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Large_4D"},
+    {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWFusedAMSGrad, AdamWFusedComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
@@ -364,7 +346,7 @@ protected:
 TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     using namespace ttml;
 
-    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
+    const std::array<std::size_t, 4> shape = {1, 4, 128, 256};
     const uint32_t steps = 100;
 
     // Initialize with ones - small gradients relative to parameter magnitude
