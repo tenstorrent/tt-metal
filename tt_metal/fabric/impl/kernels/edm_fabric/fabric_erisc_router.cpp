@@ -2461,7 +2461,8 @@ void wait_for_other_local_erisc() {
 
 FORCE_INLINE void teardown(
     volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
+//    volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
+    volatile tt::tt_fabric::EDMStatus* edm_status_ptr,
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
@@ -2658,8 +2659,11 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
-    volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+        //reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(get_stream_scratch_register_address(OVERLAY_REGISTER_ONE));
 
+    
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
@@ -2789,7 +2793,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
 #endif
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
+    edm_status_ptr[0] = tt::tt_fabric::EDMStatus::STARTED;
     asm volatile("nop");
 
     //////////////////////////////
@@ -3125,7 +3129,7 @@ void kernel_main() {
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
+        edm_status_ptr[0] = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
         asm volatile("nop");
 
         if constexpr (wait_for_host_signal) {
@@ -3141,7 +3145,8 @@ void kernel_main() {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms);
             }
 
-            *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+            edm_status_ptr[0] = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+            asm volatile("nop");
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal
             // 2. All risc cores in master eth core receive signal from host and exits from this wait

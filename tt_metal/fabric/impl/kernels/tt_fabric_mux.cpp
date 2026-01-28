@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <array>
 // clang-format on
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
+constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
 
 constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
 constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
@@ -25,6 +27,7 @@ constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
 // header only buffer slot size is the same as the edm packet header size
 
 constexpr size_t status_address = get_compile_time_arg_val(5);
+//constexpr uint32_t status_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE);
 constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
 constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
@@ -46,8 +49,8 @@ constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
-const uint32_t constexpr USE_OVERLAY_REGISTER = OverlayRegisterFile::get_register<0U>();
-const uint32_t constexpr USE_L1_ADDRESS = OverlayRegisterFile::get_register<1U>();
+const uint32_t constexpr USE_OVERLAY_REGISTER = 0UL;
+const uint32_t constexpr USE_L1_ADDRESS = 1UL;
 
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
@@ -101,7 +104,7 @@ void setup_channel(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_reg_ptr uint32_t* const>(sender_flow_control_address),
             reinterpret_cast<ConnectionLiveSemaphorePtrType>(connection_handshake_address),
-            0 /* unused, sender_sync_noc_cmd_buf */,
+            0, // unused, sender_sync_noc_cmd_buf
             tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
 
             sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
@@ -157,8 +160,9 @@ void kernel_main() {
     set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
-    auto status_ptr = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE); //reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
+    volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
+    asm volatile("nop");
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -193,7 +197,7 @@ void kernel_main() {
 
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
-    size_t connection_handshake_address = connection_handshake_base_address;
+    size_t connection_handshake_address = get_stream_scratch_register_address(2U), connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
     setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, USE_OVERLAY_REGISTER>(
@@ -266,6 +270,7 @@ void kernel_main() {
     fabric_connection.open<use_worker_allocated_credit_address>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+    asm volatile("nop");
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
@@ -320,5 +325,6 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    asm volatile("nop");
     set_l1_data_cache<false>();
 }
