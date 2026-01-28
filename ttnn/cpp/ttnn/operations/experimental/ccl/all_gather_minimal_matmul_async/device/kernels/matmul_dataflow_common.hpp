@@ -121,7 +121,7 @@ void forward_half_block_to_fabric_neighbor(
     uint32_t tile_id_start = m_tile_start * output_tensor_Wt + k_tile_start;
     uint32_t row_offset = 0;
     uint32_t pages_read_in_row = 0;
-    size_t l1_read_addr = in0_start_address + write_left_half ? 0 : (half_k_block_tiles * page_size);
+    size_t l1_read_addr = in0_start_address + (write_left_half ? 0 : (half_k_block_tiles * page_size));
     while (tiles_read < tiles_to_read) {
         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -153,7 +153,7 @@ void forward_half_block_to_fabric_neighbor(
         tiles_read += tiles_to_put_in_current_packet;
         l1_read_addr += (tiles_to_put_in_current_packet * page_size);
         if (offset_l1_read_addr) {
-            l1_read_addr += (offset_l1_read_addr ? (half_k_block_tiles * page_size) : 0);
+            l1_read_addr += (half_k_block_tiles * page_size);
         }
     }
 
@@ -282,8 +282,8 @@ void read_in0_block_sync(
             write_ptr += tile_size_bytes;
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
-        write_ptr +=
-            (K_block_tiles - (d1_end_left - d1_start_left) - (d1_end_right - d1_start_right)) * tile_size_bytes;
+        write_ptr += (K_block_tiles - (d1_end_left - d1_start_left) - (d1_end_right - d1_start_right)) *
+                     tile_size_bytes;  // TODO fix this, the zeroes are not in the right spot
     }
     noc_async_read_barrier();
 }
