@@ -11,7 +11,10 @@ if is_blackhole():
         self_out_program_config,
     )
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import layernorm_program_config, self_out_program_config
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import (
+        layernorm_program_config,
+        self_out_program_config,
+    )
 
 
 class TtnnSentenceBertSelfOutput:
