@@ -191,9 +191,14 @@ class MasterConfigLoader:
 
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
-            master_file_path = os.path.join(
-                BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master_reconstructed.json"
-            )
+            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
+            reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
+
+            if MasterConfigLoader._use_database or os.path.exists(reconstructed_path):
+                master_file_path = reconstructed_path
+            else:
+                master_file_path = original_path
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
