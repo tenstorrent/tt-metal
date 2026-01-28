@@ -7,6 +7,7 @@
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -98,6 +99,8 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().compile(mesh_device);
     program.impl().allocate_circular_buffers(mesh_device);
     program.impl().validate_circular_buffer_region(mesh_device);
+    program.impl().allocate_dataflow_buffers(mesh_device);
+    program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
@@ -405,6 +408,14 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return this->semaphores();
     };
 
+    // TODO: Add dataflow buffer support to MeshWorkload
+    static const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+        empty_dataflow_buffers;
+    tt::tt_metal::detail::DataflowBuffersGetter dataflow_buffers_getter =
+        []() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
+        return empty_dataflow_buffers;
+    };
+
     // Create a span with all programs
     std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
     program_impls.reserve(programs_.size());
@@ -414,7 +425,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
 
     set_finalized();
 }
