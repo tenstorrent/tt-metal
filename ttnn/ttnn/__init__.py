@@ -385,6 +385,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.normalization import (
