@@ -22,7 +22,9 @@ SelectiveReduceCombineDeviceOperation::program_factory_t SelectiveReduceCombineD
 #pragma clang diagnostic ignored "-Wunused-parameter"
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO
+    TT_FATAL(
+        operation_attributes.axis.has_value() && operation_attributes.axis.value() == 1,
+        "Only cluster axis==1 is supported");
 }
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_hit(

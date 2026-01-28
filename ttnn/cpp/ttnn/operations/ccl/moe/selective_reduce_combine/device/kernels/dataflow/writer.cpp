@@ -67,6 +67,7 @@ void kernel_main() {
 
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
 
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
@@ -160,7 +161,7 @@ void kernel_main() {
     DPRINT << "MUX STARTED" << "\n";
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
-    if (sync_args.is_sync_core) {
+    if (sync_args.is_sync_core && use_init_semaphore) {
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -191,21 +192,22 @@ void kernel_main() {
 
     // print_u32_pages(dense_token_maps_l1_addr, num_local_experts*global_num_tokens+4, 1);
 
-    auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-    if (sync_args.is_sync_core) {
-        noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-        const uint64_t semaphore_mc_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, init_semaphore_addr);
-        noc_semaphore_set_multicast(
-            init_semaphore_addr, semaphore_mc_addr, num_token_parallel_cores * num_data_parallel_cores - 1);
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
-    } else {
-        noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+    if constexpr (use_init_semaphore) {
+        auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
+        if (sync_args.is_sync_core) {
+            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+            const uint64_t semaphore_mc_addr =
+                get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, init_semaphore_addr);
+            noc_semaphore_set_multicast(
+                init_semaphore_addr, semaphore_mc_addr, num_token_parallel_cores * num_data_parallel_cores - 1);
+            noc_async_write_barrier();
+            noc_async_atomic_barrier();
+        } else {
+            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
+        }
+        noc_semaphore_set(init_semaphore_ptr, 0);
+        DPRINT << "INIT SEMAPHORE RECEIVED" << "\n";
     }
-    noc_semaphore_set(init_semaphore_ptr, 0);
-
-    DPRINT << "INIT SEMAPHORE RECEIVED" << "\n";
 
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
@@ -338,7 +340,6 @@ void kernel_main() {
         DPRINT << "TERMINATION MASTER DONE \n";
     } else {
         // get sync core semaphore noc address
-
         close_direction_connections<
             Num_Directions,
             fabric_mux_num_buffers_per_channel,
