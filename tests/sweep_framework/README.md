@@ -496,7 +496,7 @@ For more details on the master JSON format and tensor placements, see the [Model
 
 ## FAQ / Troubleshooting
 
-- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install beautifultable termcolor`:
+- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `uv pip install beautifultable termcolor`:
 ```
 Traceback (most recent call last):
   File "<stdin>", line 1, in <module>
