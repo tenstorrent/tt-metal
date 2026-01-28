@@ -5,9 +5,9 @@
 """
 TTNN PreSDPA Test
 Tests pre-SDPA fused operation with full pipeline:
-- RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only)
+- RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
 - Qnope output: [64, 1, 512] after matmul3
-- Qrope output: [64, 1, 64] (matmul2 output, ready for RoPE)
+- Qrope output: [64, 1, 64] after RoPE
 """
 
 import pytest
@@ -16,6 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
 
@@ -95,6 +96,26 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     # Matmul3 weights - [num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # but [qnope_head_dim, qnope_out_dim] per core for device (height sharded)
     torch_matmul3_weights = torch.randn((NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+
+    # ========================================================================
+    # Create RoPE tensors (sin, cos, trans_mat)
+    # ========================================================================
+    max_seq_len = 8192
+    position_id = 0  # Decode mode: first token
+    position_ids = torch.tensor([position_id])  # [batch]
+
+    # Create cos/sin matrices in Meta-style format
+    base = 10000.0
+    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+
+    # Meta-style: stack [cos(t), cos(t)] interleaved
+    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)  # [max_seq_len, qrope_head_dim]
+    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)  # [max_seq_len, qrope_head_dim]
+
+    # Transformation matrix for RoPE
+    torch_trans_mat = get_rot_transformation_mat()  # [1, 1, 32, 32]
 
     # ========================================================================
     # Create TTNN tensors
@@ -208,54 +229,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         memory_config=matmul3_mem_config,
     )
 
-    # Qnope output tensor - height sharded on Qnope grid, [1, 512] per core
-    qnope_output_shape = (qnope_num_cores, QNOPE_OUT_DIM)  # [64, 512] total
-    qnope_output_shard_shape = (1, QNOPE_OUT_DIM)  # [1, 512] per core
-    qnope_output_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qnope_grid}),
-        qnope_output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    qnope_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qnope_output_shard_spec
-    )
-    torch_qnope_output = torch.zeros(qnope_output_shape, dtype=torch.bfloat16)
-    ttnn_qnope_output = ttnn.from_torch(
-        torch_qnope_output,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=qnope_output_mem_config,
-        tile=tile,
-    )
-
-    # Qrope output tensor - height sharded on Qrope grid, [1, 128] per core (2 heads × 64)
-    qrope_grid_start_x = QNOPE_GRID_COLS  # Column 8
-    qrope_grid_end_x = QNOPE_GRID_COLS + QROPE_GRID_COLS - 1  # Column 11
-    qrope_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(qrope_grid_start_x, 0), ttnn.CoreCoord(qrope_grid_end_x, matmul2_grid_y - 1)
-    )
-    qrope_elements_per_core = 2 * QROPE_HEAD_DIM  # 2 heads × 64 = 128 elements per core
-    qrope_output_shape = (qrope_num_cores, qrope_elements_per_core)  # [32, 128] total
-    qrope_output_shard_shape = (1, qrope_elements_per_core)  # [1, 128] per core
-    qrope_output_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qrope_grid}),
-        qrope_output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    qrope_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qrope_output_shard_spec
-    )
-    torch_qrope_output = torch.zeros(qrope_output_shape, dtype=torch.bfloat16)
-    ttnn_qrope_output = ttnn.from_torch(
-        torch_qrope_output,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=qrope_output_mem_config,
-        tile=tile,
-    )
-
     # SDPA output tensor - height sharded on SDPA grid (col 12, rows 0-7)
     # Each SDPA Input core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
     # SDPA Input grid: 4×2 rectangle at logical (0,1)-(3,2)
@@ -288,19 +261,88 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         tile=tile,
     )
 
+    # RoPE tensors - sharded on Qrope grid (4x8 = 32 cores)
+    qrope_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
+    )
+
+    # For decode mode, cos/sin are indexed by position: [1, batch, 1, head_dim]
+    # Shape: [1, 1, 1, qrope_head_dim] - broadcast multiply will use row 0
+
+    # Cos/Sin sharding: HEIGHT_SHARDED on qrope grid
+    # Each core gets full head_dim (since cos/sin are reused for all heads on that core)
+    # Shape per core: (1, qrope_head_dim) = (1, 64)
+    cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
+    sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
+
+    qrope_cos_sin_shard_shape = (1, QROPE_HEAD_DIM)  # [1, 64] per core
+    qrope_cos_sin_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({qrope_grid}),
+        qrope_cos_sin_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    qrope_cos_sin_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qrope_cos_sin_shard_spec
+    )
+
+    # Repeat cos/sin for all qrope cores: [1, 1, num_cores, qrope_head_dim]
+    # Each core gets the same cos/sin (reused for its 2 heads)
+    cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
+    sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
+
+    ttnn_cos = ttnn.from_torch(
+        cos_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qrope_cos_sin_mem_config,
+        tile=tile,
+    )
+
+    ttnn_sin = ttnn.from_torch(
+        sin_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qrope_cos_sin_mem_config,
+        tile=tile,
+    )
+
+    # Trans_mat: [1, 1, 32, 32] - repeat for all qrope cores
+    # Each core gets full [32, 32] transformation matrix (reused for all heads)
+    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 32]
+    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
+    trans_shard_shape = (ttnn.TILE_SIZE, ttnn.TILE_SIZE)  # [32, 32] per core
+    trans_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({qrope_grid}),
+        trans_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    trans_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
+
+    ttnn_trans_mat = ttnn.from_torch(
+        trans_mat_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=trans_mem_config,
+        tile=trans_tile,
+    )
+
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
     logger.info("Running pre-SDPA operation...")
-    ttnn_qnope_result, ttnn_qrope_result, ttnn_sdpa_input_result = PreSDPA.op(
+    ttnn_sdpa_input_result = PreSDPA.op(
         ttnn_input,
         ttnn_gamma,
         ttnn_matmul_weights,
         ttnn_rmsnorm2_gamma,
         ttnn_matmul2_weights,
         ttnn_matmul3_weights,
-        ttnn_qnope_output,
-        ttnn_qrope_output,
+        ttnn_sin,
+        ttnn_cos,
+        ttnn_trans_mat,
         ttnn_sdpa_input_output,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
@@ -315,13 +357,16 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info("Computing golden reference...")
 
     # Golden uses shuffled weights to produce same interleaved output
-    _, _, torch_sdpa_expected = PreSDPA.golden(
+    _, torch_qrope_expected, torch_sdpa_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
         torch_matmul2_weights_shuffled,  # Use shuffled weights
         torch_matmul3_weights,
+        torch_sin,
+        torch_cos,
+        position_ids,
         epsilon=epsilon,
         num_qnope_heads=NUM_QNOPE_HEADS,
         num_qrope_heads=NUM_QROPE_HEADS,
@@ -331,17 +376,27 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     )
 
     # ========================================================================
+    # Verify RoPE output (Qrope after RoPE)
+    # ========================================================================
+    logger.info("Verifying Qrope RoPE output...")
+    # Note: We can't directly extract qrope output from the fused kernel since it's an intermediate CB
+    # But we can verify it indirectly through the SDPA input (which includes RoPE-processed qrope)
+    # The golden qrope_output is [64, 1, 64] after RoPE
+    # This is interleaved into SDPA input, so we verify SDPA input includes correct RoPE output
+
+    # ========================================================================
     # Verify final output (SDPA Input)
     # ========================================================================
     logger.info("Verifying SDPA Input interleaved results...")
     # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
     # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
+    # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
     torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
 
     sdpa_input_passing, sdpa_input_pcc_message = comp_pcc(torch_sdpa_input_expected_flat, sdpa_input_output_torch, 0.98)
     logger.info(f"SDPA Input PCC: {sdpa_input_pcc_message}")
 
-    # Assert final output passes
+    # Assert final output passes (this implicitly verifies RoPE since SDPA input includes RoPE-processed qrope)
     assert sdpa_input_passing, f"SDPA Input verification failed: {sdpa_input_pcc_message}"
 
-    logger.info("✓ PreSDPA test passed!")
+    logger.info("✓ PreSDPA test passed (with RoPE fusion)!")

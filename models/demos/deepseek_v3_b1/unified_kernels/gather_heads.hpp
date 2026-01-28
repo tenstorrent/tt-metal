@@ -200,7 +200,19 @@ struct GatherHeads {
             if constexpr (use_cb_output) {
                 cb_push_back(args.out_cb, args.dst_num_pages);
             }
+
+            // // Debug: Print gathered heads output
+            // // Expected: Each receiver core has 8 interleaved heads: [QNOPE(512) + QROPE(64)] × 8
+            // // Each head = 576 elements = 18 tiles of 1x32
+            // DPRINT << "\nGATHER_HEADS_OUT receiver core(" << (uint)my_logical_x_ << "," << (uint)my_logical_y_
+            //        << ") head0 tile0 (first 32 of QNOPE): ";
+            // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            // DPRINT << TileSlice(args.out_cb, 0, sr, true, false) << ENDL();
+            // DPRINT << " head0 tile16 (first 32 of QROPE): ";
+            // sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            // DPRINT << TileSlice(args.out_cb, 16, sr, true, false) << ENDL();
         }
+
 #endif
     };  // class Op
 

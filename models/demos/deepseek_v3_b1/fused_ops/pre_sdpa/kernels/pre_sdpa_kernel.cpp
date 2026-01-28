@@ -5,13 +5,15 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2
+// Implements: RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2 + Matmul3 + RoPE + GatherHeads
 // - NCRISC: RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on matmul cores),
-//           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores)
+//           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores),
+//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), GatherHeads sender (on qnope/qrope cores)
 // - BRISC: RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores), Gather receiver (on
-//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores)
+//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
+//          GatherHeads receiver (on sdpa input cores)
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
-//          Matmul2 compute (on matmul2 cores)
+//          Matmul2 compute (on matmul2 cores), Matmul3 compute (on qnope cores), RoPE compute (on qrope cores)
 //
 // Matmul2 output uses interleaved Qnope/Qrope layout (with shuffled weights):
 // - Grid: 12 cols × 8 rows = 96 cores (P150)
@@ -27,6 +29,7 @@
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../unified_kernels/gather_heads.hpp"
+#include "../../../unified_kernels/rope.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -113,6 +116,13 @@ KERNEL_ENTRY {
     // Matmul3 reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
+    // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
+    using QRopeCTArgs =
+        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+
+    // Qrope reader args (NCRISC is no-op)
+    deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -159,9 +169,6 @@ KERNEL_ENTRY {
     // Matmul writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
-    // Matmul3 writer args (BRISC is no-op)
-    deepseek_b1_ops::Matmul::WriterArgs matmul3_args{};
-
     // Gather receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Gather::ReceiverArgs gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
@@ -177,6 +184,15 @@ KERNEL_ENTRY {
 
     // Matmul2 CB indices and parameters from named compile-time args
     constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
+
+    // Matmul3 writer args (BRISC is no-op)
+    deepseek_b1_ops::Matmul::WriterArgs matmul3_args{};
+
+    // Qrope CTArgs type alias (BRISC uses WriterCTArgs, no-op)
+    using QRopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Qrope writer args (BRISC is no-op)
+    deepseek_b1_ops::Rope::WriterArgs qrope_args{};
 
     // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
     // Uses same grid and semaphores as first mcast
@@ -195,36 +211,6 @@ KERNEL_ENTRY {
         get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
         get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
     };
-
-    // NOTE: Temporary copy of matmul2 output to qrope_output_cb, change/remove this after fusing RoPE
-    if constexpr (Core::is_qrope_core) {
-        DeviceZoneScopedN("QROPE_COPY");
-        // Copy matmul2 output to qrope_output_cb
-        constexpr uint32_t matmul2_out_cb = get_named_compile_time_arg_val("matmul2_out");  // matmul2_output_cb
-        constexpr uint32_t qrope_out_cb = get_named_compile_time_arg_val("qrope_output_cb");
-        constexpr uint32_t matmul2_out_w = get_named_compile_time_arg_val("matmul2_out_w_per_core");
-
-        // Wait for matmul2 output to be ready
-        cb_wait_front(matmul2_out_cb, matmul2_out_w);
-
-        // Reserve space in qrope output
-        cb_reserve_back(qrope_out_cb, matmul2_out_w);
-
-        // Copy data locally within L1 (same core)
-        uint32_t src_addr = get_read_ptr(matmul2_out_cb);
-        uint32_t dst_addr = get_write_ptr(qrope_out_cb);
-        uint32_t tile_size = get_tile_size(matmul2_out_cb);
-        uint32_t copy_size = matmul2_out_w * tile_size;
-
-        // Use local NOC write (my_x, my_y) for same-core L1 copy
-        uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
-        noc_async_write(src_addr, noc_dst_addr, copy_size);
-        noc_async_write_barrier();
-
-        // Pop matmul2 output, push qrope output
-        cb_pop_front(matmul2_out_cb, matmul2_out_w);
-        cb_push_back(qrope_out_cb, matmul2_out_w);
-    }
 
     // BRISC: Sender args for QNOPE/QROPE cores
     // Senders write to staging CB (allocated on sender+receiver cores)
@@ -345,6 +331,22 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
     };
 
+    // Qrope CTArgs type alias (Wt and Ht are compile-time for TRISC)
+    using QRopeCTArgs = deepseek_b1_ops::Rope::
+        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+
+    // Qrope compute args (from compile-time args)
+    deepseek_b1_ops::Rope::ComputeArgs qrope_args{
+        get_named_compile_time_arg_val("in_cb"),  // Input from matmul2 output
+        get_named_compile_time_arg_val("cos_cb"),
+        get_named_compile_time_arg_val("sin_cb"),
+        get_named_compile_time_arg_val("trans_mat_cb"),
+        get_named_compile_time_arg_val("rotated_in_interm_cb"),
+        get_named_compile_time_arg_val("cos_interm_cb"),
+        get_named_compile_time_arg_val("sin_interm_cb"),
+        get_named_compile_time_arg_val("out_cb"),
+    };
+
     // Gather heads compute args (no-op for TRISC)
     deepseek_b1_ops::GatherHeads::ComputeArgs gather_heads_args{};
 #endif
@@ -388,6 +390,22 @@ KERNEL_ENTRY {
 
         // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
         unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
+    }
+
+    if constexpr (Core::is_qrope_core) {
+        // Qrope CB indices and parameters from named compile-time args
+        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("cos_cb");
+        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("sin_cb");
+        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+
+        // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
+        // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
+        // Calling setup_sharded_buffer on it would fill the CB and block matmul2's cb_reserve_back.
+        // Only setup the actual sharded tensor CBs (cos, sin, trans_mat).
+        unified_kernels::setup_sharded_buffer(qrope_cos_cb, Wt);
+        unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
+        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
     }
 
     // NCRISC: Receiver args for SDPA input cores
@@ -482,7 +500,7 @@ KERNEL_ENTRY {
         DeviceZoneScopedN("MATMUL2");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
-        // On Qrope cores: output will be copied to qrope_output_cb
+        // On Qrope cores: output goes to matmul2_output_cb for RoPE input
         deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
         matmul2(matmul2_args);
     }
@@ -496,6 +514,16 @@ KERNEL_ENTRY {
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
         matmul3(matmul3_args);
+    }
+
+    // ========================================================================
+    // RoPE (Qrope): Applies rotary position embedding to Qrope heads
+    // Reads from matmul2_output_cb, writes to qrope_output_cb
+    // ========================================================================
+    {
+        DeviceZoneScopedN("QROPE");
+        deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+        rope(qrope_args);
     }
 
     // ========================================================================

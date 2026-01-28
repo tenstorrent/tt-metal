@@ -205,6 +205,7 @@ class RopeSingleCore:
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", head_dim_per_core_t),
+            ("Ht", num_q_heads_per_core),
         ]
 
         # Named compile-time args for BRISC (empty - no-op)
@@ -221,6 +222,7 @@ class RopeSingleCore:
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", output_cb),
             ("Wt", head_dim_per_core_t),
+            ("Ht", num_q_heads_per_core),
         ]
 
         # Unified kernel descriptor

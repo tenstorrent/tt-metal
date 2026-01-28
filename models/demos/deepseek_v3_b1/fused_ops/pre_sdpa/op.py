@@ -31,6 +31,9 @@ class PreSDPA:
         rmsnorm2_gamma_tensor,
         matmul2_weights_tensor,
         matmul3_weights_tensor,
+        sin_tensor,
+        cos_tensor,
+        position_ids,
         epsilon=1e-6,
         num_qnope_heads=64,
         num_qrope_heads=64,
@@ -49,6 +52,9 @@ class PreSDPA:
             matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M] - SHUFFLED for interleaved output
             matmul3_weights_tensor: Matmul3 weights (torch.Tensor) [num_qnope_heads, qnope_head_dim, qnope_out_dim]
                                     e.g., [64, 128, 512] for batched matmul on Qnope heads
+            sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
+            cos_tensor: Cos tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
+            position_ids: Position indices (torch.Tensor) [batch] for decode mode
             epsilon: Small value to avoid division by zero
             num_qnope_heads: Number of Qnope heads (default 64)
             num_qrope_heads: Number of Qrope heads (default 64)
@@ -57,10 +63,12 @@ class PreSDPA:
             heads_per_row: Number of heads per grid row (default 8)
 
         Returns:
-            Tuple of (qnope_output, qrope_output):
+            Tuple of (qnope_output, qrope_output, sdpa_interleaved):
             - qnope_output: [num_qnope_heads, 1, qnope_out_dim] after matmul3
-            - qrope_output: [num_qrope_heads, 1, qrope_head_dim] (unchanged, ready for RoPE)
+            - qrope_output: [num_qrope_heads, 1, qrope_head_dim] after RoPE
+            - sdpa_interleaved: [8, 8, 576] interleaved QNOPE/QROPE output for SDPA
         """
+        from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
         from models.demos.deepseek_v3_b1.utils import unshuffle_output_from_interleaved_qnope_qrope
 
         def rmsnorm(x, gamma):
@@ -90,6 +98,19 @@ class PreSDPA:
         # [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
         qnope_output = torch.bmm(qnope_heads, matmul3_weights_tensor)
 
+        # Apply RoPE to Qrope heads
+        # qrope_heads: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
+        # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
+        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
+        # position_ids_expanded: [batch, seq_len] = [1, 1]
+        position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
+        # Apply RoPE
+        qrope_output_reshaped = RopeSingleCore.golden(
+            qrope_reshaped_for_rope, cos_tensor, sin_tensor, position_ids_expanded
+        )
+        # Reshape back: [1, 64, 1, 64] -> [64, 1, 64]
+        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)  # [64, 1, 64]
+
         # Interleave QNOPE and QROPE outputs for SDPA
         # Each of 8 rows has 8 combined heads: (QNOPE[512], QROPE[64]) interleaved
         # Total per row: 8 * 576 = 4608 elements
@@ -101,15 +122,15 @@ class PreSDPA:
         # Reshape qnope_output: [64, 1, 512] -> [8, 8, 512]
         qnope_reshaped = qnope_output.squeeze(1).reshape(num_rows, heads_per_row, qnope_out_dim)
 
-        # Reshape qrope_heads: [64, 1, 64] -> [8, 8, 64]
-        qrope_reshaped = qrope_heads.squeeze(1).reshape(num_rows, heads_per_row, qrope_head_dim)
+        # Reshape qrope_output: [64, 1, 64] -> [8, 8, 64]
+        qrope_reshaped = qrope_output.squeeze(1).reshape(num_rows, heads_per_row, qrope_head_dim)
 
         # Interleave: [8, 8, 576] where each combined head is (qnope[512], qrope[64])
         sdpa_interleaved = torch.zeros(num_rows, heads_per_row, combined_head_dim, dtype=qnope_output.dtype)
         sdpa_interleaved[:, :, :qnope_out_dim] = qnope_reshaped
         sdpa_interleaved[:, :, qnope_out_dim:] = qrope_reshaped
 
-        return qnope_output, qrope_heads, sdpa_interleaved
+        return qnope_output, qrope_output, sdpa_interleaved
 
     @staticmethod
     def op(
@@ -119,9 +140,10 @@ class PreSDPA:
         rmsnorm2_gamma_tensor,
         matmul2_weights_tensor,
         matmul3_weights_tensor,
-        qnope_output_tensor,
-        qrope_output_tensor,
-        sdpa_output_tensor,
+        sin_tensor,
+        cos_tensor,
+        trans_mat_tensor,
+        output_tensor,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -135,14 +157,15 @@ class PreSDPA:
             rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
             matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
             matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
-            qnope_output_tensor: Output tensor for Qnope heads (sharded on Qnope grid, [1, 512] per core)
-            qrope_output_tensor: Output tensor for Qrope heads (sharded on Qrope grid, [1, 128] per core)
-            sdpa_output_tensor: Output tensor for SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
+            sin_tensor: Sin tensor (sharded tensor for QRoPE)
+            cos_tensor: Cos tensor (sharded tensor for QRoPE)
+            trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
+            output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
         Returns:
-            Tuple of (qnope_output_tensor, qrope_output_tensor, sdpa_output_tensor) with computed results
+            output_tensor with pre-SDPA operations applied
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -339,16 +362,18 @@ class PreSDPA:
         rmsnorm2_output_cb = 13  # Separate output CB for RMSNorm2
         matmul2_input_cb = 14  # Input CB for second matmul (1x1536 with 1x32 tiles)
         matmul2_weights_cb = 15  # Weights CB for second matmul (width sharded, 4 tiles per core)
-        matmul2_output_cb = 16  # Output CB for second matmul (intermediate on Qnope, final on Qrope)
-        # Matmul3 CBs (only on Qnope cores)
+        matmul2_output_cb = 16  # Output CB for second matmul ([64, 1, 128] + [64, 1, 64])
         matmul3_weights_cb = 17  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 18  # Output CB for third matmul (Qnope final output)
-        qrope_output_cb = 19  # Output CB for Qrope (matmul2 output passed through)
-        # SDPA Input CBs (for gather heads)
-        # CB 20: Staging buffer (allocated on sender+receiver grids for address computation)
-        # CB 21: Output buffer (linked to tensor, receiver cores only)
+        qrope_output_cb = 19  # Output CB for Qrope (RoPE output)
         sdpa_input_receive_cb = 20  # Staging CB for gather heads (for address computation)
         sdpa_input_output_cb = 21  # Output CB for SDPA Input (linked to tensor)
+        qrope_cos_cb = 22  # Cos CB for RoPE
+        qrope_sin_cb = 23  # Sin CB for RoPE
+        qrope_trans_mat_cb = 24  # Trans_mat CB for RoPE
+        qrope_rotated_input_interm_cb = 25  # Rotated input intermediate CB for RoPE
+        qrope_cos_interm_cb = 26  # Cos intermediate CB for RoPE
+        qrope_sin_interm_cb = 27  # Sin intermediate CB for RoPE
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -496,6 +521,36 @@ class PreSDPA:
             ("matmul3_out", matmul3_output_cb),
             ("matmul3_k_num_tiles", matmul3_num_tiles_k),
             ("matmul3_out_w_per_core", matmul3_out_w),
+        ]
+
+        # Is it okay to hardcode like this? Or should this be derived from matmul2 output shape?
+        qrope_head_dim_per_core_t = 2  # head_dim (64) // TILE_SIZE (32) = 2 tiles
+        qrope_num_heads_per_core = 2  # Each qrope core processes 2 heads
+
+        # RoPE compile-time args (only on Qrope cores)
+        # NCRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, Wt, Ht
+        qrope_ncrisc_named_compile_time_args = [
+            ("in_cb", matmul2_output_cb),  # Input from matmul2 output
+            ("cos_cb", qrope_cos_cb),
+            ("sin_cb", qrope_sin_cb),
+            ("trans_mat_cb", qrope_trans_mat_cb),
+            ("Wt", qrope_head_dim_per_core_t),
+            ("Ht", qrope_num_heads_per_core),
+        ]
+        # BRISC: no-op (empty args)
+        qrope_brisc_named_compile_time_args = []
+        # TRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_interm_cb, sin_interm_cb, out_cb, Wt, Ht
+        qrope_trisc_named_compile_time_args = [
+            ("in_cb", matmul2_output_cb),
+            ("cos_cb", qrope_cos_cb),
+            ("sin_cb", qrope_sin_cb),
+            ("trans_mat_cb", qrope_trans_mat_cb),
+            ("rotated_in_interm_cb", qrope_rotated_input_interm_cb),
+            ("cos_interm_cb", qrope_cos_interm_cb),
+            ("sin_interm_cb", qrope_sin_interm_cb),
+            ("out_cb", qrope_output_cb),
+            ("Wt", qrope_head_dim_per_core_t),
+            ("Ht", qrope_num_heads_per_core),
         ]
 
         # ========================================================================
@@ -834,8 +889,8 @@ class PreSDPA:
         )
 
         # CB 16: Matmul2 output buffer (dynamically allocated)
-        # On Qnope cores: intermediate buffer for matmul3 input (4 tiles of 1x32 = 128 elements)
-        # On Qrope cores: final output (will be copied to qrope_output_cb)
+        # On Qnope cores: intermediate buffer for matmul3 input (4 tiles of 1x32 = 128 elements per core/head)
+        # On Qrope cores: intermediate output for QRoPE (4 tiles of 1x32 = 128 elements per core, 2 tiles per head)
         matmul2_output_total_size = matmul2_out_w * matmul_output_page_size  # 4 * 64 = 256 bytes per core
         matmul2_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=matmul2_output_cb,
@@ -854,13 +909,92 @@ class PreSDPA:
             matmul3_weights_cb, matmul3_weights_tensor
         )
 
-        # CB 18: Matmul3 output buffer (Qnope final output, sharded on Qnope grid)
-        matmul3_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul3_output_cb, qnope_output_tensor)
+        # CB 18: Matmul3 output buffer (Qnope final output, intermediate CB on Qnope grid)
+        # Each Qnope core outputs [1, 512] = 16 tiles of 1x32
+        matmul3_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+        matmul3_output_page_size = TILE_1x32.get_tile_size(data_format)
+        matmul3_output_total_size = matmul3_out_w * matmul3_output_page_size  # 16 tiles
+        matmul3_output_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=matmul3_output_cb,
+            data_format=data_format,
+            page_size=matmul3_output_page_size,
+            tile=matmul3_output_tile_descriptor,
+        )
+        matmul3_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=matmul3_output_total_size,
+            core_ranges=qnope_grid,
+            format_descriptors=[matmul3_output_cb_format],
+        )
 
-        # CB 19: Qrope output buffer (matmul2 output for Qrope cores, sharded on Qrope grid)
-        qrope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_output_cb, qrope_output_tensor)
+        # CB 22: Cos (sharded tensor)
+        qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, cos_tensor)
 
-        # CB 20: SDPA Input receive buffer (staging buffer for gather heads)
+        # CB 21: Sin (sharded tensor)
+        qrope_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_sin_cb, sin_tensor)
+
+        # CB 22: Trans_mat (sharded tensor)
+        qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_trans_mat_cb, trans_mat_tensor)
+
+        # CB 23: Rotated input intermediate CB (not backed by tensor)
+        # Sized for one head (Wt tiles = 2 tiles), since RoPE processes one head at a time
+        qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
+        qrope_rotated_input_interm_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=qrope_rotated_input_interm_cb,
+            data_format=data_format,
+            page_size=TILE_1x32.get_tile_size(data_format),
+            tile=ttnn.TileDescriptor(TILE_1x32),
+        )
+        qrope_rotated_input_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=qrope_interm_tile_size,  # Wt tiles = 2 tiles
+            core_ranges=qrope_grid,
+            format_descriptors=[qrope_rotated_input_interm_cb_format],
+        )
+
+        # CB 24: Cos intermediate CB (not backed by tensor)
+        qrope_cos_interm_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=qrope_cos_interm_cb,
+            data_format=data_format,
+            page_size=TILE_1x32.get_tile_size(data_format),
+            tile=ttnn.TileDescriptor(TILE_1x32),
+        )
+        qrope_cos_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=qrope_interm_tile_size,  # Wt tiles = 2 tiles
+            core_ranges=qrope_grid,
+            format_descriptors=[qrope_cos_interm_cb_format],
+        )
+
+        # CB 25: Sin intermediate CB (not backed by tensor)
+        qrope_sin_interm_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=qrope_sin_interm_cb,
+            data_format=data_format,
+            page_size=TILE_1x32.get_tile_size(data_format),
+            tile=ttnn.TileDescriptor(TILE_1x32),
+        )
+        qrope_sin_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=qrope_interm_tile_size,  # Wt tiles = 2 tiles
+            core_ranges=qrope_grid,
+            format_descriptors=[qrope_sin_interm_cb_format],
+        )
+
+        # CB 19: Qrope output buffer (RoPE output on Qrope grid)
+        # Each Qrope core outputs [1, 128] = 4 tiles of 1x32 (2 heads × 64 elements)
+        # RoPE reads from matmul2_output_cb and writes to this CB
+        qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+        qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
+        qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
+        qrope_output_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=qrope_output_cb,
+            data_format=data_format,
+            page_size=qrope_output_page_size,
+            tile=qrope_output_tile_descriptor,
+        )
+        qrope_output_cb_descriptor = ttnn.CBDescriptor(
+            total_size=qrope_output_total_size,
+            core_ranges=qrope_grid,
+            format_descriptors=[qrope_output_cb_format],
+        )
+
+        # CB 26: SDPA Input receive buffer (staging buffer for gather heads)
         # Must be allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
         # so that senders can use get_write_ptr to compute destination address.
         # Note: We need this staging buffer because:
@@ -884,10 +1018,8 @@ class PreSDPA:
             format_descriptors=[sdpa_input_receive_cb_format],
         )
 
-        # CB 21: SDPA Input output buffer (linked to tensor)
-        sdpa_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            sdpa_input_output_cb, sdpa_output_tensor
-        )
+        # CB 27: SDPA Input output buffer (linked to tensor)
+        sdpa_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sdpa_input_output_cb, output_tensor)
 
         # ========================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
@@ -956,26 +1088,29 @@ class PreSDPA:
             + matmul2_ncrisc_named_compile_time_args
             + mcast2_ncrisc_named_compile_time_args
             + matmul3_ncrisc_named_compile_time_args
+            + qrope_ncrisc_named_compile_time_args
             + gather_heads_ncrisc_named_compile_time_args,
             # NCRISC common runtime args: scalar + scalar2
             ncrisc_common_runtime_args=[
                 scalar_packed,
                 scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
             ],
-            # BRISC named compile-time args: mcast sender + matmul + gather receiver + matmul2 + mcast2 + matmul3 + unicast sender
+            # BRISC named compile-time args: mcast sender + matmul + gather receiver + matmul2 + mcast2 + matmul3 + qrope + unicast sender
             brisc_named_compile_time_args=mcast_sender_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
+            + qrope_brisc_named_compile_time_args
             + gather_heads_brisc_named_compile_time_args,
             # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2 + matmul2 + matmul3
             trisc_named_compile_time_args=rmsnorm_compute_named_compile_time_args
             + matmul_trisc_named_compile_time_args
             + rmsnorm2_trisc_named_compile_time_args
             + matmul2_trisc_named_compile_time_args
-            + matmul3_trisc_named_compile_time_args,
+            + matmul3_trisc_named_compile_time_args
+            + qrope_trisc_named_compile_time_args,
             # TRISC common runtime args: epsilon (used by rmsnorm compute)
             trisc_common_runtime_args=[
                 epsilon_packed,
@@ -1052,7 +1187,13 @@ class PreSDPA:
                 matmul2_output_cb_descriptor,  # CB 16: Matmul2 output (intermediate)
                 matmul3_weights_cb_descriptor,  # CB 17: Matmul3 weights
                 matmul3_output_cb_descriptor,  # CB 18: Matmul3 output (Qnope final)
-                qrope_output_cb_descriptor,  # CB 19: Qrope output
+                qrope_output_cb_descriptor,  # CB 19: Qrope output (RoPE output)
+                qrope_cos_cb_descriptor,  # CB 22: Cos (sharded tensor)
+                qrope_sin_cb_descriptor,  # CB 23: Sin (sharded tensor)
+                qrope_trans_mat_cb_descriptor,  # CB 24: Trans_mat (sharded tensor)
+                qrope_rotated_input_interm_cb_descriptor,  # CB 25: Rotated input intermediate
+                qrope_cos_interm_cb_descriptor,  # CB 26: Cos intermediate
+                qrope_sin_interm_cb_descriptor,  # CB 27: Sin intermediate
                 sdpa_input_receive_cb_descriptor,  # CB 20: SDPA Input staging buffer
                 sdpa_input_output_cb_descriptor,  # CB 21: SDPA Input output (linked to tensor)
             ],
@@ -1073,10 +1214,10 @@ class PreSDPA:
             rmsnorm2_gamma_tensor,
             matmul2_weights_tensor,
             matmul3_weights_tensor,
-            qnope_output_tensor,
-            qrope_output_tensor,
-            sdpa_output_tensor,
+            sin_tensor,
+            cos_tensor,
+            output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
 
-        return qnope_output_tensor, qrope_output_tensor, sdpa_output_tensor
+        return output_tensor
