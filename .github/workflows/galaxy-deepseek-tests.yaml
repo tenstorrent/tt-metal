@@ -2,6 +2,16 @@ name: "(Galaxy) DeepSeek tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      test-type:
+        description: 'Select which tests to run'
+        required: false
+        type: choice
+        options:
+          - all
+          - unit
+          - module
+        default: 'all'
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
@@ -23,3 +33,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: topology-6u
+      test-type: ${{ inputs.test-type || 'all' }}

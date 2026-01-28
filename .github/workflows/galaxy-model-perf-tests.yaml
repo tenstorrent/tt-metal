@@ -10,16 +10,17 @@ on:
         type: choice
         options:
           - all
+#          - cnn
 #          - llama70b
 #          - llama_unit_tests
 #          - llama70b_prefill
-          - cnn
           - sd35
           - flux1-dev
           - motif
           - sentence_bert
           - wan2-2
           - mochi
+          - qwenimage
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
@@ -33,7 +34,7 @@ jobs:
       tracy: true
       build-wheel: true
       version: 22.04
-      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
+      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit

@@ -261,7 +261,7 @@ jobs:
             extra-tag: pipeline-functional
           - runner-label: BH-LoudBox
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
             extra-tag: pipeline-perf

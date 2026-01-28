@@ -23,7 +23,7 @@ on:
     inputs:
       build-type:
         required: false
-        default: ASanCoverage
+        default: ASan
         type: choice
         options:
           - Release
@@ -76,8 +76,8 @@ jobs:
     secrets: inherit
     with:
       version: "22.04"
-      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      build-type: ${{ inputs.build-type || 'ASanCoverage' }}
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
@@ -114,7 +114,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
@@ -138,7 +138,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
@@ -152,7 +152,7 @@ jobs:
     secrets: inherit
     with:
       version: "22.04"
-      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       # Cannot do a Sanitizer build as that's not compatible with the downstream test.
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
@@ -170,14 +170,20 @@ jobs:
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
         with:
           name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
@@ -195,9 +201,11 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           fetch-depth: 500
           fetch-tags: true # Need tags for `git describe`
-          path: docker-job
           sparse-checkout: |
             tt-train
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
 
       - name: Submodules
         run: |
@@ -227,7 +235,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
@@ -341,7 +349,7 @@ jobs:
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        pip install pyyaml # Needed for clang-tidy-diff-20.py
+        uv pip install pyyaml # Needed for clang-tidy-diff-20.py
     - name: Prepare .clang-tidy with extra checks
       run: |
         if [ -f .clang-tidy-light ]; then
@@ -351,7 +359,7 @@ jobs:
         cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
         cmake --build build --target all_generated_files
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2

@@ -1,4 +1,4 @@
-name: Package and release
+name: "Package and release"
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +20,7 @@ on:
       ignore-commits:
         description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
         required: false
-        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9,66c247311094c4fc302d240f668683d7ab2a87cc" # Ignore the commit that bumps to v0.65.0
+        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9" # Ignore the commit that bumps to v0.65.0
         type: string
 
   schedule:
@@ -120,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [22.04]
+        version: [22.04, 24.04]
     with:
       version: ${{ matrix.version }}
       dry-run: ${{ inputs.dry-run || false }}
@@ -141,7 +141,7 @@ jobs:
       - name: Download ALL wheels (separate folders)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          pattern: eager-dist-*
+          pattern: ttnn-dist-*
           path: artifacts
           merge-multiple: false
 
