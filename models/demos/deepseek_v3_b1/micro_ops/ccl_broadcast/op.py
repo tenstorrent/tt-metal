@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -48,7 +48,6 @@ class DeepseekMinimalBroadcast:
         semaphores,
         cluster_axis=0,
         secondary_cluster_axis=None,
-        topology=None,
         num_links=1,
         using_persistent_buffers=True,
     ):
@@ -59,24 +58,20 @@ class DeepseekMinimalBroadcast:
             input_tensor_mesh: Input tensor mesh (sender has data, others have zeros)
             output_tensor: Pre-allocated output tensor mesh
             sender_coord: ttnn.MeshCoordinate of the sender device
+            semaphores: List of pre-created semaphores
             cluster_axis: Primary axis for broadcast (default 0)
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
-            topology: Topology for broadcast (default Linear)
             num_links: Number of links to use (default 1)
             using_persistent_buffers: Whether to use persistent buffers (default True)
-            semaphores: List of pre-created semaphores
 
         Returns:
             Output tensor with broadcast data on all devices
         """
-        if topology is None:
-            topology = ttnn.Topology.Linear
 
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
-        num_devices = mesh_rows * mesh_cols
 
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
@@ -84,9 +79,6 @@ class DeepseekMinimalBroadcast:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-
-        # Create global semaphores
-        grid = mesh_device.compute_with_storage_grid_size()
 
         out_ready_semaphore = semaphores[0]
         barrier_semaphore = semaphores[1]

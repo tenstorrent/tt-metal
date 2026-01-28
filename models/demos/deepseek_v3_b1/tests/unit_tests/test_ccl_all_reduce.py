@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("use_persistent", [True])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
 @pytest.mark.parametrize(
@@ -65,7 +64,6 @@ def test_ccl_all_reduce(
     layout,
     input_dtype,
     cluster_axis,
-    topology,
     use_persistent,
     fuse_residual_add,
 ):
@@ -96,7 +94,6 @@ def test_ccl_all_reduce(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-    output_mem_config = input_mem_config
 
     # Create input tensors for each device
     device_tensors = []
@@ -197,7 +194,6 @@ def test_ccl_all_reduce(
         input_tensor_mesh,
         intermediate_tensor,
         cluster_axis=cluster_axis,
-        topology=topology,
         persistent_output_tensor=persistent_output_tensor,
         residual_tensor_mesh=residual_tensor_mesh,
         semaphores=semaphores,
@@ -210,19 +206,6 @@ def test_ccl_all_reduce(
     # Convert output tensor to torch
     output_tensor_torch = ttnn.to_torch(
         ttnn_result,
-        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
-    )
-
-    # Debug: Also read back the intermediate tensor to see what remote data was received
-    intermediate_tensor_torch = ttnn.to_torch(
-        intermediate_tensor,
-        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
-    )
-    intermediate_tensor_torch = intermediate_tensor_torch.reshape(num_devices, -1)
-
-    # Debug: Also read back input tensor
-    input_back_torch = ttnn.to_torch(
-        input_tensor_mesh,
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
