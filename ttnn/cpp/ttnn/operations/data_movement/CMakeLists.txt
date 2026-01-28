@@ -147,6 +147,7 @@ target_sources(
         move/device/move_overlap_program_factory.cpp
         move/device/move_sharded_program_factory.cpp
         move/move.cpp
+        narrow/narrow.cpp
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
