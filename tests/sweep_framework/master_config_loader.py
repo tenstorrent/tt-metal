@@ -415,95 +415,109 @@ class MasterConfigLoader:
         Parses both INTERLEAVED and SHARDED memory configs from the master JSON.
         Now properly handles shard_spec with grid, shape, and orientation.
 
+        Raises exceptions on parsing errors instead of falling back to defaults,
+        making it easier to identify and fix issues.
+
         Args:
             memory_config: Memory config dictionary from master JSON
             tensor_shape: Tensor shape (not used currently)
+
+        Raises:
+            ValueError: If memory config is invalid or incomplete
         """
-        try:
-            # If empty or missing, return default
-            if not memory_config or not isinstance(memory_config, dict):
-                return ttnn.DRAM_MEMORY_CONFIG
-
-            buffer_type = memory_config.get("buffer_type", "BufferType.DRAM")
-            memory_layout = memory_config.get("memory_layout", "TensorMemoryLayout.INTERLEAVED")
-
-            # Map buffer types
-            if "DRAM" in buffer_type:
-                buffer_type_ttnn = ttnn.BufferType.DRAM
-            elif "L1" in buffer_type:
-                buffer_type_ttnn = ttnn.BufferType.L1
-            else:
-                buffer_type_ttnn = ttnn.BufferType.DRAM
-
-            # Parse INTERLEAVED configs
-            if "INTERLEAVED" in memory_layout:
-                memory_layout_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
-                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
-
-            # Parse SHARDED configs
-            elif "SHARDED" in memory_layout:
-                # Parse shard_spec if present
-                shard_spec_dict = memory_config.get("shard_spec")
-                if not shard_spec_dict or not isinstance(shard_spec_dict, dict):
-                    # No shard_spec, fall back to DRAM INTERLEAVED
-                    return ttnn.DRAM_MEMORY_CONFIG
-
-                # Extract grid, shape, and orientation from shard_spec
-                grid_list = shard_spec_dict.get("grid", [])
-                shard_shape = shard_spec_dict.get("shape", [32, 32])
-                orientation_str = shard_spec_dict.get("orientation", "ROW_MAJOR")
-
-                if not grid_list:
-                    # No grid specified, fall back to DRAM INTERLEAVED
-                    return ttnn.DRAM_MEMORY_CONFIG
-
-                # Create CoreRangeSet from grid
-                # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
-                core_ranges = set()
-                for range_dict in grid_list:
-                    start = range_dict.get("start", {})
-                    end = range_dict.get("end", {})
-                    core_range = ttnn.CoreRange(
-                        ttnn.CoreCoord(start.get("x", 0), start.get("y", 0)),
-                        ttnn.CoreCoord(end.get("x", 0), end.get("y", 0)),
-                    )
-                    core_ranges.add(core_range)
-
-                shard_grid = ttnn.CoreRangeSet(core_ranges)
-
-                # Map orientation
-                if orientation_str == "COL_MAJOR":
-                    orientation = ttnn.ShardOrientation.COL_MAJOR
-                else:
-                    orientation = ttnn.ShardOrientation.ROW_MAJOR
-
-                # Create ShardSpec
-                shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
-
-                # Map memory layout
-                if "WIDTH_SHARDED" in memory_layout:
-                    memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-                elif "HEIGHT_SHARDED" in memory_layout:
-                    memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                elif "BLOCK_SHARDED" in memory_layout:
-                    memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-                else:
-                    # Default sharded
-                    memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-
-                # Create and return sharded memory config
-                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
-
-            else:
-                # Unknown layout, fall back to DRAM INTERLEAVED
-                return ttnn.DRAM_MEMORY_CONFIG
-
-        except Exception as e:
-            print(f"⚠️ Error parsing memory config, using DRAM default: {e}")
-            import traceback
-
-            traceback.print_exc()
+        # If empty or missing, return default
+        if not memory_config or not isinstance(memory_config, dict):
             return ttnn.DRAM_MEMORY_CONFIG
+
+        buffer_type = memory_config.get("buffer_type")
+        memory_layout = memory_config.get("memory_layout")
+
+        # Validate required fields
+        if not buffer_type:
+            raise ValueError(f"Missing buffer_type in memory_config: {memory_config}")
+        if not memory_layout:
+            raise ValueError(f"Missing memory_layout in memory_config: {memory_config}")
+
+        # Map buffer types - fail if unknown
+        if "DRAM" in buffer_type:
+            buffer_type_ttnn = ttnn.BufferType.DRAM
+        elif "L1" in buffer_type:
+            buffer_type_ttnn = ttnn.BufferType.L1
+        else:
+            raise ValueError(f"Unknown buffer_type: {buffer_type}")
+
+        # Parse INTERLEAVED configs
+        if "INTERLEAVED" in memory_layout:
+            memory_layout_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
+            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
+
+        # Parse SHARDED configs
+        elif "SHARDED" in memory_layout:
+            # Parse shard_spec - REQUIRED for sharded configs
+            shard_spec_dict = memory_config.get("shard_spec")
+            if not shard_spec_dict or not isinstance(shard_spec_dict, dict):
+                raise ValueError(
+                    f"Sharded memory layout '{memory_layout}' requires shard_spec, " f"but got: {shard_spec_dict}"
+                )
+
+            # Extract grid, shape, and orientation from shard_spec
+            grid_list = shard_spec_dict.get("grid")
+            shard_shape = shard_spec_dict.get("shape")
+            orientation_str = shard_spec_dict.get("orientation")
+
+            # Validate required shard_spec fields
+            if not grid_list:
+                raise ValueError(f"Missing 'grid' in shard_spec: {shard_spec_dict}")
+            if not shard_shape:
+                raise ValueError(f"Missing 'shape' in shard_spec: {shard_spec_dict}")
+            if not orientation_str:
+                raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
+
+            # Create CoreRangeSet from grid
+            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+            core_ranges = set()
+            for range_dict in grid_list:
+                start = range_dict.get("start")
+                end = range_dict.get("end")
+
+                if not start or not end:
+                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
+                if "x" not in start or "y" not in start:
+                    raise ValueError(f"Invalid grid start (missing x/y): {start}")
+                if "x" not in end or "y" not in end:
+                    raise ValueError(f"Invalid grid end (missing x/y): {end}")
+
+                core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+                core_ranges.add(core_range)
+
+            shard_grid = ttnn.CoreRangeSet(core_ranges)
+
+            # Map orientation
+            if orientation_str == "COL_MAJOR":
+                orientation = ttnn.ShardOrientation.COL_MAJOR
+            elif orientation_str == "ROW_MAJOR":
+                orientation = ttnn.ShardOrientation.ROW_MAJOR
+            else:
+                raise ValueError(f"Unknown orientation: {orientation_str}")
+
+            # Create ShardSpec
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+
+            # Map memory layout
+            if "WIDTH_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            elif "HEIGHT_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            elif "BLOCK_SHARDED" in memory_layout:
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else:
+                raise ValueError(f"Unknown sharded layout: {memory_layout}")
+
+            # Create and return sharded memory config
+            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
+
+        else:
+            raise ValueError(f"Unknown memory_layout: {memory_layout}")
 
     @staticmethod
     def parse_special_float(value):
@@ -874,136 +888,6 @@ def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader
     if _global_loader is None:
         _global_loader = MasterConfigLoader()
     return _global_loader
-
-
-def get_traced_config(traced_config_name: str) -> Optional[Dict]:
-    """
-    Convenience function to look up traced config from global loader.
-    Use this in your sweep test's run() function.
-
-    Args:
-        traced_config_name: String name like "sigmoid_accurate_traced_0"
-
-    Returns:
-        Dictionary with 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
-        or None if not found
-
-    Example:
-        ```python
-        def run(traced_config_name=None, ...):
-            if traced_config_name:
-                cfg = get_traced_config(traced_config_name)
-                input_shape = cfg['shape']
-                input_a_dtype = cfg['dtype']
-                # ... etc
-        ```
-    """
-    return get_global_loader().get_traced_config(traced_config_name)
-
-
-def unpack_traced_config(
-    traced_config_name: str, use_defaults: bool = False
-) -> Tuple[Optional[list], Optional[any], Optional[any], Optional[any], Optional[any]]:
-    """
-    Convenience function to unpack a traced config directly into values.
-    This is the SIMPLEST way to use traced configs in UNARY operations.
-
-    Args:
-        traced_config_name: String name like "sigmoid_accurate_traced_0"
-        use_defaults: If True and config not found, returns default values instead of None
-
-    Returns:
-        Tuple of (shape, dtype, layout, input_memory_config, output_memory_config)
-        or (None, None, None, None, None) if not found and use_defaults=False
-        or default values if not found and use_defaults=True
-
-    Example:
-        ```python
-        def run(input_shape=None, input_a_dtype=None, ..., traced_config_name=None, *, device):
-            # Unpack traced config if provided, otherwise use defaults
-            input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = (
-                unpack_traced_config(traced_config_name) if traced_config_name
-                else (input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config)
-            )
-
-            # Or even simpler: let defaults be None and handle them later
-        ```
-    """
-    cfg = get_traced_config(traced_config_name)
-    if cfg:
-        # Check if it's binary - if so, return None to avoid confusion
-        if cfg.get("is_binary", False):
-            print(f"⚠️ Use unpack_binary_traced_config() for binary operation configs")
-            return (None, None, None, None, None)
-        return (cfg["shape"], cfg["dtype"], cfg["layout"], cfg["memory_config"], cfg["output_memory_config"])
-
-    if use_defaults:
-        # Return sensible defaults
-        return (
-            [1, 32, 32],  # shape
-            ttnn.bfloat16,  # dtype
-            ttnn.TILE_LAYOUT,  # layout
-            ttnn.DRAM_MEMORY_CONFIG,  # input_memory_config
-            ttnn.DRAM_MEMORY_CONFIG,  # output_memory_config
-        )
-
-    return (None, None, None, None, None)
-
-
-def unpack_binary_traced_config(traced_config_name: str, use_defaults: bool = False) -> Tuple:
-    """
-    Convenience function to unpack a traced config for BINARY operations (like add, multiply).
-
-    Args:
-        traced_config_name: String name like "add_traced_0"
-        use_defaults: If True and config not found, returns default values instead of None
-
-    Returns:
-        Tuple of (input_shape_dict, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout,
-                  input_a_memory_config, input_b_memory_config)
-        where input_shape_dict is {"self": shape_a, "other": shape_b}
-
-    Example:
-        ```python
-        def run(input_shape=None, input_a_dtype=None, input_b_dtype=None, ...,
-                traced_config_name=None, *, device):
-            if traced_config_name:
-                input_shape, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout, \\
-                    input_a_memory_config, input_b_memory_config = unpack_binary_traced_config(traced_config_name)
-        ```
-    """
-    cfg = get_traced_config(traced_config_name)
-    if cfg:
-        # Check if it's actually binary
-        if not cfg.get("is_binary", False):
-            print(f"⚠️ Use unpack_traced_config() for unary operation configs")
-            return (None, None, None, None, None, None, None)
-
-        # Return binary config
-        input_shape = {"self": cfg["shape_a"], "other": cfg["shape_b"]}
-        return (
-            input_shape,
-            cfg["dtype_a"],
-            cfg["dtype_b"],
-            cfg["layout_a"],
-            cfg["layout_b"],
-            cfg["memory_config_a"],
-            cfg["memory_config_b"],
-        )
-
-    if use_defaults:
-        # Return sensible defaults for binary operations
-        return (
-            {"self": [1, 32, 32], "other": [1, 32, 32]},  # input_shape
-            ttnn.bfloat16,  # input_a_dtype
-            ttnn.bfloat16,  # input_b_dtype
-            ttnn.TILE_LAYOUT,  # input_a_layout
-            ttnn.TILE_LAYOUT,  # input_b_layout
-            ttnn.DRAM_MEMORY_CONFIG,  # input_a_memory_config
-            ttnn.DRAM_MEMORY_CONFIG,  # input_b_memory_config
-        )
-
-    return (None, None, None, None, None, None, None)
 
 
 if __name__ == "__main__":
