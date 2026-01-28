@@ -16,7 +16,7 @@ namespace ttml::modules::distributed {
 
 DistributedLlamaMLP::DistributedLlamaMLP(
     uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim) {
-    auto tp_axis = autograd::ctx().get_parallelism_context()->get_tp_axis();
+    auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
 
     uint32_t multiple_of = 256U;
     uint32_t hidden_size = 0U;
