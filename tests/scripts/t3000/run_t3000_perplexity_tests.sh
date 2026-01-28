@@ -34,7 +34,7 @@ run_t3000_llama70b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
 
   # Llama-70B perplexity tests
-  pytest models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
+  pytest models/demos/nlp/llms/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

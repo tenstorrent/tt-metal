@@ -5,8 +5,8 @@
 import pytest
 from loguru import logger
 
-from models.demos.t3000.llama2_70b.demo.demo import construct_arg, main
-from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from models.demos.nlp.llms.llama2_70b.demo.demo import construct_arg, main
+from models.demos.nlp.llms.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
@@ -18,9 +18,9 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 @pytest.mark.parametrize(
     "chat, prompts_file",
     (
-        (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
-        (False, "models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
+        (True, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
     ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
@@ -54,7 +54,7 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 )
 @pytest.mark.parametrize(
     "ground_truth",
-    ("models/demos/t3000/llama2_70b/demo/data/llama3_ground_truth.json", None),
+    ("models/demos/nlp/llms/llama2_70b/demo/data/llama3_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
 @pytest.mark.parametrize(

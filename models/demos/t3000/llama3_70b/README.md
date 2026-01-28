@@ -33,7 +33,7 @@ Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in
 1. Download the Llama3/3.1-70B weights from Meta at [llama.meta.com](https://llama.meta.com/)
 2. Repack the weights:
 ```bash
-python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
+python models/demos/nlp/llms/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
 ```
 
 Note: Use `5` for `chunk_size`.
@@ -55,7 +55,7 @@ export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>/tokenizer.model  # Path ne
 export LLAMA3_CACHE_PATH=<weight_cache_dir>
 export TIKTOKEN_CACHE_DIR=""
 
-pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
+pip install -r models/demos/nlp/llms/llama2_70b/reference/llama/requirements.txt
 
 # Example:
 # export LLAMA3_CKPT_DIR="/home/llama-data-repacked/llama-3-70b/"
@@ -82,7 +82,7 @@ For best performance, ensure that tt-metal is built in release mode (default), a
 This performance test runs with sequence length 128 and batch size 32.
 
 ```bash
-pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
+pytest -svv models/demos/nlp/llms/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
 ```
 
 ## Details
