@@ -645,6 +645,174 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     }
 
 
+def parse_shard_spec_string(shard_spec_str):
+    """
+    Parse a ShardSpec string representation into a proper dictionary.
+
+    Handles both correct and malformed ShardSpec strings from C++ operator<<.
+    The C++ bug (missing closing brace) has been fixed, but this handles old traces.
+
+    Example input:
+    'ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":7}}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR}'
+
+    Returns:
+    {
+        "grid": [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}],
+        "shape": [32, 32],
+        "orientation": "ROW_MAJOR"
+    }
+    """
+    import re
+
+    if not isinstance(shard_spec_str, str) or not shard_spec_str.startswith("ShardSpec{"):
+        return shard_spec_str
+
+    try:
+        result = {}
+
+        # Extract grid - find the position and manually parse the JSON array
+        eq_pos = shard_spec_str.find("grid=")
+        if eq_pos != -1:
+            grid_start = eq_pos + 5  # Move to '[' after '='
+            # Find the matching ']' for the grid array, looking for '}], shape='
+            shape_pos = shard_spec_str.find("}], shape=", grid_start)
+            if shape_pos != -1:
+                grid_json = shard_spec_str[grid_start : shape_pos + 2]  # +2 to include '}]'
+
+                # Fix malformed JSON: if we have unbalanced braces, add missing '}'
+                # This handles old traces where the C++ operator<< had a bug (now fixed in buffer.cpp)
+                open_count = grid_json.count("{")
+                close_count = grid_json.count("}")
+                if open_count > close_count:
+                    # Add missing closing braces before the final ']'
+                    missing = open_count - close_count
+                    grid_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
+
+                try:
+                    result["grid"] = json.loads(grid_json)
+                except:
+                    # Silently skip if parsing still fails
+                    pass
+
+        # Extract shape - it's an array like [128, 576]
+        shape_match = re.search(r"shape=\[(\d+),\s*(\d+)\]", shard_spec_str)
+        if shape_match:
+            result["shape"] = [int(shape_match.group(1)), int(shape_match.group(2))]
+
+        # Extract orientation
+        orientation_match = re.search(r"orientation=ShardOrientation::(\w+)", shard_spec_str)
+        if orientation_match:
+            result["orientation"] = orientation_match.group(1)
+
+        return result if result else shard_spec_str
+
+    except Exception as e:
+        # Silently return original if parsing fails
+        return shard_spec_str
+
+
+def fix_memory_config_recursive(obj, fixed_count_ref):
+    """
+    Recursively search for memory_config with shard_spec strings and fix them.
+    """
+    if isinstance(obj, dict):
+        # Check if this dict is a memory_config with shard_spec
+        if "shard_spec" in obj and isinstance(obj["shard_spec"], str):
+            if obj["shard_spec"].startswith("ShardSpec{"):
+                parsed = parse_shard_spec_string(obj["shard_spec"])
+                if isinstance(parsed, dict):
+                    obj["shard_spec"] = parsed
+                    fixed_count_ref[0] += 1
+
+        # Recurse into all values
+        for value in obj.values():
+            fix_memory_config_recursive(value, fixed_count_ref)
+
+    elif isinstance(obj, list):
+        # Recurse into all items
+        for item in obj:
+            fix_memory_config_recursive(item, fixed_count_ref)
+
+
+def fix_infinity_in_json_file(json_file):
+    """
+    Pre-process JSON file to fix invalid -Infinity, Infinity, and NaN values.
+    These need to be strings for valid JSON.
+    """
+    import re
+
+    print(f"🔧 Pre-processing JSON to fix infinity/nan values...")
+
+    try:
+        # Read the file as text
+        with open(json_file, "r") as f:
+            content = f.read()
+
+        # Count occurrences
+        infinity_count = content.count("-Infinity") + content.count(": Infinity")
+        nan_count = content.count(": NaN")
+
+        if infinity_count == 0 and nan_count == 0:
+            print(f"   No infinity/nan values to fix")
+            return 0
+
+        # Replace invalid JSON values with strings
+        # Match patterns like: "value": -Infinity
+        content = re.sub(r":\s*-Infinity\b", ': "-inf"', content)
+        content = re.sub(r":\s*Infinity\b", ': "inf"', content)
+        content = re.sub(r":\s*NaN\b", ': "nan"', content)
+
+        # Write back
+        with open(json_file, "w") as f:
+            f.write(content)
+
+        print(f"✅ Fixed {infinity_count} infinity and {nan_count} NaN values")
+        return infinity_count + nan_count
+
+    except Exception as e:
+        print(f"❌ Error fixing infinity/nan values: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 0
+
+
+def fix_memory_config_in_json(json_file):
+    """
+    Fix memory_config entries in the master JSON file by parsing shard_spec strings.
+    This function modifies the JSON in-place.
+    """
+    print(f"🔧 Fixing memory config entries in {os.path.basename(json_file)}...")
+
+    try:
+        # First, fix any infinity/nan values that would prevent JSON loading
+        fix_infinity_in_json_file(json_file)
+
+        # Now load and process the JSON
+        with open(json_file, "r") as f:
+            data = json.load(f)
+
+        # Use a list to pass by reference for counting
+        fixed_count_ref = [0]
+
+        # Recursively fix all shard_spec entries
+        fix_memory_config_recursive(data, fixed_count_ref)
+
+        # Write back the fixed JSON
+        with open(json_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+        print(f"✅ Fixed {fixed_count_ref[0]} shard_spec entries")
+        return fixed_count_ref[0]
+
+    except Exception as e:
+        print(f"❌ Error fixing memory config: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TTNN Operations Tracer - Extract operation configurations from model tests or scripts",
@@ -924,6 +1092,9 @@ Examples (Import existing traces):
 
             print(f"\n✅ Operations extracted successfully!")
             print(f"📄 Master file: {master_file}")
+
+            # Fix memory config shard_spec entries in the master JSON
+            fix_memory_config_in_json(master_file)
 
         # Always return 0 (success) as long as we processed traces
         # Test failures don't affect tracer success

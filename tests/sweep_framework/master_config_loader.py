@@ -412,12 +412,12 @@ class MasterConfigLoader:
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
         """Convert memory config dict to ttnn memory config
 
-        Simplified version: just parse basic INTERLEAVED configs, default everything else to DRAM.
-        Sharded configs are complex and sweep tests work fine with DRAM interleaved.
+        Parses both INTERLEAVED and SHARDED memory configs from the master JSON.
+        Now properly handles shard_spec with grid, shape, and orientation.
 
         Args:
-            memory_config: Memory config dictionary from master JSON (often empty)
-            tensor_shape: Tensor shape (not used)
+            memory_config: Memory config dictionary from master JSON
+            tensor_shape: Tensor shape (not used currently)
         """
         try:
             # If empty or missing, return default
@@ -435,24 +435,94 @@ class MasterConfigLoader:
             else:
                 buffer_type_ttnn = ttnn.BufferType.DRAM
 
-            # For sweep tests, we only support INTERLEAVED
-            # Sharded configs are too complex to parse and tests work fine with INTERLEAVED
+            # Parse INTERLEAVED configs
             if "INTERLEAVED" in memory_layout:
                 memory_layout_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
                 return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
+
+            # Parse SHARDED configs
+            elif "SHARDED" in memory_layout:
+                # Parse shard_spec if present
+                shard_spec_dict = memory_config.get("shard_spec")
+                if not shard_spec_dict or not isinstance(shard_spec_dict, dict):
+                    # No shard_spec, fall back to DRAM INTERLEAVED
+                    return ttnn.DRAM_MEMORY_CONFIG
+
+                # Extract grid, shape, and orientation from shard_spec
+                grid_list = shard_spec_dict.get("grid", [])
+                shard_shape = shard_spec_dict.get("shape", [32, 32])
+                orientation_str = shard_spec_dict.get("orientation", "ROW_MAJOR")
+
+                if not grid_list:
+                    # No grid specified, fall back to DRAM INTERLEAVED
+                    return ttnn.DRAM_MEMORY_CONFIG
+
+                # Create CoreRangeSet from grid
+                # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+                core_ranges = set()
+                for range_dict in grid_list:
+                    start = range_dict.get("start", {})
+                    end = range_dict.get("end", {})
+                    core_range = ttnn.CoreRange(
+                        ttnn.CoreCoord(start.get("x", 0), start.get("y", 0)),
+                        ttnn.CoreCoord(end.get("x", 0), end.get("y", 0)),
+                    )
+                    core_ranges.add(core_range)
+
+                shard_grid = ttnn.CoreRangeSet(core_ranges)
+
+                # Map orientation
+                if orientation_str == "COL_MAJOR":
+                    orientation = ttnn.ShardOrientation.COL_MAJOR
+                else:
+                    orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+                # Create ShardSpec
+                shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+
+                # Map memory layout
+                if "WIDTH_SHARDED" in memory_layout:
+                    memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                elif "HEIGHT_SHARDED" in memory_layout:
+                    memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                elif "BLOCK_SHARDED" in memory_layout:
+                    memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                else:
+                    # Default sharded
+                    memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+                # Create and return sharded memory config
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
+
             else:
-                # For any sharded layout, just use DRAM INTERLEAVED as fallback
+                # Unknown layout, fall back to DRAM INTERLEAVED
                 return ttnn.DRAM_MEMORY_CONFIG
+
         except Exception as e:
             print(f"⚠️ Error parsing memory config, using DRAM default: {e}")
+            import traceback
+
+            traceback.print_exc()
             return ttnn.DRAM_MEMORY_CONFIG
+
+    @staticmethod
+    def parse_special_float(value):
+        """Parse special float string values like "inf", "-inf", "nan" to Python floats"""
+        if isinstance(value, str):
+            if value in ["inf", "Infinity"]:
+                return float("inf")
+            elif value in ["-inf", "-Infinity"]:
+                return float("-inf")
+            elif value in ["nan", "NaN"]:
+                return float("nan")
+        return value
 
     def _get_generic_parameters(self, operation_name: str, configs: List) -> Dict:
         """Generic parameter extraction for all operations.
 
         Simple logic:
         - If argument is a tensor → extract tensor parameters
-        - Otherwise → pass through as-is
+        - Otherwise → pass through as-is (with special float handling)
         """
         traced_config_list = []
 
@@ -483,8 +553,8 @@ class MasterConfigLoader:
                         }
                     )
                 else:
-                    # Not a tensor - pass through as-is
-                    config_dict[arg_name] = arg_value
+                    # Not a tensor - pass through as-is (parse special floats)
+                    config_dict[arg_name] = self.parse_special_float(arg_value)
 
                 arg_idx += 1
 
@@ -522,9 +592,10 @@ class MasterConfigLoader:
                 config_dict["output_memory_config"] = tensors[0]["memory_config"]
 
             # Add all keyword arguments (anything not arg0, arg1, arg2, ...)
+            # Parse special float values in keyword arguments too
             for key, value in config_args.items():
                 if not (key.startswith("arg") and key[3:].isdigit()):
-                    config_dict[key] = value
+                    config_dict[key] = self.parse_special_float(value)
 
             # Add metadata
             config_dict["traced_source"] = source
