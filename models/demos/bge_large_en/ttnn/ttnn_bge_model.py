@@ -6,7 +6,7 @@
 import ttnn
 from models.demos.bge_large_en.ttnn.ttnn_bge_embeddings import TtnnBGEEmbeddings
 from models.demos.bge_large_en.ttnn.ttnn_bge_encoder import TtnnBGEEncoder
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
 from models.demos.wormhole.bge_large_en.ttnn.common import ttnn_mean_pooling
 
 

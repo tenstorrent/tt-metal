@@ -12,7 +12,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import ttnn
 from models.demos.bge_large_en.common import load_torch_model
 from models.demos.bge_large_en.runner.performant_runner import BGEPerformantRunner
-from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.wormhole.bge_large_en.ttnn.common import BGE_L1_SMALL_SIZE, BGE_SEQ_LENGTH
 
 # Sample English texts for BGE demonstration
