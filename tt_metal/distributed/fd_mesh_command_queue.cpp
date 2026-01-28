@@ -7,8 +7,8 @@
 #include <tracy/Tracy.hpp>
 
 #include <tt-logger/tt-logger.hpp>
-#include <thread>
 #include <chrono>
+#include <immintrin.h>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -64,6 +64,15 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+// ---------------------------------------------------------
+// Stall Function
+// ---------------------------------------------------------
+// Stalls execution for a specified number of CPU ticks using RDTSC
+__attribute__((always_inline)) inline void stall_staggered(uint64_t ticks_to_wait) {
+    uint64_t start = __rdtsc();
+    while ((__rdtsc() - start) < ticks_to_wait);
+}
 
 // Don't use std::forward since we are in a loop.
 // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
@@ -958,15 +967,19 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
-    // add delay here of variable length - depending on env variable TT_STAGGER_CHIPS_DELAY
-    const char* stagger_chips_delay = std::getenv("TT_STAGGER_CHIPS_DELAY");
-    uint32_t stagger_chips_delay_value = stagger_chips_delay ? std::stoi(stagger_chips_delay) : 0;
-    // log_info(tt::LogMetal, "Stagger chips delay value: {} ns", stagger_chips_delay_value);
+    // Read stagger delay in CPU ticks from environment variable
+    const char* stagger_delay_env = std::getenv("TT_STAGGER_CHIPS_DELAY");
+    uint64_t ticks_to_wait = stagger_delay_env ? std::stoull(stagger_delay_env) : 0;
 
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
-        // log_info(tt::LogMetal, "Sleeping for {} ns", stagger_chips_delay_value);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(stagger_chips_delay_value));
-        // log_info(tt::LogMetal, "Done sleeping");
+        // Measure actual delay time using __rdtsc for the delay and chrono for measurement
+        // auto start_time = std::chrono::high_resolution_clock::now();
+        stall_staggered(ticks_to_wait);
+        // auto end_time = std::chrono::high_resolution_clock::now();
+        // auto delay_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+
+        // log_info(tt::LogMetal, "RDTSC delay: {} ticks took {} ns",
+        //          ticks_to_wait, delay_duration.count());
         auto device = mesh_device_->impl().get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
@@ -1115,15 +1128,19 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         buffer->num_pages(),
         buffer->address());
 
-    // add delay here of variable length - depending on env variable TT_STAGGER_CHIPS_DELAY
-    const char* stagger_chips_delay = std::getenv("TT_STAGGER_CHIPS_DELAY");
-    uint32_t stagger_chips_delay_value = stagger_chips_delay ? std::stoi(stagger_chips_delay) : 0;
-    // log_info(tt::LogMetal, "Stagger chips delay value: {} ns", stagger_chips_delay_value);
+    // Read stagger delay in CPU ticks from environment variable
+    const char* stagger_delay_env = std::getenv("TT_STAGGER_CHIPS_DELAY");
+    uint64_t ticks_to_wait = stagger_delay_env ? std::stoull(stagger_delay_env) : 0;
 
     for (auto* device : mesh_device_->get_devices()) {
-        // log_info(tt::LogMetal, "Sleeping for {} ns", stagger_chips_delay_value);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(stagger_chips_delay_value));
-        // log_info(tt::LogMetal, "Done sleeping");
+        // Measure actual delay time using __rdtsc for the delay and chrono for measurement
+        // auto start_time = std::chrono::high_resolution_clock::now();
+        stall_staggered(ticks_to_wait);
+        // auto end_time = std::chrono::high_resolution_clock::now();
+        // auto delay_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+
+        // log_info(tt::LogMetal, "RDTSC delay: {} ticks took {} ns",
+        //          ticks_to_wait, delay_duration.count());
         trace_dispatch::issue_trace_commands(
             mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
         // log_info(tt::LogMetal, "Issued trace commands for device {}", device->id());
