@@ -398,17 +398,6 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
     return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
 }
 
-inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_atomics_sent(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
-}
-
-inline __attribute__((always_inline)) bool ncrisc_noc_posted_atomics_sent(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT) == noc_posted_atomics_num_issued[noc]);
-}
-
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
@@ -439,6 +428,18 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
+}
+
+inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_atomics_sent(uint32_t noc) {
+    // On Blackhole, posted atomics are forced to be non-posted due to hardware bug.
+    // Delegate to non-posted atomics check.
+    return ncrisc_dynamic_noc_nonposted_atomics_flushed(noc);
+}
+
+inline __attribute__((always_inline)) bool ncrisc_noc_posted_atomics_sent(uint32_t noc) {
+    // On Blackhole, posted atomics are forced to be non-posted due to hardware bug.
+    // Delegate to non-posted atomics check.
+    return ncrisc_noc_nonposted_atomics_flushed(noc);
 }
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
@@ -885,8 +886,9 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     // On Blackhole (not Wormhole), issuing inline writes and atomics requires all 4 memory ports to accept the
     // transaction at the same time. If one port on the recipient has no back-pressure then the transaction will hang
     // because there is no mechanism to allow one memory port to move ahead of another. Additionally, mixing posted
-    // atomics with posted inlines can cause hangs in Blackhole. To workaround these hangs, it's recommended that
-    // atomics and inlines are made non-posted on Blackhole.
+    // atomics with posted inlines can cause hangs in Blackhole. To workaround this hardware bug, we force all atomics
+    // to be non-posted on Blackhole, transparently to the user.
+    posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc, 1);
