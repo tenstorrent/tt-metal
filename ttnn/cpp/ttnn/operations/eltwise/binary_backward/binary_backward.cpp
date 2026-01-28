@@ -177,11 +177,10 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& input,
     float /*alpha*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::assign(grad, input_grad.value());
-    result.emplace_back(input_grad);
+    result.emplace_back(
+        input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : ttnn::assign(grad, ttnn::empty_like(input)));
     return result;
 }
 
@@ -191,8 +190,8 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return ttnn::subalpha_bw(grad, input, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
 
@@ -541,7 +540,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    std::string approximate,
+    const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
         (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
@@ -559,7 +558,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_tensor,
     float bias,
-    std::string approximate,
+    const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL(

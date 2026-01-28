@@ -42,39 +42,6 @@ namespace tt::tt_fabric::fabric_router_tests {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
-struct WorkerMemMap {
-    uint32_t source_l1_buffer_address;
-    uint32_t packet_payload_size_bytes;
-    uint32_t test_results_address;
-    uint32_t target_address;
-    uint32_t notification_mailbox_address;
-    uint32_t test_results_size_bytes;
-};
-
-// Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
-    constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
-    constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
-    constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-
-    uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
-    uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
-    uint32_t target_address = source_l1_buffer_address;
-    uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
-
-    uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
-
-    return {
-        source_l1_buffer_address,
-        packet_payload_size_bytes,
-        test_results_address,
-        target_address,
-        notification_mailbox_address,
-        TEST_RESULTS_SIZE_BYTES};
-}
-
 // Helper struct for dual RISC memory layout generation
 // Provides memory map generation that supports both single and dual RISC modes
 struct DualRiscMemMapHelper {
@@ -271,7 +238,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     auto mesh_shape = control_plane.get_physical_mesh_shape(sender_id.mesh_id);
 
-    auto worker_mem_map = generate_worker_mem_map(sender_device, edm_config.topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, edm_config.topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -466,7 +433,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -591,7 +558,7 @@ void run_unicast_test_bw_chips(
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -963,7 +930,7 @@ void RunTestMCastConnAPI(
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -1407,7 +1374,7 @@ void RunTest2DMCastConnAPI(
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -1753,7 +1720,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
         last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -2207,7 +2174,7 @@ void FabricUnicastCommon(
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
 
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
 
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -3163,7 +3130,7 @@ void Fabric2DMulticastCommon(
     }
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
 
     // Setup connections and collect receiver devices for each multicast route
     std::vector<FabricNodeId> dest_fabric_node_ids;
@@ -3454,7 +3421,7 @@ void FabricMulticastCommon(
     }
 
     auto sender_device = fixture->get_device(src_physical_device_id);
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
+    auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
 
     // Preserve original lists for connection setup
     auto original_end_fabric_node_ids_by_dir = end_fabric_node_ids_by_dir;

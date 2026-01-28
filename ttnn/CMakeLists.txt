@@ -60,7 +60,22 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
+        FILES
+            api/ttnn/tensor/layout/layout.hpp
+            cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+            cpp/ttnn/kernel/compute/eltwise_copy.cpp
+            cpp/ttnn/kernel/compute/moreh_common.hpp
+            cpp/ttnn/kernel/compute/tilize.cpp
+            cpp/ttnn/kernel/compute/transpose_wh.cpp
+            cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+            cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
+            cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
+            cpp/ttnn/kernel/dataflow/moreh_common.hpp
+            cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
+            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
+            cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+            cpp/ttnn/kernel/kernel_common_utils.hpp
+            cpp/ttnn/kernel/kernel_utils.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -106,6 +121,7 @@ target_sources(
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
         core/tensor/to_string.cpp
+        core/tensor/py_to_tt_tensor.cpp
 )
 target_include_directories(
     ttnn_core
@@ -366,6 +382,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/all_to_all_dispatch_selective_tilize_nanobind.cpp
 )
@@ -530,6 +547,7 @@ target_sources(
             api/ttnn/tensor/xtensor/partition.hpp
             api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
             api/ttnn/types.hpp
+            api/ttnn/tensor/py_to_tt_tensor.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
@@ -818,7 +836,6 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
-add_subdirectory(cpp/ttnn/deprecated)
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)

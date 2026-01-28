@@ -8,10 +8,10 @@
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 
 // Fused SiLU activation support (only when FUSE_SILU is defined)
-// For m=1 tiles, we use optimized SFPU with:
-// - VectorMode::R: processes only Face0+Face1 (top row), 2x faster
-// - ITERATIONS=2: processes 2 rows per face instead of 8, 4x faster
-// Total: ~8x faster than default silu_tile()
+// For tiny tiles (m <= 8), we use optimized SFPU with:
+// - VectorMode::R: processes only row faces, 2x faster
+// - ITERATIONS: minimum 2 required for SFPU, then scales (m<=4->2, m=8->4, m>=16->8)
+// Total: significant speedup vs default silu_tile()
 #ifdef FUSE_SILU
 #include "compute_kernel_api.h"  // for silu_tile_init() and llk_math_eltwise_unary_sfpu_silu
 #endif
@@ -41,8 +41,7 @@
  *     apply optional SFPU activation
  *     pack subblock_w output tiles
  */
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
@@ -51,6 +50,7 @@ void MAIN {
     constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
     constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_r_dim = get_compile_time_arg_val(7);  // tile row dimension (m)
 
     constexpr uint32_t transpose = false;
     constexpr uint32_t num_subblocks_n = per_core_N / subblock_w;
@@ -89,11 +89,21 @@ void MAIN {
             cb_pop_front(cb_id_in1, subblock_k);
         }
 
-        // Apply fused SiLU activation - optimized for m=1 tiles
-        // VectorMode::R (2x) + ITERATIONS=2 (4x) = ~8x speedup
+        // Apply fused SiLU activation - optimized for tiny tiles
+        // VectorMode::R processes only row faces (2x speedup)
+        // ITERATIONS: minimum 2 for m<=4, then scale up (m=8->4, m=16->8)
 #ifdef FUSE_SILU
         for (uint32_t i = 0; i < subblock_w; i++) {
-            MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE, 2>(i, (int)VectorMode::R)));
+            // ITERATIONS must be compile-time constant for template
+            // Minimum ITERATIONS=2 required for SFPU to work correctly with VectorMode::R
+            if constexpr (tile_r_dim <= 4) {
+                MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE, 2>(i, (int)VectorMode::R)));
+            } else if constexpr (tile_r_dim == 8) {
+                MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE, 4>(i, (int)VectorMode::R)));
+            } else {
+                // For larger tiles (16, 32), use full iterations
+                MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE, 8>(i, (int)VectorMode::R)));
+            }
         }
 #endif
         tile_regs_commit();
@@ -112,4 +122,3 @@ void MAIN {
     // Pop in0 (only once at the end)
     cb_pop_front(cb_id_in0, num_tiles_k);
 }
-}  // namespace NAMESPACE

@@ -30,6 +30,7 @@ file(
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
+    deepseek_minimal_all_reduce/device/kernels/*
 )
 
 target_sources(
@@ -123,6 +124,9 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
+        deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp

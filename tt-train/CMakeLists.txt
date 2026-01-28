@@ -11,8 +11,8 @@ if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specified C++ compiler: ${CMAKE_CXX_COMPILER}")
     message(STATUS "Using specified C compiler: ${CMAKE_C_COMPILER}")
 else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    find_and_set_clang17()
+    message(STATUS "No C or C++ compiler specified, defaulting to Clang-20")
+    find_and_set_clang20()
 endif()
 
 project(
