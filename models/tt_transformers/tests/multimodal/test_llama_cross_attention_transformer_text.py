@@ -22,14 +22,19 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
-def prune_weights_90b(partial_state_dict, num_hidden_layers):
-    weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
-
-    for k in partial_state_dict.keys():
+def prune_weights_90b(partial_state_dict):
+    """Prune weights for 90B model to only keep layers 0 and 3 for testing in CI environment.
+    Also keep embed_tokens, lm_head, and norm weights and rename layer.0 to layer.1 and layer.3 to layer.0
+    to match the expected keys in the model defined by the configurations used in the test starting at line 105."""
+    small_state_dict = {}
+    for k, v in partial_state_dict.items():
+        if k in ("model.embed_tokens.weight", "lm_head.weight", "model.norm.weight"):
+            small_state_dict[k] = v
         found = re.search(r"\d+", k)
         if found:
-            if int(k[found.start() : found.end()]) in [i for i in range(num_hidden_layers) if i not in (0, 3)]:
-                partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
+            layer_idx = int(k[found.start() : found.end()])
+            if layer_idx in (0, 3):
+                small_state_dict[k] = v
 
     rename = lambda k: (
         k.replace(".layers.0.", ".layers.1.")
@@ -39,7 +44,7 @@ def prune_weights_90b(partial_state_dict, num_hidden_layers):
         else k
     )
 
-    return {rename(k): v for k, v in partial_state_dict.items()}
+    return {rename(k): v for k, v in small_state_dict.items()}
 
 
 @pytest.mark.parametrize(
@@ -69,13 +74,14 @@ def test_cross_attention_transformer_text_inference(
     batch,
     mesh_device,
     reset_seeds,
-    is_ci_env,
+    is_ci_env=True,
 ):
     dtype = ttnn.bfloat8_b
     prefill_pcc_required = 0.98
     decode_pcc_required = 0.965
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
+    model_args.is_90b = True
     model_repo_name = os.getenv("HF_MODEL")
     # config contains parameters for the whole multimodal network the subset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
@@ -130,7 +136,7 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict.update(lm_head_weights)
 
     if model_args.is_90b and is_ci_env:
-        partial_state_dict = prune_weights_90b(partial_state_dict, config.text_config.num_hidden_layers)
+        partial_state_dict = prune_weights_90b(partial_state_dict)
 
     if model_dtype_hf == torch.float32:
         for k, v in partial_state_dict.items():
