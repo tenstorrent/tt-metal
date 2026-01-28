@@ -63,7 +63,7 @@ struct ParsedTrafficPatternConfig {
 
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
-    std::optional<std::variant<tt::tt_metal::CoreCoord, std::string>> core;
+    std::optional<CoreConfig> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests

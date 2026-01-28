@@ -207,6 +207,23 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
         device_id);
 }
 
+bool is_core_sweep_config(std::optional<CoreConfig> core);
+
+// Helper to resolve CoreConfig to CoreCoord
+template <typename T, typename U>
+inline void resolve_core_config(const T& parsed_config, U& resolved_config) {
+    // Extract CoreCoord if present
+    if (is_core_sweep_config(parsed_config.core)) {
+        TT_THROW("Unexpected core variant: core sweep expansion was not applied");
+    }
+
+    if (parsed_config.core.has_value()) {
+        if (std::holds_alternative<tt::tt_metal::CoreCoord>(parsed_config.core.value())) {
+            resolved_config.core = std::get<tt::tt_metal::CoreCoord>(parsed_config.core.value());
+        }
+    }
+}
+
 struct ParsedYamlConfig {
     std::vector<ParsedTestConfig> test_configs;
     std::optional<AllocatorPolicies> allocation_policies;
@@ -424,9 +441,15 @@ private:
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
 
-    std::vector<ParsedSenderConfig> expand_sender_core_sweep(const std::vector<ParsedSenderConfig>& input_senders, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t sender_core_idx);
+    ParsedSenderConfig expand_sender_core_sweep(
+        const ParsedSenderConfig& input_senders,
+        const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+        uint32_t sender_core_idx);
 
-    std::vector<ParsedSenderConfig> expand_dest_core_sweep(const std::vector<ParsedSenderConfig>& input_senders, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t dest_core_idx);
+    ParsedSenderConfig expand_dest_core_sweep(
+        const ParsedSenderConfig& input_senders,
+        const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+        uint32_t dest_core_idx);
 
     std::pair<uint32_t, uint32_t> calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration);
 
