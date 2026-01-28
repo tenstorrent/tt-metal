@@ -170,7 +170,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("num_buffers_per_channel") = nb::none()});
 
     auto py_all_gather_minimal_matmul_async_config =
-        nb::class_<all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig>(
+        nb::class_<ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig>(
             mod,
             "AllGatherMinimalMatmulAsyncConfig",
             R"doc(
@@ -188,22 +188,22 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
                 nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_all_gather_minimal_matmul_async_config.def_rw(
-        "M_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::M_block_size, "");
+        "M_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::M_block_size, "");
     py_all_gather_minimal_matmul_async_config.def_rw(
-        "K_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::K_block_size, "");
+        "K_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::K_block_size, "");
     py_all_gather_minimal_matmul_async_config.def_rw(
-        "N_block_size", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::N_block_size, "");
+        "N_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::N_block_size, "");
     py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_h", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::subblock_h, "");
+        "subblock_h", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::subblock_h, "");
     py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_w", &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::subblock_w, "");
+        "subblock_w", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::subblock_w, "");
     py_all_gather_minimal_matmul_async_config.def_rw(
         "compute_with_storage_grid_size",
-        &all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig::compute_with_storage_grid_size,
+        &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::compute_with_storage_grid_size,
         "");
 
     py_all_gather_minimal_matmul_async_config.def(
-        "__repr__", [](const all_gather_minimal_matmul_async::AllGatherMinimalMatmulAsyncConfig& config) {
+        "__repr__", [](const ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig& config) {
             return fmt::format("{}", config);
         });
 }

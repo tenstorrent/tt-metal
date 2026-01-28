@@ -8,67 +8,38 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::all_gather_minimal_matmul_async {
+namespace ttnn::experimental::prim {
 
-namespace helpers {
-void override_program_parameters(
-    const ttnn::operations::experimental::all_gather_minimal_matmul_async::
-        all_gather_minimal_matmul_async_override_variables_t& override_variables,
-    const void* operation,
-    tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors);
-}
+struct AllGatherMinimalMatmulAsyncProgramFactory {
+    struct shared_variables_t {
+        uint32_t num_cores;
+        std::vector<CoreCoord> cores;
+        tt::tt_metal::KernelHandle in0_sender_kernels_id;
+        tt::tt_metal::KernelHandle in0_receiver_kernels_id;
+        tt::tt_metal::KernelHandle in1_sender_kernels_id;
+        tt::tt_metal::KernelHandle in1_receiver_kernels_id;
+        bool transpose_core_grid;
+    };
 
-namespace detail {
-ttnn::operations::experimental::all_gather_minimal_matmul_async::all_gather_minimal_matmul_async_override_variables_t
-all_gather_minimal_matmul_async_factory_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
-    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
-    const Tensor& mm_output_tensor,
-    const Tensor& ag_output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const bool force_transpose,
-    const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel);
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_factory(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
-    const std::optional<const AllGatherMinimalMatmulAsyncConfig>& config,
-    const Tensor& mm_output_tensor,
-    const Tensor& ag_output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const bool force_transpose,
-    const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel);
+    static cached_mesh_workload_t create_mesh_workload(
+        const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
-}  // namespace detail
-}  // namespace ttnn::operations::experimental::all_gather_minimal_matmul_async
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+        const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
+        const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+        std::vector<Tensor>& output_tensor);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+        const AllGatherMinimalMatmulAsyncInputs& tensor_args,
+        std::vector<Tensor>& output_tensor);
+};
+
+}  // namespace ttnn::experimental::prim
