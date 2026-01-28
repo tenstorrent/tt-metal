@@ -124,7 +124,7 @@ def main():
         merge_deployment_descriptors(args.deployment1, args.deployment2, merged_deployment)
 
         merged_fsd = output_dir / "merged_fsd.textproto"
-        has_cabling = run_cabling_generator(str(cabling_dir), str(merged_deployment), str(merged_fsd), temp_dir)
+        run_cabling_generator(str(cabling_dir), str(merged_deployment), str(merged_fsd), temp_dir)
 
         final_deployment = output_dir / "merged_deployment_descriptor.textproto"
         shutil.copy(merged_deployment, final_deployment)
