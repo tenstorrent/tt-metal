@@ -66,7 +66,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
     std::uint32_t base_addr = get_local_cb_interface(output_id).fifo_limit - get_local_cb_interface(output_id).fifo_size;
 
     buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = base_addr - 1;
+    bd_val.f.l1_addr_16B = base_addr;
     bd_val.f.format      = static_cast<uint8_t>(pack_dst_format[output_id]);
     bd_val.f.x_dim       = get_output_face_r_dim(output_id);
     bd_val.f.y_dim       = 16; //face_c_dim

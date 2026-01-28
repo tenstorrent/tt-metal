@@ -26,14 +26,14 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     std::uint32_t base_addr_B = get_local_cb_interface(unpB_operand_id).fifo_limit - get_local_cb_interface(unpB_operand_id).fifo_size;
 
     buffer_descriptor_u bd_val_A = {0};
-    bd_val_A.f.l1_addr_16B = base_addr_A - 1;
+    bd_val_A.f.l1_addr_16B = base_addr_A;
     bd_val_A.f.format      = static_cast<uint8_t>(unpack_src_format[unpA_operand_id]);
     bd_val_A.f.x_dim       = get_operand_face_r_dim(unpA_operand_id);
     bd_val_A.f.y_dim       = 16; //face_c_dim
     bd_val_A.f.z_dim       = get_operand_num_faces(unpA_operand_id);
 
     buffer_descriptor_u bd_val_B = {0};
-    bd_val_B.f.l1_addr_16B = base_addr_B - 1;
+    bd_val_B.f.l1_addr_16B = base_addr_B;
     bd_val_B.f.format      = static_cast<uint8_t>(unpack_src_format[unpB_operand_id]);
     bd_val_B.f.x_dim       = get_operand_face_r_dim(unpB_operand_id);
     bd_val_B.f.y_dim       = 16; //face_c_dim

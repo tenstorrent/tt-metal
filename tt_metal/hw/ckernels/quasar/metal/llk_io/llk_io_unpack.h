@@ -29,8 +29,8 @@ inline void llk_pop_tiles(const std::int32_t operand, const std::int32_t num_til
     if (get_local_cb_interface(operand).fifo_rd_ptr >= get_local_cb_interface(operand).fifo_limit) {
         get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
     }
-    get_local_cb_interface(operand).fifo_wr_tile_idx += num_tiles;
-    if (get_local_cb_interface(operand).fifo_wr_tile_idx >= get_local_cb_interface(operand).fifo_num_pages) {
-        get_local_cb_interface(operand).fifo_wr_tile_idx -= get_local_cb_interface(operand).fifo_num_pages;
+    get_local_cb_interface(operand).fifo_rd_tile_idx += num_tiles;
+    if (get_local_cb_interface(operand).fifo_rd_tile_idx >= get_local_cb_interface(operand).fifo_num_pages) {
+        get_local_cb_interface(operand).fifo_rd_tile_idx -= get_local_cb_interface(operand).fifo_num_pages;
     }
 }
