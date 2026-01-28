@@ -36,7 +36,7 @@ namespace ckernel {
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_mul_reduce_scalar_eltwise_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY>(
-        icb0, icb1, false /*acc_to_dest*/)));
+        icb0, false /*acc_to_dest*/)));
 }
 
 // clang-format off
@@ -105,7 +105,6 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
               ReduceDim::REDUCE_COL,
               DST_ACCUM_MODE,
               MATH_FIDELITY,
-              false,
               false,
               false>(0)));
     }

@@ -7,14 +7,7 @@
 #include "llk_unpack_mul_reduce_scalar.h"
 
 /*************************************************************************
- * LLK UNPACK MUL REDUCE SCALAR - Unpacker API for fused mul+reduce
+ * LLK UNPACK MUL REDUCE SCALAR
  *************************************************************************/
 
-/**
- * @brief Switch UNPACK state for mul_reduce_scalar reduce phase
- *
- * Prepares the unpacker to transition from multiply phase to reduce phase.
- * Resets counters and sets DVALID flags so the math thread can reuse
- * destination registers as source operands.
- */
 inline void llk_unpack_mul_reduce_scalar_switch_to_reduce() { _llk_unpack_mul_reduce_scalar_switch_to_reduce_(); }
