@@ -1632,6 +1632,8 @@ FORCE_INLINE void update_bw_cycles(
     }
 }
 
+constexpr bool enable_debug = false;
+
 int sender_packets_sent = 0;
 int sender_acks_received = 0;
 int sender_completions_received = 0;
@@ -1712,7 +1714,9 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
-        sender_packets_sent++;
+        if constexpr (enable_debug) {
+            sender_packets_sent++;
+        }
 
         // WATCHER_RING_BUFFER_PUSH(0x55000000 | sender_channel_index | (to_receiver_pkts_sent_id << 16));
         // Update local TX counters: split responsibility in multi-ERISC mode
@@ -1728,24 +1732,11 @@ FORCE_INLINE
         outbound_to_receiver_channel_pointers.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
         // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
-        // sender_completions_received += completions_since_last_check;
+        if constexpr (enable_debug) {
+            sender_completions_received += completions_since_last_check;
+        }
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        // if constexpr (!multi_txq_enabled) {
-            outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
-        // }
-        // DPRINT << "SEND_PROC_COMPL_LOOP: ch=" << (uint32_t)sender_channel_index
-        //        << " completions=" << HEX() << completions_since_last_check << DEC()
-        //     //    << " old_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots
-        //        << " new_free_slots=" << outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
-
-        // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
-        // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
-        // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
-        // if constexpr (!enable_first_level_ack) {
-        //     // sender_acks_sent_to_worker += completions_since_last_check;
-        //     send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-        //         local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
-        // }
+        outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
     }
 
     // Process ACKs from receiver
@@ -1759,8 +1750,10 @@ FORCE_INLINE
             //     << " acks=" << HEX() << packed_acks << ENDL();
             auto acks_since_last_check = extract_sender_channel_acks<sender_channel_index>(packed_acks);
             if (acks_since_last_check > 0) {
-                // sender_acks_sent_to_worker += acks_since_last_check;
-                // sender_acks_received += acks_since_last_check;
+                if constexpr (enable_debug) {
+                    sender_acks_sent_to_worker += acks_since_last_check;
+                    sender_acks_received += acks_since_last_check;
+                }
                 // if overlay reg based, this will materialize as decrement; but for multi_txq based,
                 // we're using unbounded L1 based counters, so we must increment instead
                 
@@ -1933,7 +1926,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             new_credits = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
             // uint32_t old_unsent = receiver_channel_pointers.m.unsent_messages;
             receiver_channel_pointers.m.unsent_messages += new_credits;
-            receiver_packets_received += new_credits;
+            if constexpr (enable_debug) {
+                receiver_packets_received += new_credits;
+            }
 
             // DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
             //        << " new_credits=" << new_credits
@@ -2016,7 +2011,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
-            receiver_packets_forwarded++;
+            if constexpr (enable_debug) {
+                receiver_packets_forwarded++;
+            }
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
                 receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
@@ -2050,7 +2047,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     // Send first-level ACK via receiver_send_received_ack (counter-based for BH)
                     receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                         receiver_channel_response_credit_sender, receiver_channel, 1);
-                    receiver_ack_credits_sent++;  // Update statistics
+                    if constexpr (enable_debug) {
+                        receiver_ack_credits_sent++;  // Update statistics
+                    }
                 }
             }
         }
@@ -2098,7 +2097,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_channel_response_credit_sender);
         receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
-        receiver_completion_credits_sent++;
+        if constexpr (enable_debug) {
+            receiver_completion_credits_sent++;
+        }
     }
 
     // send batched credits to sender side - because they are all unbounded counters, this is safe to
@@ -2493,6 +2494,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
 
+        if constexpr (enable_debug) {
         count++;
         if (count > 1024) {
             if constexpr (is_sender_channel_serviced[0]) {
@@ -2526,6 +2528,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
             count = 0;
+        }
         }
 
         // Compute idle conditions and update heartbeats in one helper

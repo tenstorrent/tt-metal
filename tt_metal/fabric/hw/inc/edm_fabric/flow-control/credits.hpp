@@ -66,7 +66,7 @@ struct PackedCredits {
     static constexpr uint32_t bit_offset(uint8_t channel) { return channel * CREDIT_WIDTH; }
 
     template <uint8_t CHANNEL>
-    static constexpr uint32_t bit_offset() {
+    FORCE_INLINE static constexpr uint32_t bit_offset() {
         return bit_offset(CHANNEL);
     }
 
@@ -557,7 +557,7 @@ public:
         if constexpr (NUM_CHANNELS == 1) {
             return static_cast<uint32_t>(packed.value & CREDIT_MASK);
         }
-
+        static_assert(credits_are_byte_aligned);
         if constexpr (credits_are_byte_aligned) {
             // Byte-aligned optimization
             if constexpr (NUM_CHANNELS == 1) {

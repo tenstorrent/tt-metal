@@ -130,6 +130,11 @@ FORCE_INLINE
         uint16_t payload_size_bytes,
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
+
+    // for (size_t i = 0 ; i < 500; i++) {
+    //     asm volatile("nop");
+    // }
+
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
