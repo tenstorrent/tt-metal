@@ -297,13 +297,7 @@ class DeepseekMinimalBroadcast:
                 if num_connections > 0:
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id,
-                        dst_nodes,
-                        [0],
-                        program,
-                        1,  # kernel_idx (writer kernel)
-                        worker_core,
-                        ttnn.FabricApiType.Linear,
+                        fabric_node_id, dst_nodes, [0], program, 1, worker_core  # kernel_idx (writer kernel)
                     )
                     writer_rt_args_ref.extend(fabric_args)
 
