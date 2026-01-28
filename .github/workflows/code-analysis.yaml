@@ -32,12 +32,15 @@ on:
         default: ""
         description: "Pre-built Dev Docker image tag"
       debug-file-filter:
-        description: "Analyze only specific file(s) for fast debugging (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')"
+        description: >-
+          Analyze only specific file(s) for fast debugging
+          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
         required: false
         type: string
         default: ""
       enable-copilot-fix:
-        description: "Enable Copilot to automatically fix ClangSA issues and create a PR"
+        description: >-
+          Enable Copilot to automatically fix ClangSA issues and create a PR
         required: false
         type: boolean
         default: false
@@ -58,12 +61,15 @@ on:
         type: boolean
         default: false
       debug-file-filter:
-        description: "Analyze only specific file(s) for fast debugging (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')"
+        description: >-
+          Analyze only specific file(s) for fast debugging
+          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
         required: false
         type: string
         default: ""
       enable-copilot-fix:
-        description: "Enable Copilot to automatically fix ClangSA issues and create a PR"
+        description: >-
+          Enable Copilot to automatically fix ClangSA issues and create a PR
         required: false
         type: boolean
         default: false
@@ -113,8 +119,21 @@ jobs:
       - id: compute-outputs
         shell: bash
         run: |
-          do_full_scan=$([[ "${{ github.ref_name }}" == "main" || "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]] && echo "true" || echo "false")
-          do_scan=$([[ "$do_full_scan" == "true" || "${{ steps.find-changes.outputs.any-code-changed }}" == "true" || "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]] && echo "true" || echo "false")
+          if [[ "${{ github.ref_name }}" == "main" ]] || \
+             [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
+            do_full_scan="true"
+          else
+            do_full_scan="false"
+          fi
+
+          if [[ "$do_full_scan" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+            do_scan="true"
+          else
+            do_scan="false"
+          fi
+
           echo "Do a scan: $do_scan"
           echo "Do a full scan: $do_full_scan"
           echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
@@ -134,18 +153,27 @@ jobs:
   clang-tidy:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
-    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && needs.determine-scan-type.outputs.do-scan == 'true' }}
+    # Use always() so this job runs even when build-docker-image is skipped
+    # (pre-built tags provided)
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' }}
+    timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
       volumes:
         - ${{ github.workspace }}:/work
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
@@ -165,8 +193,19 @@ jobs:
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          # Conditionally set this here so that it remains unset on forks,
+          # otherwise it resolves an invalid URL and the job fails
+          REDIS_USER="${{ vars.REDIS_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_PARTS=(
+            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
+            "@${REDIS_HOST}:${REDIS_PORT}"
+            "|read-only=${REDIS_READONLY}"
+          )
+          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
@@ -210,7 +249,10 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
-          cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+          cmake --preset clang-tidy \
+            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
+            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
 
       - name: Prepare baseline ccache summary
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -221,6 +263,7 @@ jobs:
 
       - name: 🛠️ Baseline Build
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        timeout-minutes: 60
         run: |
           cmake --build --preset clang-tidy
 
@@ -253,6 +296,7 @@ jobs:
           ccache -z
 
       - name: 🔍 Analyze code with clang-tidy
+        timeout-minutes: 120
         run: |
           cmake --build --preset clang-tidy
 
@@ -266,13 +310,21 @@ jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
     needs: [ build-docker-image ]
-    if: ${{ always() && !failure() && !cancelled() && (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
+    timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
-        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions # HACK: make actions available inside container
+        # HACK: make actions available inside container
+        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions
       options: --tmpfs /tmp
     defaults:
       run:
@@ -420,8 +472,8 @@ jobs:
 
           # Authenticate first (required for all gh commands)
           if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
-            echo "::error::COPILOT_OAUTH_TOKEN secret not set. \
-              Run 'gh auth login' locally, then 'gh auth token' and add as secret."
+            echo "::error::COPILOT_OAUTH_TOKEN secret not set."
+            echo "Run 'gh auth login' locally, then 'gh auth token' and add as secret."
             exit 1
           fi
           echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
@@ -445,7 +497,8 @@ jobs:
 
           # Check for existing open Copilot PRs to avoid duplicates
           OPEN_COPILOT_PRS=$(gh pr list --repo "${{ github.repository }}" \
-            --state open --label "copilot-autofix" --json number --jq 'length' 2>/dev/null || echo "0")
+            --state open --label "copilot-autofix" \
+            --json number --jq 'length' 2>/dev/null || echo "0")
           if [ "$OPEN_COPILOT_PRS" -gt 0 ]; then
             echo "⏭️ Skipping: $OPEN_COPILOT_PRS open Copilot PR(s) already exist"
             echo "Review and merge existing PRs before creating new ones."
@@ -459,12 +512,12 @@ jobs:
 
           {
             echo "Fix these Clang Static Analyzer issues:"
-          echo ""
-            jq -r --argjson limit "$LIMIT" '
-              .reports[:$limit][] |
-              "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"
-            ' /tmp/codechecker_issues.json
-          echo ""
+            echo ""
+            jq -r --argjson limit "$LIMIT" \
+              '.reports[:$limit][] |
+               "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"' \
+              /tmp/codechecker_issues.json
+            echo ""
             echo "For each: verify it's real, apply minimal fix, follow coding standards."
           } > /tmp/prompt.txt
 
@@ -482,13 +535,16 @@ jobs:
           PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
 
           if [ -n "$PR_NUMBER" ]; then
-            echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
+            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
             echo "pr-created=true" >> "$GITHUB_OUTPUT"
             # Add label to track Copilot PRs and prevent duplicates
-            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" --add-label "copilot-autofix" || true
+            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" \
+              --add-label "copilot-autofix" || true
             # Mark PR as ready for review (not draft) so CI runs automatically
             gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
-            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "/codeowners ping" || true
+            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" \
+              --body "/codeowners ping" || true
           else
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
           fi
@@ -500,16 +556,21 @@ jobs:
           if [ "${{ steps.copilot-fix.outputs.has-issues }}" != "true" ]; then
             echo "No issues found." >> "$GITHUB_STEP_SUMMARY"
           elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            echo "✅ **PR Created:** ${{ steps.copilot-fix.outputs.pr-url }}" >> "$GITHUB_STEP_SUMMARY"
+            PR_URL="${{ steps.copilot-fix.outputs.pr-url }}"
+            echo "✅ **PR Created:** $PR_URL" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ No PR created. Check [Copilot dashboard](https://github.com/${{ github.repository }}/copilot)." >> "$GITHUB_STEP_SUMMARY"
+            REPO="${{ github.repository }}"
+            DASHBOARD_URL="https://github.com/${REPO}/copilot"
+            echo "⚠️ No PR created. Check [Copilot dashboard](${DASHBOARD_URL})." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
     needs: [ clang-static-analyzer ]
     # Only publish on full scans (skip when debug-file-filter is used)
-    if: ${{ always() && needs.clang-static-analyzer.result == 'success' && inputs.debug-file-filter == '' }}
+    if: >-
+      ${{ always() && needs.clang-static-analyzer.result == 'success' &&
+          inputs.debug-file-filter == '' }}
     runs-on: ubuntu-latest
 
     steps:
