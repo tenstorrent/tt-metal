@@ -99,10 +99,10 @@ runs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           # Determine toolchain based on distro
-        if [ "$DISTRO" = "fedora" ]; then
+          if [ "$DISTRO" = "fedora" ]; then
             echo "toolchain=cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
             output_enable_lto "false"
-        elif [ "$DISTRO" = "ubuntu" ]; then
+          elif [ "$DISTRO" = "ubuntu" ]; then
             if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"

@@ -79,7 +79,6 @@ jobs:
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
