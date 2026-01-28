@@ -48,8 +48,8 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 10;    // parameterize?
-    constexpr auto num_buffers_header_only_channels = 10;  // parameterize?
+    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
+    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
@@ -330,12 +330,14 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
+    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
+        {"use_init_semaphore", use_init_semaphore},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},

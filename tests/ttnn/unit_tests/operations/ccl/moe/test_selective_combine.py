@@ -315,7 +315,7 @@ def gen_tensors(
         local_reduce,
     )
 
-    # print(f"{dense_contribs_tensor=}")
+    # print(f"{active_token_counts=}")
 
     # print(f"{output_ref=}")
 
@@ -430,7 +430,7 @@ def _get_tt_sharded_dense_input(
 
     assert shape0[2] % num_data_parallel_cores == 0
 
-    # want [num_token_parallel_cores, num_data_parallel_cores, local_experts, num_tokens//num_token_parallel_cores, hidden//num_data_parallel_cores]
+    # want [num_data_parallel_cores, num_token_parallel_cores, local_experts, num_tokens//num_token_parallel_cores, hidden//num_data_parallel_cores]
 
     shape1 = [
         local_experts,
@@ -606,12 +606,14 @@ def _run_test(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    # TODO figure out how to set different semaphore values for different devices
-    max_active_token_count = max(dense_token_counts_tensor.tolist())
-    active_token_semaphores = [
-        ttnn.create_global_semaphore(mesh_device, worker_cores, max_active_token_count)
-        for _ in range(experts_per_device)
-    ]
+    output_tensor = torch.zeros([batch * seq, experts, hidden_size], dtype=torch.bfloat16)
+    tt_output_tensor = ttnn.from_torch(
+        output_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
 
     def _run_op(num_iters):
         for _ in range(num_iters):
@@ -632,6 +634,7 @@ def _run_test(
                 num_data_parallel_cores=num_data_parallel_cores,
                 worker_core_range_set=worker_cores,
                 mux_core_range_set=mux_cores,
+                output_tensor=tt_output_tensor,
             )
         return tt_out
 
@@ -778,9 +781,9 @@ def test_decode_trace(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
-@pytest.mark.parametrize("batch", [128])
+@pytest.mark.parametrize("batch", [512])
 @pytest.mark.parametrize("experts", [32])
-@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("select_experts_k", [2])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
@@ -810,7 +813,7 @@ def test_deepseek_perf(
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
-    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
+    assert worker_cores.num_cores() >= num_token_parallel_cores * num_data_parallel_cores
     assert mux_cores.num_cores() >= num_links * 2
 
     profiler = BenchmarkProfiler()
@@ -830,7 +833,7 @@ def test_deepseek_perf(
             mux_cores,
             mesh_device,
             num_test_iters,
-            trace_mode=True,
+            trace_mode=False,
             profiler=profiler,
             scheme="sequential",
         )
