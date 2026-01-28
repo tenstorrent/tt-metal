@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);

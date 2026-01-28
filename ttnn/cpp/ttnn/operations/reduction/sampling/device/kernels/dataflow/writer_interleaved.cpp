@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of

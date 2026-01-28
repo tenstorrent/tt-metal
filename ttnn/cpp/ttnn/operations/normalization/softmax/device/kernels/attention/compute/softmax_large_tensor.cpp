@@ -8,6 +8,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
@@ -457,8 +458,8 @@ void reduce_cb(
 
                 // Accumulate based on reduce type
                 if constexpr (reduce_type == PoolType::MAX) {
-                    max_tile_init();
-                    max_tile(0, 1);  // max(DST[0], DST[1]) -> DST[0]
+                    binary_max_tile_init();
+                    binary_max_tile(0, 1, 0);  // max(DST[0], DST[1]) -> DST[0]
                 } else {
                     // SUM reduction
                     add_binary_tile_init();
