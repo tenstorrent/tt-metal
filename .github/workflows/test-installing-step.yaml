@@ -12,11 +12,8 @@ jobs:
   install-and-run-mnist:
     name: Install deps and run MNIST MLP
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', github.event.inputs.runner-label || 'N150') }}
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Prepare system
         run: |
           # The runners come with docker preinstalled but we want to
@@ -27,10 +24,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
           chmod +x install.sh
 
-          timeout 1800 sudo bash ./install.sh \
+          timeout 600 sudo bash ./install.sh \
             --update-firmware=off \
             --install-metalium-models-container \
             --verbose \
@@ -39,6 +36,7 @@ jobs:
 
       - name: Run MNIST MLP via tt-metalium-models
         shell: bash
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           sudo /root/.local/bin/tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
