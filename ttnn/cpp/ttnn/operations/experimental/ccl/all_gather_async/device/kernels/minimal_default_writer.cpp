@@ -437,6 +437,7 @@ void kernel_main() {
     }
 
     uint32_t writes_expected = 0;
+    bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Linear) {
         if (detail::valid_targets_backward(direction)) {
             writes_expected = num_targets_forward_direction;
@@ -446,8 +447,17 @@ void kernel_main() {
     } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
+            // For 4-device ring, enable split forwarding for backward worker
+            if (ring_size == 4 && num_targets_backward_direction == 1) {
+                writes_expected = 1;  // Backward worker will also forward 1 slice (but only half of it)
+                split_forwarding_enabled = true;
+            }
         } else {
             writes_expected = num_targets_forward_direction - 1;
+            // For 4-device ring, forward worker will only send half of last slice
+            if (ring_size == 4) {
+                split_forwarding_enabled = true;
+            }
         }
     }
 
@@ -462,11 +472,22 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right, and check if I have a
         // neighbor to the left
         // In the ring case, I expect to write to the left num_backward_target times
+
+        // Check if this is the last slice for split-forwarding
+        bool is_last_slice = (slice_writes == writes_expected - 1);
+
         int slice_chip_id;
         uint32_t actual_slice_chip_id;
         if (direction == 1) {
             slice_chip_id = my_chip_id + slice_writes + 1;
             actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
+            // For 4-device ring split forwarding: backward worker forwards same data as forward worker
+            if (split_forwarding_enabled && is_last_slice && ring_size == 4) {
+                // The backward worker should forward the same source data that forward worker forwards
+                // This is the device 2 hops away in backward direction
+                slice_chip_id = my_chip_id - 2;
+                actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
+            }
         } else {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
@@ -481,6 +502,36 @@ void kernel_main() {
         uint32_t pages_read_in_row = start_pages_read_in_row;
         uint32_t slice_Wt = input_tensor_Wt;
         uint32_t stride_Wt = output_tensor_Wt;
+
+        // Split-forwarding logic for 4-device ring on last slice
+        uint32_t split_tile_offset = 0;
+        uint32_t split_tiles_to_skip = 0;
+        if (split_forwarding_enabled && is_last_slice) {
+            uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+            uint32_t first_half_tiles = total_tiles / 2;
+
+            if (direction == 0) {
+                // Forward worker: only forward first half
+                tiles_to_read = input_tile_id_start + first_half_tiles;
+            } else {
+                // Backward worker: skip first half, forward second half
+                split_tiles_to_skip = first_half_tiles;
+                tiles_read = input_tile_id_start + first_half_tiles;
+
+                // Adjust starting position for tiles
+                uint32_t tiles_to_skip = first_half_tiles;
+                while (tiles_to_skip > 0) {
+                    if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                        pages_read_in_row += tiles_to_skip;
+                        tiles_to_skip = 0;
+                    } else {
+                        tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
+                    }
+                }
+            }
+        }
         if constexpr (gather_dim == 3) {
             tile_id_start = actual_slice_chip_id * input_tensor_Wt;
         } else if constexpr (gather_dim == 2) {
