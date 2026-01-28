@@ -30,7 +30,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
     run_llama_all_gather_matmul_impl,
     BINARY_MULT_CRS,
 )
-from models.demos.llama3_70b_galaxy.tt.model_config import (
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler

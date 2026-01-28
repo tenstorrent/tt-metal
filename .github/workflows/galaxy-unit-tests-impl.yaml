@@ -212,7 +212,7 @@ jobs:
           FAKE_DEVICE: TG
         run: |
           mkdir -p generated/test_reports
-          pytest models/demos/llama3_70b_galaxy/tests/unit_tests
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/unit_tests
 
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}

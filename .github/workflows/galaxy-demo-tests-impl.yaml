@@ -171,10 +171,10 @@ jobs:
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
           FAKE_DEVICE: TG
         run: |
-          pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_decode.py -k "full" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
       - name: Run Llama3 long context demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3_long_context' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -183,12 +183,12 @@ jobs:
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
           FAKE_DEVICE: TG
         run: |
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000
       - name: Run Llama3 evals tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3_evals' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -197,9 +197,9 @@ jobs:
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
           FAKE_DEVICE: TG
         run: |
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "evals-1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "evals-32" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000
       - name: Run Llama3 8B data-parallel demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3_8b_dp' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -289,9 +289,9 @@ jobs:
           TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
           MESH_DEVICE: TG
         run: |
-          pytest models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
       - name: Run Qwen3-32B long context demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'qwen3_32b_long_context' && (inputs.model == 'all' || inputs.model == 'qwen3_32b_long_context') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -301,9 +301,9 @@ jobs:
           TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
           MESH_DEVICE: TG
         run: |
-          pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
-          pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
+          pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
       - name: Run DeepSeek v3 demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'deepseek_v3' && (inputs.model == 'all' || inputs.model == 'deepseek_v3') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}

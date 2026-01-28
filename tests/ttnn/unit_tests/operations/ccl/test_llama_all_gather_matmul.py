@@ -14,7 +14,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
-from models.demos.llama3_70b_galaxy.tt.model_config import (
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tracy import signpost
