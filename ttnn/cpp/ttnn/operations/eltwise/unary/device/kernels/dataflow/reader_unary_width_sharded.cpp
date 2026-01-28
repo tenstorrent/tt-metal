@@ -18,7 +18,8 @@ void kernel_main() {
 
     const auto src_accessor = TensorAccessor(src_tensor_args, src_addr, row_width);
 
-    const uint32_t datum_size = row_width / tt::constants::TILE_WIDTH;
+    // Calculate datum size (element size in bytes) and tile width in bytes
+    const uint32_t datum_size = row_width / (num_tiles_per_row * tt::constants::TILE_WIDTH);
     const uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * datum_size;
 
     uint32_t chunk_id = start_chunk_id;

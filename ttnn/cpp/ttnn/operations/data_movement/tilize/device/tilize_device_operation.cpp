@@ -61,6 +61,11 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_mem_config.shard_spec().value().shape[1],
             tt::constants::TILE_WIDTH);
         TT_FATAL(
+            (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+             operation_attributes.output_mem_config.shard_spec().value().shape[0] == tt::constants::TILE_HEIGHT),
+            "Tile height ({}) must be of height 32",
+            operation_attributes.output_mem_config.shard_spec().value().shape[0]);
+        TT_FATAL(
             operation_attributes.output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
             "Output memory config layout ({}) must match input tensor memory layout ({})",
             operation_attributes.output_mem_config.memory_layout(),
