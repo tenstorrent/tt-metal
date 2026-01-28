@@ -128,14 +128,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
     uint32_t num_devices = mesh_view.num_devices();
-    uint32_t dispatch_devices =
-        operation_attributes.axis.has_value()
-            ? operation_attributes.axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()
-            : mesh_view.num_devices();
 
     uint32_t hidden_size = input_shape[-1];
-    uint32_t batch_per_device = input_shape[0];
-    uint32_t batch_size = input_shape[0] * dispatch_devices;
 
     uint32_t tokens = detail::get_num_rows_st(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
@@ -145,7 +139,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_page_size = detail::get_page_size_st(input_tensor);
     auto indices_page_size = detail::get_page_size_st(indices_tensor);
     auto mapping_page_size = detail::get_page_size_st(mapping_tensor);
-    // auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
+    auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
     auto output_page_size = detail::get_page_size_st(output_tensor);
     auto expert_activation_output_page_size = detail::get_page_size_st(expert_activation_output_tensor);
     auto e_t_output_page_size = detail::get_page_size_st(e_t_output_tensor);
@@ -170,7 +164,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // full scores buffer
     uint32_t scores_tensor_cb_id = tt::CBIndex::c_3;
     // Send preparation buffer [E, T] for untilize, capped by -1 to indicate no more tokens to send for this expert
-    uint32_t e_t_buffer_id = tt::CBIndex::c_4;
+    uint32_t e_t_cb_id = tt::CBIndex::c_4;
     // Tilizer input buffer for tokens to be tilized (row-major from reader)
     uint32_t tilizer_input_cb_id = tt::CBIndex::c_5;
     // Tilizer output buffer for tilized tokens (from compute to writer)
@@ -183,7 +177,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // for each expert to pass to the other kernels
     uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_8;
     // BRISC's e_t buffer for parallel metadata processing (BRISC processes tokens/2 to tokens)
-    uint32_t brisc_e_t_buffer_id = tt::CBIndex::c_9;
+    uint32_t brisc_e_t_cb_id = tt::CBIndex::c_9;
     // BRISC's per-expert token counts to communicate to NCRISC after parallel processing
     uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_10;
     // BRISC's expert activation buffer for parallel processing
@@ -228,13 +222,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         aligned_output_page_size);
 
     uint32_t aligned_scores_page_size = detail::get_aligned_page_size_st(input_scores_tensor);
-    // log_debug(
-    //     tt::LogOp,
-    //     "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
-    //     input_scores_tensor.logical_shape(),
-    //     scores_pages,
-    //     scores_page_size,
-    //     aligned_scores_page_size);
+    log_debug(
+        tt::LogOp,
+        "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
+        input_scores_tensor.logical_shape(),
+        scores_pages,
+        scores_page_size,
+        aligned_scores_page_size);
 
     ////// CORES //////
 
@@ -331,7 +325,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     constexpr uint32_t e_t_entry_size = 16;
 
     tt::tt_metal::create_cb(
-        e_t_buffer_id,
+        e_t_cb_id,
         program,
         t_core_range_set,
         e_t_output_page_size,
@@ -394,7 +388,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Single page containing all experts' token lists, each with capacity tokens/2
     // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
     tt::tt_metal::create_cb(
-        brisc_e_t_buffer_id,
+        brisc_e_t_cb_id,
         program,
         t_core_range_set,
         (tokens / 2) * e_t_entry_size * experts_per_device,  // full buffer with 16B entries
@@ -486,27 +480,35 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     CoreCoord drain_core_physical = tilizer_cores_physical.at(0);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+        // CBs
         {"tilizer_input_cb_id", tilizer_input_cb_id},
         {"tilizer_output_cb_id", tilizer_output_cb_id},
         {"total_chunks_cb_id", total_chunks_cb_id},
         {"indices_tensor_cb_id", indices_tensor_cb_id},
         {"scores_tensor_cb_id", scores_tensor_cb_id},
         {"mapping_tensor_cb_id", mapping_tensor_cb_id},
-        {"e_t_buffer_id", e_t_buffer_id},
+        {"e_t_cb_id", e_t_cb_id},
         {"expert_activation_cb_id", expert_activation_cb_id},
         {"per_expert_total_tokens_cb_id", per_expert_total_tokens_cb_id},
-        {"brisc_e_t_buffer_id", brisc_e_t_buffer_id},
+        {"brisc_e_t_cb_id", brisc_e_t_cb_id},
         {"brisc_expert_counts_cb_id", brisc_expert_counts_cb_id},
         {"brisc_expert_activation_cb_id", brisc_expert_activation_cb_id},
         {"brisc_activated_count_cb_id", brisc_activated_count_cb_id},
         {"remote_counts_cb_id", remote_counts_cb_id},
-        {"remote_counts_entry_size", remote_counts_entry_size},
+
+        // Alignment
+        {"l1_alignment", l1_alignment},
+        {"dram_alignment", dram_alignment},
+        {"e_t_entry_size", e_t_entry_size},
+
+        // Number of pages
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
         {"mapping_pages", mapping_pages},
         {"scores_pages", scores_pages},
         {"output_pages", output_pages},
 
+        // Page sizes
         {"input_page_size", input_page_size},
         {"indices_page_size", indices_page_size},
         {"mapping_page_size", mapping_page_size},
@@ -514,33 +516,31 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"expert_activation_output_page_size", expert_activation_output_page_size},
         {"e_t_output_page_size", e_t_output_page_size},
 
-        {"num_devices", num_devices},
-        {"hidden_size", hidden_size},
-        {"batch_size", batch_size},
-        {"batch_per_device", batch_per_device},
-        {"selected_experts_k", selected_experts_k},
-        {"experts", experts},
-        {"tokens", tokens},
-
-        {"mesh_rows", mesh_view.num_rows()},
-        {"mesh_cols", mesh_view.num_cols()},
-
+        // Aligned page sizes
         {"aligned_input_page_size", aligned_input_page_size},
         {"aligned_indices_page_size", aligned_indices_page_size},
         {"aligned_mapping_page_size", aligned_mapping_page_size},
         {"aligned_output_page_size", aligned_output_page_size},
         {"aligned_scores_page_size", aligned_scores_page_size},
 
-        {"l1_alignment", l1_alignment},
-        {"dram_alignment", dram_alignment},
-        {"e_t_entry_size", e_t_entry_size},
+        // General info
+        {"tokens", tokens},
+        {"hidden_size", hidden_size},
+        {"remote_counts_entry_size", remote_counts_entry_size},
+        {"experts", experts},
+        {"selected_experts_k", selected_experts_k},
+
+        // Chunk info
+        {"tokens_per_chunk", tokens_per_chunk},
+
+        // Mesh
+        {"num_devices", num_devices},
+        {"mesh_rows", mesh_view.num_rows()},
+        {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
 
         // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
-        {"max_tiles_per_chunk", max_tiles_per_chunk},
-        {"tokens_per_chunk", tokens_per_chunk},
-        {"tokens_per_tilizer_core", tokens / t_num_cores},
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
 
@@ -592,16 +592,12 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, named_compile_time_args));
 
     // Compute kernel compile-time args for tilization
-    // These are positional args: tilizer_input_cb_id, tilizer_output_cb_id, max_tiles_per_chunk,
-    //   tokens_per_chunk, total_chunks_cb_id
     std::unordered_map<std::string, uint32_t> compute_tilizer_named_compile_time_args = {
         {"tilizer_input_cb_id", tilizer_input_cb_id},
         {"tilizer_output_cb_id", tilizer_output_cb_id},
-        {"max_tiles_per_chunk", max_tiles_per_chunk},
-        {"tokens_per_chunk", tokens_per_chunk},
         {"total_chunks_cb_id", total_chunks_cb_id},
-        {"experts_per_device", experts_per_device},
-        {"aligned_input_page_size", aligned_input_page_size},
+        {"tokens_per_chunk", tokens_per_chunk},
+        {"max_tiles_per_chunk", max_tiles_per_chunk},
     };
 
     tt::tt_metal::KernelHandle compute_tilizer_kernel_id = tt::tt_metal::CreateKernel(

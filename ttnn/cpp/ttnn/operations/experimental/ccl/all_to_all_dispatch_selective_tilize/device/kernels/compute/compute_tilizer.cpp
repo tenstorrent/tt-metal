@@ -75,8 +75,8 @@ void MAIN {
     // Compile-time arguments
     constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
     constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
-    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t max_tiles_per_chunk = get_named_compile_time_arg_val("max_tiles_per_chunk");
 
     // get_runtime args
@@ -85,8 +85,11 @@ void MAIN {
 
     compute_kernel_hw_startup(tilizer_input_cb_id, tilizer_output_cb_id);
 
+    // constants
+    constexpr one_page = 1;
+
     // // Wait for writer to push total_chunks via CB
-    cb_wait_front(total_chunks_cb_id, 1);
+    cb_wait_front(total_chunks_cb_id, one_page);
 
     // // Read total_chunks from the CB
     uint32_t total_chunks = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(total_chunks_cb_id, 0));
@@ -126,6 +129,6 @@ void MAIN {
         cb_push_back(tilizer_output_cb_id, tiles_per_chunk);
     }
     fast_tilize_uninit(tilizer_input_cb_id, tilizer_output_cb_id);
-    cb_pop_front(total_chunks_cb_id, 1);
+    cb_pop_front(total_chunks_cb_id, one_page);
 }
 }  // namespace NAMESPACE
