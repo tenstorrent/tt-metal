@@ -78,8 +78,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
                 is_distributed=configuration.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 tt_ccl=self.tt_ccl,
             ),
             configuration,
@@ -321,7 +319,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
 
         if get_last_token != -1:
             h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
-        h = self.norm(h, mode=mode)
+        h = self.norm(h, mode=mode, norm_config=self.configuration.get_norm_config("lm_head", mode, self.prefetcher))
 
         # TODO: Switch to using dram-sharded LM head and remove this
         # Note: workaround for sharded_to_interleaved memory corruption (#15113)
@@ -339,7 +337,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             output = ttnn.linear(
                 h,
                 out_weight,
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_na,
                 core_grid=None,
                 dtype=ttnn.bfloat16,
                 program_config=pc,

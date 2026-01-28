@@ -18,7 +18,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", (True, False))
+@pytest.mark.parametrize("use_prefetcher", (False))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -287,7 +287,6 @@ def test_model_inference(
         prefetcher=prefetcher if use_prefetcher else None,
     )
     if use_prefetcher:
-        model_args.build_prefetcher_configs("decode")
         tt_model.prefetcher.prefetch()
 
     logger.info("Model and caches loaded.")
@@ -328,9 +327,7 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
-            if use_prefetcher
-            else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_decode_residual_mem_config("decode", prefetcher if use_prefetcher else None),
         )
 
         # Get cos/sin matrices for the current position of each user

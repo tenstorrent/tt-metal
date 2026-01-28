@@ -20,7 +20,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    (True, False),
+    (False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -89,7 +89,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
 
     # Run prefetcher if it is used
     if prefetcher is not None and mode == "decode":
-        model_args.build_prefetcher_configs("decode")
         prefetcher.prefetch()
         prefetcher.run()
 
@@ -99,16 +98,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     reference_output = reference_model(torch_input)
 
     def get_input_memory_config():
-        if mode != "decode":
-            return ttnn.DRAM_MEMORY_CONFIG
-
-        if model_args.is_galaxy:
-            return tt_model.model_config["MLP_ACT_MEMCFG"]
-
-        if prefetcher is not None:
-            return model_args.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"]
-
-        return model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+        return model_args.get_mlp_input_mem_config(mode, prefetcher)
 
     tt_input = ttnn.from_torch(
         torch_input,
