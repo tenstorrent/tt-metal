@@ -400,12 +400,27 @@ void kernel_main() {
             // == 1 ==
             // can skip for the first chunk per expert
             if (chunk != 0) {
-                uint32_t wait_value =
-                    chunk + e * (num_expert_chunks - 1);  // don't wait on the first chunk of each expert
+                // don't wait on the first chunk of each expert (why we have the -1 in there)
+                uint32_t wait_value = num_matmul_cores * (chunk + e * (num_expert_chunks - 1));
 
                 // TODO: (GR) uncomment during integration
                 // noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr
                 // uint32_t*>(matmul_chunk_available_semaphore_addr), wait_value);
+
+                // MM only signals to the T drain-sync-core, which then forwards it to the T non-drain-sync cores
+                if (is_drain_tilizer_core && num_tilizer_cores > 1) {
+                    uint64_t matmul_chunk_available_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+                        tilizer_mcast_start_x,
+                        tilizer_mcast_start_y,
+                        tilizer_mcast_end_x,
+                        tilizer_mcast_end_y,
+                        matmul_chunk_available_semaphore_addr);
+
+                    noc_semaphore_set_multicast(
+                        matmul_chunk_available_semaphore_addr,
+                        matmul_chunk_available_semaphore_mcast_addr,
+                        num_tilizer_cores - 1);
+                }
             }
 
             // == 2 ==
