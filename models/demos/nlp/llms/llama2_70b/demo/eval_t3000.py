@@ -12,9 +12,9 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.t3000.llama2_70b.demo.demo import build_generator, construct_arg
-from models.demos.t3000.llama2_70b.demo.eval import calculate_perplexity, wikitext_detokenizer
-from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
+from models.demos.nlp.llms.llama2_70b.demo.demo import build_generator, construct_arg
+from models.demos.nlp.llms.llama2_70b.demo.eval import calculate_perplexity, wikitext_detokenizer
+from models.demos.nlp.llms.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
@@ -79,7 +79,7 @@ def main(args, eval_data_args):
         max_batch_size,
     )
 
-    base_path = "models/demos/t3000/llama2_70b/scripts/llama_perplexity_runs/"
+    base_path = "models/demos/nlp/llms/llama2_70b/scripts/llama_perplexity_runs/"
     os.makedirs(base_path, exist_ok=True)
 
     # Get current timestamp

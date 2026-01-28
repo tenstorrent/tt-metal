@@ -13,7 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,

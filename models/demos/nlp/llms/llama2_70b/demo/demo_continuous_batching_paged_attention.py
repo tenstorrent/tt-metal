@@ -13,10 +13,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import top_k_top_p_filtering
-from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
-from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
-from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama import Llama
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
+from models.demos.nlp.llms.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
+from models.demos.nlp.llms.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 from ttnn import ReplicateTensorToMesh
 
 
@@ -51,7 +51,7 @@ class TTArgs:
 @dataclass
 class DataArgs:
     max_output_tokens: int = 128
-    prompts_file: str = "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"
+    prompts_file: str = "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"
     output_at_end: bool = True
     top_p: float = 1
     top_k: int = 1
@@ -338,8 +338,8 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.parametrize(
     "chat, prompts_file",
     (
-        (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_large.json"),
+        (True, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_large.json"),
     ),
     ids=("chat_completion", "text_completion"),
 )
