@@ -669,7 +669,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#if PRINT_ACCESS > 1
+#if PRINT_ACCESS > 0
     std::cout << "g_count = " << g_cnt << ", min = " << id_min << ", max = " << id_max << "\n";
     if (g_cnt) {
         int k, m, n;
