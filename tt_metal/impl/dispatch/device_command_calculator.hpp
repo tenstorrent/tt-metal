@@ -250,7 +250,7 @@ public:
 
     void add_dispatch_write_packed_large_unicast(uint16_t num_sub_cmds) {
         TT_ASSERT(
-            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
+            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS,
             "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeUnicastCmd",
             num_sub_cmds);
         static_assert(sizeof(CQDispatchWritePackedLargeUnicastSubCmd) % sizeof(uint32_t) == 0);
@@ -279,7 +279,7 @@ public:
 
     void add_dispatch_write_packed_large_unicast(uint16_t num_sub_cmds, uint32_t payload_sizeB) {
         TT_ASSERT(
-            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
+            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS,
             "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeUnicastCmd",
             num_sub_cmds);
         static_assert(sizeof(CQDispatchWritePackedLargeUnicastSubCmd) % sizeof(uint32_t) == 0);

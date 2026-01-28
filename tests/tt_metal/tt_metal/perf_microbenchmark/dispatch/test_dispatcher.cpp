@@ -741,7 +741,7 @@ protected:
         while (remaining_bytes > 0) {
             // Random number of transactions per command (1-16)
             const int max_transactions =
-                payload_generator_->get_rand<int>(1, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
+                payload_generator_->get_rand<int>(1, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
 
             std::vector<CQDispatchWritePackedLargeUnicastSubCmd> sub_cmds;
             std::vector<std::vector<uint32_t>> payloads;

@@ -1132,7 +1132,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_unicast_inte
     const uint32_t offset_idx,
     uint32_t write_offset_index) {
     TT_ASSERT(
-        num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
+        num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS,
         "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeUnicastCmd",
         num_sub_cmds);
     static_assert(sizeof(CQDispatchWritePackedLargeUnicastSubCmd) % sizeof(uint32_t) == 0);

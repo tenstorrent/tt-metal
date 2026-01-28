@@ -333,12 +333,13 @@ struct CQDispatchWritePackedLargeCmd {
 } __attribute__((packed));
 
 // Unicast variant of packed large write with uint32_t length
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS = 35;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD = 0xffffffff;
 
 struct CQDispatchWritePackedLargeUnicastSubCmd {
     uint32_t noc_xy_addr;
     uint32_t addr;    // if 0xffffffff, data is discarded (not sent)
-    uint32_t length;  // full uint32_t range
+    uint32_t length;
 } __attribute__((packed));
 
 struct CQDispatchWritePackedLargeUnicastCmd {
