@@ -261,6 +261,7 @@ void kernel_main() {
             for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
                 uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
                 uint32_t output_row_offset = input_row_offset / ring_size;
+                uint32_t output_tile_id_start = b * output_batch_num_pages;
 
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
@@ -277,7 +278,6 @@ void kernel_main() {
 
                         DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                         uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-                        uint32_t output_tile_id_start = b * output_batch_num_pages;
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                             uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
@@ -286,7 +286,7 @@ void kernel_main() {
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
                             uint32_t first_mm_core_idx = 0;
-
+                            uint32_t global_tile_idx;
                             uint32_t effective_chunk_width_in_tiles =
                                 get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
                             uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
@@ -335,10 +335,14 @@ void kernel_main() {
                                         mm_block_ht);
                                     uint32_t slice_tile_idx =
                                         slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                    uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                    global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     DPRINT << "predicted input_tile_id:" << global_tile_idx << " " << ENDL();
-                                    DPRINT << "predicted intermediate_tile_id:" << global_tile_idx << " " << ENDL();
+                                    if (i == 0) {
+                                        DPRINT << "predicted output_tile_id: " << global_tile_idx << ENDL();
+                                    } else {
+                                        DPRINT << "predicted intermediate_tile_id: " << global_tile_idx << ENDL();
+                                    }
                                 }
                             }
 
@@ -379,10 +383,13 @@ void kernel_main() {
                                 noc_async_writes_flushed();
                             } else {
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                    uint32_t output_tile_id =
+                                    uint32_t prev_output_tile_id =
                                         output_tile_id_start + output_row_offset + direction_offset + j;
-                                    DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
-                                    uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                    DPRINT << "previously writing into output_tile_id: " << prev_output_tile_id
+                                           << ENDL();
+                                    uint32_t output_tile_id = output_tile_id_start + global_tile_idx;
+                                    DPRINT << "proposed writing into output_tile_id: " << output_tile_id << ENDL();
+                                    uint64_t local_noc_addr = get_noc_addr(prev_output_tile_id, output_addrgen);
                                     noc_async_write(l1_read_addr, local_noc_addr, page_size);
                                     l1_read_addr += page_size;
                                 }

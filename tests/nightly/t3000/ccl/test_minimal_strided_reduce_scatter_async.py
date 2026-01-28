@@ -464,7 +464,7 @@ def run_reduce_scatter_impl(
                 use_strided=True,
                 verify_output_shape=True,
                 verify_output_pcc=True,
-                small_random_ints=False,
+                small_random_ints=True,
             ),
             id="experimental_strided_minimal_correctness_check_3",
         ),
