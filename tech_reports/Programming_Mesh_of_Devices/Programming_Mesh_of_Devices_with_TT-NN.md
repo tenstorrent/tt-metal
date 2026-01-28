@@ -886,7 +886,7 @@ The main changes involve:
 #### 8.3.2 Key Components
 
 These three components are used to achieve linear scaling of performance as we tile our model replicas across the mesh.
-See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_hybrid_data_tensor_parallel` for full example.
+See `models/demos/nlp/llms/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_hybrid_data_tensor_parallel` for full example.
 
 1. Submesh Creation
 

@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import ttnn
 
-from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
