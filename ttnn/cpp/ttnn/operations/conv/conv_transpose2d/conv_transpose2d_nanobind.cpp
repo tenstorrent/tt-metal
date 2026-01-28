@@ -17,6 +17,7 @@
 #include "conv_transpose2d.hpp"
 #include "prepare_conv_transpose2d_weights.hpp"
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
@@ -24,10 +25,7 @@ using ttnn::prim::Conv2dConfig;
 using ttnn::prim::Conv2dSliceConfig;
 
 void bind_conv_transpose2d(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::conv_transpose2d,
-        R"doc(
+    const auto* doc = R"doc(
         Applies a 2D transposed convolution operator over an input image composed of several input planes.
 
         This module can be seen as the gradient of Conv2d with respect to its input. It is also known as a
@@ -87,58 +85,15 @@ void bind_conv_transpose2d(nb::module_& mod) {
             - tuple[ttnn.Tensor, tuple[int, int]]: the output tensor, and its height and width, if return_output_dim = True
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and its weights and biases, if return_weights_and_bias = True
             - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and its height and width, and its weights and biases, if return_output_dim = True and return_weights_and_bias = True
-        )doc",
+        )doc";
 
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::conv_transpose2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               std::array<uint32_t, 2> output_padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               const std::optional<const ttnn::Tensor>& bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const Conv2dSliceConfig>& dram_slice_config,
-               bool mirror_kernel,
-               const bool return_output_dim,
-               const bool return_weights_and_bias) -> ResultWithOptions {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    output_padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    dram_slice_config,
-                    mirror_kernel,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
+    ttnn::bind_function(
+        mod,
+        "conv_transpose2d",
+        "ttnn.conv_transpose2d",
+        doc,
+        ttnn::overload_t(
+            &ttnn::conv_transpose2d,
             nb::kw_only(),
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -162,7 +117,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             nb::arg("dram_slice_config") = nb::none(),
             nb::arg("mirror_kernel") = true,
             nb::arg("return_output_dim") = false,
-            nb::arg("return_weights_and_bias") = false});
+            nb::arg("return_weights_and_bias") = false));
 
     mod.def(
         "prepare_conv_transpose2d_weights",
