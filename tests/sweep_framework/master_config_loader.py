@@ -636,8 +636,8 @@ class MasterConfigLoader:
             return 0
 
         # Check first config for number of tensor arguments
-        # configs is a list of (arguments, source, machine_info) tuples
-        first_config_args, first_source, first_machine_info = configs[0]
+        # configs is a list of (arguments, source, machine_info, config_hash) tuples
+        first_config_args, first_source, first_machine_info, _ = configs[0]
         tensor_count = 0
 
         # Only count consecutive tensors from the start
