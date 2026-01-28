@@ -88,7 +88,9 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* own_header = PacketHeaderPool::header_table[own_route_id].first;
 
     // Wait for own data
-    cb_wait_front(source_cb, num_tiles);
+    if constexpr (device_role != MESH_LEAF) {
+        cb_wait_front(source_cb, num_tiles);
+    }
     uint32_t own_data_addr = get_read_ptr(source_cb);
 
     // Set up header for own shard with fused write+atomic_inc
@@ -103,7 +105,9 @@ void kernel_main() {
     fabric_sender.send_payload_flush_blocking_from_address(
         reinterpret_cast<uint32_t>(own_header), sizeof(PACKET_HEADER_TYPE));
 
-    cb_pop_front(source_cb, num_tiles);
+    if constexpr (device_role != MESH_LEAF) {
+        cb_pop_front(source_cb, num_tiles);
+    }
 
     // Forward pre-assembled worker packets - wait on each worker's semaphore
     uint32_t slot_base = packet_buffer_addr;
