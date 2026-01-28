@@ -1362,6 +1362,7 @@ class TtModelArgs:
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
+                prefetch=False,
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
@@ -1407,6 +1408,7 @@ class TtModelArgs:
                 10240 // 8,
                 9216 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             # Use padded K and N
@@ -1427,6 +1429,7 @@ class TtModelArgs:
                 8192 // 4,
                 3840,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
@@ -1435,6 +1438,7 @@ class TtModelArgs:
                 3584,
                 9216 // 4,  # Use padded N
                 RING_SIZE,
+                prefetch=False,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(

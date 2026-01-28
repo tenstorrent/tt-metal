@@ -82,7 +82,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
-
+        self.use_prefetcher = False
         # Sharded weights
         w1_dim = (-1, -2)
         w2_dim = (-2, -1)
@@ -107,7 +107,7 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
@@ -133,7 +133,7 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             program_config=pc_1_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             use_noc1_only=False,
         )
@@ -180,7 +180,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_2,
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            # global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
         w2_out_reduced = self.tt_ccl.line_all_reduce(
