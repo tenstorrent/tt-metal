@@ -899,7 +899,7 @@ protected:
         while (remaining_bytes > 0) {
             uint32_t n_sub_cmds =
                 payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
-            uint32_t max_read_size = std::min(DEFAULT_SCRATCH_DB_SIZE / 2, remaining_bytes);
+            uint32_t max_read_size = remaining_bytes;
 
             std::vector<uint64_t> lengths;
             std::vector<uint64_t> addresses;
