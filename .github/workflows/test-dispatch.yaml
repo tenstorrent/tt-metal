@@ -3,42 +3,136 @@ name: "Custom test dispatch"
 on:
   workflow_dispatch:
     inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
       runner-label:
-        description: Runner label (e.g., N150)
+        description: 'Optional: N150, N300, BH, config-t3000, topology-6u. for example: ["in-service", "config-t3000"]'
+        required: true
+        type: string
+        default: '["in-service"]'
+      tracy:
         required: false
-        default: N150
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
+      command:
+        required: true
+        type: string
+      description:
+        type: string
+        default: "Custom test dispatch"
+        required: false
+      commit:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
+run-name: ${{ inputs.description }}
 jobs:
-  install-and-run-mnist:
-    name: Install deps and run MNIST MLP
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', github.event.inputs.runner-label || 'N150') }}
-    timeout-minutes: 60
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: ${{ inputs.tracy }}
+      build-wheel: true
+      ref: ${{ inputs.commit || github.sha }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+  test-dispatch:
+    needs: build-artifact
+    timeout-minutes: 120
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    container:
+      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/' || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Checkout
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Prepare system
-        run: |
-          # The runners come with docker preinstalled but we want to
-          # simulate a completely blank system for our Podman install
-          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
-
-      - name: Install TT dependencies via TT-Installer
+        timeout-minutes: 10
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          path: docker-job
+          ref: ${{ inputs.commit || github.sha }}
+      - name: 📦 Download Build Artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          path: docker-job
+      - name: 📂 Extract Build Files
+        timeout-minutes: 10
+        working-directory: docker-job
+        run: tar --zstd -xf ttm_any.tar.zst
         shell: bash
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: docker-job
+      - name: 💿 Install Wheel
+        timeout-minutes: 10
+        working-directory: docker-job
         run: |
-          set -euo pipefail
-          curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
-          chmod +x install.sh
-
-          timeout 1800 sudo bash ./install.sh \
-            --update-firmware=off \
-            --install-metalium-models-container \
-            --verbose \
-            --reboot-option=never \
-            --mode-non-interactive
-
-      - name: Run MNIST MLP via tt-metalium-models
+          echo "📂 In directory: $(pwd)"
+          echo "📄 Files:"
+          ls -la
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          echo "📦 Installing $WHEEL_FILENAME"
+          uv pip install "$WHEEL_FILENAME"
         shell: bash
+      - name: Run regression in loop
         run: |
-          set -euo pipefail
-          sudo /root/.local/bin/tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
+          uv pip install pytest-repeat
+          ${{ inputs.command }}
+        shell: bash
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
