@@ -203,22 +203,24 @@ void AdamW::step() {
             ttnn::multiply(ttnn::square(gradients), 1.F - m_config.beta2));
         // first_moment_hat = first_moment / (1 - beta1^steps)
         auto first_moment_hat = ttnn::multiply(first_moment, 1.F / (1.F - std::pow(m_config.beta1, m_steps)));
-        // second_moment_hat = second_moment / (1 - beta2^steps)
-        auto second_moment_hat = ttnn::multiply(second_moment, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
 
         first_moment_ptr->set_value(first_moment);
         second_moment_ptr->set_value(second_moment);
 
-        // For amsgrad, use the maximum of all past second_moment_hat values
+        // For amsgrad, use the maximum of all past second_moment values
         ttnn::Tensor denom_tensor;
         if (m_config.amsgrad) {
             auto& max_exp_avg_sq_ptr = m_max_exp_avg_sq.at(key);
             auto max_exp_avg_sq = max_exp_avg_sq_ptr->get_value(autograd::PreferredPrecision::FULL);
-            // max_exp_avg_sq = max(max_exp_avg_sq, second_moment_hat)
-            max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment_hat);
+            // max_exp_avg_sq = max(max_exp_avg_sq, second_moment)
+            max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
             max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
-            denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq), m_config.epsilon);
+            // Apply bias correction after taking max
+            auto max_exp_avg_sq_hat = ttnn::multiply(max_exp_avg_sq, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
+            denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq_hat), m_config.epsilon);
         } else {
+            // second_moment_hat = second_moment / (1 - beta2^steps)
+            auto second_moment_hat = ttnn::multiply(second_moment, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
             denom_tensor = ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon);
         }
 
