@@ -11,7 +11,7 @@ if is_blackhole():
         layernorm_program_config,
     )
 else:
-    from models.demos.wormhole.sentence_bert.ttnn.common import ff2_program_config, layernorm_program_config
+    from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import ff2_program_config, layernorm_program_config
 
 
 class TtnnSentenceBertOutput:
