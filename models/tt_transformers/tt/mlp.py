@@ -85,10 +85,12 @@ class MLP(LightweightModule):
         # race conditions caused by different block sizes
         use_prefetcher = prefetcher is not None
 
-        ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        decoders_optimizations = self.args.decoders_optimizations
+
+        ff1_3_dtype = decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF1_FF3, prefetcher=use_prefetcher
         )
-        ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        ff2_dtype = decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
@@ -123,10 +125,8 @@ class MLP(LightweightModule):
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
-        activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
-        )
-        li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        activation_dtype = decoders_optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+        li_ff1_3_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
@@ -266,7 +266,7 @@ class MLP(LightweightModule):
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
-        li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+        li_ff2_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
