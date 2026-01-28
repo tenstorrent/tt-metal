@@ -270,8 +270,8 @@ def test_slice_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_nope_slice", 10, 2.43),  # Target based on typical reduce performance
-        ("q_rope_slice", 10, 1.89),
+        ("q_nope_slice", 10, 2.39),  # 2.43 if run on mesh device
+        ("q_rope_slice", 10, 1.88),  # 1.89 if run on mesh device
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -286,6 +286,8 @@ def test_slice_q_rope_nope_deepseek_perf(
 
     subdir = "deepseek_ccl_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_slice_q_rope_nope.py -k {step_name}"
+    # you can also use mesh device version
+    # command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_slice_q_rope_nope_mesh.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "SliceDeviceOperation"
 
