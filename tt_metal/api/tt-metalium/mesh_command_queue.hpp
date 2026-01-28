@@ -61,9 +61,6 @@ class ShardDataTransfer;
 // THREAD SAFETY: All methods are thread safe.
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
-    // Currently only supports dispatching workloads and relies on the
-    // tt::tt_metal::HWCommandQueue.
-    // Additional support for Reads and Writes to be added
 protected:
     MeshDevice* mesh_device_ = nullptr;
     uint32_t id_ = 0;
