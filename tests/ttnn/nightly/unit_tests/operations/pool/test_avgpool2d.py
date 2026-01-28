@@ -6,7 +6,7 @@ import ttnn
 import pytest
 import math
 
-from models.demos.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     COMPUTE_KERNEL_CONFIG_HIFI4,
     COMPUTE_KERNEL_CONFIG_LOFI,
