@@ -113,7 +113,7 @@ jobs:
       - name: Create Docker Compose file
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ]; then
+          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \

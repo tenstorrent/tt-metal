@@ -992,6 +992,34 @@ std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray() {
     return result;
 }
 
+std::vector<std::pair<uint32_t, uint32_t>> GetTP2DevicePairs() {
+    // NOTE: This algorithm assumes that on Galaxy systems, the PCIe bus_id ordering
+    // is fixed and corresponds to physical Ethernet-connected TP2 pairs.
+    // Adjacent bus_ids (e.g., c1-c2, c3-c4, c5-c6, c7-c8) represent ASICs that are
+    // directly connected via Ethernet.
+    // If the bus_id mapping changes in future hardware configurations, this
+    // pairing logic may need to be revisited.
+    auto& metal_context = MetalContext::instance();
+    const auto& cluster = metal_context.get_cluster();
+
+    // Collect bus_id and chip_id pairs
+    std::vector<std::pair<uint16_t, uint32_t>> bus_chip_pairs;
+    for (const auto& chip_id : cluster.all_chip_ids()) {
+        auto bus_id = cluster.get_bus_id(chip_id);
+        bus_chip_pairs.emplace_back(bus_id, chip_id);
+    }
+
+    // Sort by bus_id
+    std::sort(bus_chip_pairs.begin(), bus_chip_pairs.end());
+
+    // Pair adjacent bus_ids (c1-c2, c3-c4, ...)
+    std::vector<std::pair<uint32_t, uint32_t>> pairs;
+    for (size_t i = 0; i + 1 < bus_chip_pairs.size(); i += 2) {
+        pairs.emplace_back(bus_chip_pairs[i].second, bus_chip_pairs[i + 1].second);
+    }
+    return pairs;
+}
+
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {

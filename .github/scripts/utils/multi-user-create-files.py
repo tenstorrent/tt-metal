@@ -15,13 +15,34 @@ def multi_user_containers(num_containers, image, chips_per_container, mesh_descr
         devices = []
 
         if tray_mapping:
-            # Use physical topology mapping for tray scenario
-            tray_id = i + 1  # Tray IDs are 1-indexed
-            device_ids = tray_mapping["device_mapping"][str(tray_id)]
-            for dev_id in device_ids[:chips_per_container]:
-                devices.append(f"/dev/tenstorrent/{dev_id}:/dev/tenstorrent/{dev_id}")
+            if chips_per_container == 2 and "tp2_pairs" in tray_mapping and tray_mapping["tp2_pairs"]:
+                # TP2 scenario: Use Ethernet-connected pairs
+                tp2_pairs = tray_mapping["tp2_pairs"]
+                if i < len(tp2_pairs):
+                    pair = tp2_pairs[i]
+                    devices.append(f"/dev/tenstorrent/{pair[0]}:/dev/tenstorrent/{pair[0]}")
+                    devices.append(f"/dev/tenstorrent/{pair[1]}:/dev/tenstorrent/{pair[1]}")
+                else:
+                    raise ValueError(f"Not enough TP2 pairs for container {i}: have {len(tp2_pairs)}, need {num_containers}")
+            elif "device_mapping" in tray_mapping:
+                # Tray scenario: Use physical topology mapping
+                tray_id = i + 1  # Tray IDs are 1-indexed
+                if str(tray_id) in tray_mapping["device_mapping"]:
+                    device_ids = tray_mapping["device_mapping"][str(tray_id)]
+                    for dev_id in device_ids[:chips_per_container]:
+                        devices.append(f"/dev/tenstorrent/{dev_id}:/dev/tenstorrent/{dev_id}")
+                else:
+                    # Fallback: sequential device IDs
+                    for n in range(chips_per_container):
+                        dev_num = i * chips_per_container + n
+                        devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
+            else:
+                # Fallback: sequential device IDs
+                for n in range(chips_per_container):
+                    dev_num = i * chips_per_container + n
+                    devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
         else:
-            # Sequential device IDs for single/tp2 scenarios
+            # Sequential device IDs (no tray_mapping)
             for n in range(0, chips_per_container):
                 dev_num = i * chips_per_container + n
                 devices.append(f"/dev/tenstorrent/{dev_num}:/dev/tenstorrent/{dev_num}")
@@ -91,6 +112,7 @@ if args.tray_mapping_file:
     print(f"Loaded tray mapping from {args.tray_mapping_file}")
     print(f"Architecture: {tray_mapping.get('arch', 'unknown')}")
     print(f"Device mapping: {tray_mapping.get('device_mapping', {})}")
+    print(f"TP2 pairs: {tray_mapping.get('tp2_pairs', [])}")
 
 services = multi_user_containers(
     args.num_containers, args.image, args.chips_per_container, args.mesh_descriptor, args.container_prefix, tray_mapping

@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -97,6 +98,16 @@ ChipId GetPCIeDeviceID(ChipId device_id);
  *               Returns empty map if not on a Galaxy system.
  */
 std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray();
+
+/**
+ * Returns TP2-compatible device pairs based on bus_id ordering.
+ * On Galaxy systems, devices with adjacent bus_ids (e.g., c1-c2, c3-c4) are
+ * Ethernet-connected and form valid TP2 pairs.
+ *
+ * Return value: std::vector<std::pair<uint32_t, uint32_t>>
+ *               List of (device_id_1, device_id_2) pairs.
+ */
+std::vector<std::pair<uint32_t, uint32_t>> GetTP2DevicePairs();
 
 // clang-format off
 /**
