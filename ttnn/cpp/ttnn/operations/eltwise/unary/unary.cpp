@@ -226,6 +226,8 @@ template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER_ITERATIVE>;
 
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;
@@ -241,10 +243,8 @@ Tensor Sigmoid_accurate::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
-        {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, fast_and_approximate_mode ? 1.0f : 0.0f),
-         UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-         UnaryWithParam(UnaryOpType::RECIP)},
+        {UnaryWithParam(
+            UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), fast_and_approximate_mode ? 1.0f : 0.0f})},
         memory_config,
         optional_output_tensor);
 }
@@ -580,7 +580,6 @@ Tensor Swish::invoke(
     return detail::unary_impl(input_tensor, {EltwiseUnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
