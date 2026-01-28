@@ -274,35 +274,6 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
 
     # Run once to compile
     print("Running reduce_to_one (compiling)...")
-    ttnn.reduce_to_one(
-        input_tensor,
-        root_coord=ttnn.MeshCoordinate(root_coord),
-        exit_coord=ttnn.MeshCoordinate(exit_coord),
-        topology=topology,
-        intermediate_tensors=intermediate_tensors,
-    )
-    ttnn.synchronize_device(submesh_device)
-
-    # Debug: read back input tensor to check if corrupted after first run
-    input_readback = ttnn.to_torch(
-        input_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(submesh_device, dims=(0, 1), mesh_shape=(4, 2))
-    )
-    print(f"Input tensor after first run (original vs readback):")
-    orig_flat = data_all.flatten()
-    read_flat = input_readback.flatten()
-    # Find mismatches
-    mismatch_mask = orig_flat != read_flat
-    mismatch_indices = torch.where(mismatch_mask)[0]
-    print(f"Total elements: {len(orig_flat)}, Mismatches: {len(mismatch_indices)}")
-    if len(mismatch_indices) > 0:
-        print(f"First 20 mismatch indices: {mismatch_indices[:20].tolist()}")
-        print(f"Original values at mismatches: {orig_flat[mismatch_indices[:20]].tolist()}")
-        print(f"Readback values at mismatches: {read_flat[mismatch_indices[:20]].tolist()}")
-    # Check for NaN/Inf
-    print(f"NaN count in readback: {torch.isnan(read_flat).sum().item()}")
-    print(f"Inf count in readback: {torch.isinf(read_flat).sum().item()}")
-    print(f"Match: {torch.allclose(data_all, input_readback)}")
-
     output_tensor = ttnn.reduce_to_one(
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
@@ -315,7 +286,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     # Warmup trace
     # logger.info("Capturing warmup trace")
     # trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    # for i in range(1):
+    # for i in range(30):
     #     output_tensor = ttnn.reduce_to_one(
     #         input_tensor,
     #         root_coord=ttnn.MeshCoordinate(root_coord),
@@ -329,7 +300,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     # # Capture main trace
     # logger.info("Capturing main trace")
     # trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    # for i in range(1):
+    # for i in range(20):
     #     output_tensor = ttnn.reduce_to_one(
     #         input_tensor,
     #         root_coord=ttnn.MeshCoordinate(root_coord),
@@ -340,7 +311,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     # ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     # ttnn.synchronize_device(submesh_device)
 
-    # # Execute warmup trace
+    # Execute warmup trace
     # logger.info("Execute trace warmup")
     # profiler.start("reduce-to-one-warmup")
     # ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)

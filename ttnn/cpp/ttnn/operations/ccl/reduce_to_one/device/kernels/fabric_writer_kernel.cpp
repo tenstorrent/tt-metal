@@ -43,12 +43,19 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(7);  // For ROOT1 to wait on compute
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    // ROOT1: wait for compute to finish writing final result to output_cb, then exit
-    // Stage 1 pushes to output_cb, stage 2 pops it (as input), stage 3 pushes final result
-    // We only need to wait for stage 3's push
+    // ROOT1: wait for compute to finish writing to scratch_cb2, then NOC copy to output_cb
     if constexpr (device_role == MESH_ROOT1) {
-        cb_wait_front(output_cb, num_tiles);
-        cb_pop_front(output_cb, num_tiles);
+        // First round is partial results
+        cb_wait_front(source_cb, num_tiles);
+        cb_pop_front(source_cb, num_tiles);
+        // Wait for compute to push final result to source_cb (scratch_cb2)
+        cb_wait_front(source_cb, num_tiles);
+        uint32_t src_addr = get_read_ptr(source_cb);
+        uint32_t dst_addr = get_write_ptr(output_cb);
+        // Local NOC copy from scratch_cb2 to output_cb
+        noc_async_write(src_addr, get_noc_addr(dst_addr), payload_size_bytes);
+        noc_async_write_barrier();
+        cb_pop_front(source_cb, num_tiles);
         return;
     }
 

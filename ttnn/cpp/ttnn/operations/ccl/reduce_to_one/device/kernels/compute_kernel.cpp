@@ -6,6 +6,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -72,17 +73,17 @@ void MAIN {
     }
 
     if constexpr (device_role == MESH_ROOT1) {
-        // ROOT1: 3 stages - only write to output_cb once at the end
-        // Stage 1: local + received_r1 (from LEAF) → scratch_cb
-        binary_op_init_common(local_cb, received_cb_r1, scratch_cb);
+        // ROOT1: 3 stages - write to scratch_cb, writer will NOC copy to output
+        // Stage 1: local + received_r1 (from LEAF) → scratch_cb2
+        binary_op_init_common(local_cb, received_cb_r1, scratch_cb2);
         add_tiles_init(local_cb, received_cb_r1);
-        reduce_step<local_cb, received_cb_r1, scratch_cb>();
-        // Stage 2: scratch_cb + received_r2 (from ROOT3) → scratch_cb2
-        add_tiles_init(scratch_cb, received_cb_r2);
-        reduce_step<scratch_cb, received_cb_r2, scratch_cb2>();
-        // Stage 3: scratch_cb2 + received_r3 (from ROOT2) → output_cb (final result)
-        add_tiles_init(scratch_cb2, received_cb_r3);
-        reduce_step<scratch_cb2, received_cb_r3, output_cb>();
+        reduce_step<local_cb, received_cb_r1, scratch_cb2>();
+        // Stage 2: scratch_cb2 + received_r2 (from ROOT3) → scratch_cb
+        add_tiles_init(scratch_cb2, received_cb_r2);
+        reduce_step<scratch_cb2, received_cb_r2, scratch_cb>();
+        // Stage 3: scratch_cb + received_r3 (from ROOT2) → scratch_cb2 (writer will NOC copy to output)
+        add_tiles_init(scratch_cb, received_cb_r3);
+        reduce_step<scratch_cb, received_cb_r3, scratch_cb2>();
     }
 }
 
