@@ -60,7 +60,7 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
  */
 // clang-format on
 template <PoolType reduce_type = PoolType::SUM>
-ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tiles) {
+ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tiles, uint16_t scaler) {
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
@@ -83,8 +83,8 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with ones for the scaler
-    // Fill row 0 of Dest[0] with 1.0 (0x3F80 in bfloat16)
-    MATH((ckernel::sfpu::populate_dest0_row_with_value_(0, 0x3F80)));
+    // Fill row 0 of Dest[0] with the scaler in bfloat16 format
+    MATH((ckernel::sfpu::populate_dest0_row_with_value_(0, scaler)));
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
