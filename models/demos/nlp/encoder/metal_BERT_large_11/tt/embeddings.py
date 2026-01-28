@@ -7,7 +7,7 @@ from typing import Optional
 import torch
 
 import ttnn
-from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 class TtEmbeddings:

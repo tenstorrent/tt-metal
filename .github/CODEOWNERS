@@ -298,7 +298,7 @@ models/demos/nlp/llms/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiT
 models/demos/nlp/llms/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/nlp/llms/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
-models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
+models/demos/nlp/encoder/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/codeowner-bypass
 models/*/mnist/ @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/*/squeezebert/ @cfjchu @uaydonat @tenstorrent/codeowner-bypass
