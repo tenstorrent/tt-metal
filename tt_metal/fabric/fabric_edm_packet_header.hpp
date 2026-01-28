@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "api/debug/dprint.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
@@ -133,17 +132,6 @@ struct MulticastRoutingCommandHeader {
     uint8_t range_hops;  // 0 implies unicast
 };
 static_assert(sizeof(MulticastRoutingCommandHeader) == 2, "MulticastRoutingCommandHeader size is not 2 bytes");
-
-struct SparseMulticastRoutingCommandHeader {
-    // Each bit represents a single hop in the target direction
-    // Up to 16 hops can be specified in the bitmask.
-    // If the bit is 1, the router will perform the WRITE operation at that hop.
-    // If the bit is 0, the router will simply forward the packet to the next hop.
-    // This continues until the last set bit, which will perform a WRITE operation and not forward the packet any
-    // further.
-    uint16_t hop_mask;
-};
-// TODO: Add static assert?
 
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
@@ -345,11 +333,6 @@ public:
         return *static_cast<Derived*>(this);
     }
 
-    Derived& to_chip_sparse_multicast(const SparseMulticastRoutingCommandHeader& sparse_mcast_routing_command_header) {
-        static_cast<Derived*>(this)->to_chip_sparse_multicast_impl(sparse_mcast_routing_command_header);
-        return *static_cast<Derived*>(this);
-    }
-
     Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -457,12 +440,6 @@ public:
 
     volatile Derived* to_chip_multicast(const MulticastRoutingCommandHeader& mcast_routing_command_header) volatile {
         static_cast<volatile Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
-        return static_cast<volatile Derived*>(this);
-    }
-
-    volatile Derived* to_chip_sparse_multicast(
-        const SparseMulticastRoutingCommandHeader& sparse_mcast_routing_command_header) volatile {
-        static_cast<volatile Derived*>(this)->to_chip_sparse_multicast_impl(sparse_mcast_routing_command_header);
         return static_cast<volatile Derived*>(this);
     }
 
@@ -833,17 +810,6 @@ public:
         return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
     }
 
-    // Helper to calculate routing fields for sparse multicast
-    static LowLatencyRoutingFieldsT<ExtensionWords> calculate_chip_sparse_multicast_routing_fields(
-        const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) {
-        // Delegate to canonical encoder
-        // We currently only support a base packet header, not extension words
-        uint32_t buffer;
-        routing_encoding::encode_1d_sparse_multicast(chip_sparse_multicast_command_header.hop_mask, buffer);
-        // Unpack using helper
-        return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(&buffer);
-    }
-
     // Specialized implementations for LowLatencyPacketHeader
     void set_routing_fields(LowLatencyRoutingFieldsT<ExtensionWords>& fields) { this->routing_fields = fields; }
 
@@ -853,10 +819,6 @@ public:
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         this->routing_fields = calculate_chip_multicast_routing_fields(chip_multicast_command_header);
     }
-    void to_chip_sparse_multicast_impl(
-        const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) {
-        this->routing_fields = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
-    }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         auto routing = calculate_chip_unicast_routing_fields(distance_in_hops);
@@ -864,11 +826,6 @@ public:
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
         auto routing = calculate_chip_multicast_routing_fields(chip_multicast_command_header);
-        routing.copy_to(&this->routing_fields);
-    }
-    void to_chip_sparse_multicast_impl(
-        const SparseMulticastRoutingCommandHeader& chip_sparse_multicast_command_header) volatile {
-        auto routing = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
         routing.copy_to(&this->routing_fields);
     }
 };

@@ -16,34 +16,31 @@ namespace ttnn::operations::experimental::ccl {
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::program_factory_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::select_program_factory(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t&) {
     return AllToAllDispatchSelectiveTilizeSparse{};
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_miss(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
-    auto indices_tensor = tensor_args.expert_indices_tensor;
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& indices_tensor = tensor_args.expert_indices_tensor;
 
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
-
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_hit(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const tensor_args_t& tensor_args) {}
+    const operation_attributes_t&, const tensor_args_t&) {}
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
-    auto mapping_tensor = tensor_args.expert_mapping_tensor;
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& mapping_tensor = tensor_args.expert_mapping_tensor;
 
-    auto input_shape = input_tensor.tensor_spec().logical_shape();
-    auto mapping_shape = mapping_tensor.tensor_spec().logical_shape();
+    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
+    const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -60,14 +57,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
     // Output shape: [experts_per_device, total_tokens, hidden_size] - tiled for matmul
     auto output_shape = ttnn::Shape({experts_per_device, total_tokens, hidden_size});
 
-    ttnn::MemoryConfig dram_memory_config =
-        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-
     // Output 0: Tilized output for matmul
     auto tilized_output_spec = TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), dram_memory_config));
+            input_tensor.dtype(),
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 
     // Output 1: Expert activation tensor
     // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]
@@ -85,18 +81,32 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            dram_memory_config));
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 
-    return std::array<TensorSpec, 2>{tilized_output_spec, expert_activation_spec};
+    // Output 2: Token indices
+    // 1 page per expert per device
+    // each index is at a 16B offset due to NoC DMA restrictions, 16B = 4 UINT32 elements
+    // (tokens + 1), 1 extra element per page for -1 terminator
+    uint32_t page_width = (total_tokens + 1) * 4;
+    auto e_t_shape = ttnn::Shape({experts_per_device, page_width});
+    auto e_t_spec = TensorSpec(
+        Shape(e_t_shape),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+
+    return std::array<TensorSpec, 3>{tilized_output_spec, expert_activation_spec, e_t_spec};
 }
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    return std::array<Tensor, 2>{
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    return std::array<Tensor, 3>{
         create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[1], tensor_args.input_tensor.device())};
+        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),
+        create_device_tensor(output_specs[2], tensor_args.input_tensor.device())};
 }
 
 std::tuple<
@@ -108,17 +118,11 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    uint32_t tokens_per_chunk,
-    const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
-    const std::optional<CoreRangeSet>& matmul_core_range_set,
-    const std::optional<CoreRangeSet>& combine_core_range_set) {
+    uint32_t tokens_per_chunk) {
     return {
         operation_attributes_t{
             .axis = axis,
             .tokens_per_chunk = tokens_per_chunk,
-            .selective_tilize_core_range_set = selective_tilize_core_range_set,
-            .matmul_core_range_set = matmul_core_range_set,
-            .combine_core_range_set = combine_core_range_set,
         },
         tensor_args_t{
             .input_tensor = input_tensor,

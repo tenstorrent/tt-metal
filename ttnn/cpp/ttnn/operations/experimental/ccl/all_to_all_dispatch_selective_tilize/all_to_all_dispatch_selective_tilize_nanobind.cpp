@@ -78,20 +78,14 @@ void bind_all_to_all_dispatch_selective_tilize(nb::module_& mod) {
                const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> cluster_axis,
-               uint32_t tokens_per_chunk,
-               const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
-               const std::optional<CoreRangeSet>& matmul_core_range_set,
-               const std::optional<CoreRangeSet>& combine_core_range_set) {
+               uint32_t tokens_per_chunk) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
                     expert_scores_tensor,
                     expert_mapping_tensor,
                     cluster_axis,
-                    tokens_per_chunk,
-                    selective_tilize_core_range_set,
-                    matmul_core_range_set,
-                    combine_core_range_set);
+                    tokens_per_chunk);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
@@ -99,10 +93,7 @@ void bind_all_to_all_dispatch_selective_tilize(nb::module_& mod) {
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("tokens_per_chunk") = 32,
-            nb::arg("selective_tilize_core_range_set") = nb::none(),
-            nb::arg("matmul_core_range_set") = nb::none(),
-            nb::arg("combine_core_range_set") = nb::none()});
+            nb::arg("tokens_per_chunk") = 32});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

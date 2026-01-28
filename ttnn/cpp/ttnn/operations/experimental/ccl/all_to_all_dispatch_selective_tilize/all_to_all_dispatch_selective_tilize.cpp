@@ -15,26 +15,15 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchSelectiveTilize::invoke(
+std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    uint32_t tokens_per_chunk,
-    const std::optional<CoreRangeSet>& selective_tilize_core_range_set,
-    const std::optional<CoreRangeSet>& matmul_core_range_set,
-    const std::optional<CoreRangeSet>& combine_core_range_set) {
+    uint32_t tokens_per_chunk) {
     return ttnn::prim::all_to_all_dispatch_selective_tilize(
-        input_tensor,
-        expert_indices_tensor,
-        expert_scores_tensor,
-        expert_mapping_tensor,
-        axis,
-        tokens_per_chunk,
-        selective_tilize_core_range_set,
-        matmul_core_range_set,
-        combine_core_range_set);
+        input_tensor, expert_indices_tensor, expert_scores_tensor, expert_mapping_tensor, axis, tokens_per_chunk);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

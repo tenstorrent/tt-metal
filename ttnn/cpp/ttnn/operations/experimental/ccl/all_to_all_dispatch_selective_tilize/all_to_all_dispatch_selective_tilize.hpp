@@ -14,16 +14,13 @@ namespace ttnn {
 namespace operations::experimental::ccl {
 
 struct ExecuteAllToAllDispatchSelectiveTilize {
-    static std::array<ttnn::Tensor, 2> invoke(
+    static std::array<ttnn::Tensor, 3> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_scores_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        uint32_t tokens_per_chunk = 32,
-        const std::optional<CoreRangeSet>& selective_tilize_core_range_set = std::nullopt,
-        const std::optional<CoreRangeSet>& matmul_core_range_set = std::nullopt,
-        const std::optional<CoreRangeSet>& combine_core_range_set = std::nullopt);
+        uint32_t tokens_per_chunk = 32);
 };
 
 }  // namespace operations::experimental::ccl
