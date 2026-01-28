@@ -909,7 +909,7 @@ protected:
         uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
         const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
-        while (remaining_bytes > 0) {
+        while (remaining_bytes >= MIN_READ_SIZE) {
             const uint32_t n_sub_cmds =
                 payload_generator_->get_rand<uint32_t>(1, CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
 
@@ -936,6 +936,7 @@ protected:
                 const uint64_t addr = l1_base + random_offset;
                 addresses.push_back(addr);
             }
+            EXPECT_GT(lengths.size(), 0u);
 
             EXPECT_LE(total_length + device_data.size() * sizeof(uint32_t), DEVICE_DATA_SIZE_LARGE);
 
