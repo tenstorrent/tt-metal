@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
+#include "nb_memeff_runner.hpp"
 #include "nb_modules.hpp"
 
 namespace ttml::nanobind::models {
@@ -34,8 +35,10 @@ using namespace ttml::models;
 void py_module_types(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module_types(m_modules);
 
-    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m);
-    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
+    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_runner_type(s); });
+    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_weight_tying_type(s); });
 
     // Export KvCacheConfig class
     {
@@ -149,6 +152,14 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
 void py_module(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module(m_modules);
+
+    m.def(
+        "memory_efficient_runner",
+        &ttml::nanobind::memory_efficient_runner,
+        nb::arg("forward_impl"),
+        nb::arg("input"),
+        nb::arg("mask") = nb::none(),
+        "Memory-efficient forward/backward runner with gradient checkpointing.");
 
     {
         auto py_base_transformer =

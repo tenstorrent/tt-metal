@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,6 +61,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def_prop_ro(
+            "tensor",
+            [](const TensorPtr& self) -> TensorPtr { return self; },
+            "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
@@ -200,6 +204,36 @@ void py_module(nb::module_& m) {
         py_autocast_tensor.def(nb::init<AutocastTensor&&>());
         py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor, nb::arg("tensor"), "Set underlying Tensor");
         py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor, "Get underlying Tensor");
+
+        py_autocast_tensor.def_static(
+            "from_numpy",
+            [](nb::ndarray<nb::numpy> numpy_tensor,
+               tt::tt_metal::Layout layout,
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::TensorToMesh* mapper) {
+                return AutocastTensor(ttml::nanobind::util::make_metal_tensor(numpy_tensor, layout, new_type, mapper));
+            },
+            nb::arg("numpy_tensor"),
+            nb::arg("layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("mapper") = nullptr,
+            "Construct an AutocastTensor from a numpy tensor");
+
+        // Fallback: custom dtypes (like ml_dtypes.bfloat16)
+        py_autocast_tensor.def_static(
+            "from_numpy",
+            [](nb::object numpy_tensor_obj,
+               tt::tt_metal::Layout layout,
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::TensorToMesh* mapper) {
+                return AutocastTensor(
+                    ttml::nanobind::util::make_metal_tensor(numpy_tensor_obj, layout, new_type, mapper));
+            },
+            nb::arg("numpy_tensor"),
+            nb::arg("layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("mapper") = nullptr,
+            "Construct an AutocastTensor from a numpy tensor with custom dtype");
     }
 
     {

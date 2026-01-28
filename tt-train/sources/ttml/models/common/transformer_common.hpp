@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,7 +74,10 @@ autograd::TensorPtr memory_efficient_runner(
 void initialize_weights_gpt2(ttml::modules::ModuleBase& model);
 void initialize_weights_he_kaiming_normal(ttml::modules::ModuleBase& model);
 
+RunnerType read_runner_type(const std::string& s);
 RunnerType read_runner_type(const YAML::Node& config);
+
+WeightTyingType read_weight_tying_type(const std::string& s);
 WeightTyingType read_weight_tying_type(const YAML::Node& config);
 
 /**

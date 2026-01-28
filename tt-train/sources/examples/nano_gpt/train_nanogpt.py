@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ including:
 import argparse
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 import time
 import pickle
@@ -89,6 +89,11 @@ class TrainingConfig(BaseTrainingConfig):
 
 
 @dataclass
+class ModelExperimentalConfig:
+    use_composite_layernorm: bool = False  # Use composite vs fused layernorm
+
+
+@dataclass
 class ModelConfig:
     """Model configuration aligned with ttml.common.config.TransformerConfig naming."""
 
@@ -101,6 +106,12 @@ class ModelConfig:
     dropout_prob: float = 0.2  # Match C++ default: float dropout_prob = 0.2F
     bias: bool = True
     max_sequence_length: int = 128  # Reduced from 1024 to avoid memory issues
+    runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
+    weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
+    positional_embedding_type: str = "trainable"
+    experimental: ModelExperimentalConfig = field(
+        default_factory=ModelExperimentalConfig
+    )
 
 
 class LossAverageMeter:
@@ -370,23 +381,36 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     config.model_type = transformer_config.get("model_type", config.model_type)
     config.model_path = transformer_config.get("model_path", config.model_path)
 
-    if config.model_type == "gpt2":
-        # GPT2 config fields are directly under transformer_config
-        config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-        config.embedding_dim = transformer_config.get(
-            "embedding_dim", config.embedding_dim
-        )
-        config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
-        config.num_heads = transformer_config.get("num_heads", config.num_heads)
-        config.dropout_prob = transformer_config.get(
-            "dropout_prob", config.dropout_prob
-        )
-        config.bias = transformer_config.get("bias", config.bias)
-        config.max_sequence_length = transformer_config.get(
-            "max_sequence_length", config.max_sequence_length
-        )
-    else:
+    if config.model_type != "gpt2":
         raise ValueError(f"Unsupported model type: {config.model_type}")
+
+    # GPT2 config fields are directly under transformer_config
+    config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
+    config.embedding_dim = transformer_config.get("embedding_dim", config.embedding_dim)
+    config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
+    config.num_heads = transformer_config.get("num_heads", config.num_heads)
+    config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
+    config.bias = transformer_config.get("bias", config.bias)
+    config.max_sequence_length = transformer_config.get(
+        "max_sequence_length", config.max_sequence_length
+    )
+    config.positional_embedding_type = transformer_config.get(
+        "positional_embedding_type", config.positional_embedding_type
+    )
+
+    tc_runner_type = transformer_config.get("runner_type")
+    if tc_runner_type is not None:
+        config.runner_type = ttml.models.RunnerType.from_string(tc_runner_type)
+
+    tc_weight_tying = transformer_config.get("weight_tying")
+    if tc_weight_tying is not None:
+        config.weight_tying = ttml.models.WeightTyingType.from_string(tc_weight_tying)
+
+    exp_config = transformer_config.get("experimental")
+    if isinstance(exp_config, dict):
+        config.experimental.use_composite_layernorm = exp_config.get(
+            "use_composite_layernorm", config.experimental.use_composite_layernorm
+        )
 
     return config
 
@@ -791,6 +815,12 @@ def load_model_from_checkpoint(
         n_head=model_config.num_heads,
         dropout=model_config.dropout_prob,
         bias=model_config.bias,
+        runner_type=model_config.runner_type,
+        weight_tying=model_config.weight_tying,
+        positional_embedding_type=model_config.positional_embedding_type,
+    )
+    nanogpt_config.experimental.use_composite_layernorm = (
+        model_config.experimental.use_composite_layernorm
     )
 
     # Create model
@@ -1193,6 +1223,12 @@ def main():
                 n_head=model_config.num_heads,
                 dropout=model_config.dropout_prob,
                 bias=model_config.bias,
+                runner_type=model_config.runner_type,
+                weight_tying=model_config.weight_tying,
+                positional_embedding_type=model_config.positional_embedding_type,
+            )
+            nanogpt_config.experimental.use_composite_layernorm = (
+                model_config.experimental.use_composite_layernorm
             )
 
             # Create model
