@@ -166,6 +166,7 @@ jobs:
   build-tt-train:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: [ build, find-changed-files ]
+    timeout-minutes: 20
     runs-on: tt-ubuntu-2204-large-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
@@ -188,6 +189,7 @@ jobs:
           name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
       - name: Install packages
+        timeout-minutes: 10
         run: |
           set -euo pipefail
 
@@ -208,11 +210,13 @@ jobs:
         run: git config --global --add safe.directory /work
 
       - name: Submodules
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           git submodule update --init --recursive tt-train
 
       - name: Configure tt-train
+        timeout-minutes: 10
         run: |
           set -euo pipefail
 
@@ -221,6 +225,7 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
 
       - name: Build tt-train
+        timeout-minutes: 10
         run: |
           set -euo pipefail
 
@@ -325,6 +330,7 @@ jobs:
   clang-tidy-light:
     needs: [docker-image]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    timeout-minutes: 140
     runs-on: ubuntu-latest
     container: ${{ needs.docker-image.outputs.ci-build-tag }}
     permissions:
@@ -341,10 +347,12 @@ jobs:
     - name: Set safe directory for Git
       run: git config --global --add safe.directory $GITHUB_WORKSPACE
     - name: Fetch base branch
+      timeout-minutes: 5
       run: |
         git remote add upstream "https://github.com/${{ github.event.pull_request.base.repo.full_name }}"
         git fetch --no-tags upstream "${{ github.event.pull_request.base.ref }}"
     - name: Install clang-tidy
+      timeout-minutes: 10
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
@@ -358,6 +366,7 @@ jobs:
         fi
         cat .clang-tidy
     - name: Prepare compile_commands.json
+      timeout-minutes: 10
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
         cmake --build build --target all_generated_files
