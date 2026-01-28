@@ -4,7 +4,9 @@
 
 #include "op_slicing.hpp"
 #include <ttnn/operations/core/core.hpp>
+#include <ttnn/operations/creation.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
+#include <ttnn/operations/data_movement/tilize/tilize.hpp>
 #include <ttnn/operations/functions.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
@@ -168,7 +170,14 @@ Op2DSliceConfig determine_slice_config(
         return_slice_config.slice_type = slice_config_.value().slice_type;
     }
 
-    log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    log_warning(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    log_warning(
+        tt::LogOp,
+        "Determining slice config: output_layout={}, output_height={}, output_width={}, auto_slice_type={}",
+        output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+        output_height,
+        output_width,
+        auto_slice_type);
     // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
     const uint32_t output_sliced_dim =
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
@@ -183,26 +192,66 @@ Op2DSliceConfig determine_slice_config(
     } else {
         max_num_slices = (output_sliced_dim > 1) ? (output_sliced_dim - 1) : 1;
     }
+
+    log_warning(
+        tt::LogOp,
+        "Max possible slices for {} layout and {}-slicing: {} (output_sliced_dim={})",
+        output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        max_num_slices,
+        output_sliced_dim);
+
     bool found_valid_config = false;
     while (current_num_slices <= max_num_slices) {
         return_slice_config.num_slices = current_num_slices;
         uint32_t l1_usage = compute_L1_usage_for_slice_config(
             input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
+        log_warning(
+            tt::LogOp,
+            "Trying num_slices={}: L1 usage={}, available={}",
+            current_num_slices,
+            l1_usage,
+            L1_stats.total_free_bytes);
         if (L1_stats.total_free_bytes >= l1_usage) {
             found_valid_config = true;
+            log_warning(tt::LogOp, "Found valid config with num_slices={}, L1 usage={}", current_num_slices, l1_usage);
             break;
         }
         current_num_slices++;
     }
-    TT_FATAL(
-        found_valid_config,
-        "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on output "
-        "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
-        "slicing.",
-        current_num_slices - 1,
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
-        output_sliced_dim,
-        L1_stats.total_free_bytes);
+
+    // If we still haven't found a valid config and we're in auto mode with TILE layout,
+    // signal the caller to try the untilize fallback instead of failing immediately
+    if (!found_valid_config && auto_slice_type && output_layout == tt::tt_metal::Layout::TILE) {
+        // Return a special config with num_slices = 0 to signal the caller to try untilize fallback
+        return_slice_config.num_slices = 0;
+        log_warning(
+            tt::LogOp,
+            "DRAM Auto slice with TILE layout could not find valid slice configuration. Tried up to {} slices for "
+            "{}-slicing on output dimension {}. Available L1: {} bytes. Will attempt untilize fallback.",
+            current_num_slices - 1,
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+            output_sliced_dim,
+            L1_stats.total_free_bytes);
+        return return_slice_config;
+    }
+
+    // If we haven't found a valid config and can't fall back (manual config or non-TILE layout), this is fatal
+    if (!found_valid_config) {
+        log_error(
+            tt::LogOp,
+            "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on output "
+            "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
+            "slicing.",
+            current_num_slices - 1,
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+            output_sliced_dim,
+            L1_stats.total_free_bytes);
+
+        // For ROW_MAJOR or manual configs, there's no fallback available, so we must fail
+        // For TILE with auto_slice_type, we should have already returned above
+        TT_FATAL(false, "DRAM slice configuration failed with no available fallback options.");
+    }
 
     if (output_layout == tt::tt_metal::Layout::TILE &&
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
@@ -224,6 +273,12 @@ Op2DSliceConfig determine_slice_config(
             device);
     }
 
+    // If we still haven't found a valid configuration and we're using TILE layout,
+    // this means tiled slicing cannot fit in L1 even with maximum slicing.
+    // As a last resort fallback, we'll need to untilize the input to ROW_MAJOR,
+    // which allows much finer-grained slicing (up to output_dim - 1 slices instead of output_dim / 32).
+    // This will be handled at the run_sliced_op level where we have access to the actual tensor.
+
     return return_slice_config;
 }
 
@@ -240,21 +295,122 @@ void run_sliced_op(
         output_tensors[0].get().logical_shape().to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
 
+    log_warning(
+        tt::LogOp,
+        "run_sliced_op called: output_layout={}, output_shape={}x{}, dram_slice_config_.has_value()={}",
+        output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+        output_height,
+        output_width,
+        dram_slice_config_.has_value());
+
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
+        log_warning(tt::LogOp, "Using provided slice config: num_slices={}", dram_slice_config.num_slices);
     } else {
+        log_warning(tt::LogOp, "Calling determine_slice_config to auto-determine configuration");
+        // If dram_slice_config_.has_value() but num_slices==0, treat it as auto mode by passing nullopt
+        // This ensures auto_slice_type=true in determine_slice_config, enabling untilize fallback for TILE
         dram_slice_config = determine_slice_config(
             op_slice_attr,
             input_tensor.logical_shape(),
             output_tensors[0].get().logical_shape(),
-            dram_slice_config_,
+            std::nullopt,  // Force auto mode to enable fallback logic
             output_layout,
             input_tensor.device());
         log_info(tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
     }
 
+    // If determine_slice_config returned num_slices == 0, it means tiled slicing failed.
+    // Fall back to untilize → ROW_MAJOR slicing → tilize path (only for TILE layout).
+    // Note: We only reach here with num_slices==0 in auto mode (manual configs with num_slices==0 are rejected
+    // earlier).
+    if (dram_slice_config.num_slices == 0 && output_layout == tt::tt_metal::Layout::TILE) {
+        log_warning(
+            tt::LogOp,
+            "TILE layout slicing failed for {}. Falling back to untilize→ROW_MAJOR slicing→tilize path. "
+            "This adds untilize/tilize overhead but allows the operation to proceed with finer-grained slicing. "
+            "Output shape: {}x{}, will allow up to {} slices in ROW_MAJOR mode.",
+            op_slice_attr->name(),
+            output_height,
+            output_width,
+            std::max(output_height, output_width) - 1);
+
+        // Step 1: Untilize the DRAM input tensor to ROW_MAJOR (BFloat16)
+        log_debug(tt::LogOp, "Step 1: Untilizing input tensor from TILE to ROW_MAJOR");
+        ttnn::Tensor untilized_input =
+            ttnn::untilize(input_tensor, tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+
+        // Step 2: Create ROW_MAJOR output tensors (will be BFloat16 for BFloat8 inputs)
+        std::vector<ttnn::Tensor> row_major_outputs;
+        row_major_outputs.reserve(num_output_tensors);
+        for (auto& output_tensor_ref : output_tensors) {
+            auto& output_tensor = output_tensor_ref.get();
+            auto original_dtype = output_tensor.dtype();
+            DataType row_major_dtype = (original_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : original_dtype;
+
+            row_major_outputs.push_back(ttnn::empty(
+                output_tensor.logical_shape(),
+                row_major_dtype,
+                tt::tt_metal::Layout::ROW_MAJOR,
+                output_tensor.device(),
+                tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+        }
+
+        // Step 3: Create ref wrappers for ROW_MAJOR outputs
+        std::vector<OpSliceAttr::RefTensor> row_major_output_refs;
+        row_major_output_refs.reserve(num_output_tensors);
+        for (auto& tensor : row_major_outputs) {
+            row_major_output_refs.emplace_back(tensor);
+        }
+
+        // Step 4: Run sliced op with ROW_MAJOR tensors (no slice config to force re-determination)
+        // This will recursively call run_sliced_op, and if it also fails, it will hit the TT_FATAL below
+        log_debug(tt::LogOp, "Step 4: Running sliced op with ROW_MAJOR tensors (will auto-determine slice config)");
+        run_sliced_op(untilized_input, row_major_output_refs, op_slice_attr, std::nullopt);
+
+        log_info(tt::LogOp, "ROW_MAJOR slicing completed successfully, now tilizing outputs back to TILE layout");
+
+        // Step 5: Tilize the ROW_MAJOR outputs and assign back to original TILE output references
+        for (uint32_t i = 0; i < num_output_tensors; i++) {
+            auto& row_major_output = row_major_outputs[i];
+            auto& original_output = output_tensors[i].get();
+
+            log_warning(
+                tt::LogOp,
+                "Tilizing output {}: ROW_MAJOR shape={}, dtype={}, target TILE dtype={}",
+                i,
+                row_major_output.logical_shape(),
+                row_major_output.dtype(),
+                original_output.dtype());
+
+            // Tilize expects the physical shape to be tile-aligned (multiples of 32)
+            // The output tensor should already have proper padding in its physical shape
+            output_tensors[i].get() = ttnn::tilize(
+                row_major_output,
+                original_output.memory_config(),
+                original_output.dtype());  // Specify target dtype for BFloat8 conversion
+        }
+
+        return;
+    }
+
+    // At this point, either:
+    // 1. We have a manual slice config (dram_slice_config_.has_value())
+    // 2. We successfully found an auto config (num_slices > 0)
+    // 3. We failed TILE auto-slicing AND the untilize fallback also failed (ROW_MAJOR layout with num_slices == 0)
+    TT_FATAL(
+        dram_slice_config.num_slices > 0,
+        "DRAM slicing configuration failed for {} with output layout {}. Unable to find a valid slice configuration. "
+        "This indicates that even with maximum slicing granularity, the operation requires more L1 memory than "
+        "available. "
+        "Output shape: {}x{}, Available L1: {} bytes",
+        op_slice_attr->name(),
+        output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+        output_height,
+        output_width,
+        input_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_free_bytes);
+
     log_debug(tt::LogOp, "{} DRAM with Slice Config {}", op_slice_attr->name(), dram_slice_config);
-    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for DRAM Slicing");
 
     uint32_t slice_rounding_value = 1;
     if (output_layout == tt::tt_metal::Layout::TILE) {

@@ -882,7 +882,8 @@ static std::vector<Tensor> pool2d_DRAM(
     // Note: return_indices is guaranteed to be false here due to the check at line 735
     // If return_indices=true, we either fatal (num_slices>1) or take L1 path (num_slices==1)
 
-    TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
+    // Allow num_slices == 0 to pass through - run_sliced_op will handle the untilize fallback for TILE layout
+    // TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
 
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
