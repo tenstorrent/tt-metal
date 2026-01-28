@@ -66,12 +66,14 @@ FORCE_INLINE void pack_payload(uint32_t slot_addr, uint32_t src_l, uint32_t src_
 
 /**
  * Forward complete packet (header + payload) to aggregator slot in single NOC transfer.
+ * Uses bit-packed semaphore signaling: increments by (1 << slot_idx) so aggregator
+ * can identify exactly which slot is ready.
  */
 template <uint32_t slot_size>
-FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint64_t agg_sem_noc) {
+FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint64_t agg_sem_noc, uint32_t slot_idx) {
     noc_async_write(slot_addr, agg_slot_noc, slot_size);
     noc_async_writes_flushed();
-    noc_semaphore_inc(agg_sem_noc, 1);
+    noc_semaphore_inc(agg_sem_noc, 1u << slot_idx);
 }
 
 // =============================================================================
@@ -133,8 +135,10 @@ void kernel_main() {
     const uint32_t agg_core_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t r1_slot_idx = get_arg_val<uint32_t>(arg_idx++);  // For bit-packed signaling
     const uint32_t r2_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t r2_slot_idx = get_arg_val<uint32_t>(arg_idx++);  // For bit-packed signaling
 
     // ==========================================================================
     // Precompute NOC addresses (avoids redundant calculations in helpers)
@@ -160,7 +164,7 @@ void kernel_main() {
 
         prepare_header<l1_alignment, total_payload_size>(slot_addr, r1_dst_noc, r1_sem_noc);
         pack_payload<payload_size_bytes, aligned_page_size>(slot_addr, src_addr_l, src_addr_s, src_addr_m);
-        forward_packet<slot_size>(slot_addr, r1_agg_slot_noc, r1_agg_sem_noc);
+        forward_packet<slot_size>(slot_addr, r1_agg_slot_noc, r1_agg_sem_noc, r1_slot_idx);
 
         cb_push_back(cb_packet_slot, 1);
     }
@@ -200,7 +204,7 @@ void kernel_main() {
 
         pack_payload<payload_size_bytes, aligned_page_size>(
             r2_slot_addr, get_read_ptr(cb_r1_result_l), get_read_ptr(cb_r1_result_s), get_read_ptr(cb_r1_result_m));
-        forward_packet<slot_size>(r2_slot_addr, r2_agg_slot_noc, r2_agg_sem_noc);
+        forward_packet<slot_size>(r2_slot_addr, r2_agg_slot_noc, r2_agg_sem_noc, r2_slot_idx);
 
         cb_push_back(cb_packet_slot, 1);
     }

@@ -434,23 +434,23 @@ reduce_to_all_simplified_program_factory(
         aggregator_buffer_base = l1_unreserved_base_address;
     }
 
-    // Create semaphores for aggregator synchronization (4 per aggregator core)
-    // Layout: [link0_fwd_r1, link0_fwd_r2, link0_bwd_r1, link0_bwd_r2,
-    //          link1_fwd_r1, link1_fwd_r2, link1_bwd_r1, link1_bwd_r2]
+    // Create semaphores for aggregator synchronization (2 per aggregator core)
+    // Non-blocking design: Each semaphore is bit-packed (1 << slot_idx) per worker.
+    // Aggregator polls mask, forwards ready slots immediately without blocking per-round.
+    // Layout: [link0_fwd, link0_bwd, link1_fwd, link1_bwd]
+    // Maximum 32 slots per direction (limited by 32-bit semaphore width).
     std::vector<uint32_t> aggregator_sem_addrs;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         CoreCoord agg_core = aggregator_cores[link_idx];
-        // FWD R1, FWD R2, BWD R1, BWD R2
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r1
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r2
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r1
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r2
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd
+        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd
     }
 
-    // Aggregator compile-time args
+    // Aggregator compile-time args (non-blocking design)
+    // Aggregator polls bit-packed semaphore and forwards any ready slots immediately.
     std::vector<uint32_t> aggregator_ct_args = {
-        packets_per_round,  // 0: Workers per round (half the workers per link)
-        slot_size,          // 1: Total packet size (header + L + S + M)
+        slots_per_direction,  // 0: Total slots per direction (R1 + R2 combined)
+        slot_size,            // 1: Total packet size (header + L + S + M)
     };
 
     // =========================================================================
@@ -608,23 +608,21 @@ reduce_to_all_simplified_program_factory(
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
     // Set aggregator runtime args (BRISC for FWD, NCRISC for BWD)
+    // Non-blocking design: single semaphore per direction (bit-packed by workers)
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         CoreCoord agg_core = aggregator_cores[link_idx];
 
-        // Semaphore addresses for this aggregator core
-        uint32_t fwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 0];
-        uint32_t fwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 1];
-        uint32_t bwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 2];
-        uint32_t bwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 3];
+        // Semaphore addresses for this aggregator core (2 per core: fwd, bwd)
+        uint32_t fwd_sem = aggregator_sem_addrs[link_idx * 2 + 0];
+        uint32_t bwd_sem = aggregator_sem_addrs[link_idx * 2 + 1];
 
         // BRISC runtime args (FWD direction)
         // buffer_offset = 0 (BRISC uses first region)
         std::vector<uint32_t> brisc_rt_args = {
             aggregator_buffer_base,  // 0: buffer_base
             0,                       // 1: buffer_offset (BRISC uses offset 0)
-            fwd_r1_sem,              // 2: R1 semaphore
-            fwd_r2_sem,              // 3: R2 semaphore
+            fwd_sem,                 // 2: semaphore (bit-packed by workers)
         };
         // Append fabric connection args (direction implicit in src→dst)
         if (forward_coord.has_value()) {
@@ -639,8 +637,7 @@ reduce_to_all_simplified_program_factory(
         std::vector<uint32_t> ncrisc_rt_args = {
             aggregator_buffer_base,  // 0: buffer_base
             ncrisc_buffer_offset,    // 1: buffer_offset (NCRISC uses offset after BRISC region)
-            bwd_r1_sem,              // 2: R1 semaphore
-            bwd_r2_sem,              // 3: R2 semaphore
+            bwd_sem,                 // 2: semaphore (bit-packed by workers)
         };
         // Append fabric connection args (direction implicit in src→dst)
         if (backward_coord.has_value()) {
@@ -658,15 +655,17 @@ reduce_to_all_simplified_program_factory(
         CoreCoord agg_core = aggregator_cores[link_idx];
         CoreCoord agg_core_noc = mesh_device->worker_core_from_logical_core(agg_core);
 
-        // Semaphore addresses for this aggregator core
-        uint32_t fwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 0];
-        uint32_t fwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 1];
-        uint32_t bwd_r1_sem = aggregator_sem_addrs[link_idx * 4 + 2];
-        uint32_t bwd_r2_sem = aggregator_sem_addrs[link_idx * 4 + 3];
+        // Semaphore addresses for this aggregator core (2 per core: fwd, bwd)
+        uint32_t fwd_sem = aggregator_sem_addrs[link_idx * 2 + 0];
+        uint32_t bwd_sem = aggregator_sem_addrs[link_idx * 2 + 1];
 
-        // Track slot indices for each worker type
-        uint32_t type_a_slot_idx = 0;  // Type A workers use slots 0, 1, ...
-        uint32_t type_b_slot_idx = 0;  // Type B workers use slots 0, 1, ...
+        // Track slot indices for R1 and R2 within each direction
+        // Each direction has slots_per_direction slots: [R1 slots: 0..ppr-1][R2 slots: ppr..2*ppr-1]
+        // where ppr = packets_per_round
+        uint32_t fwd_r1_slot_idx = 0;  // FWD direction R1 slots
+        uint32_t fwd_r2_slot_idx = 0;  // FWD direction R2 slots
+        uint32_t bwd_r1_slot_idx = 0;  // BWD direction R1 slots
+        uint32_t bwd_r2_slot_idx = 0;  // BWD direction R2 slots
 
         for (uint32_t worker_idx = 0; worker_idx < cores_for_link.size(); worker_idx++) {
             CoreCoord core = cores_for_link[worker_idx];
@@ -676,34 +675,38 @@ reduce_to_all_simplified_program_factory(
             // Type A: R1=FWD, R2=BWD; Type B: R1=BWD, R2=FWD
             const bool is_type_a = ((device_index + worker_idx) % 2) == 0;
 
-            // Calculate slot index within this worker's type
-            uint32_t my_slot_idx = is_type_a ? type_a_slot_idx++ : type_b_slot_idx++;
-
-            // Calculate aggregator slot addresses for R1 and R2
-            // Type A: R1→FWD (BRISC region, offset 0), R2→BWD (NCRISC region, offset ncrisc_buffer_offset)
-            // Type B: R1→BWD (NCRISC region), R2→FWD (BRISC region)
-            uint32_t r1_slot_base;
-            uint32_t r2_slot_base;
+            // Assign slot indices within each direction's slot space
+            // R1 slots: 0..packets_per_round-1, R2 slots: packets_per_round..2*packets_per_round-1
+            uint32_t r1_slot_idx;
+            uint32_t r2_slot_idx;
             uint32_t r1_agg_sem;
             uint32_t r2_agg_sem;
 
             if (is_type_a) {
                 // Type A: R1=FWD, R2=BWD
-                r1_slot_base = aggregator_buffer_base + 0;                     // BRISC region
-                r2_slot_base = aggregator_buffer_base + ncrisc_buffer_offset;  // NCRISC region
-                r1_agg_sem = fwd_r1_sem;
-                r2_agg_sem = bwd_r2_sem;
+                r1_slot_idx = fwd_r1_slot_idx++;
+                r2_slot_idx = packets_per_round + bwd_r2_slot_idx++;
+                r1_agg_sem = fwd_sem;
+                r2_agg_sem = bwd_sem;
             } else {
                 // Type B: R1=BWD, R2=FWD
-                r1_slot_base = aggregator_buffer_base + ncrisc_buffer_offset;  // NCRISC region
-                r2_slot_base = aggregator_buffer_base + 0;                     // BRISC region
-                r1_agg_sem = bwd_r1_sem;
-                r2_agg_sem = fwd_r2_sem;
+                r1_slot_idx = bwd_r1_slot_idx++;
+                r2_slot_idx = packets_per_round + fwd_r2_slot_idx++;
+                r1_agg_sem = bwd_sem;
+                r2_agg_sem = fwd_sem;
             }
 
-            // Calculate actual slot addresses (R1 slots, then R2 slots in each region)
-            uint32_t r1_slot_addr = r1_slot_base + (my_slot_idx * slot_size);
-            uint32_t r2_slot_addr = r2_slot_base + (packets_per_round * slot_size) + (my_slot_idx * slot_size);
+            // Calculate aggregator slot addresses based on direction
+            uint32_t r1_slot_base =
+                is_type_a ? aggregator_buffer_base : (aggregator_buffer_base + ncrisc_buffer_offset);
+            uint32_t r2_slot_base =
+                is_type_a ? (aggregator_buffer_base + ncrisc_buffer_offset) : aggregator_buffer_base;
+
+            // Calculate actual slot addresses (R1 slots first, then R2 slots in each region)
+            // Type A R1: FWD region slot r1_slot_idx
+            // Type A R2: BWD region slot (r2_slot_idx - packets_per_round) + packets_per_round offset
+            uint32_t r1_slot_addr = r1_slot_base + (r1_slot_idx * slot_size);
+            uint32_t r2_slot_addr = r2_slot_base + (r2_slot_idx * slot_size);
 
             // Reader runtime args
             std::vector<uint32_t> reader_rt_args = {
@@ -714,7 +717,7 @@ reduce_to_all_simplified_program_factory(
             };
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
-            // Writer runtime args (simplified for aggregator - no mux protocol needed)
+            // Writer runtime args (with slot indices for bit-packed semaphore signaling)
             std::vector<uint32_t> writer_rt_args = {
                 input_tensor_l.buffer()->address(),  // 0: Local L source address
                 input_tensor_s.buffer()->address(),  // 1: Local S source address
@@ -730,8 +733,10 @@ reduce_to_all_simplified_program_factory(
                 agg_core_noc.y,  // 10: aggregator_core_y
                 r1_slot_addr,    // 11: R1 aggregator slot address
                 r1_agg_sem,      // 12: R1 aggregator semaphore
-                r2_slot_addr,    // 13: R2 aggregator slot address
-                r2_agg_sem,      // 14: R2 aggregator semaphore
+                r1_slot_idx,     // 13: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
+                r2_slot_addr,    // 14: R2 aggregator slot address
+                r2_agg_sem,      // 15: R2 aggregator semaphore
+                r2_slot_idx,     // 16: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
