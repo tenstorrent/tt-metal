@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import logging
 
 import torch
@@ -33,6 +34,7 @@ class TTSampling(LightweightModule):
         max_batch_size: Maximum batch size supported
         max_top_k: Maximum number of top-k tokens to consider
         cluster_shape: Shape of the device cluster (rows, cols)
+        sampling_all_gather_axis: Axis to all-gather over in 2D meshes (0=rows, 1=cols, default: 0)
         sub_core_grids: Sub-core grid configuration for operations
         sub_core_grid_topk: Sub-core grid configuration specifically for top-k operations
         start_core: Starting core coordinate for sampling operations
@@ -59,6 +61,17 @@ class TTSampling(LightweightModule):
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
+        self._line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
+        self._line_all_gather_supports_buffer_key = False
+        if callable(self._line_all_gather):
+            try:
+                line_all_gather_sig = inspect.signature(self._line_all_gather)
+                line_all_gather_params = line_all_gather_sig.parameters
+                self._line_all_gather_supports_buffer_key = "buffer_key" in line_all_gather_params or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in line_all_gather_params.values()
+                )
+            except (TypeError, ValueError):
+                logger.warning("Unable to inspect line_all_gather signature; assuming no buffer_key support.")
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
@@ -178,26 +191,17 @@ class TTSampling(LightweightModule):
         - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
         - Otherwise fall back to `ttnn.all_gather`.
         """
-        line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
-        if callable(line_all_gather):
+        if callable(self._line_all_gather):
             # Some implementations accept `buffer_key` (for persistent buffers), others may not.
-            try:
-                return line_all_gather(
-                    tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    memory_config=memory_config,
-                    num_links=num_links,
-                    buffer_key=buffer_key,
-                )
-            except TypeError:
-                return line_all_gather(
-                    tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    memory_config=memory_config,
-                    num_links=num_links,
-                )
+            line_all_gather_kwargs = {
+                "dim": dim,
+                "cluster_axis": cluster_axis,
+                "memory_config": memory_config,
+                "num_links": num_links,
+            }
+            if self._line_all_gather_supports_buffer_key and buffer_key is not None:
+                line_all_gather_kwargs["buffer_key"] = buffer_key
+            return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
         return ttnn.all_gather(
             tensor,
