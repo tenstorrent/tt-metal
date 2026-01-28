@@ -12,8 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
@@ -254,5 +253,4 @@ void MAIN {
     cb_pop_front(cb_one, onetile);
     cb_pop_front(cb_beta1_exponent, onetile);
     cb_pop_front(cb_beta2_exponent, onetile);
-}  // void MAIN
-}  // namespace NAMESPACE
+}

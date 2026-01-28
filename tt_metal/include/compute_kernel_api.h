@@ -328,7 +328,7 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The value of the exponent in the power operation                           | uint32_t |                                                       | True     |
+ * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t |                                                       | True     |
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
@@ -339,6 +339,33 @@ ALWI void power_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
+
+// POWER_ITERATIVE : y = x^(const param0)
+// clang-format off
+/**
+ * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Note: Unlike power_tile, power_iterative_tile() only supports positive integer scalars. It uses an iterative multiplication loop to compute values, and is faster than power_tile for small exponents (e.g. 1, 2, 3)
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t | Must be a positive integer exponent                   | True     |
+ */
+// clang-format on
+ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_power_iterative<APPROX>(idst, param0)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init<APPROX>())); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
