@@ -735,6 +735,11 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
 void CablingGenerator::initialize_cluster(
     const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor) {
+    // Track which node_descriptors were explicitly present in this file
+    for (const auto& [name, descriptor] : cluster_descriptor.node_descriptors()) {
+        explicit_node_descriptors_.insert(name);
+    }
+
     // Build cluster with all connections and port validation
     if (deployment_descriptor.has_value()) {
         root_instance_ = build_graph_instance(
@@ -1086,6 +1091,11 @@ void CablingGenerator::merge(
     // Create CablingGenerator for the new file
     CablingGenerator other(new_file_path, deployment_arg);
 
+    // Merge the sets of explicit node_descriptors from both sources
+    for (const auto& descriptor_name : other.explicit_node_descriptors_) {
+        explicit_node_descriptors_.insert(descriptor_name);
+    }
+
     // Validate and merge node_templates_ (must match exactly, except inter_board_connections can differ)
     validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
 
@@ -1389,16 +1399,19 @@ static void resolved_graph_to_protobuf(
 void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) const {
     cabling_generator::proto::ClusterDescriptor cluster_desc;
 
-    // Add node descriptors (templates)
+    // Only emit node descriptors that were explicitly present in source files
     for (const auto& [name, node_template] : node_templates_) {
-        auto& node_desc = (*cluster_desc.mutable_node_descriptors())[name];
-        node_desc.set_motherboard(node_template.motherboard);
+        // Check if this descriptor was explicitly in a source file
+        if (explicit_node_descriptors_.contains(name)) {
+            auto& node_desc = (*cluster_desc.mutable_node_descriptors())[name];
+            node_desc.set_motherboard(node_template.motherboard);
 
-        auto* boards = node_desc.mutable_boards();
-        for (const auto& [tray_id, board] : node_template.boards) {
-            auto* board_proto = boards->add_board();
-            board_proto->set_tray_id(*tray_id);
-            board_proto->set_board_type(std::string(enchantum::to_string(board.get_board_type())));
+            auto* boards = node_desc.mutable_boards();
+            for (const auto& [tray_id, board] : node_template.boards) {
+                auto* board_proto = boards->add_board();
+                board_proto->set_tray_id(*tray_id);
+                board_proto->set_board_type(std::string(enchantum::to_string(board.get_board_type())));
+            }
         }
     }
 
