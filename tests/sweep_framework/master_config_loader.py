@@ -134,7 +134,7 @@ class MasterConfigLoader:
 
         Note:
             This filter is applied at the database query level when in database mode,
-            reducing data transfer. In JSON mode, filtering happens in Python.
+            reducing data transfer.
         """
         cls._mesh_filter = mesh_shape
 
