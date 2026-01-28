@@ -153,13 +153,13 @@ cb_pop_front(cb_out, 1);  // Release the tile
 | Dataflow (reader/writer) | `#include "api/dataflow/dataflow_api.h"` |
 | Compute (basic) | `#include "compute_kernel_api/common.h"` |
 | Compute with tilize helper | `#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"` |
-| Compute with reduce helper | `#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"` |
+| Compute with reduce helper | `#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"` |
 | Compute with binary op helper | `#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"` |
 | Compute with untilize helper | `#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"` |
 
 **Common mistake**: `#include "dataflow_api.h"` → Use `"api/dataflow/dataflow_api.h"`
 
-For reduce helper API details, read `ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp` directly.
+For reduce helper API details, read `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp` directly.
 
 ---
 
