@@ -32,8 +32,8 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-        description: "Toolchain file to use for build"
+        default: ""
+        description: "Toolchain file to use for build (leave empty to auto-detect from platform)"
       publish-artifact:
         required: false
         type: boolean
@@ -187,8 +187,8 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-        description: "Toolchain file to use for build"
+        default: ""
+        description: "Toolchain file to use for build (leave empty to auto-detect from platform)"
       profile:
         required: false
         type: boolean
