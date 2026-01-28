@@ -17,6 +17,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"
@@ -24,12 +25,12 @@
 #include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
 #include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
 void run_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const experimental::dfb::DataflowBufferConfig& dfb_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, experimental::dfb::DataflowBufferConfig& dfb_config) {
     Program program = CreateProgram();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -43,28 +44,56 @@ void run_dfb_program(
     log_info(tt::LogTest, "Out Buffer: [address: {} B, size: {} B]", out_buffer->address(), out_buffer->size());
 
     CoreCoord logical_core = CoreCoord(0, 0);
-    /*auto logical_dfb_id = */ experimental::dfb::CreateDataflowBuffer(program, logical_core, dfb_config);
 
-    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address()};
+    uint32_t num_entries_per_producer = dfb_config.num_entries / dfb_config.num_producers;
+    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), num_entries_per_producer};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
-    /*auto producer_kernel = */ CreateKernel(
+    auto producer_kernel = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = producer_cta});
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_processors_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
 
-    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address()};
+    uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
+                                            ? dfb_config.num_entries / dfb_config.num_consumers
+                                            : dfb_config.num_entries;
+    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
-    /*auto consumer_kernel = */ CreateKernel(
+    auto consumer_kernel = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
         logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .compile_args = consumer_cta});
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_processors_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
 
-    // SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)in_buffer->address()});
-    // SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)out_buffer->address()});
+    auto producer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
+        program.impl().get_kernel(producer_kernel));
+    auto consumer_quasar = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(
+        program.impl().get_kernel(consumer_kernel));
+    TT_FATAL(producer_quasar && consumer_quasar, "DFB test kernels must be QuasarDataMovementKernel");
+    const auto& producer_dms = producer_quasar->get_dm_processors();
+    const auto& consumer_dms = consumer_quasar->get_dm_processors();
+
+    dfb_config.producer_risc_mask = 0;
+    for (DataMovementProcessor dm : producer_dms) {
+        dfb_config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+    }
+    dfb_config.consumer_risc_mask = 0;
+    for (DataMovementProcessor dm : consumer_dms) {
+        dfb_config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
+    }
+
+    log_info(
+        tt::LogTest,
+        "Producer risc mask: 0x{:x}. Consumer risc mask: 0x{:x}",
+        dfb_config.producer_risc_mask,
+        dfb_config.consumer_risc_mask);
+
+    /*auto logical_dfb_id = */ experimental::dfb::CreateDataflowBuffer(program, logical_core, dfb_config);
+
+    SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)dfb_config.producer_risc_mask});
+    SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)dfb_config.consumer_risc_mask});
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size / sizeof(uint32_t));
     distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
@@ -87,10 +116,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1S) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -98,6 +125,23 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1S) {
     run_dfb_program(this->devices_.at(0), config);
 }
 
+TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 1,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+// just config -- add actual checks
 TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -105,10 +149,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -116,43 +158,6 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
-
-    const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-
-    for (const auto& dfb : dfbs_on_core) {
-        EXPECT_EQ(dfb->risc_configs.size(), 5);
-        std::vector<::experimental::PackedTileCounter> producer_tcs;
-        std::vector<::experimental::PackedTileCounter> consumer_tcs;
-        for (const auto& risc_config : dfb->risc_configs) {
-            if (risc_config.is_producer) {
-                EXPECT_EQ(risc_config.config.num_tcs_to_rr, 4);
-                EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 4);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    producer_tcs.push_back(tc);
-                }
-            } else {
-                EXPECT_EQ(risc_config.config.num_tcs_to_rr, 1);
-                EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 1);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    consumer_tcs.push_back(tc);
-                }
-            }
-        }
-        for (auto ptc : producer_tcs) {
-            log_info(
-                tt::LogTest,
-                "Producer TC: (0x{:x}, 0x{:x})",
-                (uint32_t)::experimental::get_tensix_id(ptc),
-                (uint32_t)::experimental::get_counter_id(ptc));
-        }
-        for (auto ctc : consumer_tcs) {
-            log_info(
-                tt::LogTest,
-                "Consumer TC: (0x{:x}, 0x{:x})",
-                (uint32_t)::experimental::get_tensix_id(ctc),
-                (uint32_t)::experimental::get_counter_id(ctc));
-        }
-    }
 }
 
 TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
@@ -162,10 +167,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x1E,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x1,
         .num_consumers = 1,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -173,37 +176,6 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
-
-    const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-
-    for (const auto& dfb : dfbs_on_core) {
-        EXPECT_EQ(dfb->risc_configs.size(), 5);
-        std::vector<::experimental::PackedTileCounter> producer_tcs;
-        std::vector<::experimental::PackedTileCounter> consumer_tcs;
-        for (const auto& risc_config : dfb->risc_configs) {
-            if (risc_config.is_producer) {
-                // EXPECT_EQ(risc_config.config.num_tcs_to_rr, 1);
-                // EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 1);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    producer_tcs.push_back(tc);
-                }
-            } else {
-                // EXPECT_EQ(risc_config.config.num_tcs_to_rr, 4);
-                // EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 4);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    consumer_tcs.push_back(tc);
-                }
-            }
-        }
-        // for (auto ptc : producer_tcs) {
-        //     log_info(tt::LogTest, "Producer TC: (0x{:x}, 0x{:x})", (uint32_t)::experimental::get_tensix_id(ptc),
-        //     (uint32_t)::experimental::get_counter_id(ptc));
-        // }
-        // for (auto ctc : consumer_tcs) {
-        //     log_info(tt::LogTest, "Consumer TC: (0x{:x}, 0x{:x})", (uint32_t)::experimental::get_tensix_id(ctc),
-        //     (uint32_t)::experimental::get_counter_id(ctc));
-        // }
-    }
 }
 
 TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
@@ -213,10 +185,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -224,37 +194,6 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
-
-    const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-
-    for (const auto& dfb : dfbs_on_core) {
-        // EXPECT_EQ(dfb->risc_configs.size(), 5);
-        std::vector<::experimental::PackedTileCounter> producer_tcs;
-        std::vector<::experimental::PackedTileCounter> consumer_tcs;
-        for (const auto& risc_config : dfb->risc_configs) {
-            if (risc_config.is_producer) {
-                // EXPECT_EQ(risc_config.config.num_tcs_to_rr, 1);
-                // EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 1);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    producer_tcs.push_back(tc);
-                }
-            } else {
-                // EXPECT_EQ(risc_config.config.num_tcs_to_rr, 4);
-                // EXPECT_EQ(risc_config.config.packed_tile_counter.size(), 4);
-                for (const auto& tc : risc_config.config.packed_tile_counter) {
-                    consumer_tcs.push_back(tc);
-                }
-            }
-        }
-        // for (auto ptc : producer_tcs) {
-        //     log_info(tt::LogTest, "Producer TC: (0x{:x}, 0x{:x})", (uint32_t)::experimental::get_tensix_id(ptc),
-        //     (uint32_t)::experimental::get_counter_id(ptc));
-        // }
-        // for (auto ctc : consumer_tcs) {
-        //     log_info(tt::LogTest, "Consumer TC: (0x{:x}, 0x{:x})", (uint32_t)::experimental::get_tensix_id(ctc),
-        //     (uint32_t)::experimental::get_counter_id(ctc));
-        // }
-    }
 }
 
 TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4SConfig) {
@@ -264,10 +203,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x3,
         .num_producers = 2,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -284,10 +221,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -304,7 +239,6 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1BConfig) {  // update this to not u
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
@@ -327,7 +261,6 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4BConfig) {
         .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
@@ -344,10 +277,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1BConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
@@ -364,10 +295,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4BConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
@@ -384,10 +313,8 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2BConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
@@ -405,10 +332,8 @@ TEST_F(
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
-        .producer_risc_mask = 0x3,
         .num_producers = 2,
         .pap = ::experimental::AccessPattern::STRIDED,
-        .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
