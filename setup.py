@@ -265,14 +265,6 @@ class CMakeBuild(build_ext):
                         ]
                     )
 
-                # Add LTO flags if enabled
-                if os.environ.get("CIBW_ENABLE_LTO") == "ON":
-                    cmake_args.extend(
-                        [
-                            "-DTT_ENABLE_LTO=ON",
-                        ]
-                    )
-
                 cmake_args.extend(["-S", source_dir])
 
                 subprocess.check_call(cmake_args)
