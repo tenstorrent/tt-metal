@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_with_pcc
 import torch
 import ttnn
 import pytest
@@ -318,6 +318,7 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
         return torch.rand(shape, dtype=torch.bfloat16)
+    raise ValueError(f"Unsupported dtype for random_torch_tensor: {dtype}")
 
 
 @pytest.mark.parametrize(

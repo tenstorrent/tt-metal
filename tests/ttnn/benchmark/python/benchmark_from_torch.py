@@ -82,7 +82,7 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
         )
 
         if not use_device:
-            moved = ttnn.to_device(ttnn_tensor, device=device)
+            ttnn.to_device(ttnn_tensor, device=device)
 
         ttnn.synchronize_device(device)
 
