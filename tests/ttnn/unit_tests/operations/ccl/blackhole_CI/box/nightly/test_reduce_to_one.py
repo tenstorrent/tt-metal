@@ -6,6 +6,8 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from tracy import signpost
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
 
 
@@ -83,18 +85,21 @@ def test_reduce_to_one(bh_2d_mesh_device):
     mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh_device.shape)
     mesh_mapper = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config)
 
-    # Create intermediate tensor (same shape as input, used as receive buffer)
-    # Use same shape [4, 2, 1, 7168] and same mesh_mapper as input
-    intermediate_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
-    intermediate_tensor = ttnn.from_torch(
-        intermediate_data,
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    # Create 3 intermediate tensors for 3 reduction rounds (same shape as input)
+    # Round 1: LEAF → ROOT*, Round 2: ROOT3 → ROOT2/ROOT1, Round 3: ROOT2 → ROOT1
+    intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        intermediate_tensors.append(intermediate_tensor)
 
     print("\n=== Testing reduce_to_one ===")
 
@@ -133,7 +138,7 @@ def test_reduce_to_one(bh_2d_mesh_device):
         root_coord=ttnn.MeshCoordinate(root_coord),
         exit_coord=ttnn.MeshCoordinate(exit_coord),
         topology=topology,
-        intermediate_tensor=intermediate_tensor,
+        intermediate_tensors=intermediate_tensors,
     )
     ttnn.synchronize_device(submesh_device)
 
@@ -162,3 +167,215 @@ def test_reduce_to_one(bh_2d_mesh_device):
 
     assert match, "Output tensor does not match reference"
     print("Test passed!")
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_1d_linear_trace"],
+)
+def test_reduce_to_one_with_trace(bh_2d_mesh_device):
+    """Test reduce_to_one operation with trace capture and replay."""
+
+    # Log mesh device info
+    logger.info(f"bh_2d_mesh_device shape: {bh_2d_mesh_device.shape}")
+    logger.info(f"bh_2d_mesh_device num_devices: {bh_2d_mesh_device.get_num_devices()}")
+
+    # Validate mesh has enough devices for 2x4 submesh
+    mesh_rows, mesh_cols = bh_2d_mesh_device.shape
+    assert mesh_rows * mesh_cols >= 8, f"Need at least 8 devices, got {mesh_rows * mesh_cols}"
+    logger.info(f"Mesh is {mesh_rows}x{mesh_cols} = {mesh_rows * mesh_cols} devices")
+
+    # Setup - create 2x4 submesh
+    num_devices = 8
+    exit_coord = (0, 1)
+    root_coord = (1, 1)
+
+    topology = ttnn.Topology.Linear
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh_device.shape}")
+
+    # Tensor shape: (1, 7168) sharded across 8 cores
+    tensor_shape = [1, 7168]
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    tile = ttnn.Tile((1, 32))
+
+    # Get optimal cores for DRAM access
+    compute_cores = submesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+    logger.info(f"Using {num_cores} optimal DRAM cores: {compute_cores[:8]}")
+
+    # Build shard grid from optimal cores (use first 8 cores)
+    num_shard_cores = 8
+    shard_cores = compute_cores[:num_shard_cores]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in shard_cores})
+
+    shard_shape = [1, 896]
+    shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+    # Mesh mapper
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh_device.shape)
+    mesh_mapper = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config)
+
+    # Create 3 intermediate tensors for 3 reduction rounds (required for trace mode)
+    intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        intermediate_tensors.append(intermediate_tensor)
+
+    print("\n=== Testing reduce_to_one with trace ===")
+
+    # Generate test data
+    data_per_device = []
+    torch.manual_seed(42)
+
+    for device_idx in range(num_devices):
+        data = torch.ones(tensor_shape, dtype=torch.bfloat16)
+        data_per_device.append(data)
+
+    data_all = torch.stack(data_per_device, dim=0)
+    data_all = data_all.reshape(4, 2, *tensor_shape)
+
+    # Create input tensor
+    input_tensor = ttnn.from_torch(
+        data_all,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Compute reference output
+    ref_output = compute_reference_reduce_to_one(data_per_device)
+
+    profiler = BenchmarkProfiler()
+
+    # Run once to compile
+    print("Running reduce_to_one (compiling)...")
+    ttnn.reduce_to_one(
+        input_tensor,
+        root_coord=ttnn.MeshCoordinate(root_coord),
+        exit_coord=ttnn.MeshCoordinate(exit_coord),
+        topology=topology,
+        intermediate_tensors=intermediate_tensors,
+    )
+    ttnn.synchronize_device(submesh_device)
+
+    # Debug: read back input tensor to check if corrupted after first run
+    input_readback = ttnn.to_torch(
+        input_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(submesh_device, dims=(0, 1), mesh_shape=(4, 2))
+    )
+    print(f"Input tensor after first run (original vs readback):")
+    orig_flat = data_all.flatten()
+    read_flat = input_readback.flatten()
+    # Find mismatches
+    mismatch_mask = orig_flat != read_flat
+    mismatch_indices = torch.where(mismatch_mask)[0]
+    print(f"Total elements: {len(orig_flat)}, Mismatches: {len(mismatch_indices)}")
+    if len(mismatch_indices) > 0:
+        print(f"First 20 mismatch indices: {mismatch_indices[:20].tolist()}")
+        print(f"Original values at mismatches: {orig_flat[mismatch_indices[:20]].tolist()}")
+        print(f"Readback values at mismatches: {read_flat[mismatch_indices[:20]].tolist()}")
+    # Check for NaN/Inf
+    print(f"NaN count in readback: {torch.isnan(read_flat).sum().item()}")
+    print(f"Inf count in readback: {torch.isinf(read_flat).sum().item()}")
+    print(f"Match: {torch.allclose(data_all, input_readback)}")
+
+    output_tensor = ttnn.reduce_to_one(
+        input_tensor,
+        root_coord=ttnn.MeshCoordinate(root_coord),
+        exit_coord=ttnn.MeshCoordinate(exit_coord),
+        topology=topology,
+        intermediate_tensors=intermediate_tensors,
+    )
+    ttnn.synchronize_device(submesh_device)
+
+    # Warmup trace
+    # logger.info("Capturing warmup trace")
+    # trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    # for i in range(1):
+    #     output_tensor = ttnn.reduce_to_one(
+    #         input_tensor,
+    #         root_coord=ttnn.MeshCoordinate(root_coord),
+    #         exit_coord=ttnn.MeshCoordinate(exit_coord),
+    #         topology=topology,
+    #         intermediate_tensors=intermediate_tensors,
+    #     )
+    # ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
+    # ttnn.synchronize_device(submesh_device)
+
+    # # Capture main trace
+    # logger.info("Capturing main trace")
+    # trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    # for i in range(1):
+    #     output_tensor = ttnn.reduce_to_one(
+    #         input_tensor,
+    #         root_coord=ttnn.MeshCoordinate(root_coord),
+    #         exit_coord=ttnn.MeshCoordinate(exit_coord),
+    #         topology=topology,
+    #         intermediate_tensors=intermediate_tensors,
+    #     )
+    # ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
+    # ttnn.synchronize_device(submesh_device)
+
+    # # Execute warmup trace
+    # logger.info("Execute trace warmup")
+    # profiler.start("reduce-to-one-warmup")
+    # ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
+    # ttnn.release_trace(submesh_device, trace_id_warmup)
+    # ttnn.synchronize_device(submesh_device)
+    # profiler.end("reduce-to-one-warmup")
+
+    # # Execute main trace
+    # logger.info("Execute main trace")
+    # signpost("start")
+    # profiler.start("reduce-to-one-trace")
+    # ttnn.execute_trace(submesh_device, trace_id, blocking=False)
+    # ttnn.release_trace(submesh_device, trace_id)
+    # ttnn.synchronize_device(submesh_device)
+    # profiler.end("reduce-to-one-trace")
+    # signpost("stop")
+
+    # Verify output
+    print("\nVerifying trace output...")
+    output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
+
+    root_device_idx = root_coord[0] * submesh_device.shape[1] + root_coord[1]
+    output_root = output_torch[root_device_idx]
+
+    rtol = 0.01
+    atol = 0.05
+
+    match = torch.allclose(output_root, ref_output, rtol=rtol, atol=atol)
+
+    if not match:
+        print(f"Output mismatch!")
+        print(f"Reference:\n{ref_output[:1, :8]}")
+        print(f"Output:\n{output_root[:1, :8]}")
+        diff = torch.abs(output_root - ref_output)
+        print(f"Max diff: {diff.max()}, Mean diff: {diff.mean()}")
+
+    assert match, "Output tensor does not match reference after trace execution"
+    print("Trace test passed!")

@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -29,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(4);  // Round 3: ROOT2 → ROOT1
     constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t scratch_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(7);
 
     // Senders don't receive anything - they just read local data
     if constexpr (device_role == MESH_LEAF) {
@@ -54,17 +56,17 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* recv_sem1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round1);
 
     noc_semaphore_wait(recv_sem1_ptr, 1);
+    noc_semaphore_set(recv_sem1_ptr, 0);
     // Push received data to compute
     cb_push_back(received_cb_r1, num_tiles);
-    noc_semaphore_set(recv_sem1_ptr, 0);
 
     if constexpr (device_role == MESH_ROOT2 || device_role == MESH_ROOT1) {
         // === Round 2: Wait for result from ROOT3 (ROOT3 → ROOT2/ROOT1) ===
         cb_reserve_back(received_cb_r2, num_tiles);
         volatile tt_l1_ptr uint32_t* recv_sem2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round2);
         noc_semaphore_wait(recv_sem2_ptr, 1);
-        cb_push_back(received_cb_r2, num_tiles);
         noc_semaphore_set(recv_sem2_ptr, 0);
+        cb_push_back(received_cb_r2, num_tiles);
     }
 
     if constexpr (device_role == MESH_ROOT1) {
@@ -72,7 +74,7 @@ void kernel_main() {
         cb_reserve_back(received_cb_r3, num_tiles);
         volatile tt_l1_ptr uint32_t* recv_sem3_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_round3);
         noc_semaphore_wait(recv_sem3_ptr, 1);
-        cb_push_back(received_cb_r3, num_tiles);
         noc_semaphore_set(recv_sem3_ptr, 0);
+        cb_push_back(received_cb_r3, num_tiles);
     }
 }
