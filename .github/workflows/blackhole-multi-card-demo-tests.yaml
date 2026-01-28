@@ -20,16 +20,57 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
       model:
         required: false
         type: string
         default: 'all'
+        description: "Select model to test (all, llama3.1-8b, llama3.3-70b, qwen3-32b, flux.1-dev, wan2.2-t2v-a14b)"
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -40,7 +81,8 @@ jobs:
     with:
       tracy: true
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: false
   blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
@@ -65,10 +107,10 @@ jobs:
             runner-label: P300-viommu
             extra-tag: pipeline-yyz2-lfc
             num_devices: 2
-          # - name: QuietBox Global Edition tests
-          #   runner-label: BH-QB-GE
-          #   extra-tag: pipeline-perf
-          #   num_devices: 4
+          - name: QuietBox Global Edition tests
+            runner-label: BH-QB-GE
+            extra-tag: pipeline-perf
+            num_devices: 4
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
