@@ -254,7 +254,9 @@ void get_max_page_size_and_num_pages(
     } else if (device->arch() == tt::ARCH::BLACKHOLE) {
         noc_max_page_size = 16384;
     } else {
-        TT_FATAL(false, "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported.");
+        TT_THROW(
+            "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported. Got: {}",
+            device->arch());
     }
 
     page_size = (noc_max_page_size / tile_size) * tile_size;

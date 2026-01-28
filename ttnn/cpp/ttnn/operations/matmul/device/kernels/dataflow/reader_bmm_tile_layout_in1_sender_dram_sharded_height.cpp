@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Batch-sharded DRAM matmul - in1 reader and output writer kernel
-// For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+// For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Each worker handles B/num_workers batches independently
 // Input B (weights) is DRAM sharded by batch - each bank has B/12 complete [N, K] matrices
 // Output is NOC written to OUTPUT STORAGE CORES (different from worker cores)

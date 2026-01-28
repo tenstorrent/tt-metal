@@ -609,7 +609,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                                      operations::matmul::
                                          MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 // Batch-sharded DRAM matmul validations
-                // For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+                // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
                 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
                 // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
                 // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
