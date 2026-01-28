@@ -152,32 +152,10 @@ class TTBEVFormerLayer:
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
 
-        # Convert torch tensors to ttnn tensors if needed
-        if isinstance(bev_query, torch.Tensor):
-            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-        # Temporal Self-Attention
-        if isinstance(prev_bev, torch.Tensor):
-            prev_bev = ttnn.from_torch(prev_bev, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-        if isinstance(reference_points_3d, torch.Tensor):
-            # Extract 2D coordinates from the first depth level of 3D reference points
-            # reference_points_3d shape: [bs, num_queries, num_points, 3]
-            bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
-
-            # Convert to TTNN tensor if needed
-            if hasattr(ttnn, "Device") and isinstance(self.device, ttnn.Device):
-                bev_reference_points = ttnn.from_torch(
-                    bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                )
-        else:
-            # reference_points_3d is already a TTNN tensor
-            # Convert to torch, do the operations, then convert back
-            torch_ref_points = ttnn.to_torch(reference_points_3d)
-            bev_reference_points = torch_ref_points[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
-            bev_reference_points = ttnn.from_torch(
-                bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+        bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
+        bev_reference_points = ttnn.from_torch(
+            bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
 
         if use_signpost:
             signpost(header="BEVLayer Tensor Setup Complete")
@@ -427,10 +405,6 @@ class TTBEVFormerEncoder:
         """
         if use_signpost:
             signpost(header="TTNN BEVFormerEncoder Forward Start")
-
-        # Convert torch tensors to ttnn tensors if needed
-        if isinstance(bev_query, torch.Tensor):
-            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         output = bev_query
         intermediate = []
