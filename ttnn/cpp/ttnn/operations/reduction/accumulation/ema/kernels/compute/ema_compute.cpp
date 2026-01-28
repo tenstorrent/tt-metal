@@ -63,8 +63,7 @@ inline void ema_sfpi_tile(
 // ------------------------------------------------------------------------------------------------
 */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     // -----------------
     constexpr auto total_batches_per_core = get_compile_time_arg_val(0);
@@ -121,4 +120,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

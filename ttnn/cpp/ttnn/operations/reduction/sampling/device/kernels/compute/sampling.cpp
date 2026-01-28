@@ -23,7 +23,6 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-namespace NAMESPACE {
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
 
@@ -374,7 +373,7 @@ void mul_block_bcast_scalar_inplace() {
     }
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -428,4 +427,3 @@ void MAIN {
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols(values_cb_index, cb_cur_sum, cb_local_vals, Ht, Kt);
 }
-}  // namespace NAMESPACE

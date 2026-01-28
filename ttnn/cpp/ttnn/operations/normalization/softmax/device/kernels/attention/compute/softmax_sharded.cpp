@@ -64,8 +64,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     cb_wait_front(cb_out, block_w);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t block_h = get_compile_time_arg_val(0);
     constexpr uint32_t block_w = get_compile_time_arg_val(1);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
@@ -259,4 +258,3 @@ void MAIN {
         cb_pop_front(cb_exps, block_w);
     }
 }
-}  // namespace NAMESPACE

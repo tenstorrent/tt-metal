@@ -11,7 +11,6 @@
 
 #include "sort_common.hpp"
 
-namespace NAMESPACE {
 /*
 This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
@@ -67,7 +66,7 @@ Calculation of each row:
   3. **Data Saving**:
       - The tiles are now fully sorted along the desired dimension and ready to be saved.
  */
-void MAIN {
+void kernel_main() {
     // Runtime args
     const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
 
@@ -212,5 +211,3 @@ void MAIN {
         transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, Wt);
     }  // Ht loop
 }
-
-}  // namespace NAMESPACE

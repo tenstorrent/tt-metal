@@ -14,8 +14,7 @@
 
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
@@ -267,5 +266,4 @@ void MAIN {
         // Indexes tensor
         transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
     }  // h loop
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

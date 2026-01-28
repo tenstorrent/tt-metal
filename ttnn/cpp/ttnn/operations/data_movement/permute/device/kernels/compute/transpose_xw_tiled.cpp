@@ -10,9 +10,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // X = output width
     // Y = output height
     // input shape = (..., H, W)
@@ -71,4 +69,3 @@ void MAIN {
         cb_pop_front(cb_tilize, 1);
     }
 }
-}  // namespace NAMESPACE

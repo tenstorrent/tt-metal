@@ -19,8 +19,7 @@
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
@@ -116,4 +115,3 @@ void MAIN {
         cb_push_back(cb_grad_in, per_core_block_size);
     }
 }
-}  // namespace NAMESPACE

@@ -21,8 +21,6 @@
 
 namespace generic = norm::kernel_util::generic;
 
-namespace NAMESPACE {
-
 template <
     tt::CBIndex cb_in,
     tt::CBIndex cb_inb,
@@ -208,7 +206,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_pop_front(cb_in, num_to_sync);
 }
 
-void MAIN {
+void kernel_main() {
     namespace kutil = norm::kernel_util;
 
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -475,4 +473,3 @@ void MAIN {
         cb_pop_front(cb_ex, onetile);
     }  // NCHt loop
 }
-}  // namespace NAMESPACE
