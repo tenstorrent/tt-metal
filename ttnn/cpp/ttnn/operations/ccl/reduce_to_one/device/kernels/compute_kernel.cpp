@@ -16,10 +16,11 @@ constexpr uint32_t local_cb = get_compile_time_arg_val(0);        // Input tenso
 constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(1);  // Round 1: LEAF → ROOT*
 constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(2);  // Round 2: ROOT3 → ROOT2/ROOT1
 constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(3);  // Round 3: ROOT2 → ROOT1
-constexpr uint32_t output_cb = get_compile_time_arg_val(4);       // Final output (writer waits on this)
+constexpr uint32_t output_cb = get_compile_time_arg_val(4);       // Final output tensor (ROOT1 only)
 constexpr uint32_t scratch_cb = get_compile_time_arg_val(5);      // Scratch for intermediate results
 constexpr uint32_t num_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t device_role = get_compile_time_arg_val(7);
+constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(8);  // Second scratch buffer (stable addr)
 
 // Helper to perform one reduction step: in1_cb + in2_cb → out_cb
 template <uint32_t in1_cb, uint32_t in2_cb, uint32_t out_cb>
@@ -46,17 +47,17 @@ void MAIN {
         return;
     }
 
-    // Staged reduction - final result always in output_cb for all roles
+    // Staged reduction using scratch_cb and scratch_cb2 (stable addresses for trace mode)
     // Each round uses a different received CB to prevent data overwrites:
-    // ROOT3 (1 stage): local + received_r1 → output
-    // ROOT2 (2 stages): local + received_r1 → scratch, scratch + received_r2 → output
-    // ROOT1 (3 stages): local + received_r1 → output, output + received_r2 → scratch, scratch + received_r3 → output
+    // ROOT3 (1 stage): local + received_r1 → scratch_cb2
+    // ROOT2 (2 stages): local + received_r1 → scratch_cb, scratch_cb + received_r2 → scratch_cb2
+    // ROOT1 (3 stages): scratch_cb → scratch_cb2 → output_cb (write to output_cb only once)
 
     if constexpr (device_role == MESH_ROOT3) {
-        // ROOT3: 1 stage, direct to output (receives from LEAF via received_cb_r1)
-        binary_op_init_common(local_cb, received_cb_r1, output_cb);
+        // ROOT3: 1 stage, direct to scratch_cb2 (receives from LEAF via received_cb_r1)
+        binary_op_init_common(local_cb, received_cb_r1, scratch_cb2);
         add_tiles_init(local_cb, received_cb_r1);
-        reduce_step<local_cb, received_cb_r1, output_cb>();
+        reduce_step<local_cb, received_cb_r1, scratch_cb2>();
     }
 
     if constexpr (device_role == MESH_ROOT2) {
@@ -65,23 +66,23 @@ void MAIN {
         binary_op_init_common(local_cb, received_cb_r1, scratch_cb);
         add_tiles_init(local_cb, received_cb_r1);
         reduce_step<local_cb, received_cb_r1, scratch_cb>();
-        // Stage 2: scratch + received_r2 (from ROOT3) → output
+        // Stage 2: scratch + received_r2 (from ROOT3) → scratch_cb2
         add_tiles_init(scratch_cb, received_cb_r2);
-        reduce_step<scratch_cb, received_cb_r2, output_cb>();
+        reduce_step<scratch_cb, received_cb_r2, scratch_cb2>();
     }
 
     if constexpr (device_role == MESH_ROOT1) {
-        // ROOT1: 3 stages
-        // Stage 1: local + received_r1 (from LEAF) → output
-        binary_op_init_common(local_cb, received_cb_r1, output_cb);
+        // ROOT1: 3 stages - only write to output_cb once at the end
+        // Stage 1: local + received_r1 (from LEAF) → scratch_cb
+        binary_op_init_common(local_cb, received_cb_r1, scratch_cb);
         add_tiles_init(local_cb, received_cb_r1);
-        reduce_step<local_cb, received_cb_r1, output_cb>();
-        // Stage 2: output + received_r2 (from ROOT3) → scratch
-        add_tiles_init(output_cb, received_cb_r2);
-        reduce_step<output_cb, received_cb_r2, scratch_cb>();
-        // Stage 3: scratch + received_r3 (from ROOT2) → output
-        add_tiles_init(scratch_cb, received_cb_r3);
-        reduce_step<scratch_cb, received_cb_r3, output_cb>();
+        reduce_step<local_cb, received_cb_r1, scratch_cb>();
+        // Stage 2: scratch_cb + received_r2 (from ROOT3) → scratch_cb2
+        add_tiles_init(scratch_cb, received_cb_r2);
+        reduce_step<scratch_cb, received_cb_r2, scratch_cb2>();
+        // Stage 3: scratch_cb2 + received_r3 (from ROOT2) → output_cb (final result)
+        add_tiles_init(scratch_cb2, received_cb_r3);
+        reduce_step<scratch_cb2, received_cb_r3, output_cb>();
     }
 }
 

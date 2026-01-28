@@ -29,7 +29,7 @@ struct ReduceToOneOp {
     struct tensor_args_t {
         const Tensor input_tensor;
         const std::optional<Tensor> optional_output_tensor;
-        const std::optional<Tensor> optional_intermediate_tensor;
+        const std::optional<std::vector<Tensor>> optional_intermediate_tensors;  // 3 tensors for 3 reduction rounds
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
@@ -42,6 +42,7 @@ struct ReduceToOneOp {
             tt::tt_metal::KernelHandle send_fabric_writer_kernel_id;  // fabric_writer for bottom cores
             std::vector<CoreCoord> cores;
             std::vector<CoreCoord> bottom_cores;
+            std::vector<CoreCoord> non_bottom_cores;
 
             tt::tt_metal::KernelHandle root1_reader_kernel_id;
             tt::tt_metal::KernelHandle root1_writer_kernel_id;
@@ -57,6 +58,13 @@ struct ReduceToOneOp {
             bool is_mesh_root3_device;
             bool is_mesh_root2_device;
             bool is_mesh_root1_device;
+
+            // CB handles for dynamic address updates
+            tt::tt_metal::CBHandle local_cb_handle;
+            tt::tt_metal::CBHandle received_cb_r1_handle;
+            tt::tt_metal::CBHandle received_cb_r2_handle;
+            tt::tt_metal::CBHandle received_cb_r3_handle;
+            tt::tt_metal::CBHandle output_cb_handle;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -126,6 +134,6 @@ ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt);
+    const std::optional<std::vector<Tensor>>& optional_intermediate_tensors = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

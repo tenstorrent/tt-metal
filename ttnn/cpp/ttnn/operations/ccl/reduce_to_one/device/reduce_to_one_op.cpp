@@ -36,11 +36,17 @@ void ReduceToOneOp::validate(const operation_attributes_t& operation_attributes,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
 
-    const auto& optional_intermediate_tensor = tensor_args.optional_intermediate_tensor;
-    if (optional_intermediate_tensor.has_value()) {
+    const auto& optional_intermediate_tensors = tensor_args.optional_intermediate_tensors;
+    if (optional_intermediate_tensors.has_value()) {
         TT_FATAL(
-            optional_intermediate_tensor.value().device() == mesh_device,
-            "Intermediate tensor must be allocated on same mesh device as input tensor");
+            optional_intermediate_tensors.value().size() == 3,
+            "Expected 3 intermediate tensors for 3 reduction rounds, got {}",
+            optional_intermediate_tensors.value().size());
+        for (const auto& tensor : optional_intermediate_tensors.value()) {
+            TT_FATAL(
+                tensor.device() == mesh_device,
+                "Intermediate tensor must be allocated on same mesh device as input tensor");
+        }
     }
 
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -79,10 +85,18 @@ ReduceToOneOp::tensor_return_value_t ReduceToOneOp::create_output_tensors(
     std::vector<ttnn::Tensor> intermediate_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
 
-    // Create 3 intermediate tensors for 3 rounds of receiving
-    // Note: optional_intermediate_tensor is ignored for now - always create fresh tensors
-    for (size_t i = 0; i < 3; ++i) {
-        intermediate_tensors.push_back(create_device_tensor(output_specs[0][i], mesh_device));
+    // Use provided intermediate tensors or create fresh ones
+    // For trace mode to work, we must reuse the same tensors passed from host
+    if (tensor_args.optional_intermediate_tensors.has_value()) {
+        // Use all 3 provided intermediate tensors
+        for (const auto& tensor : tensor_args.optional_intermediate_tensors.value()) {
+            intermediate_tensors.push_back(tensor);
+        }
+    } else {
+        // Create 3 fresh intermediate tensors for 3 rounds of receiving
+        for (size_t i = 0; i < 3; ++i) {
+            intermediate_tensors.push_back(create_device_tensor(output_specs[0][i], mesh_device));
+        }
     }
 
     // Create or use provided output tensor
@@ -187,10 +201,10 @@ ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<Tensor>& optional_intermediate_tensor) {
+    const std::optional<std::vector<Tensor>>& optional_intermediate_tensors) {
     using OperationType = ttnn::operations::ccl::ReduceToOneOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{root_coord, exit_coord, topology, input_tensor.tensor_spec()},
-        OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
+        OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensors});
 }
 }  // namespace ttnn::prim

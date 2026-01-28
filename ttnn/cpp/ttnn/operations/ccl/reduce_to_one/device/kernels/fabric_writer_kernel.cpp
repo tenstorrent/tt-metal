@@ -34,23 +34,21 @@ enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_R
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: output_cb
+    constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: scratch_cb2
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_workers = get_compile_time_arg_val(5);
     constexpr uint32_t packet_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(7);  // For ROOT1 to wait on compute
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    // ROOT1: wait for compute done and exit (sending to exit_coord not yet implemented)
-    // ROOT1 compute writes to output_cb twice (stage 1 and stage 3), so we need to wait twice
+    // ROOT1: wait for compute to finish writing final result to output_cb, then exit
+    // Stage 1 pushes to output_cb, stage 2 pops it (as input), stage 3 pushes final result
+    // We only need to wait for stage 3's push
     if constexpr (device_role == MESH_ROOT1) {
-        // Wait for stage 1 output, pop to free CB for stage 3
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
-        // Wait for final stage 3 output
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
+        cb_wait_front(output_cb, num_tiles);
+        cb_pop_front(output_cb, num_tiles);
         return;
     }
 
@@ -107,6 +105,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* worker_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
         noc_semaphore_wait(worker_sem_ptr, 1);
+        noc_semaphore_set(worker_sem_ptr, 0);
 
         // Worker's packet is at slot: [header (packet_header_size_bytes)] [payload (payload_size_bytes)]
         uint32_t worker_header_addr = slot_base;
@@ -116,9 +115,6 @@ void kernel_main() {
         fabric_sender.wait_for_empty_write_slot();
         fabric_sender.send_payload_without_header_non_blocking_from_address(worker_payload_addr, payload_size_bytes);
         fabric_sender.send_payload_flush_blocking_from_address(worker_header_addr, sizeof(PACKET_HEADER_TYPE));
-
-        // Reset semaphore for next use
-        noc_semaphore_set(worker_sem_ptr, 0);
 
         slot_base += slot_size_bytes;
     }

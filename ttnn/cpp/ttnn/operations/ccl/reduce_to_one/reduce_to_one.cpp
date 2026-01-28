@@ -15,9 +15,9 @@ ttnn::Tensor ExecuteReduceToOne::invoke(
     const MeshCoordinate& exit_coord,
     const tt::tt_fabric::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
+    const std::optional<std::vector<ttnn::Tensor>>& optional_intermediate_tensors) {
     auto result = ttnn::prim::reduce_to_one(
-        input_tensor, topology, root_coord, exit_coord, optional_output_tensor, optional_intermediate_tensor);
+        input_tensor, topology, root_coord, exit_coord, optional_output_tensor, optional_intermediate_tensors);
     // Return the final output tensor from result[1][0]
     return result[1][0];
 }

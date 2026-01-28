@@ -6,6 +6,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <unordered_set>
@@ -258,9 +260,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     constexpr auto received_cb_r1 = tt::CBIndex::c_1;  // Round 1: LEAF → ROOT* (backed by intermediate tensor)
     constexpr auto received_cb_r2 = tt::CBIndex::c_5;  // Round 2: ROOT3 → ROOT2/ROOT1 (separate L1 buffer)
     constexpr auto received_cb_r3 = tt::CBIndex::c_6;  // Round 3: ROOT2 → ROOT1 (separate L1 buffer)
-    constexpr auto output_cb = tt::CBIndex::c_2;       // Compute output (writer waits on this)
+    constexpr auto output_cb = tt::CBIndex::c_2;       // Final output (backed by output tensor)
     constexpr auto scratch_cb = tt::CBIndex::c_4;      // Scratch for intermediate compute
     constexpr auto packet_cb = tt::CBIndex::c_3;
+    constexpr auto scratch_cb2 = tt::CBIndex::c_7;  // Second scratch for compute (NOT globally allocated - stable addr)
 
     // === Create CBs backed by tensor buffers ===
     // num_worker_slots = non-bottom cores per column (cores that send to bottom core)
@@ -282,7 +285,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                                .set_page_size(local_cb, payload_size_bytes)
                                .set_tile_dims(local_cb, compute_tile)
                                .set_globally_allocated_address(*input_tensor.buffer());
-    CreateCircularBuffer(program, all_cores, cb_local_config);
+    auto local_cb_handle = CreateCircularBuffer(program, all_cores, cb_local_config);
 
     // received_cb_r1: Round 1 receive buffer - backed by intermediate tensor r1
     // LEAF senders write here
@@ -291,7 +294,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .set_page_size(received_cb_r1, payload_size_bytes)
             .set_tile_dims(received_cb_r1, compute_tile)
             .set_globally_allocated_address(*intermediate_tensor_r1.buffer());
-    CreateCircularBuffer(program, all_cores, cb_received_r1_config);
+    auto received_cb_r1_handle = CreateCircularBuffer(program, all_cores, cb_received_r1_config);
 
     // received_cb_r2: Round 2 receive buffer - backed by intermediate tensor r2
     // ROOT3 senders write here (different address than round 1)
@@ -300,7 +303,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .set_page_size(received_cb_r2, payload_size_bytes)
             .set_tile_dims(received_cb_r2, compute_tile)
             .set_globally_allocated_address(*intermediate_tensor_r2.buffer());
-    CreateCircularBuffer(program, all_cores, cb_received_r2_config);
+    auto received_cb_r2_handle = CreateCircularBuffer(program, all_cores, cb_received_r2_config);
 
     // received_cb_r3: Round 3 receive buffer - backed by intermediate tensor r3
     // ROOT2 senders write here (different address than rounds 1 and 2)
@@ -309,20 +312,28 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .set_page_size(received_cb_r3, payload_size_bytes)
             .set_tile_dims(received_cb_r3, compute_tile)
             .set_globally_allocated_address(*intermediate_tensor_r3.buffer());
-    CreateCircularBuffer(program, all_cores, cb_received_r3_config);
+    auto received_cb_r3_handle = CreateCircularBuffer(program, all_cores, cb_received_r3_config);
 
     // output_cb: backed by output tensor (compute output destination)
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{output_cb, input_dataformat}})
                                 .set_page_size(output_cb, payload_size_bytes)
                                 .set_tile_dims(output_cb, compute_tile)
                                 .set_globally_allocated_address(*output_tensor.buffer());
-    CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto output_cb_handle = CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // scratch_cb: scratch space for intermediate compute results
     auto cb_scratch_config = tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{scratch_cb, input_dataformat}})
                                  .set_page_size(scratch_cb, payload_size_bytes)
                                  .set_tile_dims(scratch_cb, compute_tile);
     CreateCircularBuffer(program, all_cores, cb_scratch_config);
+
+    // scratch_cb2: second scratch buffer for compute (NOT globally allocated - stable address)
+    // Used by ROOT3/ROOT2 for compute output, and by ROOT1 as intermediate scratch
+    auto cb_send_source_config =
+        tt::tt_metal::CircularBufferConfig(payload_size_bytes, {{scratch_cb2, input_dataformat}})
+            .set_page_size(scratch_cb2, payload_size_bytes)
+            .set_tile_dims(scratch_cb2, compute_tile);
+    CreateCircularBuffer(program, all_cores, cb_send_source_config);
 
     // packet_cb: staging buffer for workers to assemble packets before bottom core forwards them
     // Workers write [header][payload] here, bottom core reads and sends via fabric
@@ -362,7 +373,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Reader kernel: handles data arrival and pushes to compute
     // Pass all 3 received CB indices - kernel decides which to use based on role/round
     std::vector<uint32_t> reader_ct_args = {
-        role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles, scratch_cb};
+        role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles, scratch_cb, scratch_cb2};
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
@@ -370,10 +381,11 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     // Worker writer kernel: non-bottom cores assemble and send packets to bottom core
-    // LEAF: reads from local_cb (no compute), others: reads from output_cb (compute output)
-    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : output_cb;
+    // LEAF: reads from local_cb (no compute), others: reads from scratch_cb2 (compute output)
+    // ROOT1: waits on output_cb for compute to finish (doesn't send, just synchronizes)
+    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : scratch_cb2;
     std::vector<uint32_t> worker_writer_ct_args = {
-        role, worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb};
+        role, worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb, output_cb};
     auto worker_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
@@ -381,10 +393,18 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::WriterDataMovementConfig(worker_writer_ct_args));
 
     // Fabric writer kernel: bottom cores handle fabric communication
-    // LEAF: reads from local_cb (no compute), others: reads from output_cb (compute output)
-    uint32_t fabric_source_cb = is_mesh_leaf ? local_cb : output_cb;
+    // LEAF: reads from local_cb (no compute), others: reads from scratch_cb2 (compute output)
+    // ROOT1: waits on output_cb for compute to finish (doesn't send, just synchronizes)
+    uint32_t fabric_source_cb = is_mesh_leaf ? local_cb : scratch_cb2;
     std::vector<uint32_t> fabric_writer_ct_args = {
-        role, fabric_source_cb, compute_num_tiles, payload_size_bytes, payload_size_bytes, num_worker_slots, packet_cb};
+        role,
+        fabric_source_cb,
+        compute_num_tiles,
+        payload_size_bytes,
+        payload_size_bytes,
+        num_worker_slots,
+        packet_cb,
+        output_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
@@ -393,8 +413,18 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Compute kernel: reduction for ROOT devices, early exits for LEAF
     // Pass all 3 received CB indices - kernel decides which to use based on role/round
+    // scratch_cb, scratch_cb2: scratch buffers for intermediate results (stable addresses)
+    // output_cb: final output (ROOT1 writes final result here)
     std::vector<uint32_t> compute_ct_args = {
-        local_cb, received_cb_r1, received_cb_r2, received_cb_r3, output_cb, scratch_cb, compute_num_tiles, role};
+        local_cb,
+        received_cb_r1,
+        received_cb_r2,
+        received_cb_r3,
+        output_cb,
+        scratch_cb,
+        compute_num_tiles,
+        role,
+        scratch_cb2};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",
@@ -491,6 +521,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .send_fabric_writer_kernel_id = fabric_writer_kernel,
             .cores = cores,
             .bottom_cores = bottom_cores_vec,
+            .non_bottom_cores = non_bottom_cores_vec,
             .root1_reader_kernel_id = is_mesh_root1 ? reader_kernel : 0,
             .root1_writer_kernel_id = is_mesh_root1 ? fabric_writer_kernel : 0,
             .root2_reader_kernel_id = is_mesh_root2 ? reader_kernel : 0,
@@ -500,92 +531,211 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .is_mesh_leaf_device = is_mesh_leaf,
             .is_mesh_root3_device = is_mesh_root3,
             .is_mesh_root2_device = is_mesh_root2,
-            .is_mesh_root1_device = is_mesh_root1}};
+            .is_mesh_root1_device = is_mesh_root1,
+            .local_cb_handle = local_cb_handle,
+            .received_cb_r1_handle = received_cb_r1_handle,
+            .received_cb_r2_handle = received_cb_r2_handle,
+            .received_cb_r3_handle = received_cb_r3_handle,
+            .output_cb_handle = output_cb_handle}};
 }
 
 void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        // Get intermediate tensors
+        // Get input tensor
+        const auto& input_tensor = tensor_args.input_tensor;
+
+        // Get intermediate and output tensors
         const auto& intermediate_tensors = tensor_return_value[0];
+        const auto& output_tensor = tensor_return_value[1][0];
 
-        // Determine device type based on flags
-        bool is_leaf_device = shared_variables.is_mesh_leaf_device;
-        bool is_root3_device = shared_variables.is_mesh_root3_device;
-        bool is_root2_device = shared_variables.is_mesh_root2_device;
+        // Determine device role for logging
+        const char* role_str = shared_variables.is_mesh_root1_device   ? "ROOT1"
+                               : shared_variables.is_mesh_root2_device ? "ROOT2"
+                               : shared_variables.is_mesh_root3_device ? "ROOT3"
+                                                                       : "LEAF";
 
-        // Update reader kernel runtime args - all 3 semaphore addresses for all devices
-        auto& reader_runtime_args_by_core =
-            tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_reader_kernel_id);
+        // Log old vs new CB addresses for debugging
+        // Note: output_cb address will differ since output_tensor is not passed from host
+        // This is okay for trace mode since fabric_writer reads from scratch_cb2 (stable address, not globally
+        // allocated)
+        auto old_local_addr = tt::tt_metal::GetCircularBufferConfig(program, shared_variables.local_cb_handle)
+                                  .globally_allocated_address();
+        auto old_r1_addr = tt::tt_metal::GetCircularBufferConfig(program, shared_variables.received_cb_r1_handle)
+                               .globally_allocated_address();
+        auto old_r2_addr = tt::tt_metal::GetCircularBufferConfig(program, shared_variables.received_cb_r2_handle)
+                               .globally_allocated_address();
+        auto old_r3_addr = tt::tt_metal::GetCircularBufferConfig(program, shared_variables.received_cb_r3_handle)
+                               .globally_allocated_address();
+        auto old_output_addr = tt::tt_metal::GetCircularBufferConfig(program, shared_variables.output_cb_handle)
+                                   .globally_allocated_address();
 
-        for (const auto& core : shared_variables.cores) {
-            auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-            reader_runtime_args[0] = shared_variables.semaphores[0].address();
-            reader_runtime_args[1] = shared_variables.semaphores[1].address();
-            reader_runtime_args[2] = shared_variables.semaphores[2].address();
-        }
+        auto new_local_addr = input_tensor.buffer()->address();
+        auto new_r1_addr = intermediate_tensors[0].buffer()->address();
+        auto new_r2_addr = intermediate_tensors[1].buffer()->address();
+        auto new_r3_addr = intermediate_tensors[2].buffer()->address();
+        auto new_output_addr = output_tensor.buffer()->address();
 
-        // Update LEAF device writer args (sends to intermediate_tensor[0], semaphore[0])
-        if (is_leaf_device) {
-            auto& worker_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
-            auto& fabric_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+        log_info(
+            tt::LogOp,
+            "override_runtime_arguments [{}]: local_cb old={} new={} same={}",
+            role_str,
+            old_local_addr.value_or(0),
+            new_local_addr,
+            old_local_addr.value_or(0) == new_local_addr);
+        log_info(
+            tt::LogOp,
+            "override_runtime_arguments [{}]: received_cb_r1 old={} new={} same={}",
+            role_str,
+            old_r1_addr.value_or(0),
+            new_r1_addr,
+            old_r1_addr.value_or(0) == new_r1_addr);
+        log_info(
+            tt::LogOp,
+            "override_runtime_arguments [{}]: received_cb_r2 old={} new={} same={}",
+            role_str,
+            old_r2_addr.value_or(0),
+            new_r2_addr,
+            old_r2_addr.value_or(0) == new_r2_addr);
+        log_info(
+            tt::LogOp,
+            "override_runtime_arguments [{}]: received_cb_r3 old={} new={} same={}",
+            role_str,
+            old_r3_addr.value_or(0),
+            new_r3_addr,
+            old_r3_addr.value_or(0) == new_r3_addr);
+        log_info(
+            tt::LogOp,
+            "override_runtime_arguments [{}]: output_cb old={} new={} same={}",
+            role_str,
+            old_output_addr.value_or(0),
+            new_output_addr,
+            old_output_addr.value_or(0) == new_output_addr);
 
-            for (const auto& core : shared_variables.cores) {
-                auto& args = worker_writer_args_by_core[core.x][core.y];
-                args[8] = intermediate_tensors[0].buffer()->address();
-                args[9] = shared_variables.semaphores[0].address();
-            }
-            for (const auto& core : shared_variables.bottom_cores) {
-                auto& args = fabric_writer_args_by_core[core.x][core.y];
-                args[0] = intermediate_tensors[0].buffer()->address();
-                args[3] = shared_variables.semaphores[0].address();
-            }
-        }
+        // // Update CB addresses for tensor buffers
+        // tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_variables.local_cb_handle,
+        // *input_tensor.buffer()); tt::tt_metal::UpdateDynamicCircularBufferAddress(program,
+        // shared_variables.received_cb_r1_handle, *intermediate_tensors[0].buffer());
+        // tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_variables.received_cb_r2_handle,
+        // *intermediate_tensors[1].buffer()); tt::tt_metal::UpdateDynamicCircularBufferAddress(program,
+        // shared_variables.received_cb_r3_handle, *intermediate_tensors[2].buffer());
+        // tt::tt_metal::UpdateDynamicCircularBufferAddress(program, shared_variables.output_cb_handle,
+        // *output_tensor.buffer());
 
-        // Update ROOT3 device writer args (sends to intermediate_tensor[1], semaphore[1])
-        if (is_root3_device) {
-            auto& worker_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
-            auto& fabric_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+        // // Determine device type based on flags
+        // bool is_leaf_device = shared_variables.is_mesh_leaf_device;
+        // bool is_root3_device = shared_variables.is_mesh_root3_device;
+        // bool is_root2_device = shared_variables.is_mesh_root2_device;
 
-            for (const auto& core : shared_variables.cores) {
-                auto& args = worker_writer_args_by_core[core.x][core.y];
-                args[8] = intermediate_tensors[1].buffer()->address();
-                args[9] = shared_variables.semaphores[1].address();
-            }
-            for (const auto& core : shared_variables.bottom_cores) {
-                auto& args = fabric_writer_args_by_core[core.x][core.y];
-                args[0] = intermediate_tensors[1].buffer()->address();
-                args[3] = shared_variables.semaphores[1].address();
-            }
-        }
+        // // Update reader kernel runtime args - all 3 semaphore addresses for all devices
+        // auto& reader_runtime_args_by_core =
+        //     tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_reader_kernel_id);
 
-        // Update ROOT2 device writer args (sends to intermediate_tensor[2], semaphore[2])
-        if (is_root2_device) {
-            auto& worker_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
-            auto& fabric_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+        // for (const auto& core : shared_variables.cores) {
+        //     auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+        //     auto old_sem0 = reader_runtime_args[0];
+        //     auto old_sem1 = reader_runtime_args[1];
+        //     auto old_sem2 = reader_runtime_args[2];
+        //     reader_runtime_args[0] = shared_variables.semaphores[0].address();
+        //     reader_runtime_args[1] = shared_variables.semaphores[1].address();
+        //     reader_runtime_args[2] = shared_variables.semaphores[2].address();
+        //     log_info(tt::LogOp, "override [{}] reader core({},{}): sem0 old={} new={}, sem1 old={} new={}, sem2
+        //     old={} new={}",
+        //         role_str, core.x, core.y, old_sem0, reader_runtime_args[0], old_sem1, reader_runtime_args[1],
+        //         old_sem2, reader_runtime_args[2]);
+        // }
 
-            for (const auto& core : shared_variables.cores) {
-                auto& args = worker_writer_args_by_core[core.x][core.y];
-                args[8] = intermediate_tensors[2].buffer()->address();
-                args[9] = shared_variables.semaphores[2].address();
-            }
-            for (const auto& core : shared_variables.bottom_cores) {
-                auto& args = fabric_writer_args_by_core[core.x][core.y];
-                args[0] = intermediate_tensors[2].buffer()->address();
-                args[3] = shared_variables.semaphores[2].address();
-            }
-        }
+        // // Update LEAF device writer args (sends to intermediate_tensor[0], semaphore[0])
+        // if (is_leaf_device) {
+        //     auto& worker_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
+        //     auto& fabric_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+
+        //     for (const auto& core : shared_variables.non_bottom_cores) {
+        //         auto& args = worker_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[8];
+        //         auto old_dst_sem = args[9];
+        //         args[8] = intermediate_tensors[0].buffer()->address();
+        //         args[9] = shared_variables.semaphores[0].address();
+        //         log_info(tt::LogOp, "override [LEAF] worker_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[8], old_dst_sem, args[9]);
+        //     }
+        //     for (const auto& core : shared_variables.bottom_cores) {
+        //         auto& args = fabric_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[0];
+        //         auto old_dst_sem = args[3];
+        //         args[0] = intermediate_tensors[0].buffer()->address();
+        //         args[3] = shared_variables.semaphores[0].address();
+        //         log_info(tt::LogOp, "override [LEAF] fabric_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[0], old_dst_sem, args[3]);
+        //     }
+        // }
+
+        // // Update ROOT3 device writer args (sends to intermediate_tensor[1], semaphore[1])
+        // if (is_root3_device) {
+        //     auto& worker_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
+        //     auto& fabric_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+
+        //     for (const auto& core : shared_variables.non_bottom_cores) {
+        //         auto& args = worker_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[8];
+        //         auto old_dst_sem = args[9];
+        //         args[8] = intermediate_tensors[1].buffer()->address();
+        //         args[9] = shared_variables.semaphores[1].address();
+        //         log_info(tt::LogOp, "override [ROOT3] worker_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[8], old_dst_sem, args[9]);
+        //     }
+        //     for (const auto& core : shared_variables.bottom_cores) {
+        //         auto& args = fabric_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[0];
+        //         auto old_dst_sem = args[3];
+        //         args[0] = intermediate_tensors[1].buffer()->address();
+        //         args[3] = shared_variables.semaphores[1].address();
+        //         log_info(tt::LogOp, "override [ROOT3] fabric_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[0], old_dst_sem, args[3]);
+        //     }
+        // }
+
+        // // Update ROOT2 device writer args (sends to intermediate_tensor[2], semaphore[2])
+        // if (is_root2_device) {
+        //     auto& worker_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
+        //     auto& fabric_writer_args_by_core =
+        //         tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
+
+        //     for (const auto& core : shared_variables.non_bottom_cores) {
+        //         auto& args = worker_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[8];
+        //         auto old_dst_sem = args[9];
+        //         args[8] = intermediate_tensors[2].buffer()->address();
+        //         args[9] = shared_variables.semaphores[2].address();
+        //         log_info(tt::LogOp, "override [ROOT2] worker_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[8], old_dst_sem, args[9]);
+        //     }
+        //     for (const auto& core : shared_variables.bottom_cores) {
+        //         auto& args = fabric_writer_args_by_core[core.x][core.y];
+        //         auto old_dst_l1 = args[0];
+        //         auto old_dst_sem = args[3];
+        //         args[0] = intermediate_tensors[2].buffer()->address();
+        //         args[3] = shared_variables.semaphores[2].address();
+        //         log_info(tt::LogOp, "override [ROOT2] fabric_writer core({},{}): dst_l1 old={} new={}, dst_sem old={}
+        //         new={}",
+        //             core.x, core.y, old_dst_l1, args[0], old_dst_sem, args[3]);
+        //     }
+        // }
     }
 }
 

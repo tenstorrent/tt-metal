@@ -28,21 +28,17 @@ enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_R
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t source_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: scratch_cb2
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);  // Total payload size
     constexpr uint32_t packet_cb = get_compile_time_arg_val(4);  // CB index for worker packets
+    constexpr uint32_t output_cb = get_compile_time_arg_val(5);  // For ROOT1 to wait on compute
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    // ROOT1 doesn't send - early exit
-    // ROOT1 compute writes to output_cb twice (stage 1 and stage 3), so we need to wait twice
+    // ROOT1 doesn't send - wait for compute to finish writing to output_cb, then exit
     if constexpr (device_role == MESH_ROOT1) {
-        // Wait for stage 1 output, pop to free CB for stage 3
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
-        // Wait for final stage 3 output
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
+        cb_wait_front(output_cb, num_tiles);
+        cb_pop_front(output_cb, num_tiles);
         return;
     }
 
