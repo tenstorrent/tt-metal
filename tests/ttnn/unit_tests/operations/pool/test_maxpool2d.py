@@ -24,47 +24,36 @@ SliceHeight = ttnn.Op2DDRAMSliceHeight
 
 parameters = {
     "dram_slice_tests": {
-        "in_specs": [[ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
+        "in_specs": [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
         "input_specs": [
             # Contains following parameters
-            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout, slice_type, skip_for_block_formats]
             # Manual num_slices tests
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth],
-            # [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth],
-            # [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight],
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS, SliceWidth],
-            # [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS, SliceWidth],
-            # [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 2, HS, SliceHeight],
-            # # Pooling dimension has been changed from width to height. Otherwise, with tile layout, the output width of 1 gets rounded up to 32.
-            # [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
-            # [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
-            # [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth],
-            # # Automatic num_slices tests (num_slices=0 means framework determines num_slices)
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth],
-            # [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, BS, SliceWidth],
-            # [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 0, WS, SliceHeight],
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, SliceWidth],
-            # [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, SliceHeight],
-            # # Fully automatic tests (slice_type=None means framework chooses direction AND num_slices)
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, None],
-            # [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 0, BS, None],
-            # [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 0, HS, None],
-            # [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 0, BS, None],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS, SliceWidth, False],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS, SliceWidth, True],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS, SliceHeight, True],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS, SliceWidth, False],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS, SliceWidth, True],
+            [1, 256, 81, 81, 2, 2, 2, 2, 0, 0, 1, 1, True, 2, HS, SliceHeight, False],
+            # Pooling dimension has been changed from width to height. Otherwise, with tile layout, the output width of 1 gets rounded up to 32.
+            [1, 256, 64, 1024, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
+            [1, 256, 32, 1024, 32, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
+            [1, 256, 64, 2048, 64, 1, 1, 1, 0, 0, 1, 1, False, 8, BS, SliceWidth, False],
             # Non-tile multiples
-            # [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceHeight],
-            # [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight],
-            # [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth],
-            # [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceHeight, True],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceHeight, False],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, WS, SliceWidth, True],
+            [1, 90, 900, 900, 2, 2, 2, 2, 0, 0, 1, 1, False, 0, HS, SliceWidth, False],
             # large kernel tests
-            [1, 700, 700, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None],
-            # [1, 700, 70, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None],
-            # [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None],
-            # [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None],
+            [1, 700, 700, 70, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 700, 70, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
+            [1, 70, 700, 700, 7, 7, 3, 3, 0, 0, 1, 1, False, 0, HS, None, False],
             # large kernel wide tests
-            # [1, 20480, 500, 50, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None],
-            # [1, 20480, 50, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None],
-            # [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None],
-            # [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None],
+            [1, 20480, 500, 50, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 20480, 50, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, WS, None, True],
+            [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
+            [1, 384, 500, 500, 9, 9, 4, 4, 0, 0, 1, 1, False, 0, HS, None, True],
         ],
     },
     "height_shard_tests": {
@@ -157,8 +146,13 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         num_slices,
         shard_scheme,
         slice_type,
+        skip_for_block_formats,
     ) = input_spec
     [in_dtype, output_layout] = in_specs
+
+    if skip_for_block_formats and output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("DRAM slicing cannot find a valid auto-config for this case")
+
     # Handle three cases:
     # 1. slice_type=None -> fully automatic (dram_slice_config=None)
     # 2. num_slices=0 -> semi-automatic (framework determines num_slices)
