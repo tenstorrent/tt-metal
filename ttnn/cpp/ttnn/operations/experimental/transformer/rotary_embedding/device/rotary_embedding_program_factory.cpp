@@ -9,14 +9,14 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
 RotaryEmbeddingProgramFactory::cached_program_t RotaryEmbeddingProgramFactory::create(
     const RotaryEmbeddingParams& operation_attributes,
     const RotaryEmbeddingInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
@@ -394,7 +394,7 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const RotaryEmbeddingParams& operation_attributes,
     const RotaryEmbeddingInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    Tensor& tensor_return_value) {
     using namespace tt::constants;
 
     const auto& token_idx = operation_attributes.token_idx;
@@ -470,4 +470,4 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding::program
+}  // namespace ttnn::experimental::prim

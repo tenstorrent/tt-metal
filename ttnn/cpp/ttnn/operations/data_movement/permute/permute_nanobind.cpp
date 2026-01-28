@@ -41,12 +41,12 @@ void bind_permute(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int64_t>& dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
+               float pad_value = 0.0f) { return self(input_tensor, dims, memory_config, pad_value); },
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = nb::none(),
+            nb::arg("pad_value") = 0.0f,
         });
 }
 

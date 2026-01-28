@@ -219,6 +219,10 @@ bool fabric_set_unicast_route(
                 case eth_chan_directions::SOUTH:
                     packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_SOUTH;
                     break;
+                case eth_chan_directions::Z:
+                    // Z exit port will use NOOP to indicate forward to Z
+                    packet_header->route_buffer[0] = MeshRoutingFields::NOOP;
+                    break;
                 default: ASSERT(false); break;
             }
         };

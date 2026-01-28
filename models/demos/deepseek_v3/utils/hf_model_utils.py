@@ -93,6 +93,8 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
             loaded_weight_scale = weights_dict[f"{name}_scale_inv"]
             loaded_weight = dequantize(loaded_weight, loaded_weight_scale, (128, 128))
             del loaded_weight_scale
+        if loaded_weight.dtype != tensor.dtype:
+            loaded_weight = loaded_weight.to(dtype=tensor.dtype)
         tensor.data = loaded_weight
         del loaded_weight
         return tensor

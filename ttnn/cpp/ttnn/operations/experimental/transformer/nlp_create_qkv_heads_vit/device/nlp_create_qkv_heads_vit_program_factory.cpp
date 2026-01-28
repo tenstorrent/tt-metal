@@ -9,7 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
@@ -17,7 +17,7 @@ using namespace tt;
 NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgramFactory::create(
     const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
     const NlpCreateQkvHeadsVitInputs& tensor_args,
-    tensor_return_value_t& output) {
+    NlpCreateQkvHeadsVitResult& output) {
     const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
 
@@ -100,7 +100,7 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
 
@@ -108,7 +108,7 @@ NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgram
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
             tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+                "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
                 core_group_2,
                 tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
         }
@@ -215,7 +215,7 @@ void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
     const NlpCreateQkvHeadsVitInputs& tensor_args,
-    tensor_return_value_t& output) {
+    NlpCreateQkvHeadsVitResult& output) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
@@ -241,4 +241,4 @@ void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::program
+}  // namespace ttnn::experimental::prim

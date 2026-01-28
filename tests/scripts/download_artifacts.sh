@@ -187,8 +187,8 @@ if [ -n "$eagerdist_artifact" ]; then
   wheel_file="$(find . -name "*.whl" -type f | head -1)"
   if [ -n "$wheel_file" ]; then
     echo "Found wheel file: $wheel_file"
-    echo "Installing wheel with pip..."
-    if pip install --force-reinstall "$wheel_file"; then
+    echo "Installing wheel with uv pip..."
+    if uv pip install --force-reinstall "$wheel_file"; then
       echo "Python wheel installed successfully"
       wheel_installed=true
       rm -f "$wheel_file"

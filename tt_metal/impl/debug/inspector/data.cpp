@@ -7,6 +7,7 @@
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
 #include "context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
@@ -30,6 +31,8 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(
+                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
@@ -127,6 +130,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
+        mesh_workload.setName(mesh_workload_data.name);
+        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -153,6 +158,16 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             binary_status.setMeshId(mesh_id);
             binary_status.setStatus(convert_binary_status(status));
         }
+    }
+}
+
+void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
+    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
+    for (size_t i = 0; i < runtime_ids.size(); ++i) {
+        auto entry = all_runtime_ids[i];
+        entry.setWorkloadId(runtime_ids[i].workload_id);
+        entry.setRuntimeId(runtime_ids[i].runtime_id);
     }
 }
 

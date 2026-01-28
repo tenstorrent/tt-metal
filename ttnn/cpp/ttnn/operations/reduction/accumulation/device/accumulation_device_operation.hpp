@@ -18,7 +18,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
@@ -28,7 +28,7 @@ struct AccumulationDeviceOperation {
     using tensor_args_t = AccumulationInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<accumulation::AccumulationProgramFactory>;
+    using program_factory_t = std::variant<AccumulationProgramFactory>;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
 
@@ -45,9 +45,6 @@ struct AccumulationDeviceOperation {
     static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::reduction::accumulation
-
-namespace ttnn::prim {
 ttnn::Tensor accumulation(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -55,5 +52,6 @@ ttnn::Tensor accumulation(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::operations::reduction::accumulation::AccumulationOp op);
+    AccumulationOp op);
+
 }  // namespace ttnn::prim

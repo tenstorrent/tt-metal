@@ -7,16 +7,16 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental::prim {
 
-struct TransformerParams {
+struct ConcatenateHeadsParams {
     const CoreCoord compute_with_storage_grid_size;
     const tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct TransformerInputs {
+struct ConcatenateHeadsInputs {
     const Tensor input;
     const std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental::prim

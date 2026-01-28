@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::llama_matmul {
 
-matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
+ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -29,8 +29,8 @@ matmul::program::matmul_mcast_1d_common_override_variables_t matmul_multi_core_a
     std::optional<CoreRangeSet> restricted_cores);
 
 void override_agmm_fusion_program_parameters(
-    const ttnn::operations::matmul::program::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const matmul::operation_attributes_t& operation,
+    const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const ttnn::prim::MatmulParams& operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,

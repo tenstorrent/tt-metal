@@ -33,7 +33,9 @@
 
 // clang-format on
 
+// Global so triage can see these values.
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -69,6 +71,11 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -368,7 +375,6 @@ int main() {
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
-    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     trigger_sync_register_init();

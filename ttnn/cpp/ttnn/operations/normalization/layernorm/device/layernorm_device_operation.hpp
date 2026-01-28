@@ -16,7 +16,7 @@
 #include "layernorm_op_multi_core_sharded.hpp"
 #include "layernorm_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormDeviceOperation {
     using operation_attributes_t = LayerNormParams;
@@ -41,22 +41,18 @@ struct LayerNormDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
-
-namespace ttnn::prim {
-ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_return_value_t layer_norm(
+Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& residual_input_tensor,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype = std::nullopt,
-    ttnn::operations::normalization::LayerNormType norm_type =
-        ttnn::operations::normalization::LayerNormType::LAYERNORM,
-    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage =
-        ttnn::operations::normalization::DistributedLayerNormStage::NOT_DISTRIBUTED,
+    LayerNormType norm_type = LayerNormType::LAYERNORM,
+    DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
     const std::optional<const Tensor>& stats = std::nullopt);
+
 }  // namespace ttnn::prim

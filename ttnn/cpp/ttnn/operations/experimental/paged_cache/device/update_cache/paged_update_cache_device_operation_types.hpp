@@ -12,9 +12,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::update {
+namespace ttnn::experimental::prim {
 
-struct UpdateParams {
+struct PagedUpdateCacheParams {
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
@@ -22,11 +22,11 @@ struct UpdateParams {
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
 };
 
-struct UpdateInputs {
+struct PagedUpdateCacheInputs {
     Tensor cache_tensor;
     Tensor input_tensor;
     std::optional<Tensor> update_idxs_tensor;
     std::optional<Tensor> page_table;
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::update
+}  // namespace ttnn::experimental::prim

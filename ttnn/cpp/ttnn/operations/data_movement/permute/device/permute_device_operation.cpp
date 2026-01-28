@@ -9,6 +9,7 @@
 #include "permute_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
@@ -91,7 +92,7 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

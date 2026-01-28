@@ -9,7 +9,7 @@
 #include <vector>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm {
+namespace ttnn::experimental::prim {
 
 struct PagedRowMajorFusedUpdateCacheSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -32,15 +32,15 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const FusedUpdateParams& operation_attributes,
-        const FusedUpdateInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedFusedUpdateCacheParams& operation_attributes,
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const FusedUpdateParams& operation_attributes,
-        const FusedUpdateInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedFusedUpdateCacheParams& operation_attributes,
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value);
 };
 
 struct PagedRowMajorFusedUpdateCacheMeshWorkloadFactory {
@@ -48,16 +48,16 @@ struct PagedRowMajorFusedUpdateCacheMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const FusedUpdateParams& operation_attributes,
+        const PagedFusedUpdateCacheParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const FusedUpdateInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const FusedUpdateParams& operation_attributes,
-        const FusedUpdateInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const PagedFusedUpdateCacheParams& operation_attributes,
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm
+}  // namespace ttnn::experimental::prim

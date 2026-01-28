@@ -199,7 +199,8 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
-        const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const;
+        const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
     void collect_results();
     virtual bool validate_results(std::vector<uint32_t>& data) const = 0;
     void dump_results();

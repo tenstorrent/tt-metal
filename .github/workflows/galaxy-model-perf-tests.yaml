@@ -21,6 +21,30 @@ on:
           - wan2-2
           - mochi
           - qwenimage
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
@@ -31,10 +55,12 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
-      version: 22.04
-      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit

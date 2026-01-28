@@ -5,12 +5,10 @@
 #include "embeddings_fused_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::create(
-    const embedding::EmbeddingParams& operation_attributes,
-    const embedding::EmbeddingInputs& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
@@ -299,9 +297,9 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
 
 void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::EmbeddingParams& /*operation_attributes*/,
-    const embedding::EmbeddingInputs& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& /*operation_attributes*/,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -335,4 +333,4 @@ void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

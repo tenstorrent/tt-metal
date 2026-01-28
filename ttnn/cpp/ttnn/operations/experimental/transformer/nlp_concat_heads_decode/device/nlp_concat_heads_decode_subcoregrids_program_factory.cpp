@@ -8,7 +8,7 @@
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -16,7 +16,7 @@ using namespace tt::constants;
 NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsDecodeSubcoregridsProgramFactory::create(
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
     const NlpConcatHeadsDecodeInputs& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -139,7 +139,7 @@ void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
     const NlpConcatHeadsDecodeInputs& tensor_args,
-    tensor_return_value_t& output) {
+    Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
@@ -167,4 +167,4 @@ void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::program
+}  // namespace ttnn::experimental::prim

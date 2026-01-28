@@ -107,7 +107,7 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
 }
 
 template <uint32_t num_tiles = 1, bool is_32bit>
-inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop_configure_mop() {
+inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     load_replay_buf(
         ckernel::math::replay_buf_offset,  // replay buffer offset
@@ -151,7 +151,7 @@ inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init_()
 // Initialize for single face transpose
 template <bool is_32bit = false>
 inline void _llk_math_deepseek_moe_gate_transpose_dest_single_face_step2_init_() {
-    deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop_configure_mop<2, is_32bit>();
+    deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop<2, is_32bit>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>

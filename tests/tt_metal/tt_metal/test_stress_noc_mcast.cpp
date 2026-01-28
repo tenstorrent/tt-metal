@@ -43,16 +43,16 @@ using namespace tt::tt_metal;
 
 namespace {
 
-const uint32_t DEFAULT_SECONDS = 1;  // Reduced for gtest (original was 10)
+const uint32_t DEFAULT_SECONDS = 10;
 const uint32_t DEFAULT_TARGET_WIDTH = 1;
 const uint32_t DEFAULT_TARGET_HEIGHT = 1;
 const uint32_t N_RANDS = 512;
 
 }  // namespace
 
-// Stress test for NOC multicast - uses short duration for CI
+// Disabled because this test can hang the NoC due to hardware issues.
 // Uses detail::LaunchProgram which requires slow dispatch mode
-TEST_F(MeshDeviceSingleCardFixture, StressNocMcast) {
+TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
     IDevice* dev = devices_[0]->get_devices()[0];
 
     // Use default test parameters
