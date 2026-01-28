@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <future>
 #include <vector>
@@ -1213,6 +1214,12 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
         cluster_->get_target_device_type() == tt::TargetDevice::Silicon,
         "generate_dram_bank_to_noc_table_by_proximity should only be called for Silicon devices");
 
+    // Check cache first
+    if (dram_bank_to_noc_xy_by_proximity_[device_id].find(virtual_core) !=
+        dram_bank_to_noc_xy_by_proximity_[device_id].end()) {
+        return dram_bank_to_noc_xy_by_proximity_[device_id].at(virtual_core);
+    }
+
     const auto& soc_d = cluster_->get_soc_desc(device_id);
 
     // bank_id_to_dram_view must be pre-populated by generate_device_bank_to_noc_tables
@@ -1276,7 +1283,99 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
         }
     }
 
+    // Cache the result
+    dram_bank_to_noc_xy_by_proximity_[device_id][virtual_core] = dram_bank_to_noc_xy;
+
     return dram_bank_to_noc_xy;
+}
+
+std::vector<std::pair<CoreRange, std::vector<uint16_t>>> MetalContext::find_rectangular_ranges_with_same_table(
+    ChipId device_id, CoreCoord start_core, CoreCoord end_core) {
+    // Generate tables for all cores and group by table content
+    std::map<std::vector<uint16_t>, std::vector<CoreCoord>> table_to_cores;
+
+    for (uint32_t y = start_core.y; y <= end_core.y; y++) {
+        for (uint32_t x = start_core.x; x <= end_core.x; x++) {
+            CoreCoord core(x, y);
+            auto table = generate_dram_bank_to_noc_table_by_proximity(device_id, core);
+            table_to_cores[table].push_back(core);
+        }
+    }
+
+    // Find rectangular ranges for each unique table
+    std::vector<std::pair<CoreRange, std::vector<uint16_t>>> ranges;
+    for (auto& [table, cores] : table_to_cores) {
+        if (cores.empty()) {
+            continue;
+        }
+
+        // Sort cores by y then x for easier range detection
+        std::sort(cores.begin(), cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            if (a.y != b.y) {
+                return a.y < b.y;
+            }
+            return a.x < b.x;
+        });
+
+        // Find rectangular ranges using a simple greedy approach
+        // Group consecutive rows/columns that form rectangles
+        std::vector<bool> used(cores.size(), false);
+        for (size_t i = 0; i < cores.size(); i++) {
+            if (used[i]) {
+                continue;
+            }
+
+            CoreCoord start = cores[i];
+            CoreCoord end = cores[i];
+            used[i] = true;
+
+            // Try to extend the range horizontally first
+            bool extended = true;
+            while (extended) {
+                extended = false;
+                // Try to extend right
+                CoreCoord next_right = {end.x + 1, end.y};
+                auto it = std::find(cores.begin(), cores.end(), next_right);
+                if (it != cores.end() && !used[std::distance(cores.begin(), it)]) {
+                    end.x++;
+                    used[std::distance(cores.begin(), it)] = true;
+                    extended = true;
+                }
+            }
+
+            // Try to extend vertically (entire row)
+            extended = true;
+            while (extended) {
+                extended = false;
+                CoreCoord next_row_start = {start.x, end.y + 1};
+                bool can_extend_row = true;
+                std::vector<size_t> row_indices;
+
+                // Check if entire next row exists
+                for (uint32_t x = start.x; x <= end.x; x++) {
+                    CoreCoord check_core = {x, end.y + 1};
+                    auto it = std::find(cores.begin(), cores.end(), check_core);
+                    if (it == cores.end() || used[std::distance(cores.begin(), it)]) {
+                        can_extend_row = false;
+                        break;
+                    }
+                    row_indices.push_back(std::distance(cores.begin(), it));
+                }
+
+                if (can_extend_row) {
+                    end.y++;
+                    for (auto idx : row_indices) {
+                        used[idx] = true;
+                    }
+                    extended = true;
+                }
+            }
+
+            ranges.emplace_back(CoreRange(start, end), table);
+        }
+    }
+
+    return ranges;
 }
 
 void MetalContext::initialize_device_bank_to_noc_tables(
@@ -1301,43 +1400,49 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         "Size of bank_to_noc table is greater than available space");
 
     // For Wormhole, generate per-core DRAM tables picking the closest NOC endpoint.
-    // Each core needs its own unique table, so we iterate and unicast to each core.
+    // Find rectangular ranges with the same table and multicast to those ranges.
     if (cluster_->arch() == ARCH::WORMHOLE_B0 && end_core.has_value() &&
         cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
         auto start = virtual_core;
         auto end = end_core.value();
-        for (uint32_t y = start.y; y <= end.y; y++) {
-            for (uint32_t x = start.x; x <= end.x; x++) {
-                CoreCoord core(x, y);
-                auto dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, core);
+        auto ranges = find_rectangular_ranges_with_same_table(device_id, start, end);
 
-                cluster_->write_core(
-                    dram_bank_to_noc_xy.data(),
-                    dram_to_noc_sz_in_bytes,
-                    tt_cxy_pair(device_id, core),
-                    mem_bank_to_noc_addr);
+        for (const auto& [range, dram_bank_to_noc_xy] : ranges) {
+            // Multicast DRAM table to the rectangular range
+            cluster_->noc_multicast_write(
+                dram_bank_to_noc_xy.data(),
+                dram_to_noc_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                mem_bank_to_noc_addr);
 
-                uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
-                cluster_->write_core(
-                    l1_bank_to_noc_xy_[device_id].data(),
-                    l1_to_noc_sz_in_bytes,
-                    tt_cxy_pair(device_id, core),
-                    l1_noc_addr);
+            uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                l1_bank_to_noc_xy_[device_id].data(),
+                l1_to_noc_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                l1_noc_addr);
 
-                uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
-                cluster_->write_core(
-                    dram_bank_offset_map_[device_id].data(),
-                    dram_offset_sz_in_bytes,
-                    tt_cxy_pair(device_id, core),
-                    dram_offset_addr);
+            uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                dram_bank_offset_map_[device_id].data(),
+                dram_offset_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                dram_offset_addr);
 
-                uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
-                cluster_->write_core(
-                    l1_bank_offset_map_[device_id].data(),
-                    l1_offset_sz_in_bytes,
-                    tt_cxy_pair(device_id, core),
-                    l1_offset_addr);
-            }
+            uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                l1_bank_offset_map_[device_id].data(),
+                l1_offset_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                l1_offset_addr);
         }
     } else if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
