@@ -11,8 +11,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.wormhole.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
+from models.demos.nlp.encoder.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.nlp.encoder.distilbert.tt import ttnn_optimized_distilbert
 
 
 def load_inputs(input_path, batch):
@@ -288,7 +288,7 @@ def run_distilbert_question_and_answering_inference_squad_v2(
 
 @pytest.mark.parametrize(
     "model_name, input_loc",
-    ((["distilbert-base-uncased-distilled-squad", "models/demos/wormhole/distilbert/demo/input_data.json"]),),
+    ((["distilbert-base-uncased-distilled-squad", "models/demos/nlp/encoder/distilbert/demo/input_data.json"]),),
 )
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("distilbert", [ttnn_optimized_distilbert])

@@ -12,7 +12,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
+from models.demos.nlp.encoder.distilbert.tt import ttnn_optimized_distilbert
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
