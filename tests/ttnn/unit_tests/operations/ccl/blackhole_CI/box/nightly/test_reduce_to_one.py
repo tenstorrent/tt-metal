@@ -96,13 +96,13 @@ def test_reduce_to_one(bh_2d_mesh_device):
 
     print("\n=== Testing reduce_to_one ===")
 
-    # Generate test data - different values for each device
-    torch.manual_seed(42)
+    # Generate test data - random values for each device
     data_per_device = []
+    torch.manual_seed(42)  # For reproducibility
 
     for device_idx in range(num_devices):
-        # Each device gets unique data
-        data = torch.randn(tensor_shape, dtype=torch.bfloat16) * 0.5 + device_idx
+        # Each device gets random values
+        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
         data_per_device.append(data)
 
     # Reshape data to match mesh shape (4 rows, 2 cols)
@@ -139,8 +139,9 @@ def test_reduce_to_one(bh_2d_mesh_device):
     print("\nVerifying output...")
     output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
 
-    # Get output from root device (linearized index in 2x4 mesh)
-    root_device_idx = root_coord[0] * 4 + root_coord[1]
+    # Get output from root device (row-major linearized index)
+    # ConcatMeshToTensor uses row-major order: device_idx = row * num_cols + col
+    root_device_idx = root_coord[0] * submesh_device.shape[1] + root_coord[1]
     output_root = output_torch[root_device_idx]
 
     # Tolerances for bfloat16

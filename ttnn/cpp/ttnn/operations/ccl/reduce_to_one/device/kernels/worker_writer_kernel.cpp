@@ -35,11 +35,14 @@ void kernel_main() {
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     // ROOT1 doesn't send - early exit
+    // ROOT1 compute writes to output_cb twice (stage 1 and stage 3), so we need to wait twice
     if constexpr (device_role == MESH_ROOT1) {
-        // tt_l1_ptr routing_l1_info_t* routing_table =
-        // reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-        // uint16_t my_chip_id = routing_table->my_device_id;
-        // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
+        // Wait for stage 1 output, pop to free CB for stage 3
+        cb_wait_front(source_cb, num_tiles);
+        cb_pop_front(source_cb, num_tiles);
+        // Wait for final stage 3 output
+        cb_wait_front(source_cb, num_tiles);
+        cb_pop_front(source_cb, num_tiles);
         return;
     }
 
@@ -88,18 +91,8 @@ void kernel_main() {
     uint64_t header_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, header_dest_addr);
     uint64_t payload_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, payload_dest_addr);
 
-    // Debug: print destination semaphore info
-    // DPRINT << "worker dst_sem: noc_x=" << my_noc_x << " noc_y=" << my_noc_y
-    //        << " sem_addr=" << dst_sem_addr << " l1_addr=" << dst_l1_addr << ENDL();
-
     // Wait for data in source CB
     cb_wait_front(source_cb, num_tiles);
-    // DPRINT << "worker writer wait done " << source_cb <<ENDL();
-    // tt_l1_ptr routing_l1_info_t* routing_table =
-    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    // uint16_t my_chip_id = routing_table->my_device_id;
-    // DPRINT << "worker writer wait done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
-
     uint32_t data_addr = get_read_ptr(source_cb);
 
     // Send header to bottom core
@@ -107,9 +100,6 @@ void kernel_main() {
 
     // Send payload to bottom core (right after header)
     noc_async_write(data_addr, payload_noc_addr, payload_size);
-
-    // Wait for writes to complete before signaling ready
-    noc_async_writes_flushed();
 
     // Signal bottom core by incrementing this worker's semaphore on bottom core
     uint64_t arrival_sem_noc_addr = get_noc_addr(bottom_core_noc_x, bottom_core_noc_y, arrival_sem_addr);
@@ -119,9 +109,4 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
-
-    // tt_l1_ptr routing_l1_info_t* routing_table =
-    //     reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    // uint16_t my_chip_id = routing_table->my_device_id;
-    // DPRINT << "fabric writer done " << (uint)my_chip_id << " device_role " << device_role <<ENDL();
 }
