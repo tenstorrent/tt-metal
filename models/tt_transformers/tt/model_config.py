@@ -36,6 +36,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -717,6 +718,7 @@ class ModelArgs:
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
             self.prefill_rows = 8  # TODO if BH = 10, if wh = 8
+            self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -727,7 +729,6 @@ class ModelArgs:
                 if self.is_galaxy
                 else self.find_prefill_grid(self.prefill_rows, self.hidden_dim // self.tile_size)
             )
-
             self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
@@ -1500,7 +1501,6 @@ class ModelArgs:
     def get_attn_input_mem_config(self, mode: str, prefetcher=None):
         match mode:
             case "decode":
-                self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
                 if prefetcher is not None:
                     return ttnn.create_sharded_memory_config(
                         shape=(32, self.dim // self.cluster_shape[0] // prefetcher.ring_size),
