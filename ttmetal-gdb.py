@@ -16,7 +16,7 @@ class ShapePrinter:
 
     def __init__(self, val):
         """Initialize the printer with a gdb.Value representing a Shape object."""
-        self.val = val
+        self.__val = val
 
     def to_string(self):
         """Return a string representation of the Shape.
@@ -24,43 +24,21 @@ class ShapePrinter:
         Format: Shape([d1, d2, ..., dn], rank=n, volume=v)
         where d1..dn are dimensions, n is the rank, and v is the total volume.
         """
-        try:
-            # Access the value_ member (SmallVector<uint32_t>)
-            value_vec = self.val["value_"]
+        value_ = self.__val["value_"]
 
-            # Cast to SmallVectorBase to access size and data pointer
-            base_type = gdb.lookup_type("ttsl::detail::llvm::SmallVectorBase<unsigned int>")
-            vec_base = value_vec.cast(base_type)
+        t = value_.type.template_argument(0).pointer()
+        begin_ptr = value_["BeginX"].cast(t)
+        size = value_["Size"]
 
-            # Get the size (number of dimensions)
-            size = int(vec_base["Size"])
+        # Extract elements
+        dimensions = []
+        for i in range(size):
+            elem = (begin_ptr + i).dereference()
+            dimensions.append(int(elem))
 
-            if size == 0:
-                return "Shape([])"
+        volume = eval("*".join(map(str, dimensions))) if dimensions else 0
 
-            # Get the data pointer
-            begin_ptr = vec_base["BeginX"]
-            uint32_ptr_type = gdb.lookup_type("uint32_t").pointer()
-            data_ptr = begin_ptr.cast(uint32_ptr_type)
-
-            # Extract all dimensions
-            dims = []
-            for i in range(size):
-                dims.append(int(data_ptr[i]))
-
-            # Calculate total volume
-            volume = 1
-            for dim in dims:
-                volume *= dim
-
-            # Format the output
-            dims_str = ", ".join(str(d) for d in dims)
-            return f"Shape([{dims_str}], rank={size}, volume={volume})"
-
-        except gdb.error as e:
-            return f"Shape(<inaccessible: {e}>)"
-        except Exception as e:
-            return f"Shape(<error: {e}>)"
+        return "Shape({}, rank={}, volume={})".format(dimensions, len(dimensions), volume)
 
     def display_hint(self):
         """Return a display hint for GDB.
