@@ -492,6 +492,43 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             cmd_ptr = fence;
         }
 
+        // Opportunistically retire any completed reads without blocking.
+        // This prevents inflight slots from staying full while commands are being processed.
+        bool retired_any = false;
+        while (inflight_count != 0U) {
+            const uint32_t idx = inflight_head;
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, inflight[idx].trid)) {
+                break;
+            }
+            retired_any = true;
+
+            const bool wrapped = (inflight[idx].flags & INFLIGHT_FLAG_WRAPPED) != 0U;
+            if (wrapped && fence != cmddat_q_base) {
+                fence = cmddat_q_base;
+            }
+            if (fence < cmd_ptr) {
+                cmd_ptr = fence;
+            }
+            fence += inflight[idx].reserved_size;
+
+            inflight_head = (inflight_head + 1U) & INFLIGHT_MASK;
+            --inflight_count;
+
+            if (inflight[idx].flags & INFLIGHT_FLAG_STALL_AFTER) {
+                ASSERT(inflight_count == 0U);
+                issue_fence = fence;  // keep reservation pointer aligned
+                stall_state = STALLED;
+                invalidate_l1_cache();
+                return;
+            }
+        }
+        if (retired_any) {
+            invalidate_l1_cache();
+            if (inflight_count == 0U) {
+                issue_fence = fence;
+            }
+        }
+
         // Preserve the original state machine behavior: `cmd_ready` is based on the committed fence at entry.
         const bool cmd_ready = (cmd_ptr != fence);
 
