@@ -426,13 +426,15 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     static_assert((MAX_OUTSTANDING_READS & (MAX_OUTSTANDING_READS - 1U)) == 0U);  // power-of-two for masking
     static constexpr uint32_t INFLIGHT_MASK = MAX_OUTSTANDING_READS - 1U;
     static constexpr uint32_t INFLIGHT_FLAG_STALL_AFTER = 0x1u;
+    static constexpr uint32_t INFLIGHT_FLAG_WRAPPED = 0x2u;
 
     struct InflightRead {
-        uint32_t fence;          // where the read's preamble begins (payload at fence + preamble)
         uint32_t trid;           // NoC transaction ID
-        uint32_t read_size;      // payload bytes (noc_async_read length)
+#if ENABLE_PREFETCH_DPRINTS
+        uint32_t read_size;  // payload bytes (noc_async_read length)
+#endif
         uint32_t reserved_size;  // payload + preamble (bytes to advance committed fence)
-        uint32_t flags;          // bit0: stall-after (ExecBuf path)
+        uint32_t flags;          // bit0: stall-after (ExecBuf path), bit1: wrapped
     };
 
     // Circular queue: only head + count are needed; tail is derived.
@@ -510,6 +512,25 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
             uint32_t total_size = 0U;
             const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
+            const uint32_t needed_bytes = fetch_size + preamble_size;
+
+            // Pre-check cmddat_q space to avoid calling into read_from_pcie only to fail.
+            // If we can't fit at the end, wrap to the beginning if there is enough free space before cmd_ptr.
+            bool wrapped = false;
+            if (cmd_ptr > issue_fence) {
+                const uint32_t available_bytes = cmd_ptr - issue_fence;
+                if (needed_bytes > available_bytes) {
+                    break;
+                }
+            } else if (issue_fence + needed_bytes > cmddat_q_end) {
+                const uint32_t available_bytes_at_beginning = cmd_ptr - cmddat_q_base;
+                if (needed_bytes > available_bytes_at_beginning) {
+                    break;
+                }
+                issue_fence = cmddat_q_base;
+                wrapped = true;
+            }
+            const uint32_t read_fence = issue_fence;
 
 #if ENABLE_PREFETCH_DPRINTS
             DPRINT << "fetch_q_get_cmds: ISSUE_ATTEMPT idx=" << idx << " trid=" << this_trid
@@ -523,7 +544,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                 prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid);
 
             if (total_size == 0U) {
-                // Could not issue due to cmddat_q wrap restriction. Do not consume host entry; retry later.
+                // Could not issue due to cmddat_q space constraints. Do not consume host entry; retry later.
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_FAILED trid=" << this_trid << " fetch_size=" << fetch_size
                        << " issue_fence=" << issue_fence << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
@@ -531,14 +552,12 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                 break;
             }
 
-            // `issue_fence` may have been wrapped inside read_from_pcie before issuing the read.
-            const uint32_t read_fence = issue_fence;
-
-            inflight[idx].fence = read_fence;
             inflight[idx].trid = this_trid;
+#if ENABLE_PREFETCH_DPRINTS
             inflight[idx].read_size = fetch_size;
+#endif
             inflight[idx].reserved_size = total_size;
-            inflight[idx].flags = stall_flag ? INFLIGHT_FLAG_STALL_AFTER : 0x0u;
+            inflight[idx].flags = (stall_flag ? INFLIGHT_FLAG_STALL_AFTER : 0x0u) | (wrapped ? INFLIGHT_FLAG_WRAPPED : 0x0u);
             ++inflight_count;
 
             // Advance reservation pointer for the next issue.
@@ -569,10 +588,12 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         if (!cmd_ready) {
             if (inflight_count != 0U) {
                 const uint32_t idx = inflight_head;
+                const bool wrapped = (inflight[idx].flags & INFLIGHT_FLAG_WRAPPED) != 0U;
+                const uint32_t read_fence = wrapped ? cmddat_q_base : fence;
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << inflight[idx].trid
-                       << " read_fence=" << inflight[idx].fence << " read_size=" << inflight[idx].read_size
+                       << " read_fence=" << read_fence << " read_size=" << inflight[idx].read_size
                        << " total_size=" << inflight[idx].reserved_size
                        << " preamble_size=" << (inflight[idx].reserved_size - inflight[idx].read_size)
                        << " flags=" << inflight[idx].flags << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
@@ -580,13 +601,13 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
 
-                // If the read wrapped cmddat_q, align the committed fence to the read's fence before advancing.
-                if (fence != inflight[idx].fence) {
+                // If the read wrapped cmddat_q, align the committed fence to cmddat_q_base before advancing.
+                if (wrapped && fence != cmddat_q_base) {
 #if ENABLE_PREFETCH_DPRINTS
-                    DPRINT << "fetch_q_get_cmds: RETIRE_FENCE_ADJUST fence=" << fence << " -> " << inflight[idx].fence
+                    DPRINT << "fetch_q_get_cmds: RETIRE_FENCE_ADJUST fence=" << fence << " -> " << cmddat_q_base
                            << ENDL();
 #endif
-                    fence = inflight[idx].fence;
+                    fence = cmddat_q_base;
                 }
                 if (fence < cmd_ptr) {
 #if ENABLE_PREFETCH_DPRINTS
@@ -664,6 +685,26 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                         const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                         uint32_t total_size2 = 0U;
                         const uint32_t idx2 = (inflight_head + inflight_count) & INFLIGHT_MASK;  // == inflight_head
+                        const uint32_t needed_bytes2 = fetch_size + preamble_size;
+
+                        // Pre-check cmddat_q space to avoid calling into read_from_pcie only to fail.
+                        bool can_issue2 = true;
+                        bool wrapped2 = false;
+                        if (cmd_ptr > issue_fence) {
+                            const uint32_t available_bytes = cmd_ptr - issue_fence;
+                            if (needed_bytes2 > available_bytes) {
+                                can_issue2 = false;
+                            }
+                        } else if (issue_fence + needed_bytes2 > cmddat_q_end) {
+                            const uint32_t available_bytes_at_beginning = cmd_ptr - cmddat_q_base;
+                            if (needed_bytes2 > available_bytes_at_beginning) {
+                                can_issue2 = false;
+                            } else {
+                                issue_fence = cmddat_q_base;
+                                wrapped2 = true;
+                            }
+                        }
+                        const uint32_t read_fence2 = issue_fence;
 #if ENABLE_PREFETCH_DPRINTS
                         DPRINT << "fetch_q_get_cmds: RE_CHECK_ISSUE_ATTEMPT idx=" << idx2 << " trid=" << this_trid
                                << " fetch_size=" << fetch_size << " preamble_size=" << preamble_size
@@ -671,15 +712,17 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                                << ENDL();
 #endif
 
-                        total_size2 = read_from_pcie<preamble_size>(
-                            prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid);
+                        if (can_issue2) {
+                            total_size2 = read_from_pcie<preamble_size>(
+                                prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid);
+                        }
                         if (total_size2 != 0U) {
-                            const uint32_t read_fence2 = issue_fence;
-                            inflight[idx2].fence = read_fence2;
                             inflight[idx2].trid = this_trid;
+#if ENABLE_PREFETCH_DPRINTS
                             inflight[idx2].read_size = fetch_size;
+#endif
                             inflight[idx2].reserved_size = total_size2;
-                            inflight[idx2].flags = 0x0u;
+                            inflight[idx2].flags = wrapped2 ? INFLIGHT_FLAG_WRAPPED : 0x0u;
                             ++inflight_count;
                             issue_fence += total_size2;
 
