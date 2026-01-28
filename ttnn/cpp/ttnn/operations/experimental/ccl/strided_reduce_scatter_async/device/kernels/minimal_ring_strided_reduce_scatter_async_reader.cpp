@@ -222,6 +222,10 @@ void kernel_main() {
                             DPRINT << "next tile that would be read" << ENDL();
                             uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
+
+                            cb_reserve_back(cb_in0, tile_granularity);
+                            uint32_t l1_write_addr = get_write_ptr(cb_in0);
+
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
                                 auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
                                     first_tile_row_in_mm_M_block,
@@ -252,23 +256,29 @@ void kernel_main() {
                                     slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                 // DPRINT << "slice_tile_idx: " << slice_tile_idx << ENDL();
                                 // DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
+                                uint32_t input_tile_id = global_tile_idx + batch_offset;
                                 DPRINT << "predicted input_tile_id:" << global_tile_idx + batch_offset << " " << ENDL();
                                 DPRINT << "predicted intermediate_tile_id:" << global_tile_idx << " " << ENDL();
-                            };
+                                uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                                noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                                l1_write_addr += page_size;
+                            }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_in0, tile_granularity);
                         }
 
-                        cb_reserve_back(cb_in0, tile_granularity);
-                        uint32_t l1_write_addr = get_write_ptr(cb_in0);
-                        for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                            uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset + j;
-                            DPRINT << "writing to input_tile_id: " << input_tile_id << ENDL();
-                            uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                            l1_write_addr += page_size;
-                        }
-                        // TODO: can move it outside after removing the if (reduce)
-                        noc_async_read_barrier();
-                        cb_push_back(cb_in0, tile_granularity);
+                        // cb_reserve_back(cb_in0, tile_granularity);
+                        // uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                        // for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                        //     uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset + j;
+                        //     DPRINT << "writing to input_tile_id: " << input_tile_id << ENDL();
+                        //     uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                        //     noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        //     l1_write_addr += page_size;
+                        // }
+                        // // TODO: can move it outside after removing the if (reduce)
+                        // noc_async_read_barrier();
+                        // cb_push_back(cb_in0, tile_granularity);
 
                         if (do_reduce) {
                             // TODO: read the next intermediate slice out of the intermediate buffer, and put it in
