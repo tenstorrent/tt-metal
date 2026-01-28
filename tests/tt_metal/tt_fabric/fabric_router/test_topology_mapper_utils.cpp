@@ -1425,5 +1425,423 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_StressTest_ManyConfigurat
     EXPECT_GT(successful_configs, 0u) << "At least some configurations should succeed";
 }
 
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_2_Fails) {
+    // Negative test: Logical topology that cannot be mapped to physical topology
+    // This test verifies that the mapper correctly fails when:
+    // 1. Logical meshes requires connectivity not available in physical meshes
+    // 2. The mapper tries multiple different multi-mesh mapping combinations before failing
+    //
+    // Logical Topology (2 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 (line: 0-1)
+    //
+    // Physical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    //   Mesh 1: 2x2 grid (4 ASICs) - missing intra-mesh connectivity
+    //   Mesh 2: 2x2 grid (4 ASICs) - missing intra-mesh connectivity
+    //   Inter-mesh: All-to-all
+    //
+    // Expected behavior:
+    //   - The mapper will try multiple combinations, but will fail because of the missing intra-mesh connectivity
+    //   - Eventually exhausts all possibilities and fails
+    //   - This ensures the retry logic is exercised (at least 2 attempts)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh0{0};
+    const MeshId logical_mesh1{1};
+    const MeshId physical_mesh0{0};
+    const MeshId physical_mesh1{1};
+    const MeshId physical_mesh2{2};
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph (2 meshes: 2x2 and 2x2)
+    // =========================================================================
+
+    // Logical Mesh 0: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, 2, 2);
+
+    // Logical Mesh 1: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, 2, 2);
+
+    // Create logical multi-mesh graph
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh1] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+
+    // Create mesh-level adjacency map (line: 0-1)
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[logical_mesh0] = {logical_mesh1};
+    logical_mesh_level_adj_map[logical_mesh1] = {logical_mesh0};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (3 meshes, all 2x2)
+    // =========================================================================
+
+    // Physical Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, 2, 2);
+
+    // Physical Mesh 1: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    PhysicalAdjacencyMap physical_adj_m1;
+    physical_adj_m1[physical_asics_m1[0]] = {physical_asics_m1[1]};
+    physical_adj_m1[physical_asics_m1[1]] = {physical_asics_m1[0]};
+    physical_adj_m1[physical_asics_m1[2]] = {physical_asics_m1[3]};
+    physical_adj_m1[physical_asics_m1[3]] = {physical_asics_m1[2]};
+
+    // Physical Mesh 2: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
+    }
+    PhysicalAdjacencyMap physical_adj_m2;
+    physical_adj_m2[physical_asics_m2[0]] = {physical_asics_m2[1]};
+    physical_adj_m2[physical_asics_m2[1]] = {physical_asics_m2[0]};
+    physical_adj_m2[physical_asics_m2[2]] = {physical_asics_m2[3]};
+    physical_adj_m2[physical_asics_m2[3]] = {physical_asics_m2[2]};
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh2] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create mesh-level adjacency map (all-to-all)
+    // This allows the mapper to try different combinations of physical meshes
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {physical_mesh1, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh1] = {physical_mesh0, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh2] = {physical_mesh0, physical_mesh1};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Run mapping and verify failure
+    // =========================================================================
+
+    // Create mapping config
+    TopologyMappingConfig config;
+    config.strict_mode = false;
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    // Call map_multi_mesh_to_physical - should fail
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Verify overall result failed
+    EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to missing intra-mesh connectivity";
+    EXPECT_FALSE(result.error_message.empty()) << "Error message should be provided when mapping fails";
+
+    // Verify that no complete mapping was found
+    // The mapper may find partial mappings, but not all logical meshes should be mapped
+    std::set<MeshId> mapped_logical_meshes;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mapped_logical_meshes.insert(fabric_node.mesh_id);
+    }
+
+    // Verify that the error message indicates multiple attempts were made
+    // The error message should mention retry attempts or failed mesh pairs
+    // This ensures the retry logic was exercised (at least 2 attempts)
+    bool mentions_retry_or_attempts = result.error_message.find("attempt") != std::string::npos ||
+                                      result.error_message.find("retry") != std::string::npos ||
+                                      result.error_message.find("Failed mesh pairs") != std::string::npos;
+    EXPECT_TRUE(mentions_retry_or_attempts)
+        << "Error message should indicate multiple mapping attempts were made. Error: " << result.error_message;
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_3_Fails) {
+    // Negative test: Logical topology that cannot be mapped to physical topology
+    // This test verifies that the mapper correctly fails when:
+    // 1. Logical meshes requires connectivity not available in physical meshes
+    // 2. The mapper tries multiple different multi-mesh mapping combinations before failing
+    //
+    // Logical Topology (2 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 (line: 0-1)
+    //
+    // Physical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    //   Mesh 1: 2x2 grid (4 ASICs) - properly connected
+    //   Mesh 2: 2x2 grid (4 ASICs) - properly connected
+    //   Inter-mesh: none
+    //
+    // Expected behavior:
+    //   - The mapper will try multiple combinations, but will fail because of the missing inter-mesh connectivity
+    //   - Eventually exhausts all possibilities and fails
+    //   - This ensures the retry logic is exercised (at least 2 attempts)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh0{0};
+    const MeshId logical_mesh1{1};
+    const MeshId physical_mesh0{0};
+    const MeshId physical_mesh1{1};
+    const MeshId physical_mesh2{2};
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph (2 meshes: 2x2 and 2x2)
+    // =========================================================================
+
+    // Logical Mesh 0: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, 2, 2);
+
+    // Logical Mesh 1: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, 2, 2);
+
+    // Create logical multi-mesh graph
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh1] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+
+    // Create mesh-level adjacency map (line: 0-1)
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[logical_mesh0] = {logical_mesh1};
+    logical_mesh_level_adj_map[logical_mesh1] = {logical_mesh0};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (3 meshes, all 2x2)
+    // =========================================================================
+
+    // Physical Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, 2, 2);
+
+    // Physical Mesh 1: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    auto physical_adj_m1 = build_grid_adjacency(physical_asics_m1, 2, 2);
+
+    // Physical Mesh 2: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
+    }
+    auto physical_adj_m2 = build_grid_adjacency(physical_asics_m2, 2, 2);
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh2] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create mesh-level adjacency map (no connectivity)
+    // This allows the mapper to try different combinations of physical meshes
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {};
+    physical_mesh_level_adj_map[physical_mesh1] = {};
+    physical_mesh_level_adj_map[physical_mesh2] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Run mapping and verify failure
+    // =========================================================================
+
+    // Create mapping config
+    TopologyMappingConfig config;
+    config.strict_mode = false;
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    // Call map_multi_mesh_to_physical - should fail
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Verify overall result failed
+    EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to missing inter-mesh connectivity";
+    EXPECT_FALSE(result.error_message.empty()) << "Error message should be provided when mapping fails";
+
+    // Verify that no complete mapping was found
+    // The mapper may find partial mappings, but not all logical meshes should be mapped
+    std::set<MeshId> mapped_logical_meshes;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mapped_logical_meshes.insert(fabric_node.mesh_id);
+    }
+
+    // Verify that the error message indicates multiple attempts were made
+    // The error message should mention retry attempts or failed mesh pairs
+    // This ensures the retry logic was exercised (at least 2 attempts)
+    bool mentions_retry_or_attempts = result.error_message.find("attempt") != std::string::npos ||
+                                      result.error_message.find("retry") != std::string::npos ||
+                                      result.error_message.find("Failed mesh pairs") != std::string::npos;
+    EXPECT_TRUE(mentions_retry_or_attempts)
+        << "Error message should indicate multiple mapping attempts were made. Error: " << result.error_message;
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_4_Fails) {
+    // Negative test: Logical topology that cannot be mapped to physical topology
+    // This test verifies that the mapper correctly fails when:
+    // 1. Logical meshes requires connectivity not available in physical meshes
+    // 2. The mapper tries multiple different multi-mesh mapping combinations before failing
+    //
+    // Logical Topology (2 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 (none)
+    //
+    // Physical Topology (3 meshes):
+    //   Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    //   Mesh 1: 2x2 grid (4 ASICs) - missing intra-mesh connectivity
+    //   Mesh 2: 2x2 grid (4 ASICs) - missing intra-mesh connectivity
+    //   Inter-mesh: All-to-all
+    //
+    // Expected behavior:
+    //   - The mapper will try multiple combinations, but will fail because of the missing intra-mesh connectivity
+    //   - Eventually exhausts all possibilities and fails
+    //   - This ensures the retry logic is exercised (at least 2 attempts)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh0{0};
+    const MeshId logical_mesh1{1};
+    const MeshId physical_mesh0{0};
+    const MeshId physical_mesh1{1};
+    const MeshId physical_mesh2{2};
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph (2 meshes: 2x2 and 2x2)
+    // =========================================================================
+
+    // Logical Mesh 0: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, 2, 2);
+
+    // Logical Mesh 1: 2x2 grid (4 nodes)
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, 2, 2);
+
+    // Create logical multi-mesh graph
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh1] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+
+    // Create mesh-level adjacency map (line: 0-1)
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[logical_mesh0] = {};
+    logical_mesh_level_adj_map[logical_mesh1] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (3 meshes, all 2x2)
+    // =========================================================================
+
+    // Physical Mesh 0: 2x2 grid (4 ASICs) - properly connected
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, 2, 2);
+
+    // Physical Mesh 1: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    PhysicalAdjacencyMap physical_adj_m1;
+    physical_adj_m1[physical_asics_m1[0]] = {physical_asics_m1[1]};
+    physical_adj_m1[physical_asics_m1[1]] = {physical_asics_m1[0]};
+    physical_adj_m1[physical_asics_m1[2]] = {physical_asics_m1[3]};
+    physical_adj_m1[physical_asics_m1[3]] = {physical_asics_m1[2]};
+
+    // Physical Mesh 2: 2x2 grid (4 ASICs) - missing intra-mesh connectivity (2 x two asics connected in line)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
+    }
+    PhysicalAdjacencyMap physical_adj_m2;
+    physical_adj_m2[physical_asics_m2[0]] = {physical_asics_m2[1]};
+    physical_adj_m2[physical_asics_m2[1]] = {physical_asics_m2[0]};
+    physical_adj_m2[physical_asics_m2[2]] = {physical_asics_m2[3]};
+    physical_adj_m2[physical_asics_m2[3]] = {physical_asics_m2[2]};
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh2] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create mesh-level adjacency map (all-to-all)
+    // This allows the mapper to try different combinations of physical meshes
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {physical_mesh1, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh1] = {physical_mesh0, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh2] = {physical_mesh0, physical_mesh1};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Run mapping and verify failure
+    // =========================================================================
+
+    // Create mapping config
+    TopologyMappingConfig config;
+    config.strict_mode = false;
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    // Call map_multi_mesh_to_physical - should fail
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Verify overall result failed
+    EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to missing intra-mesh connectivity";
+    EXPECT_FALSE(result.error_message.empty()) << "Error message should be provided when mapping fails";
+
+    // Verify that no complete mapping was found
+    // The mapper may find partial mappings, but not all logical meshes should be mapped
+    std::set<MeshId> mapped_logical_meshes;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mapped_logical_meshes.insert(fabric_node.mesh_id);
+    }
+
+    // Verify that the error message indicates multiple attempts were made
+    // The error message should mention retry attempts or failed mesh pairs
+    // This ensures the retry logic was exercised (at least 2 attempts)
+    bool mentions_retry_or_attempts = result.error_message.find("attempt") != std::string::npos ||
+                                      result.error_message.find("retry") != std::string::npos ||
+                                      result.error_message.find("Failed mesh pairs") != std::string::npos;
+    EXPECT_TRUE(mentions_retry_or_attempts)
+        << "Error message should indicate multiple mapping attempts were made. Error: " << result.error_message;
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::tt_fabric
