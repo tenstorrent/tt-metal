@@ -226,8 +226,8 @@ jobs:
         run: |
           pytest -n auto --disable-warnings -q -s \
             --input-method=json \
-            --input-path='models/demos/tg/falcon7b/input_data_tg.json' \
-            models/demos/tg/falcon7b/demo_tg.py \
+            --input-path='models/demos/nlp/llms/falcon7b/tg/input_data_tg.json' \
+            models/demos/nlp/llms/falcon7b/tg/demo_tg.py \
             --timeout=1500
       - name: Run SentenceBert demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'sentence_bert' }}
