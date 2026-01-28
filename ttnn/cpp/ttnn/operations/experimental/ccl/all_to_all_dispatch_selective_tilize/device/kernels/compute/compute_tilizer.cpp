@@ -7,12 +7,6 @@
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/tilize.h"
 
-// Compute kernel for tilizing incoming tokens from the reader.
-// Waits for writer to pass total_chunks via CB, then processes each chunk:
-// - Wait for reader to push tokens_per_chunk tokens
-// - Tilize the block
-// - Push tilized output to writer
-
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row
 // cb_id: circular buffer ID
@@ -70,6 +64,12 @@ void print_tile_rows(
     }
     DPRINT << "++++++" << ENDL();
 }
+
+// Compute kernel for tilizing incoming tokens from the reader.
+// Waits for writer to pass total_chunks via CB, then processes each chunk:
+// - Wait for reader to push tokens_per_chunk tokens
+// - Tilize the block
+// - Push tilized output to writer
 namespace NAMESPACE {
 void MAIN {
     // Compile-time arguments
@@ -79,22 +79,23 @@ void MAIN {
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t max_tiles_per_chunk = get_named_compile_time_arg_val("max_tiles_per_chunk");
 
-    // get_runtime args
+    // Runtime arguments
     uint32_t rt_args_idx = 0;
     uint32_t tiles_per_chunk = get_arg_val<uint32_t>(rt_args_idx++);
 
+    // Constants
+    constexpr uint32_t one_page = 1;
+
+    // Setup
     compute_kernel_hw_startup(tilizer_input_cb_id, tilizer_output_cb_id);
+    fast_tilize_init(tilizer_input_cb_id, max_tiles_per_chunk, tilizer_output_cb_id);
 
-    // constants
-    constexpr one_page = 1;
-
-    // // Wait for writer to push total_chunks via CB
+    // Wait for writer to push total_chunks via CB
     cb_wait_front(total_chunks_cb_id, one_page);
 
-    // // Read total_chunks from the CB
+    // Read total_chunks from the CB
     uint32_t total_chunks = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(total_chunks_cb_id, 0));
 
-    fast_tilize_init(tilizer_input_cb_id, max_tiles_per_chunk, tilizer_output_cb_id);
     // Process each chunk
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
         // Wait for reader to push tokens_per_chunk pages (row-major data)
@@ -102,24 +103,23 @@ void MAIN {
         cb_wait_front(tilizer_input_cb_id, tokens_per_chunk);
 
         // DEBUG: Print subsets of input (row-major bfloat16)
-        // Usage: print_row_major_subset<BufferWidth>(cb_addr, start_row, end_row, start_col, end_col)
         // Get CB address directly within UNPACK context (avoids mailbox sync issues with get_tile_address)
         // UNPACK(({
         //     uint32_t operand_id = get_operand_id(tilizer_input_cb_id);
         //     uint32_t cb_addr = get_local_cb_interface(operand_id).fifo_rd_ptr << 4;  // Convert to byte address
         //     DPRINT << "=== CHUNK " << chunk << " INPUT ===" << ENDL();
         //     print_row_major_subset<buffer_width>(cb_addr, 0, 1, 0, 1);  // first 4 rows x 8 cols
-        //     // print_row_major_subset<buffer_width>(cb_addr, 0, 4, buffer_width - 8, buffer_width);  // last 4x8
+        //     print_row_major_subset<buffer_width>(cb_addr, 0, 4, buffer_width - 8, buffer_width);  // last 4x8
         // }));
 
         cb_reserve_back(tilizer_output_cb_id, tiles_per_chunk);
 
         fast_tilize_block(tilizer_input_cb_id, tiles_per_chunk, tilizer_output_cb_id);
+
         // Pop input from reader (tokens_per_chunk pages)
         cb_pop_front(tilizer_input_cb_id, tokens_per_chunk);
 
         // DEBUG: Print first and last tiles of output (tilized format)
-        // Usage: print_tile_rows(cb_idx, tile_idx, untilize, start_row, end_row, start_col, end_col)
         // PACK(({
         //     DPRINT << "=== CHUNK " << chunk << " OUTPUT ===" << ENDL();
         //     print_tile_rows(tilizer_output_cb_id, 0, true, 0, 1, 0, 1);                    // First tile, 4x8
@@ -128,6 +128,7 @@ void MAIN {
 
         cb_push_back(tilizer_output_cb_id, tiles_per_chunk);
     }
+
     fast_tilize_uninit(tilizer_input_cb_id, tilizer_output_cb_id);
     cb_pop_front(total_chunks_cb_id, one_page);
 }

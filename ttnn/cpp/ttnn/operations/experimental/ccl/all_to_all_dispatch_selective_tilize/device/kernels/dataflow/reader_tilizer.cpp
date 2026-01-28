@@ -598,7 +598,7 @@ void kernel_main() {
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
     cb_push_back(expert_activation_cb_id, tokens);
 
-    // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
+    // DEBUG: print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
 
     // Get pointer to the mapping data
     uint16_t* expert_to_device_map = reinterpret_cast<uint16_t*>(
@@ -609,12 +609,13 @@ void kernel_main() {
         uint16_t expert_mesh_coord = expert_to_device_map[i];
         if (expert_mesh_coord == linearized_mesh_coord) {
             if (local_expert_count >= experts_per_device) {
-                DPRINT << "Error: more than " << experts_per_device << " experts on device " << linearized_mesh_coord
-                       << ENDL();
+                // DEBUG: DPRINT << "Error: more than " << experts_per_device << " experts on device " <<
+                // linearized_mesh_coord << ENDL();
                 ASSERT(false);
             }
-            // DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is " << i
-            // << ENDL();
+            // DEBUG: DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is "
+            // << i << ENDL();
+
             local_expert_ids[local_expert_count] = i;
             local_expert_count++;
         }
@@ -886,7 +887,7 @@ void kernel_main() {
         noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         // Barrier for this write is at the very end of the kernel
 
-        // print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
+        // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
 
         uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_cb_id);
         uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
@@ -1037,9 +1038,11 @@ void kernel_main() {
         cb_push_back(total_chunks_cb_id, one_page);
     }
 
+    // DEBUG
     // print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
     // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0,
     // std::max(num_activated_tokens_per_expert[0], num_activated_tokens_per_expert[1]));
+
     // ========== ALL CORES: Read activated tokens from sparse buffer and pack into tilizer input CB ==========
     // The e_t buffer contains sparse token IDs for each expert, with 16B aligned entries
     for (uint32_t e = 0; e < experts_per_device; e++) {
