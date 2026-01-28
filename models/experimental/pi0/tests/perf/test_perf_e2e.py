@@ -127,7 +127,7 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     [
         {
             "l1_small_size": 16384,
-            "trace_region_size": 8000000,
+            "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
     ],
@@ -146,6 +146,57 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
     # Create config and inputs
     config = create_config()
     inputs = create_test_inputs(config, batch_size=batch_size)
+
+    inputs["images"][0] = ttnn.from_torch(
+        inputs["images"][0],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    inputs["images"][1] = ttnn.from_torch(
+        inputs["images"][1],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    inputs["img_masks"][0] = ttnn.from_torch(
+        inputs["img_masks"][0].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    inputs["img_masks"][1] = ttnn.from_torch(
+        inputs["img_masks"][1].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    inputs["lang_tokens"] = ttnn.from_torch(
+        inputs["lang_tokens"],
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    inputs["lang_masks"] = ttnn.from_torch(
+        inputs["lang_masks"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    inputs["state"] = ttnn.from_torch(
+        inputs["state"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
     # Load weights
     weight_loader = PI0WeightLoader(str(checkpoint_path))
