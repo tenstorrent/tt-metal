@@ -338,7 +338,7 @@ constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD = 0xf
 
 struct CQDispatchWritePackedLargeUnicastSubCmd {
     uint32_t noc_xy_addr;
-    uint32_t addr;    // if 0xffffffff, data is discarded (not sent)
+    uint32_t addr;  // if 0xffffffff, data is discarded (not sent)
     uint32_t length;
 } __attribute__((packed));
 

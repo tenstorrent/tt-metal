@@ -181,7 +181,9 @@ constexpr uint32_t l1_cache_elements =
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
-static_assert(l1_cache_elements / sizeof(CQDispatchWritePackedLargeUnicastSubCmd)>= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+static_assert(
+    l1_cache_elements / sizeof(CQDispatchWritePackedLargeUnicastSubCmd) >=
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
 
 // Used to send go signals asynchronously. Currently unused but this is a prototype for a GoSignalState
 // ring buffer that can be used to store and then asynchronously send Go Signals.
