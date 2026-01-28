@@ -35,7 +35,7 @@ You do NOT write kernel code. You design HOW kernels should be implemented.
 2. **Kernel helper library headers** - What helpers are available:
    - `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp`
-   - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp`
+   - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`
 3. **Reference analyses** (optional) - Patterns from similar operations
@@ -122,7 +122,7 @@ You MUST produce a structured Kernel Design Document saved to:
 ### Available Helpers Reviewed
 - [ ] tilize_helpers.hpp - {relevant? yes/no}
 - [ ] untilize_helpers.hpp - {relevant? yes/no}
-- [ ] reduce_helpers.hpp - {relevant? yes/no}
+- [ ] reduce_helpers_compute.hpp - {relevant? yes/no}
 - [ ] binary_op_helpers.hpp - {relevant? yes/no}
 - [ ] dest_helpers.hpp - {relevant? yes/no}
 
@@ -152,8 +152,8 @@ You MUST produce a structured Kernel Design Document saved to:
 - [ ] Template parameters for reduce helper (if applicable):
   - `PoolType`: SUM, AVG, or MAX
   - `ReduceDim`: REDUCE_ROW, REDUCE_COL, or REDUCE_SCALAR
-  - `ReduceInputMode`: STREAMING (default), STREAMING_BATCHED, PRELOADED, or PERSISTENT
-  - `ReduceDataFormatReconfig`: NONE, INPUT, OUTPUT, or BOTH (default)
+  - `ReduceInputPolicy`: WaitAndPopPerTile (default), WaitAndPopPerBatch, NoWaitNoPop, or WaitUpfrontNoPop
+  - `ReduceDataFormatReconfigMode`: NONE, INPUT, OUTPUT, or INPUT_AND_OUTPUT (default)
 
 **Note**: `REDUCE_OP` and `REDUCE_DIM` macros are **deprecated**. Always specify template parameters explicitly.
 
@@ -162,7 +162,7 @@ You MUST produce a structured Kernel Design Document saved to:
 When designing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel_lib/`:
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
-- `reduce_helpers.hpp` - reduce(), TileShape, ReduceInputMode, Accumulation types
+- `reduce_helpers_compute.hpp` - reduce(), ReduceInputBlockShape, ReduceInputPolicy, Accumulation types
 - `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim, BinaryInputMode types
 - `dest_helpers.hpp` - DEST register limits (DEST_AUTO_LIMIT)
 
