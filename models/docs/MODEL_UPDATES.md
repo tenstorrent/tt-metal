@@ -16,7 +16,7 @@
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/qwen25_vl)
 - Integrated Qwen2.5-VL with vLLM V1 in the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
-### [GPT-OSS](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gpt_oss)
+### [GPT-OSS](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/nlp/llms/gpt_oss)
 - Integrated GPT-OSS with vLLM V1 in the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 
 ## November 3, 2025
