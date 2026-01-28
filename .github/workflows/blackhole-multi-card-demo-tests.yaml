@@ -50,15 +50,27 @@ on:
         required: false
         type: boolean
         default: false
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
       model:
         required: false
         type: string
         default: 'all'
+        description: "Select model to test (all, llama3.1-8b, llama3.3-70b, qwen3-32b, flux.1-dev, wan2.2-t2v-a14b)"
       platform:
         required: false
         type: string
         default: "Ubuntu 22.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:

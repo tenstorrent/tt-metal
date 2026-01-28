@@ -40,7 +40,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   profiler-tests:
     needs: build-artifact-profiler
     secrets: inherit

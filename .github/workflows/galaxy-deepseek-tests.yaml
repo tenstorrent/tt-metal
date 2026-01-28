@@ -49,7 +49,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit

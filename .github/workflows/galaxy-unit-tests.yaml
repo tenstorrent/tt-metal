@@ -55,7 +55,7 @@ jobs:
       build-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-unit-tests:
     needs: build-artifact
     secrets: inherit

@@ -69,7 +69,7 @@ jobs:
       ref: ${{ inputs.commit || github.sha }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120

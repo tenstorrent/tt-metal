@@ -56,6 +56,11 @@ on:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
     inputs:
+      model:
+        description: "Select model to test (all, falcon7b, mamba, functional_unet, stable_diffusion, etc.)"
+        required: false
+        type: string
+        default: "all"
       platform:
         required: false
         type: string
@@ -65,7 +70,7 @@ on:
         required: false
         type: string
         default: "Release"
-        description: "Build type configuration"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
       enable-lto:
         required: false
         type: boolean
@@ -82,7 +87,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   models-perf:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

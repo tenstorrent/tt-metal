@@ -7,6 +7,7 @@ on:
         required: false
         default: Release
         type: string
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
       platform:
         required: false
         type: string
@@ -17,6 +18,16 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      with-retries:
+        required: false
+        type: boolean
+        default: false
+        description: "Re-run failed jobs (max 3)"
+      force-test-everything:
+        required: false
+        type: boolean
+        default: true
+        description: "Force test everything regardless of file changes"
   workflow_dispatch:
     inputs:
       with-retries:
@@ -75,9 +86,9 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      platform: ${{ inputs.platform }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
 
   find-changed-files:
     runs-on: ubuntu-latest

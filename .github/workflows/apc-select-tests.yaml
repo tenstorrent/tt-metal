@@ -84,7 +84,7 @@ jobs:
       platform: ${{ inputs.platform }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
 
   sd-unit-tests:
     needs: [parse-tests-json, build-artifact]

@@ -40,11 +40,31 @@ on:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
     inputs:
+      architecture:
+        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
+        required: false
+        type: string
+        default: '["blackhole", "wormhole_b0"]'
+      requested-models:
+        description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
+        required: false
+        type: string
+        default: "all"
       platform:
         required: false
         type: string
         default: "Ubuntu 22.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 run-name: "(Single-card) Device perf regressions"
 jobs:
@@ -58,7 +78,7 @@ jobs:
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit

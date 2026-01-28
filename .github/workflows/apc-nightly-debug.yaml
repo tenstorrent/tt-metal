@@ -32,4 +32,4 @@ jobs:
     with:
       build-type: RelWithDebInfo
       platform: ${{ matrix.platform }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}

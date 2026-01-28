@@ -247,7 +247,7 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          enable-lto: ${{ inputs.enable-lto }}
+          enable-lto: ${{ inputs.enable-lto || false }}
 
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
@@ -611,4 +611,4 @@ jobs:
             'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}

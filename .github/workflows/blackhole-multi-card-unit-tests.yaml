@@ -34,6 +34,16 @@ on:
         type: string
         default: "Ubuntu 22.04"
         description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact-profiler:
@@ -46,7 +56,7 @@ jobs:
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-multi-card-unit-tests:
     needs: build-artifact-profiler
     secrets: inherit

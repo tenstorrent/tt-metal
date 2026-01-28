@@ -12,6 +12,21 @@ on:
         description: 'Enable watcher in BH Post commit'
         default: false
         type: boolean
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
     inputs:
       runner-label:
@@ -135,7 +150,7 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
-      enable-lto: ${{ inputs.enable-lto }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   run-profiler-regression:
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
