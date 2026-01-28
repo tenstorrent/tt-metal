@@ -20,6 +20,30 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
@@ -30,6 +54,11 @@ on:
         required: false
         type: string
         default: 'all'
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
 
 jobs:
   build-artifact:
@@ -40,7 +69,8 @@ jobs:
     with:
       tracy: true
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: false
   blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit

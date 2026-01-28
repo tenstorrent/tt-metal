@@ -1,7 +1,5 @@
 name: "(Blackhole) Blackhole nightly tests"
 
-
-
 on:
   workflow_dispatch:
     inputs:
@@ -67,7 +65,37 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
@@ -78,9 +106,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto }}
   bh-nightly:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact
