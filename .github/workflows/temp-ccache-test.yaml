@@ -31,7 +31,7 @@ jobs:
       name-suffix: "run2"
 
   ttnn-ccache-test-run1:
-    environment: mainline
+    environment: ccache-kernel-redis-test
     needs: build-artifact-1
     name: TTNN CCache Test - Run 1 (Build Artifact 1)
     runs-on: tt-ubuntu-2204-N150-stable
@@ -302,7 +302,7 @@ jobs:
           fi
 
   ttnn-ccache-test-run2:
-    environment: mainline
+    environment: ccache-kernel-redis-test
     needs: [build-artifact-2, ttnn-ccache-test-run1]
     name: TTNN CCache Test - Run 2 (Build Artifact 2)
     runs-on: tt-ubuntu-2204-N150-stable
@@ -498,7 +498,7 @@ jobs:
           retention-days: 14
 
   ttnn-ccache-test-run3:
-    environment: mainline
+    environment: ccache-kernel-redis-test
     needs: [build-artifact-1, ttnn-ccache-test-run1]
     name: TTNN CCache Test - Run 3 (Back to Build Artifact 1)
     runs-on: tt-ubuntu-2204-N150-stable
