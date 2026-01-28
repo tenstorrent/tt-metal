@@ -18,7 +18,7 @@ jobs:
         id: get-version
         run: |
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          if [[ "$BRANCH_NAME" == "stable" ]]; then
+          if [[ "$BRANCH_NAME" == "stable" || "$BRANCH_NAME" == "main" ]]; then
             VERSION="latest"
           elif [[ "$BRANCH_NAME" =~ ^releases/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             VERSION=${BRANCH_NAME#releases/}

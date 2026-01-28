@@ -3,33 +3,14 @@ name: "[internal] Python wheels test impl"
 on:
   workflow_call:
     inputs:
-      from-precompiled:
-        description: "Use precompiled assets for wheel build"
-        default: True
-        type: boolean
-
-# THIS COMMENT NEEDS REEVALUATION AND THE WORKFLOW NEEDS CLEANUP
-# Since pre-compiled assets are only built on ubuntu-20.04, we force tests
-# to only be run on ubuntu-20.04.
-#
-# Otherwise, we run across 20.04 and 22.04 as we should have assets for both
-# from previous wheel builds if from-precompiled is false.
-#
-# I chose the more heavy-handed approach because:
-# - This should all go away soon once we have more OSes + more Docker up and
-# running so we can matrix properly across more stuff
-# - though provides less flexibility to caller workflows, we want to be pretty
-# strict with the matrix + doesn't change often
+      wheel-artifact-name:
+        description: "Name of the wheel artifact to download and test"
+        required: true
+        type: string
 
 jobs:
   test-wheels-host:
-    strategy:
-      matrix:
-        os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-22.04"]' || '["ubuntu-22.04", "ubuntu-24.04"]') }}
-        runner-hw-info: [
-          {arch: wormhole_b0}
-        ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
@@ -38,7 +19,7 @@ jobs:
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Activate env and run release tests - host
