@@ -12,6 +12,7 @@ This Python implementation matches the C++ sdpa_decode_program_factory.cpp exact
 """
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -701,6 +702,13 @@ class FlashMLADecode:
             ]
         )
 
+        # Debug flag to skip reduction and isolate DRAM streaming + multicast
+        skip_reduction_debug = os.environ.get("SKIP_REDUCTION_DEBUG", "0") == "1"
+        writer_defines = []
+        if skip_reduction_debug:
+            compute_defines.append(("SKIP_REDUCTION_DEBUG", "1"))
+            writer_defines.append(("SKIP_REDUCTION_DEBUG", "1"))
+
         # =========================================================================
         # Create CB descriptors (matching C++ lines 475-655)
         # =========================================================================
@@ -1104,6 +1112,7 @@ class FlashMLADecode:
                 core_ranges=core_grid,
                 compile_time_args=writer_compile_time_args,
                 runtime_args=writer_rtargs,
+                defines=writer_defines,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0,
                     noc=ttnn.NOC.NOC_1,

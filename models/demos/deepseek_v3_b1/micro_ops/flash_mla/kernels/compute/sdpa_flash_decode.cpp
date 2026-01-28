@@ -265,6 +265,25 @@ void MAIN {
          * @param qk_chunk_tiles - Number of QK chunk tiles (dynamic)
          * @param out_chunk_tiles - Number of output chunk tiles
          */
+#ifdef SKIP_REDUCTION_DEBUG
+        // DEBUG: Skip flash attention loop entirely - just test DRAM streaming + multicast
+        // Must still consume K and V from CBs to avoid deadlock with reader
+        {
+            const uint32_t k_tiles = Sk_chunk_t_dynamic * DHt;
+            const uint32_t v_tiles = Sk_chunk_t_dynamic * vDHt;
+            cb_pop_front(cb_q_in, q_chunk_tiles);
+            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+                // Wait for and pop K
+                cb_wait_front(cb_k_in, k_tiles);
+                cb_pop_front(cb_k_in, k_tiles);
+                // Wait for and pop V
+                cb_wait_front(cb_v_in, v_tiles);
+                cb_pop_front(cb_v_in, v_tiles);
+            }
+        }
+        return;
+#endif
+
         /* START OF FLASH ATTENTION LOOP */
         {
             uint32_t cb_out_mm = cb_out_accumulate_im;
@@ -456,6 +475,7 @@ void MAIN {
             }
         }
         /* END OF FLASH ATTENTION LOOP */
+
         // Perform reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
