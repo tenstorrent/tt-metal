@@ -31,9 +31,7 @@ jobs:
           chmod +x install.sh
 
           timeout 1800 sudo bash ./install.sh \
-            --smi-version=v3.0.38 \
             --update-firmware=off \
-            --kmd-version=2.5.0 \
             --install-metalium-models-container \
             --verbose \
             --reboot-option=never \
