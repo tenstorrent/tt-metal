@@ -9,7 +9,7 @@ from torch import nn
 from transformers import AutoModel, AutoTokenizer
 import pytest
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu, TTNNGelu
-from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TtRMSNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
 from models.experimental.tt_symbiote.modules.attention import LlamaAttention
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC
@@ -113,7 +113,7 @@ def test_deepseek_ocr(device):
     )
     nn_to_nn = {
         model.model.sam_model.__class__: ImageEncoderViT,
-        model.model.layers[0].input_layernorm.__class__: TtRMSNorm,
+        model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
     }
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
