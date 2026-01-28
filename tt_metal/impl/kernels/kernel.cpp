@@ -114,7 +114,11 @@ Kernel::Kernel(
     named_compile_time_args_(named_compile_args),
 
     core_with_max_runtime_args_({0, 0}),
-    defines_(defines) {
+    defines_(defines),
+    watcher_assert_enabled_(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()),
+    watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -447,21 +451,40 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     auto& set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     // TODO: Only allow setting once
     if (set_rt_args.empty()) {
-        if (runtime_args.size() > max_runtime_args_per_core_) {
-            max_runtime_args_per_core_ = runtime_args.size();
+        // When watcher assert is enabled, we store [arg count | args]
+        size_t effective_limit = runtime_args.size() + watcher_count_word_offset_;
+
+        // Validate against hardware limit (341 words)
+        this->validate_runtime_args_size(effective_limit, this->common_runtime_args_.size(), logical_core);
+
+        // Track maximum dispatch size for CRTA validation
+        // Note: max_runtime_args_per_core_ stores effective size (includes count word if watcher enabled)
+        if (effective_limit > max_runtime_args_per_core_) {
+            max_runtime_args_per_core_ = effective_limit;
             core_with_max_runtime_args_ = logical_core;
         }
-        this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
-        set_rt_args.assign(runtime_args.begin(), runtime_args.end());
-        this->core_to_runtime_args_data_[logical_core.x][logical_core.y] =
-            RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
+
+        // Prepend count when watcher enabled for device-side bounds checking
+        if (watcher_assert_enabled_) {
+            set_rt_args.reserve(effective_limit);
+            set_rt_args.push_back(static_cast<uint32_t>(runtime_args.size()));
+            set_rt_args.insert(set_rt_args.end(), runtime_args.begin(), runtime_args.end());
+        } else {
+            set_rt_args.assign(runtime_args.begin(), runtime_args.end());
+        }
+        // RuntimeArgsData always needs to point to args data with actual arg count due to
+        // user-facing API (RuntimeArgsData& GetRuntimeArgs)
+        this->core_to_runtime_args_data_[logical_core.x][logical_core.y] = RuntimeArgsData{
+            set_rt_args.data() + watcher_count_word_offset_, set_rt_args.size() - watcher_count_word_offset_};
         this->core_with_runtime_args_.insert(logical_core);
     } else {
+        // Updating existing args - extract user arg count and verify it matches
+        size_t user_arg_count = set_rt_args.size() - watcher_count_word_offset_;
         TT_FATAL(
-            set_rt_args.size() == runtime_args.size(),
+            user_arg_count == runtime_args.size(),
             "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!",
             logical_core.str(),
-            set_rt_args.size(),
+            user_arg_count,
             runtime_args.size());
         std::memcpy(
             this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
@@ -475,10 +498,23 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
     TT_FATAL(
         set_rt_args.empty(),
         "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
-    this->validate_runtime_args_size(
-        max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
-    set_rt_args.assign(common_runtime_args.begin(), common_runtime_args.end());
-    this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
+
+    size_t effective_crta_limit = common_runtime_args.size() + watcher_count_word_offset_;
+
+    // Validate combined RTA + CRTA size doesn't exceed hardware limit (341 words)
+    // max_runtime_args_per_core_ already includes count word if watcher enabled
+    this->validate_runtime_args_size(max_runtime_args_per_core_, effective_crta_limit, core_with_max_runtime_args_);
+
+    // Prepend count when watcher enabled for device-side bounds checking
+    if (watcher_assert_enabled_) {
+        set_rt_args.reserve(effective_crta_limit);
+        set_rt_args.push_back(static_cast<uint32_t>(common_runtime_args.size()));
+        set_rt_args.insert(set_rt_args.end(), common_runtime_args.begin(), common_runtime_args.end());
+    } else {
+        set_rt_args.assign(common_runtime_args.begin(), common_runtime_args.end());
+    }
+    this->common_runtime_args_data_ = RuntimeArgsData{
+        set_rt_args.data() + watcher_count_word_offset_, set_rt_args.size() - watcher_count_word_offset_};
 }
 
 // Pads runtime args to count
@@ -492,7 +528,7 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                 }
 
                 TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
-                core_to_runtime_args_data_[x][y].rt_args_count = count;
+                core_to_runtime_args_data_[x][y].rt_args_count = count - watcher_count_word_offset_;
             }
         }
     }
@@ -502,7 +538,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 
     this->common_runtime_args_count_ = count;
-    this->common_runtime_args_data_.rt_args_count = count;
+    this->common_runtime_args_data_.rt_args_count = count - watcher_count_word_offset_;
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
