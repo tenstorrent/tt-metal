@@ -312,8 +312,8 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     y_torch = torch.tensor([[1, 2, 31, 4, 5, 0, -20, 1, -3, -25, 0, 1, 31, 30]], dtype=torch.int32)
 
     if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_uint32 = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_uint32 = y_torch.to(torch.int64) & 0xFFFFFFFF
+        x_uint32 = x_torch.to(torch.uint32)
+        y_uint32 = y_torch.to(torch.uint32)
         x_torch = x_uint32.to(torch.int32)
         y_torch = y_uint32.to(torch.int32)
 
@@ -324,7 +324,12 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    assert torch.equal(tt_out, z_torch)
+    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
+        tt_out = tt_out.to(torch.int64)
+        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
+        assert torch.equal(tt_out, z_torch_uint64)
+    else:
+        assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
@@ -381,7 +386,12 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    assert torch.equal(tt_out, z_torch)
+    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
+        tt_out = tt_out.to(torch.int64)
+        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
+        assert torch.equal(tt_out, z_torch_uint64)
+    else:
+        assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
@@ -427,10 +437,8 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
 
     y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
     if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_uint32 = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_uint32 = y_torch.to(torch.int64) & 0xFFFFFFFF
-        x_torch = x_uint32.to(torch.int32)
-        y_torch = y_uint32.to(torch.int32)
+        x_torch = x_torch.to(torch.int64) & 0xFFFFFFFF
+        y_torch = y_torch.to(torch.int64) & 0xFFFFFFFF
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
@@ -439,7 +447,12 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
     z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=use_legacy)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    assert torch.equal(tt_out, z_torch)
+    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
+        tt_out = tt_out.to(torch.int64)
+        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
+        assert torch.equal(tt_out, z_torch_uint64)
+    else:
+        assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
