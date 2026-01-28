@@ -46,6 +46,7 @@ def get_mesh_device_name(num_devices, mesh_device_name):
             2: "N300",
             4: "N150x4",
             8: "T3K",
+            32: "TG",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
@@ -82,9 +83,11 @@ def get_supported_trace_region_size(request, mesh_device):
             "N150": 25000000,
             "N300": 38000000,
             "T3K": 50000000,
+            "TG": 50000000,
         },
         "Llama-3.3-70B": {
             "T3K": 80000000,
+            "TG": 80000000,
             "P150": 80000000,
             "P300": 80000000,
             "P150x4": 80000000,
@@ -92,6 +95,7 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "Llama-3.1-70B": {
             "T3K": 90000000,
+            "TG": 90000000,
             "P150": 90000000,
             "P300": 90000000,
             "P150x4": 90000000,
@@ -99,6 +103,7 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "Qwen3-32B": {
             "T3K": 90000000,
+            "TG": 90000000,
             "P150": 90000000,
             "P300": 90000000,
             "P150x4": 90000000,
@@ -106,6 +111,7 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "GPT-OSS-20B": {
             "T3K": 50000000,
+            "TG": 50000000,
         },
         "GPT-OSS-120B": {
             "T3K": 50000000,

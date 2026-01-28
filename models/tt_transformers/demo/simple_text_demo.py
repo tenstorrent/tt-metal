@@ -757,6 +757,7 @@ def prepare_generator_args(
             "N300": (1, 2),
             "N150x4": (1, 4),
             "T3K": (1, 8),
+            "TG": (8, 4),
             "P150": (1, 1),
             "P300": (1, 2),
             "P150x4": (1, 4),
@@ -1329,7 +1330,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "BHGLX", "T3K"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name

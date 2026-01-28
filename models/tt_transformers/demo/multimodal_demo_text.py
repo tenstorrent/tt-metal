@@ -29,6 +29,7 @@ from models.tt_transformers.tt.generator import Generator
             "N300": (1, 2),
             "N150x4": (1, 4),
             "T3K": (1, 8),
+            "TG": (8, 4),
             "P150": (1, 1),
             "P300": (1, 2),
             "P150x4": (1, 4),
