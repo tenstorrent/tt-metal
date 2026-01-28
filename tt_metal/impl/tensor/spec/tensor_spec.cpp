@@ -166,14 +166,20 @@ TensorSpec TensorSpec::sharded_across_dims_except(
 TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
     auto shard_height = div_up(physical_shape().height(), num_cores);
-    NdShardSpec shard_spec(Shape({shard_height, physical_shape().width()}), std::move(grid), orientation);
+    NdShardSpec shard_spec(
+        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(physical_shape().width())}),
+        std::move(grid),
+        orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
 TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
     auto num_cores = grid.num_cores();
     auto shard_width = div_up(physical_shape().width(), num_cores);
-    NdShardSpec shard_spec(Shape({physical_shape().height(), shard_width}), std::move(grid), orientation);
+    NdShardSpec shard_spec(
+        Shape({static_cast<uint32_t>(physical_shape().height()), static_cast<uint32_t>(shard_width)}),
+        std::move(grid),
+        orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
@@ -183,7 +189,8 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
         div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
     auto shard_width =
         div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
-    NdShardSpec shard_spec(Shape({shard_height, shard_width}), grid, orientation);
+    NdShardSpec shard_spec(
+        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)}), grid, orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
 }
 
