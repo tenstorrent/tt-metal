@@ -52,11 +52,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmRuntimeArgs) {
             {"TEST_RUNTIME_ARGS", "1"},
             {"RESULTS_ADDR", std::to_string(results_addr)}};
 
-        KernelHandle kernel = experimental::CreateKernel(
+        KernelHandle kernel = experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
             core,
-            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
+            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
 
         SetRuntimeArgs(program, kernel, core, runtime_args);
 
@@ -104,11 +104,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmCommonRuntimeArgs) {
             {"TEST_RUNTIME_ARGS", "1"},
             {"RESULTS_ADDR", std::to_string(results_addr)}};
 
-        KernelHandle kernel = experimental::CreateKernel(
+        KernelHandle kernel = experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
             core,
-            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
+            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
 
         SetCommonRuntimeArgs(program, kernel, common_runtime_args);
 
@@ -164,11 +164,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmUniqueAndCommonRuntimeArgs) {
                 {"NUM_COMMON_RUNTIME_ARGS", std::to_string(num_common_runtime_args)},
                 {"TEST_RUNTIME_ARGS", "1"},
                 {"RESULTS_ADDR", std::to_string(results_addr)}};
-            KernelHandle kernel = experimental::CreateKernel(
+            KernelHandle kernel = experimental::quasar::CreateKernel(
                 program,
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
                 core,
-                experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
+                experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
 
             SetRuntimeArgs(program, kernel, core, unique_runtime_args);
             SetCommonRuntimeArgs(program, kernel, common_runtime_args);
@@ -222,11 +222,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmDefines) {
             {"DEFINES_2", std::to_string(std::rand() % 1000)},
             {"TEST_DEFINES", "1"},
             {"RESULTS_ADDR", std::to_string(results_addr)}};
-        experimental::CreateKernel(
+        experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
             core,
-            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
+            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1, .defines = defines});
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -268,11 +268,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmCompileArgs) {
         for (uint32_t j = 0; j < 5; j++) {
             compile_args[j] = std::rand() % 1000;
         }
-        experimental::CreateKernel(
+        experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
             core,
-            experimental::QuasarDataMovementConfig{
+            experimental::quasar::QuasarDataMovementConfig{
                 .num_processors_per_cluster = 1, .compile_args = compile_args, .defines = defines});
 
         workload.add_program(device_range, std::move(program));
@@ -316,11 +316,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmNamedCompileArgs) {
             {"NAMED_COMPILE_ARGS_3", std::rand() % 1000},
             {"NAMED_COMPILE_ARGS_4", std::rand() % 1000}};
 
-        experimental::CreateKernel(
+        experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/dm_configs_kernel.cpp",
             core,
-            experimental::QuasarDataMovementConfig{
+            experimental::quasar::QuasarDataMovementConfig{
                 .num_processors_per_cluster = 1, .defines = defines, .named_compile_args = named_compile_args});
 
         workload.add_program(device_range, std::move(program));
