@@ -42,7 +42,7 @@ template <bool IS_MAX_OP>
 sfpi_inline void calculate_unary_max_min_int32_body() {
     // Load input to lreg0
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);
     TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
 
     // Copy value param to lreg1
