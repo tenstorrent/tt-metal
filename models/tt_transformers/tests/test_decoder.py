@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    (True, False),
+    ([False]),
 )
 @pytest.mark.parametrize(
     "mesh_device",

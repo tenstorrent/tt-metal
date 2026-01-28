@@ -18,7 +18,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", (False))
+@pytest.mark.parametrize("use_prefetcher", ([False]))
 @pytest.mark.parametrize(
     "weights, layers",
     [
