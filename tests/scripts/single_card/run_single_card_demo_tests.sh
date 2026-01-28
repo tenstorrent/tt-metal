@@ -216,7 +216,7 @@ run_mnist_func() {
 
 run_squeezebert_func() {
 
-  $PYTEST_CMD models/demos/squeezebert/demo/demo.py
+  $PYTEST_CMD models/demos/nlp/encoder/squeezebert/demo/demo.py
 
 }
 
