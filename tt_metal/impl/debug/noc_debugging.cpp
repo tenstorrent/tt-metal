@@ -30,19 +30,6 @@ inline bool wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
-NOCDebugIssueType get_unflushed_issue_type(const NOCDebugState::PendingWriteInfo& info) {
-    if (info.is_semaphore && info.is_mcast) {
-        return NOCDebugIssueType::UNFLUSHED_SEMAPHORE_MCAST_AT_END;
-    }
-    if (info.is_semaphore) {
-        return NOCDebugIssueType::UNFLUSHED_SEMAPHORE_AT_END;
-    }
-    if (info.is_mcast) {
-        return NOCDebugIssueType::UNFLUSHED_WRITE_MCAST_AT_END;
-    }
-    return NOCDebugIssueType::UNFLUSHED_WRITE_AT_END;
-}
-
 }  // namespace detail
 
 NOCDebugState::CoreDebugState& NOCDebugState::get_state(tt_cxy_pair core) { return cores[core]; }
@@ -86,16 +73,7 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
 
     if (!problem_type.empty()) {
         // Classify write type for more detailed error reporting
-        NOCDebugIssueType issue_type;
-        if (is_semaphore && is_mcast) {
-            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST;
-        } else if (is_semaphore) {
-            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE;
-        } else if (is_mcast) {
-            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER_MCAST;
-        } else {
-            issue_type = NOCDebugIssueType::WRITE_FLUSH_BARRIER;
-        }
+        NOCDebugIssueType issue_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER, is_mcast, is_semaphore);
         state.issue[processor_id].set_issue(issue_type);
     }
 
@@ -136,7 +114,7 @@ void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64
     }
 
     if (!problem_type.empty()) {
-        state.issue[processor_id].set_issue(NOCDebugIssueType::READ_BARRIER);
+        state.issue[processor_id].set_issue(NOCDebugIssueType(NOCDebugIssueBaseType::READ_BARRIER));
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -188,14 +166,18 @@ void NOCDebugState::update_latest_risc_timestamp(tt_cxy_pair core, int processor
 void NOCDebugState::finish_cores() {
     std::unique_lock<std::mutex> lock{cores_mutex};
 
+    const auto get_unflushed_write_issue_type = [](const NOCDebugState::PendingWriteInfo& info) {
+        return NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, info.is_mcast, info.is_semaphore);
+    };
+
     for (auto& [core, state] : cores) {
         for (size_t noc_id = 0; noc_id < CoreDebugState::MAX_NOCS; ++noc_id) {
             // Set issues for the specific processor that initiated each pending write
             for (const auto& [addr, info] : state.posted_writes_pending[noc_id]) {
-                state.issue[info.processor_id].set_issue(detail::get_unflushed_issue_type(info));
+                state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
             for (const auto& [addr, info] : state.nonposted_writes_pending[noc_id]) {
-                state.issue[info.processor_id].set_issue(detail::get_unflushed_issue_type(info));
+                state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
         }
     }
@@ -212,19 +194,26 @@ void NOCDebugState::reset_state() {
     cores.clear();
 }
 
-std::string_view NOCDebugState::get_issue_description(NOCDebugIssueType issue_type) {
-    switch (issue_type) {
-        case NOCDebugIssueType::WRITE_FLUSH_BARRIER: [[fallthrough]];
-        case NOCDebugIssueType::UNFLUSHED_WRITE_AT_END: return "write";
-        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_MCAST: [[fallthrough]];
-        case NOCDebugIssueType::UNFLUSHED_WRITE_MCAST_AT_END: return "write mcast";
-        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE: [[fallthrough]];
-        case NOCDebugIssueType::UNFLUSHED_SEMAPHORE_AT_END: return "semaphore";
-        case NOCDebugIssueType::WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST: [[fallthrough]];
-        case NOCDebugIssueType::UNFLUSHED_SEMAPHORE_MCAST_AT_END: return "semaphore mcast";
-        case NOCDebugIssueType::READ_BARRIER: return "read";
-        default: return "unknown";
+std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_type) {
+    std::string desc;
+    if (issue_type.base_type == NOCDebugIssueBaseType::READ_BARRIER) {
+        return "read";
     }
+
+    // For writes, build description based on flags
+    if (issue_type.is_semaphore) {
+        desc = "semaphore";
+    } else {
+        desc = "write";
+    }
+
+    if (issue_type.is_mcast) {
+        desc += " mcast";
+    } else {
+        desc += " unicast";
+    }
+
+    return desc;
 }
 
 void NOCDebugState::print_aggregated_errors() const {
@@ -238,12 +227,6 @@ void NOCDebugState::print_aggregated_errors() const {
     };
     std::map<std::string, CoreIssues> issues_by_core;
 
-    // Issue type ranges for categorization
-    constexpr auto WRITE_BARRIER_START = NOCDebugIssueType::WRITE_FLUSH_BARRIER;
-    constexpr auto WRITE_BARRIER_END = NOCDebugIssueType::READ_BARRIER;
-    constexpr auto UNFLUSHED_WRITE_START = NOCDebugIssueType::UNFLUSHED_WRITE_AT_END;
-    constexpr auto UNFLUSHED_WRITE_END = NOCDebugIssueType::COUNT;
-
     for (const auto& [core, state] : cores) {
         for (size_t proc = 0; proc < CoreDebugState::MAX_PROCESSORS; ++proc) {
             const auto& issue = state.issue[proc];
@@ -254,25 +237,14 @@ void NOCDebugState::print_aggregated_errors() const {
             std::string core_key = fmt::format("Device {} ({},{}) Processor {}", core.chip, core.x, core.y, proc);
             CoreIssues& core_issues = issues_by_core[core_key];
 
-            // Collect write barrier issues (during execution)
-            for (size_t i = static_cast<size_t>(WRITE_BARRIER_START); i < static_cast<size_t>(WRITE_BARRIER_END); ++i) {
-                auto issue_type = static_cast<NOCDebugIssueType>(i);
-                if (issue.has_issue(issue_type)) {
-                    core_issues.write_barrier_issues.push_back(std::string(get_issue_description(issue_type)));
-                }
-            }
-
-            // Check read barrier (during execution)
-            if (issue.has_issue(NOCDebugIssueType::READ_BARRIER)) {
-                core_issues.has_read_barrier = true;
-            }
-
-            // Collect unflushed write issues (at kernel end)
-            for (size_t i = static_cast<size_t>(UNFLUSHED_WRITE_START); i < static_cast<size_t>(UNFLUSHED_WRITE_END);
-                 ++i) {
-                auto issue_type = static_cast<NOCDebugIssueType>(i);
-                if (issue.has_issue(issue_type)) {
-                    core_issues.unflushed_write_issues.push_back(std::string(get_issue_description(issue_type)));
+            // Iterate through all issues and categorize them
+            for (const auto& issue_type : issue.issues) {
+                if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER) {
+                    core_issues.write_barrier_issues.push_back(get_issue_description(issue_type));
+                } else if (issue_type.base_type == NOCDebugIssueBaseType::READ_BARRIER) {
+                    core_issues.has_read_barrier = true;
+                } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
+                    core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
                 }
             }
         }

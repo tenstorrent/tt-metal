@@ -12,7 +12,9 @@
 #include <array>
 #include <tools/profiler/event_metadata.hpp>
 #include <unordered_set>
-#include <string_view>
+#include <set>
+#include <string>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -75,33 +77,69 @@ using NOCDebugEvent = std::variant<
     NocWriteFlushEvent,
     UnknownNocEvent>;
 
-enum class NOCDebugIssueType : uint8_t {
-    // Write with missing flush or barrier at the source core (by write type)
+enum class NOCDebugIssueBaseType : uint8_t {
     WRITE_FLUSH_BARRIER,
-    WRITE_FLUSH_BARRIER_MCAST,
-    WRITE_FLUSH_BARRIER_SEMAPHORE,
-    WRITE_FLUSH_BARRIER_SEMAPHORE_MCAST,
-    // Read with missing barrier at the destination core.
     READ_BARRIER,
-    // Unflushed writes at end of kernel execution (by write type)
     UNFLUSHED_WRITE_AT_END,
-    UNFLUSHED_WRITE_MCAST_AT_END,
-    UNFLUSHED_SEMAPHORE_AT_END,
-    UNFLUSHED_SEMAPHORE_MCAST_AT_END,
-    // Number of issue types
     COUNT,
 };
 
+struct NOCDebugIssueType {
+    NOCDebugIssueBaseType base_type;
+    bool is_mcast : 1;      // True if the issue involved a multicast
+    bool is_semaphore : 1;  // True if the issue involved a semaphore operation
+
+    NOCDebugIssueType() : base_type(NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER), is_mcast(false), is_semaphore(false) {}
+
+    NOCDebugIssueType(NOCDebugIssueBaseType type, bool mcast = false, bool semaphore = false) :
+        base_type(type), is_mcast(mcast), is_semaphore(semaphore) {}
+
+    bool operator==(const NOCDebugIssueType& other) const {
+        return base_type == other.base_type && is_mcast == other.is_mcast && is_semaphore == other.is_semaphore;
+    }
+
+    bool operator!=(const NOCDebugIssueType& other) const { return !(*this == other); }
+
+    bool operator<(const NOCDebugIssueType& other) const {
+        if (base_type != other.base_type) {
+            return base_type < other.base_type;
+        }
+        if (is_mcast != other.is_mcast) {
+            return is_mcast < other.is_mcast;
+        }
+        return is_semaphore < other.is_semaphore;
+    }
+};
+
 struct NOCDebugIssue {
-    std::bitset<static_cast<size_t>(NOCDebugIssueType::COUNT)> issue_bits;
+    std::set<NOCDebugIssueType> issues;
 
-    NOCDebugIssue() { issue_bits.reset(); }
+    void set_issue(const NOCDebugIssueType& issue_type) { issues.insert(issue_type); }
 
-    void set_issue(NOCDebugIssueType issue_type) { issue_bits[static_cast<size_t>(issue_type)] = true; }
+    bool has_issue(const NOCDebugIssueType& issue_type) const { return issues.count(issue_type) > 0; }
 
-    bool has_issue(NOCDebugIssueType issue_type) const { return issue_bits[static_cast<size_t>(issue_type)]; }
+    bool any_issue() const { return !issues.empty(); }
 
-    bool any_issue() const { return issue_bits.any(); }
+    // Check if any issue with a specific base type exists
+    bool has_base_issue(NOCDebugIssueBaseType base_type) const {
+        for (const auto& issue : issues) {
+            if (issue.base_type == base_type) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Get all issues with a specific base type
+    std::vector<NOCDebugIssueType> get_issues_by_base(NOCDebugIssueBaseType base_type) const {
+        std::vector<NOCDebugIssueType> result;
+        for (const auto& issue : issues) {
+            if (issue.base_type == base_type) {
+                result.push_back(issue);
+            }
+        }
+        return result;
+    }
 };
 
 class NOCDebugState {
@@ -170,7 +208,7 @@ private:
 
     const CoreDebugState& get_state(tt_cxy_pair core) const;
 
-    static std::string_view get_issue_description(NOCDebugIssueType issue_type);
+    static std::string get_issue_description(const NOCDebugIssueType& issue_type);
 
     mutable std::unordered_map<tt_cxy_pair, CoreDebugState> cores;
     mutable std::mutex cores_mutex;
