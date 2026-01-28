@@ -30,6 +30,9 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.deallocate": core.test_deallocate,
     "ttnn.reallocate": core.test_reallocate,
     "ttnn.to_memory_config": core.test_to_memory_config,
+    "ttnn.copy_device_to_host_tensor": core.test_copy_device_to_host_tensor,
+    "ttnn.copy_host_to_device_tensor": core.test_copy_host_to_device_tensor,
+    "ttnn.to_dtype": core.test_to_dtype,
     # Tensor Creation
     "ttnn.arange": tensor_creation.test_arrange,
     "ttnn.empty": tensor_creation.test_empty,
