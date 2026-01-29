@@ -193,9 +193,7 @@ void kernel_main() {
     // OVERLAY_REGISTER_ONE used for the channels
     //
     // note on the fabric router, OVERLAY_REGISTER_ZERO is the first register used for channels
-    //
-    // need to skip both - the ordering was done intentionally
-    // to maintain symmetry with the fabric router
+    // this means the register use is not symmetric between the mux and the fabric router
     //
     #pragma unroll
     for (uint8_t i = 0UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
