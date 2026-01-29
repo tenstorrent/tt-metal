@@ -90,6 +90,7 @@ void kernel_main() {
     constexpr uint32_t brisc_expert_counts_cb_id = get_named_compile_time_arg_val("brisc_expert_counts_cb_id");
     constexpr uint32_t brisc_expert_activation_cb_id = get_named_compile_time_arg_val("brisc_expert_activation_cb_id");
     constexpr uint32_t brisc_activated_count_cb_id = get_named_compile_time_arg_val("brisc_activated_count_cb_id");
+    constexpr uint32_t cb_s2c_in_id = get_named_compile_time_arg_val("cb_s2c_in_id");
 
     // Alignment
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
@@ -374,7 +375,7 @@ void kernel_main() {
     // Order matches reader: all chunks for expert 0, then expert 1, etc.
     for (uint32_t e = 0; e < experts_per_device; e++) {
         uint32_t num_expert_tokens = num_tokens_per_expert[e];
-        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;  // round up
 
         // figure out which semaphore we're using to coordinate with drain-sync core
         uint32_t tilize_chunk_ready_semaphore_addr =
@@ -402,9 +403,8 @@ void kernel_main() {
                 // don't wait on the first chunk of each expert (why we have the -1 in there)
                 uint32_t wait_value = num_matmul_cores * (chunk + e * (num_expert_chunks - 1));
 
-                // TODO: (GR) uncomment during integration
-                // noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr
-                // uint32_t*>(matmul_chunk_available_semaphore_addr), wait_value);
+                noc_semaphore_wait(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_available_semaphore_addr), wait_value);
 
                 // MM only signals to the T drain-sync-core, which then forwards it to the T non-drain-sync cores
                 if (is_drain_tilize_core && num_tilize_cores > 1) {
@@ -423,7 +423,7 @@ void kernel_main() {
             }
 
             // == 2 ==
-            uint32_t matmul_chunk_input_tensor_address = 0;  // TODO: (GR) use cb
+            uint32_t matmul_chunk_input_tensor_address = get_read_ptr(cb_s2c_in_id);
             uint32_t l1_read_addr = get_read_ptr(tilize_output_cb_id);
             uint32_t l1_write_addr =
                 matmul_chunk_input_tensor_address + (e * tiles_per_row + width_tile_start) * output_page_size;
@@ -431,12 +431,11 @@ void kernel_main() {
             uint64_t total_chunks_mcast_addr = get_safe_multicast_noc_addr(
                 matmul_mcast_start_x, matmul_mcast_start_y, matmul_mcast_end_x, matmul_mcast_end_y, l1_write_addr);
 
-            // TODO: (GR) uncomment during integration
-            // noc_async_write_multicast(
-            //     l1_read_addr,
-            //     total_chunks_mcast_addr,
-            //     tiles_per_chunk * output_page_size,
-            //     num_matmul_bounding_box_cores);
+            noc_async_write_multicast(
+                l1_read_addr,
+                total_chunks_mcast_addr,
+                tiles_per_chunk * output_page_size,
+                num_matmul_bounding_box_cores);
 
             noc_async_write_barrier();
 

@@ -546,6 +546,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         {"brisc_expert_activation_cb_id", brisc_expert_activation_cb_id},
         {"brisc_activated_count_cb_id", brisc_activated_count_cb_id},
         {"remote_counts_cb_id", remote_counts_cb_id},
+        ("cb_s2c_in_id", cb_s2c_in_id),  // where matmul accepts tilized chunks
 
         // Alignment
         {"l1_alignment", l1_alignment},
