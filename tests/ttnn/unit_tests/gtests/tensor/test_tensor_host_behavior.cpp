@@ -15,10 +15,16 @@
  *
  * Weird edge case found:
  * - to_vector() on tensor created with empty HostBuffer() segfaults.
+ * - Empty shape needs to be Shape({0}) not Shape(), otherwise it's volume would be 1.
  */
 
 namespace ttnn {
 namespace {
+
+// Note: this means EMPTY_SHAPE.empty() is false
+const Shape EMPTY_SHAPE = Shape({0});
+// This will fail a lot of tests because volume() is 1 for Shape{}.
+// const Shape EMPTY_SHAPE = Shape{};
 
 using TensorUnderTest = tt::tt_metal::Tensor;
 
@@ -143,13 +149,14 @@ TEST(TensorHostBehaviorTest, HostBufferConstructor_Overloads) {
 }
 
 TEST(TensorHostBehaviorTest, HostBufferConstructor_EmptyBuffer) {
-    TensorUnderTest tensor(HostBuffer(), Shape({0}), DataType::FLOAT32, Layout::ROW_MAJOR);
-    EXPECT_EQ(tensor.logical_shape(), Shape({0}));
-    EXPECT_EQ(tensor.padded_shape(), Shape({0}));
+    TensorUnderTest tensor(HostBuffer(), EMPTY_SHAPE, DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_shape(), EMPTY_SHAPE);
+    EXPECT_EQ(tensor.padded_shape(), EMPTY_SHAPE);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     // Note: to_vector() on tensor created with empty HostBuffer() segfaults.
-    // Use from_vector for safe empty tensor creation (see to_vector_EmptyTensor test).
+    // TODO: why is other factory methods not segfaulting?
+    // EXPECT_TRUE(tensor.to_vector<float>().empty());
 }
 
 // Tensor currently does not validate the size of the HostBuffer against the shape or padded shape.
@@ -193,9 +200,9 @@ TEST(TensorHostBehaviorTest, from_borrowed_data) {
 
 TEST(TensorHostBehaviorTest, from_borrowed_data_EmptyTensor) {
     std::vector<float> vec;
-    auto tensor = TensorUnderTest::from_borrowed_data(std::span<float>(vec), Shape({0}), MemoryPin());
-    EXPECT_EQ(tensor.logical_shape(), Shape({0}));
-    EXPECT_EQ(tensor.padded_shape(), Shape({0}));
+    auto tensor = TensorUnderTest::from_borrowed_data(std::span<float>(vec), EMPTY_SHAPE, MemoryPin());
+    EXPECT_EQ(tensor.logical_shape(), EMPTY_SHAPE);
+    EXPECT_EQ(tensor.padded_shape(), EMPTY_SHAPE);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_TRUE(tensor.to_vector<float>().empty());
@@ -230,11 +237,11 @@ TEST(TensorHostBehaviorTest, from_span) {
 TEST(TensorHostBehaviorTest, from_span_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_span(std::span<const float>(vec), spec);
     EXPECT_EQ(tensor.tensor_spec(), spec);
-    EXPECT_EQ(tensor.logical_shape(), Shape({0}));
-    EXPECT_EQ(tensor.padded_shape(), Shape({0}));
+    EXPECT_EQ(tensor.logical_shape(), EMPTY_SHAPE);
+    EXPECT_EQ(tensor.padded_shape(), EMPTY_SHAPE);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_TRUE(tensor.to_vector<float>().empty());
@@ -286,11 +293,11 @@ TEST(TensorHostBehaviorTest, from_vector) {
 TEST(TensorHostBehaviorTest, from_vector_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     EXPECT_EQ(tensor.tensor_spec(), spec);
-    EXPECT_EQ(tensor.logical_shape(), Shape({0}));
-    EXPECT_EQ(tensor.padded_shape(), Shape({0}));
+    EXPECT_EQ(tensor.logical_shape(), EMPTY_SHAPE);
+    EXPECT_EQ(tensor.padded_shape(), EMPTY_SHAPE);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_TRUE(tensor.to_vector<float>().empty());
@@ -343,11 +350,11 @@ TEST(TensorHostBehaviorTest, from_vector_Rvalue) {
 TEST(TensorHostBehaviorTest, from_vector_Rvalue_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(std::move(vec), spec);
     EXPECT_EQ(tensor.tensor_spec(), spec);
-    EXPECT_EQ(tensor.logical_shape(), Shape({0}));
-    EXPECT_EQ(tensor.padded_shape(), Shape({0}));
+    EXPECT_EQ(tensor.logical_shape(), EMPTY_SHAPE);
+    EXPECT_EQ(tensor.padded_shape(), EMPTY_SHAPE);
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_TRUE(tensor.to_vector<float>().empty());
@@ -418,7 +425,7 @@ TEST(TensorHostBehaviorTest, to_vector_EmptyTensor) {
     // Use from_vector for empty tensor to avoid segfault with default HostBuffer
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     EXPECT_TRUE(tensor.to_vector<float>().empty());
 }
@@ -507,7 +514,7 @@ TEST(TensorHostBehaviorTest, logical_volume_HigherRank) {
 TEST(TensorHostBehaviorTest, logical_volume_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     EXPECT_EQ(tensor.logical_volume(), 0);
 }
@@ -529,7 +536,7 @@ TEST(TensorHostBehaviorTest, physical_volume_WithPadding) {
 TEST(TensorHostBehaviorTest, physical_volume_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     EXPECT_EQ(tensor.physical_volume(), 0);
 }
@@ -577,7 +584,7 @@ TEST(TensorHostBehaviorTest, strides_Tile) {
 TEST(TensorHostBehaviorTest, strides_EmptyTensor) {
     std::vector<float> vec;
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
-    TensorSpec spec(Shape({0}), tensor_layout);
+    TensorSpec spec(EMPTY_SHAPE, tensor_layout);
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     auto strides = tensor.strides();
     EXPECT_EQ(strides.rank(), 1);
