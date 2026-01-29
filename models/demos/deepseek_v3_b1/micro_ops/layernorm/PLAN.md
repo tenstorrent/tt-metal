@@ -15,11 +15,11 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
   - Create `models/demos/deepseek_v3_b1/micro_ops/layernorm/kernels/`
   - Create `models/demos/deepseek_v3_b1/micro_ops/layernorm/tests/`
 
-- [ ] **1.1.2** Create `__init__.py`
+- [x] **1.1.2** Create `__init__.py`
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/__init__.py`
   - Content: Empty or minimal exports
 
-- [ ] **1.1.3** Create `op.py` with class skeleton
+- [x] **1.1.3** Create `op.py` with class skeleton
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Define `LayerNormSingleCore` class
@@ -27,7 +27,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Add `@staticmethod op(input_tensor, gamma_tensor, beta_tensor, output_tensor, epsilon=1e-6)` stub
   - Verification: `from models.demos.deepseek_v3_b1.micro_ops.layernorm.op import LayerNormSingleCore` succeeds
 
-**Step 1.1 Complete:** [ ]
+**Step 1.1 Complete:** [x]
 
 ---
 
