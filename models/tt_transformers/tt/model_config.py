@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
+    Mode,
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -41,11 +42,6 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
-
-class Mode(Enum):
-    DECODE = "decode"
-    PREFILL = "prefill"
 
 
 class TensorGroup(Enum):
@@ -661,7 +657,7 @@ class ModelArgs:
             )
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
-            self.prefill_rows = 10 if is_blackhole() else 8  # TODO if BH = 10, if wh = 8
+            self.prefill_rows = 8
             self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
@@ -1079,7 +1075,7 @@ class ModelArgs:
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
-    def get_residual_mem_config(self, mode: Mode, prefetcher=None):
+    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for decode residual tensors."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1118,7 +1114,7 @@ class ModelArgs:
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
-    def get_mlp_input_mem_config(self, mode: str = "decode", prefetcher=None):
+    def get_mlp_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1146,7 +1142,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    def get_mlp_ff1_3_prg_config(self, mode: str, seq_len: int, prefetcher: Prefetcher):
+    def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1190,7 +1186,7 @@ class ModelArgs:
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
                 per_core_N=math.ceil(
-                    self.hidden_dim // self.cluster_shape[1] / (self.tile_size * self.dram_shard_grid_width)
+                    (self.hidden_dim // self.cluster_shape[1]) / (self.tile_size * self.dram_shard_grid_width)
                 )
                 if not self.is_galaxy
                 else None,
@@ -2208,7 +2204,7 @@ class ModelArgs:
         return ttnn.TILE_LAYOUT
 
     # =========================================================================
-    # UTILITY AND TRACE CONFIG METHODS
+    # UTILITY METHODS
     # =========================================================================
     def get_max_prefill_chunk_size(self):
         # Set the max number of tokens for each prefill chunk based on the model and device

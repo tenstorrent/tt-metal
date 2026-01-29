@@ -21,6 +21,7 @@ from models.common.llama_models import (
 )
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
+    Mode,
     copy_host_to_device,
     get_block_size,
     get_max_prefill_chunk_size,
@@ -318,7 +319,7 @@ class Generator:
         warmup_prefill=True,
         **kwargs,
     ):
-        self.mode = "prefill"
+        self.mode = Mode.PREFILL
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -689,8 +690,8 @@ class Generator:
         output_tokens: torch.Tensor | None = None,
     ):
         mode_switched = False
-        if self.mode != "decode":
-            self.mode = "decode"
+        if self.mode != Mode.DECODE:
+            self.mode = Mode.DECODE
             mode_switched = True
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)

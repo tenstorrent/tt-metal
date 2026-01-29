@@ -5,6 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.tt_transformers.tt.common import Mode
 
 
 class DistributedNorm(LightweightModule):
@@ -47,7 +48,7 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode, norm_config=None):
+    def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
 
         sharded_program_config = norm_config.get("sharded_program_config", None)
@@ -55,7 +56,7 @@ class DistributedNorm(LightweightModule):
         output_mem_config = norm_config.get("output_mem_config", None)
 
         if self.TG:
-            if mode == "decode":
+            if mode == Mode.DECODE:
                 return tt_sharded_distributed_rmsnorm(
                     x,
                     epsilon=self.norm.eps,
@@ -76,7 +77,7 @@ class DistributedNorm(LightweightModule):
                     compute_kernel_config=self.ln_cfg,
                 )
 
-        input_mem_cfg = sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
@@ -104,7 +105,7 @@ class DistributedNorm(LightweightModule):
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
         x = self.norm(
-            x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"), norm_config=norm_config
+            x, mode=mode, in_sharded=(mode == Mode.DECODE), out_sharded=(mode == Mode.DECODE), norm_config=norm_config
         )
 
         # Distributed norm requires a gather

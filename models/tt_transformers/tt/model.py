@@ -11,7 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -159,9 +159,9 @@ class Transformer(LightweightModule):
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
         logits = self.norm(
-            logits, mode="prefill", norm_config=self.args.get_norm_config("lm_head", "prefill", self.prefetcher)
+            logits, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
         )
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config("prefill", None)
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
         if lm_head_input_mem_cfg.is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
@@ -488,7 +488,7 @@ class Transformer(LightweightModule):
             rot_mats_global=rot_mats_global,
             rot_mats_local=rot_mats_local,
             user_id=user_id,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
@@ -524,7 +524,7 @@ class Transformer(LightweightModule):
             current_pos,
             rot_mats_global=rot_mats_global,
             rot_mats_local=rot_mats_local,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
         )
@@ -573,14 +573,10 @@ class Transformer(LightweightModule):
 
         return tt_logits, None
 
-    def switch_mode(self, mode):
-        if mode == "decode":
-            if self.prefetcher is not None:
-                self.prefetcher.init("decode")
-                self.prefetcher.prefetch()
-        else:
-            if self.prefetcher is not None:
-                self.prefetcher.init("prefill")
+    def switch_mode(self, mode: Mode):
+        if self.prefetcher is not None:
+            self.prefetcher.init(mode)
+            self.prefetcher.prefetch()
 
     def forward(
         self,
@@ -589,14 +585,14 @@ class Transformer(LightweightModule):
         rot_mats_global=None,
         rot_mats_local=None,
         user_id=0,
-        mode="decode",
+        mode: Mode = Mode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
     ):
-        if mode == "decode":
+        if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
@@ -607,10 +603,10 @@ class Transformer(LightweightModule):
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
 
-            if mode == "decode" and not self.args.is_galaxy:
+            if mode == Mode.DECODE and not self.args.is_galaxy:
                 x = ttnn.to_memory_config(
                     x,
-                    self.args.get_residual_mem_config("decode", self.prefetcher),
+                    self.args.get_residual_mem_config(mode, self.prefetcher),
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
@@ -629,11 +625,11 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
-        if mode == "decode":
+        if mode == Mode.DECODE:
             if self.prefetcher is not None:
                 self.prefetcher.stop()
 
-        if mode == "prefill" and get_last_token == -1:
+        if mode == Mode.PREFILL and get_last_token == -1:
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -644,12 +640,12 @@ class Transformer(LightweightModule):
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
-            mode, None if mode == "prefill" else self.prefetcher
+            mode, None if mode == Mode.PREFILL else self.prefetcher
         )
-        if mode == "prefill" and lm_head_input_mem_cfg.is_sharded():
+        if mode == Mode.PREFILL and lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
-        if mode == "decode" and self.prefetcher is not None:
-            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config("decode", self.prefetcher))
+        if mode == Mode.DECODE and self.prefetcher is not None:
+            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
         return x

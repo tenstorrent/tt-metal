@@ -7,7 +7,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.common import pad_to_size
+from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -115,7 +115,7 @@ class MLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
-    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -132,7 +132,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
-        if mode == "prefill" and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
+        if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
             # Reshape input to to fit on device and parallelize computation
             x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
@@ -150,9 +150,9 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
             memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == "decode"
+            if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
         w3_out = ttnn.linear(
@@ -163,9 +163,9 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
             memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == "decode"
+            if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
         ttnn.deallocate(x)
@@ -174,7 +174,7 @@ class MLP(LightweightModule):
             # if mode == "decode" and self.dim!=8192:
             #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
-            if self.dim == 8192 or mode == "prefill":
+            if self.dim == 8192 or mode == Mode.PREFILL:
                 input_mem_cfg = w1_out.memory_config()
 
                 cluster_axis = 1
@@ -186,7 +186,7 @@ class MLP(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     num_links=self.tt_ccl.get_num_links(cluster_axis),
                     cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == Mode.DECODE else None,
                     intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
                     chunks_per_sync=10,
@@ -202,7 +202,7 @@ class MLP(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     num_links=1,
                     cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == Mode.DECODE else None,
                     intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
                     chunks_per_sync=10,
@@ -218,9 +218,9 @@ class MLP(LightweightModule):
                     self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
+                    sharded=True if mode == Mode.DECODE else False,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
                 w3_out = tt_all_reduce(
                     w3_out,
@@ -228,9 +228,9 @@ class MLP(LightweightModule):
                     self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
+                    sharded=True if mode == Mode.DECODE else False,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                 )
 
         w2_in = ttnn.mul(
@@ -241,14 +241,14 @@ class MLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        if mode == "decode" and not TG and self.prefetcher is None:
+        if mode == Mode.DECODE and not TG and self.prefetcher is None:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
 
-        if TG and (self.dim == 8192 or mode == "prefill"):
+        if TG and (self.dim == 8192 or mode == Mode.PREFILL):
             cluster_axis = 1
             w2_in = ttnn.experimental.all_gather_async(
                 w2_in,
@@ -265,7 +265,7 @@ class MLP(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
-            if mode == "decode":
+            if mode == Mode.DECODE:
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
@@ -280,9 +280,9 @@ class MLP(LightweightModule):
             program_config=pc_2,
             memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == "decode"
+            if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
         ttnn.deallocate(w2_in)
@@ -293,11 +293,7 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
-            num_reduce_scatter_links=self.model_config["MLP_RS_CONFIG"]["num_links"]
-            if mode == "decode"
-            else self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
-            sharded=(mode == "decode"),
+            sharded=(mode == Mode.DECODE),
             memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
             rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
             if mode == "decode"
@@ -308,7 +304,7 @@ class MLP(LightweightModule):
             chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == "decode" else 10,
             num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"] if mode == "decode" else 2,
             subdevice_id=self.prefetcher.worker_sub_device_id
-            if mode == "decode" and self.prefetcher is not None
+            if mode == Mode.DECODE and self.prefetcher is not None
             else None,
         )
         # Ensure dim 0 and 1 are 1
@@ -317,7 +313,7 @@ class MLP(LightweightModule):
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-        if mode == "decode":
+        if mode == Mode.DECODE:
             w2_out_reduced = ttnn.to_memory_config(
                 w2_out_reduced,
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),
