@@ -7,6 +7,11 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+// Common types shared with tilize_helpers.hpp:
+//   - INVALID_CB: sentinel value (32) indicating no CB for reconfig
+//   - InitUninitMode: { InitAndUninit, InitOnly, UninitOnly, Neither }
+//   - WaitMode: { Wait, WaitUpfront, NoWait }
 #include "ttnn/cpp/ttnn/kernel_lib/compute_kernel_lib_common.hpp"
 
 /**
@@ -50,50 +55,6 @@ namespace compute_kernel_lib {
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
 // =============================================================================
-// Internal Helpers (declarations)
-// =============================================================================
-
-// unpack_dst_format is defined in JIT-generated chlkc_unpack_data_format.h
-// It's an array where unpack_dst_format[cb_id] contains the DataFormat enum value
-
-// Integer data formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
-// - Int8 = 14, UInt8 = 30, UInt16 = 9, Int32 = 8, UInt32 = 24
-
-// FP32 data formats: Float32 = 4, TF32 = 20
-
-/**
- * @brief Check if data format is an integer type
- * @tparam cb_id Circular buffer ID to check
- * @return true if CB has an integer format
- */
-template <uint32_t cb_id>
-constexpr bool is_integer_format();
-
-/**
- * @brief Check if data format is FP32 (requires standard untilize for wide widths)
- *
- * FP32 formats need special handling because pack_untilize block-based path
- * doesn't work correctly for FP32 with wide widths.
- *
- * @tparam cb_id Circular buffer ID to check
- * @return true if CB has FP32 or TF32 format
- */
-template <uint32_t cb_id>
-constexpr bool is_fp32_format();
-
-/**
- * @brief Compute number of column chunks needed to split a wide row into DEST-sized chunks
- *
- * Finds the largest divisor of total_width that is <= max_block_width
- * This ensures optimal block size while respecting DEST register limits.
- *
- * @param total_width Total width in tiles to be split
- * @param max_block_width Maximum block width (DEST register limit)
- * @return Number of column chunks needed
- */
-constexpr uint32_t compute_num_columns(uint32_t total_width, uint32_t max_block_width);
-
-// =============================================================================
 // Unified Init/Uninit Functions (declarations)
 // =============================================================================
 
@@ -102,20 +63,10 @@ constexpr uint32_t compute_num_columns(uint32_t total_width, uint32_t max_block_
  *
  * @tparam block_width_tiles Width in tiles
  * @tparam input_cb Input circular buffer ID
- * @tparam output_cb Output circular buffer ID (only used for pack path)
+ * @tparam output_cb Output circular buffer ID
  */
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb = 0>
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_init();
-
-/**
- * @brief Uninitialize untilize - automatically dispatches based on width and data format
- *
- * @tparam block_width_tiles Width in tiles
- * @tparam input_cb Input circular buffer ID (only used for standard path)
- * @tparam output_cb Output circular buffer ID (only used for pack path)
- */
-template <uint32_t block_width_tiles, uint32_t input_cb = 0, uint32_t output_cb = 0>
-ALWI void untilize_uninit();
 
 // =============================================================================
 // Main Function (declaration)

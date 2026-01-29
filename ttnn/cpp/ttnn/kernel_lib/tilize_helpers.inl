@@ -4,6 +4,14 @@
 // Implementation file for tilize_helpers.hpp
 // This file is included at the end of tilize_helpers.hpp
 
+// Check if tile dimension arrays are available (from JIT-generated chlkc_pack_tile_dims.h)
+// Tilize is a pack operation, so we use pack_tile_*_dim arrays for the output CB
+#include "ttnn/kernel_lib/compute_kernel_lib_common.hpp"
+#if __has_include("chlkc_pack_tile_dims.h")
+#include "chlkc_pack_tile_dims.h"
+#define PACK_TILE_DIMS_AVAILABLE
+#endif
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -12,11 +20,7 @@ namespace compute_kernel_lib {
 
 template <uint32_t cb_id>
 constexpr bool has_32x32_tiles() {
-// Check if tile dimension arrays are available (from JIT-generated chlkc_pack_tile_dims.h)
-// Tilize is a pack operation, so we use pack_tile_*_dim arrays for the output CB
-#if __has_include("chlkc_pack_tile_dims.h")
-#include "chlkc_pack_tile_dims.h"
-
+#ifdef PACK_TILE_DIMS_AVAILABLE
     // Access pack tile dimensions at compile time
     constexpr uint32_t tile_r_dim = pack_tile_r_dim[cb_id];
     constexpr uint32_t tile_c_dim = pack_tile_c_dim[cb_id];
@@ -52,6 +56,10 @@ ALWI void tilize(
     uint32_t total_input_pages) {
     // Compile-time validation
     static_assert(input_cb != output_cb, "Input and output circular buffers must be different");
+    static_assert(wait_mode != WaitMode::WaitUpfront,
+        "WaitUpfront is not currently supported for tilize due to lack of need. Will be added when required.");
+    static_assert(!(init_uninit_mode == InitUninitMode::Neither && reconfig_from_cb != INVALID_CB),
+        "reconfig_from_cb cannot be used with InitUninitMode::Neither (reconfig affects init/uninit)");
 
     // Derive compile-time flags from enums
     constexpr bool do_init =

@@ -109,6 +109,9 @@ template <
     WaitMode wait_mode,
     uint32_t reconfig_from_cb>
 ALWI void untilize(uint32_t num_blocks) {
+    // Compile-time validation
+    static_assert(input_cb != output_cb, "Input and output circular buffers must be different");
+
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool should_pack_untilize = is_integer_format<input_cb>() || is_fp32_format<input_cb>();
     constexpr bool do_init =

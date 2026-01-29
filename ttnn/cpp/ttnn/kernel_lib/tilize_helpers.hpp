@@ -6,6 +6,11 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+// Common types shared with untilize_helpers.hpp:
+//   - INVALID_CB: sentinel value (32) indicating no CB for reconfig
+//   - InitUninitMode: { InitAndUninit, InitOnly, UninitOnly, Neither }
+//   - WaitMode: { Wait, WaitUpfront, NoWait }
 #include "ttnn/cpp/ttnn/kernel_lib/compute_kernel_lib_common.hpp"
 
 /**
@@ -47,38 +52,6 @@ namespace compute_kernel_lib {
 // INVALID_CB, InitUninitMode, and WaitMode are provided by compute_kernel_lib_common.hpp
 
 // =============================================================================
-// Internal Helpers (declarations)
-// =============================================================================
-
-/**
- * @brief Check if CB has 32x32 tile dimensions at compile time
- *
- * Fast tilize requires 32x32 tile dimensions. This function checks the tile
- * configuration from JIT-generated headers when available.
- *
- * @tparam cb_id Circular buffer ID to check
- * @return true if CB has 32x32 tiles (or if unable to determine, assumes true)
- */
-template <uint32_t cb_id>
-constexpr bool has_32x32_tiles();
-
-/**
- * @brief Determine if fast tilize can be used based on compile-time conditions
- *
- * Fast tilize is enabled when ALL requirements are met:
- * 1. Output CB has 32x32 tile dimensions
- * 2. Half sync mode is enabled (dst_full_sync_en=false)
- *
- * Note: Fast tilize drops FP32 precision for higher throughput.
- * On Blackhole architecture, fast_tilize internally falls back to standard tilize.
- *
- * @tparam output_cb Output circular buffer ID
- * @return true if fast tilize can be used
- */
-template <uint32_t output_cb>
-constexpr bool can_use_fast_tilize();
-
-// =============================================================================
 // Main Function (declaration)
 // =============================================================================
 
@@ -110,8 +83,8 @@ constexpr bool can_use_fast_tilize();
  * @tparam output_cb Output circular buffer ID (must be compile-time constant)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Whether to wait for input (default: Wait)
- * @tparam reconfig_from_cb CB to reconfigure datatype from (default: INVALID_CB = disabled)
- *                          When != INVALID_CB, enables datatype reconfiguration from this CB's format
+ * @tparam reconfig_from_cb Previous CB whose data format we're switching from (default: INVALID_CB = disabled)
+ *                          When set, calls tilize_init_short_with_dt(reconfig_from_cb, input_cb, ...)
  *
  * @param block_width_tiles Number of tiles per tilize call (tiles per output row)
  * @param num_blocks Number of iterations/blocks to process
