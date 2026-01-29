@@ -53,19 +53,17 @@ ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
  * | icb0           | Input circular buffer 0 (tensor A)                            | uint32_t | 0 to 31     | True     |
  * | icb1           | Input circular buffer 1 (tensor B)                            | uint32_t | 0 to 31     | True     |
  * | num_tiles      | Number of tiles to process                                    | uint32_t | 1 to 8      | True     |
- * | num_faces      | Number of faces per tile (default: 4)                         | uint32_t | 1, 2 or 4   | False    |
  * | scalar         | Scalar multiplier for reduction (default: 1.0)                | float    | Any float   | False    |
  *
  * Return value: None
  */
 // clang-format on
 template <PoolType reduce_type = PoolType::SUM>
-ALWI void mul_reduce_scalar_tile(
-    uint32_t icb0, uint32_t icb1, uint32_t num_tiles, uint32_t num_faces = 4, float scaler = 1.0f) {
+ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tiles, float scaler = 1.0f) {
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
-        MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(i)));
+        MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY>(i, icb0)));
     }
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)
@@ -80,12 +78,12 @@ ALWI void mul_reduce_scalar_tile(
 
     // Populate srcB with the scaler value
     MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(
-        _calculate_fill_, RC, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, scaler));
+        _calculate_fill_, RC_custom, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, scaler));
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(
-        SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(_calculate_fill_, RC, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, 0.0f));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(
+        _calculate_fill_, RC_custom, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, 0.0f));
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_SCALAR>()));
@@ -97,7 +95,7 @@ ALWI void mul_reduce_scalar_tile(
             MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         }
         // Perform column reduction, accumulating into dest[0]
-        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, num_faces)));
+        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
     }
 
     // Step 7: Perform final scalar reduction
