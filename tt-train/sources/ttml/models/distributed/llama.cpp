@@ -4,6 +4,7 @@
 
 #include "llama.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
@@ -15,30 +16,9 @@
 
 namespace ttml::models::distributed::llama {
 
-namespace {
-
-void initialize_weights(DistributedLlama& model) {
-    auto params = model.parameters();
-    for (auto& [name, tensor_ptr] : params) {
-        const auto& tensor = tensor_ptr->get_value();
-        if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.logical_shape();
-            auto* device = &autograd::ctx().get_device();
-            auto num_devices = static_cast<uint32_t>(device->num_devices());
-            tensor_shape[0] *= num_devices;
-            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
-        } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
-        }
-    }
-}
-
-}  // namespace
-
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
+    auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
+
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -103,7 +83,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-        embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
+        embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
 
     create_name("llama");
     register_module(tok_emb, "tok_emb");
@@ -112,8 +92,6 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
-
-    initialize_weights(*this);
 }
 
 autograd::TensorPtr DistributedLlama::operator()(

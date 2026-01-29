@@ -8,7 +8,26 @@
 
 namespace ttml::ops {
 
+// Result struct for SDPA with scale values (needed for ring attention)
+struct SDPAResult {
+    autograd::TensorPtr output;
+    autograd::TensorPtr sum_exp;  // sum(exp(qk_scaled - max)), shape (B, H, S, 1)
+    autograd::TensorPtr exp_max;  // exp(max(qk_scaled)), shape (B, H, S, 1)
+};
+
 autograd::TensorPtr scaled_dot_product_attention(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const std::optional<autograd::TensorPtr>& mask = std::nullopt);
+
+// SDPA variant that returns scale values for ring attention online softmax combination.
+// Returns {output, sum_exp, exp_max} where:
+//   - output: attention output (B, H, S, D)
+//   - sum_exp: sum(exp(qk_scaled - max)) per row (B, H, S, 1)
+//   - exp_max: exp(max(qk_scaled)) per row (B, H, S, 1)
+// The total unnormalized scale is sum_exp * exp_max = sum(exp(qk_scaled))
+SDPAResult scaled_dot_product_attention_with_intermediates(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,

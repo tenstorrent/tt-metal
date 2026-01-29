@@ -12,6 +12,9 @@
 #include "core/compute_kernel_config.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/matmul_op.hpp"
+#include "ops/unary_ops.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -86,6 +89,65 @@ ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t group
         ttnn::reshape(ungrouped_grads, ttnn::Shape{batch_num * groups, num_heads / groups, seq_len, embedding_dim});
     auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
     return ttnn::reshape(summed_grads, ttnn::Shape{batch_num, groups, seq_len, embedding_dim});
+}
+
+// Autograd op for group_shared_matmul with backward using direct matmul operations
+// (avoids matmul_backward which has reshape issues)
+autograd::TensorPtr group_shared_matmul_op(
+    const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
+    // Get groups from tensor b (the KV tensor in attention)
+    auto groups = b->get_value().logical_shape().to_array_4D()[1];
+
+    auto out = autograd::create_tensor();
+    auto res = group_shared_matmul(a->get_value(), b->get_value(), transpose_a, transpose_b);
+    out->set_value(res);
+
+    // Backward using direct matmul operations
+    // For C = A @ B:
+    //   dA = dC @ B^T
+    //   dB = A^T @ dC
+    autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b, groups]() {
+        auto dL_dout = out->get_grad();
+
+        ttnn::Tensor dL_da;
+        ttnn::Tensor dL_db;
+
+        if (!transpose_a && !transpose_b) {
+            // C = A @ B
+            // dA = dC @ B^T
+            // dB = A^T @ dC
+            dL_da = group_shared_matmul(dL_dout, b->get_value(), false, true);
+            dL_db = ttnn_fixed::matmul(a->get_value(), dL_dout, true, false);
+        } else if (!transpose_a && transpose_b) {
+            // C = A @ B^T
+            // dA = dC @ B
+            // dB = dC^T @ A
+            dL_da = group_shared_matmul(dL_dout, b->get_value(), false, false);
+            dL_db = ttnn_fixed::matmul(dL_dout, a->get_value(), true, false);
+        } else if (transpose_a && !transpose_b) {
+            // C = A^T @ B
+            // dA = B @ dC^T
+            // dB = A @ dC
+            dL_da = group_shared_matmul(b->get_value(), dL_dout, false, true);
+            dL_db = ttnn_fixed::matmul(a->get_value(), dL_dout, false, false);
+        } else {
+            // C = A^T @ B^T
+            // dA = B^T @ dC^T = (dC @ B)^T
+            // dB = dC^T @ A^T = (A @ dC)^T
+            dL_da = group_shared_matmul(b->get_value(), dL_dout, true, true);
+            dL_db = ttnn_fixed::matmul(dL_dout, a->get_value(), true, true);
+        }
+
+        // Sum over groups for the KV gradient (b tensor)
+        dL_db = sum_over_groups(dL_db, groups);
+
+        a->add_grad(dL_da);
+        b->add_grad(dL_db);
+    };
+
+    auto links = autograd::get_links(a, b);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
 }
 
 void validate_qkv_shapes(
@@ -239,6 +301,58 @@ autograd::TensorPtr scaled_dot_product_attention(
     out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
+}
+
+SDPAResult scaled_dot_product_attention_with_intermediates(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const std::optional<autograd::TensorPtr>& mask) {
+    validate_qkv_shapes(query, key, value);
+
+    auto [batch_num, heads, seq_len, embedding_dim] = query->get_value().logical_shape().to_array_4D();
+
+    const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
+
+    // Scale query: q_scaled = query * scale
+    auto q_scaled = query * scale;
+
+    // qk_scaled = q_scaled @ K^T, shape (B, H, S_q, S_kv)
+    auto qk_scaled = group_shared_matmul_op(q_scaled, key, /*transpose_a=*/false, /*transpose_b=*/true);
+
+    // Apply mask if provided: qk_scaled = qk_scaled * mask + (mask - 1) * large_negative
+    if (mask.has_value()) {
+        auto m = mask.value();
+        auto masked = qk_scaled * m;
+        auto neg_inf_mask = (m * (-1.0F) + 1.0F) * (-1e9F);  // (1 - mask) * (-1e9)
+        qk_scaled = masked + neg_inf_mask;
+    }
+
+    // max_qk = max(qk_scaled, dim=-1, keepdim=true), shape (B, H, S_q, 1)
+    auto max_qk = ops::max(qk_scaled, /*dim=*/3, /*keepdim=*/true);
+
+    // qk_shifted = qk_scaled - max_qk (for numerical stability)
+    auto qk_shifted = qk_scaled - max_qk;
+
+    // exp_qk = exp(qk_shifted), shape (B, H, S_q, S_kv)
+    auto exp_qk = ops::exp(qk_shifted);
+
+    // sum_exp = sum(exp_qk, dim=-1, keepdim=true), shape (B, H, S_q, 1)
+    auto sum_exp = ops::sum(exp_qk, /*dim=*/3, /*keepdim=*/true);
+
+    // attention_weights = exp_qk / sum_exp = exp_qk * reciprocal(sum_exp)
+    // auto inv_sum_exp = ops::reciprocal(sum_exp);
+    // auto attention_weights = exp_qk * inv_sum_exp;
+    auto attention_weights = ops::softmax(qk_shifted, /* axis */ 3);
+
+    // output = attention_weights @ V, shape (B, H, S_q, D)
+    auto out = group_shared_matmul_op(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
+
+    // exp_max = exp(max_qk), shape (B, H, S_q, 1)
+    auto exp_max = ops::exp(max_qk);
+
+    // All operations are autograd-aware, backward is automatic through composition
+    return SDPAResult{out, sum_exp, exp_max};
 }
 
 autograd::TensorPtr scaled_dot_product_attention_fused(
