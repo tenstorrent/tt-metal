@@ -152,8 +152,8 @@ You MUST produce a structured Kernel Design Document saved to:
 - [ ] Template parameters for reduce helper (if applicable):
   - `PoolType`: SUM, AVG, or MAX
   - `ReduceDim`: REDUCE_ROW, REDUCE_COL, or REDUCE_SCALAR
-  - `InputPolicy`: WaitAndPopPerTile (default), WaitAndPopPerBatch, NoWaitNoPop, or WaitUpfrontNoPop
-  - `DataFormatReconfigMode`: NONE, INPUT, OUTPUT, or INPUT_AND_OUTPUT (default)
+  - `ReduceInputPolicy`: WaitAndPopPerTile (default), WaitAndPopPerBatch, NoWaitNoPop, or WaitUpfrontNoPop
+  - `ReduceDataFormatReconfigMode`: NONE, INPUT, OUTPUT, or INPUT_AND_OUTPUT (default)
 
 **Note**: `REDUCE_OP` and `REDUCE_DIM` macros are **deprecated**. Always specify template parameters explicitly.
 
@@ -162,7 +162,7 @@ You MUST produce a structured Kernel Design Document saved to:
 When designing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel_lib/`:
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
-- `reduce_helpers_compute.hpp` - reduce(), InputBlockShape, InputPolicy, Accumulation types
+- `reduce_helpers_compute.hpp` - reduce(), ReduceInputBlockShape, ReduceInputPolicy, Accumulation types
 - `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim, BinaryInputMode types
 - `dest_helpers.hpp` - DEST register limits (DEST_AUTO_LIMIT)
 

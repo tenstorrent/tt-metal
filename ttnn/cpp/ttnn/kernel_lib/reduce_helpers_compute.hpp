@@ -35,17 +35,17 @@
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(
  *       cb_in, cb_scaler, cb_out,
- *       compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
  *       cb_in, cb_scaler, cb_out,
- *       compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
  *       cb_in, cb_scaler, cb_out,
- *       compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  */
 
 namespace compute_kernel_lib {
@@ -63,7 +63,7 @@ namespace compute_kernel_lib {
  * - OUTPUT: Reconfigure packer only (output format changed)
  * - INPUT_AND_OUTPUT: Reconfigure both unpacker and packer (default, safest option)
  */
-enum class DataFormatReconfigMode {
+enum class ReduceDataFormatReconfigMode {
     NONE,             // Skip all data format reconfiguration
     INPUT,            // Reconfigure unpacker only (calls reconfig_data_format)
     OUTPUT,           // Reconfigure packer only (calls pack_reconfig_data_format)
@@ -83,7 +83,7 @@ enum class DataFormatReconfigMode {
  * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse)
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
  */
-enum class InputPolicy {
+enum class ReduceInputPolicy {
     WaitAndPopPerTile,   // Wait/process/pop one tile at a time (streaming)
     WaitAndPopPerBatch,  // Wait for batch, process all, pop batch
     WaitUpfrontNoPop,    // Wait for all tiles upfront, don't pop (persistent)
@@ -100,14 +100,14 @@ enum class InputPolicy {
  * Specifies how input tiles are arranged in memory, particularly for non-contiguous layouts
  * where rows have padding (row_stride > logical width).
  */
-struct InputMemoryLayout {
+struct ReduceInputMemoryLayout {
     uint32_t row_stride = 0;  // 0 = auto-detect from Wt (contiguous row-major)
 
-    explicit constexpr InputMemoryLayout() = default;
-    explicit constexpr InputMemoryLayout(uint32_t row) : row_stride(row) {}
+    explicit constexpr ReduceInputMemoryLayout() = default;
+    explicit constexpr ReduceInputMemoryLayout(uint32_t row) : row_stride(row) {}
 
-    static constexpr InputMemoryLayout contiguous() { return InputMemoryLayout(); }
-    static constexpr InputMemoryLayout with_row_stride(uint32_t s) { return InputMemoryLayout(s); }
+    static constexpr ReduceInputMemoryLayout contiguous() { return ReduceInputMemoryLayout(); }
+    static constexpr ReduceInputMemoryLayout with_row_stride(uint32_t s) { return ReduceInputMemoryLayout(s); }
 };
 
 /**
@@ -119,15 +119,15 @@ struct InputMemoryLayout {
  * - REDUCE_COL: output has (cols × batches) tiles
  * - REDUCE_SCALAR: output has (batches) tiles
  */
-struct InputBlockShape {
+struct ReduceInputBlockShape {
     uint32_t rows;
     uint32_t cols;
     uint32_t batches;
 
-    static constexpr InputBlockShape of(uint32_t r, uint32_t c, uint32_t b = 1) { return {r, c, b}; }
-    static constexpr InputBlockShape single() { return {1, 1, 1}; }
-    static constexpr InputBlockShape row(uint32_t c, uint32_t b = 1) { return {1, c, b}; }
-    static constexpr InputBlockShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
+    static constexpr ReduceInputBlockShape of(uint32_t r, uint32_t c, uint32_t b = 1) { return {r, c, b}; }
+    static constexpr ReduceInputBlockShape single() { return {1, 1, 1}; }
+    static constexpr ReduceInputBlockShape row(uint32_t c, uint32_t b = 1) { return {1, c, b}; }
+    static constexpr ReduceInputBlockShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
 // NoAccumulation is defined in common_types.hpp
@@ -246,16 +246,16 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    InputPolicy input_policy = InputPolicy::WaitAndPopPerTile,
-    DataFormatReconfigMode reconfig_mode = DataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
+    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
     uint32_t input_cb,
     uint32_t scaler_cb,
     uint32_t output_cb,
-    InputBlockShape input_block_shape,
-    InputMemoryLayout input_memory_layout = InputMemoryLayout::contiguous(),
+    ReduceInputBlockShape input_block_shape,
+    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{});
 

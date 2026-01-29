@@ -21,13 +21,16 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
     // REDUCE_OP/DIM is expected to come from add_define
-    // DataFormatReconfigMode::NONE: First operation after hw_startup, no reconfig needed
+    // ReduceDataFormatReconfigMode::NONE: First operation after hw_startup, no reconfig needed
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
-        compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-        compute_kernel_lib::DataFormatReconfigMode::NONE>(
-        tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3, compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_2,
+        tt::CBIndex::c_3,
+        compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
 #else
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 

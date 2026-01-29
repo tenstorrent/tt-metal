@@ -145,13 +145,13 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::InputPolicy::NoWaitNoPop,
-        compute_kernel_lib::DataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
         cb_in,
         cb_scaler,
         cb_ex_partial,
-        compute_kernel_lib::InputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::InputMemoryLayout::with_row_stride(block_w));
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
@@ -255,13 +255,13 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::InputPolicy::NoWaitNoPop,
-        compute_kernel_lib::DataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
         cb_xmm2,
         cb_scaler,
         cb_ex_partial2,
-        compute_kernel_lib::InputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::InputMemoryLayout::with_row_stride(block_w));
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     cb_pop_front(cb_xmm2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
