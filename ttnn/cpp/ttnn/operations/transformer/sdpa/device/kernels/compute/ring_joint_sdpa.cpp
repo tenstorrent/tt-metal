@@ -12,8 +12,7 @@
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -164,4 +163,3 @@ void MAIN {
             cb_out);
     }
 }
-}  // namespace NAMESPACE

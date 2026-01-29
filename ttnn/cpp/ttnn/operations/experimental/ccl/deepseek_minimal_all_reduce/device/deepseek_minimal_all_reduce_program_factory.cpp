@@ -86,6 +86,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const tt::tt_metal::GlobalSemaphore& semaphore2) {
     const auto& input_tensor = tensor_args.input_tensor;
     const bool has_residual = tensor_args.residual_tensor.has_value();
+    const bool using_persistent_buffers =
+        tensor_args.intermediate_tensor.has_value() && tensor_args.persistent_output_tensor.has_value();
     tt::tt_metal::Program program{};
 
     // uint32_t num_links = operation_attributes.num_links;
@@ -301,6 +303,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         remote_receiver_noc_y,
         dst_num_hops,
         num_connections,
+        using_persistent_buffers ? 1 : 0,
     };
 
     std::vector<uint32_t> receiver_reader_compile_args = {
@@ -312,7 +315,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         remote_sender_noc_y,
         num_standard_tiles,   // num standard tiles (7)
         compute_cb_residual,  // CB for residual tensor (optional)
-        static_cast<uint32_t>(has_residual ? 1 : 0),
+        has_residual ? 1 : 0,
+        using_persistent_buffers ? 1 : 0,
     };
 
     // output writes directly to output tensor memory
