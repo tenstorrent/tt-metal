@@ -1,0 +1,52 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "dit_minimal_matmul_addcmul_fused.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+
+namespace ttnn::operations::experimental::transformer {
+
+ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
+    const ttnn::Tensor& matmul_input_tensor,
+    const ttnn::Tensor& matmul_weight_tensor,
+    float scalar,
+    const ttnn::Tensor& addcmul_input_tensor1,
+    const ttnn::Tensor& addcmul_input_tensor2,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    std::optional<unary::UnaryWithParam> fused_activation,
+    const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    // TODO: Full fusion will modify minimal_matmul kernels to compute addcmul inline
+    // For now, parameters are passed to minimal_matmul but kernels don't use them yet
+    // The full implementation will compute: output = addcmul_input_tensor1 + (scalar * matmul_output *
+    // addcmul_input_tensor2) where matmul_output = minimal_matmul(matmul_input_tensor, matmul_weight_tensor)
+
+    // Call minimal_matmul with all parameters including fused ternary
+    // Note: Parameter mapping for addcmul semantics:
+    // Desired formula: output = addcmul_input_tensor1 + (scalar * matmul_out * addcmul_input_tensor2)
+    // In dataflow/compute: output = ternary_a + (scalar * matmul_out * ternary_b)
+    // So: fused_ternary_input_a = addcmul_input_tensor1 (residual/base)
+    //     fused_ternary_input_c = addcmul_input_tensor2 (gate/multiplier)
+    auto outputs = ttnn::prim::minimal_matmul(
+        matmul_input_tensor,
+        matmul_weight_tensor,
+        bias_tensor,
+        std::move(fused_activation),
+        config,
+        memory_config,
+        dtype,
+        compute_kernel_config,
+        1,                       // no splitting
+        -1,                      // dim
+        scalar,                  // fused_ternary_scalar
+        addcmul_input_tensor1,   // fused_ternary_input_a (residual/base)
+        addcmul_input_tensor2);  // fused_ternary_input_c (gate/multiplier)
+
+    TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
+    return outputs[0];
+}
+
+}  // namespace ttnn::operations::experimental::transformer
