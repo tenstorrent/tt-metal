@@ -131,7 +131,7 @@ void kernel_main() {
         }
         // reduce f(x)
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_cal, cb_one, cb_reduce, compute_kernel_lib::InputBlockShape::single());
+            cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
 
         tile_regs_acquire();
 
