@@ -40,6 +40,9 @@ enum class KernelName {
     ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
     ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
     ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
+    ComputeNoBcastAddcdiv,   // ADDCDIV: no bcast, uses addcdiv_tile
+    ComputeBcastAddcdiv,     // ADDCDIV: column and scalar bcast cases
+    ComputeRowBcastAddcdiv,  // ADDCDIV: row bcast cases : bfloat16 only
 };
 
 struct TernaryKernelConfig {
