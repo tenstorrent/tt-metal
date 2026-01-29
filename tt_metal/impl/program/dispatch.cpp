@@ -69,6 +69,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/common_values.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -87,6 +88,11 @@ std::shared_ptr<Kernel> GetKernel(const ProgramImpl& program, KernelHandle kerne
 namespace program_dispatch {
 
 namespace {
+
+inline bool is_watcher_assert_enabled() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+}
 
 struct CommandConstants {
     CoreType dispatch_core_type;
@@ -139,6 +145,16 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
+        // Initialize RTA/CRTA offsets to sentinel when watcher enabled. Launch message memory
+        // may contain stale data from previous dispatches. Can't use 0 as "no args" since 0 is
+        // a valid L1 offset. Sentinel (0xFFFF) distinguishes "no args" from "args at offset 0"
+        if (is_watcher_assert_enabled()) {
+            auto rta_offsets = kg->launch_msg.view().kernel_config().rta_offset();
+            for (size_t i = 0; i < rta_offsets.size(); i++) {
+                kg->launch_msg.view().kernel_config().rta_offset()[i].rta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
+                kg->launch_msg.view().kernel_config().rta_offset()[i].crta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
+            }
+        }
         std::ranges::fill(max_rtas, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
@@ -161,12 +177,19 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             uint32_t rta_offset = base_offset + offset;
             offset += max_rtas[dispatch_class] * sizeof(uint32_t);
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
-            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                uint32_t processor_index = hal.get_processor_index(
-                    kernel->get_kernel_programmable_core_type(),
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i));
-                kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+            // Per-kernel check: Only set actual offset if this kernel has RTAs
+            if (max_rtas[dispatch_class] > 0) {
+                for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                    uint32_t processor_index = hal.get_processor_index(
+                        kernel->get_kernel_programmable_core_type(),
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i));
+                    TT_FATAL(
+                        rta_offset <= std::numeric_limits<uint16_t>::max(),
+                        "RTA offset {} overflows uint16_t",
+                        rta_offset);
+                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                }
             }
         }
         kg->total_rta_size = offset;
@@ -218,13 +241,20 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
             auto dispatch_class = kernel->dispatch_class();
-            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                uint32_t processor_index = hal.get_processor_index(
-                    kernel->get_kernel_programmable_core_type(),
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i));
-                kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                    crta_offsets[dispatch_class];
+            // Per-kernel check: Only set actual offset if this kernel has CRTAs
+            if (max_crtas[dispatch_class] > 0) {
+                for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                    uint32_t processor_index = hal.get_processor_index(
+                        kernel->get_kernel_programmable_core_type(),
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i));
+                    TT_FATAL(
+                        crta_offsets[dispatch_class] <= std::numeric_limits<uint16_t>::max(),
+                        "CRTA offset {} overflows uint16_t",
+                        crta_offsets[dispatch_class]);
+                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
+                        crta_offsets[dispatch_class];
+                }
             }
         }
     }
@@ -491,7 +521,7 @@ void generate_runtime_args_cmds(
             std::uniform_int_distribution<int> dist(0, 65535);
             for (uint32_t count = 0; count < total_words; count++) {
                 uint16_t rnd = static_cast<uint16_t>(dist(gen));
-                const uint32_t known_garbage = 0xBEEF0000 | rnd;
+                const uint32_t known_garbage = WATCHER_RTA_UNSET_PATTERN | rnd;
                 command_start_ptr[count] = known_garbage;
             }
         }
@@ -512,6 +542,10 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
+        // When watcher assert is enabled, RTAs are stored as [count | args...] in the command buffer
+        // RuntimeArgsData.rt_args_data points to args (skips count) for user-facing API
+        // data_in_sequence points to args location in command buffer for retargeting
+        uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
@@ -519,20 +553,25 @@ void generate_runtime_args_cmds(
             for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
                 auto& data = rt_args_data[i][j];
                 uint32_t* data_in_sequence =
-                    (uint32_t*)((char*)runtime_args_command_sequences.back().data() + data_offset + offset);
-                if (data.first.get().rt_args_data == data.second.get().data()) {
+                    reinterpret_cast<uint32_t*>(
+                        reinterpret_cast<char*>(runtime_args_command_sequences.back().data()) + data_offset + offset) +
+                    count_word_offset;
+                // rt_args_data points to args; data.second.get().data() points to count when watcher enabled
+                if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
                     // Update the pointer to point into the command sequence. Future RTA updates will modify the command
                     // sequence directly.
                     data.first.get().rt_args_data = data_in_sequence;
                 } else {
-                    TT_ASSERT(data.first.get().rt_args_data == std::get<0>(rt_data_and_sizes[i][j]));
+                    TT_ASSERT(
+                        data.first.get().rt_args_data ==
+                        (reinterpret_cast<const uint32_t*>(std::get<0>(rt_data_and_sizes[i][j])) + count_word_offset));
                     // Pointer already points into another command sequence. Schedule a copy from there.
                     rta_updates.emplace_back(
                         data.first.get().rt_args_data,
                         data_in_sequence,
                         data.first.get().rt_args_count * sizeof(uint32_t));
                 }
-                offset += data.first.get().rt_args_count * sizeof(uint32_t);
+                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
             }
             data_offset += data_inc;
         }
@@ -624,8 +663,12 @@ BatchedTransfers assemble_runtime_args_commands(
         if (common_rt_args.empty()) {
             continue;
         }
+        uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+        TT_ASSERT(kernel->common_runtime_args_data().data() == common_rt_args.data() + count_word_offset);
+        TT_ASSERT(kernel->common_runtime_args_data().size() == common_rt_args.size() - count_word_offset);
         per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
     }
+    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
 
     // kernel_group multicast is best when multiple kernels on the same kernel group have common RTAs. It may also merge
     // CRTA writes with CB and semaphore writes.
@@ -767,8 +810,10 @@ BatchedTransfers assemble_runtime_args_commands(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                     TT_ASSERT(
                                         runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[dispatch_class]);
+                                    // Back up pointer to include count word for dispatch
+                                    // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).rt_args_data,
+                                        kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[dispatch_class]);
                                     total_rta_size += runtime_args_data.size() * sizeof(uint32_t);
@@ -847,10 +892,14 @@ BatchedTransfers assemble_runtime_args_commands(
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
 
-                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                    TT_ASSERT(
+                        (kernel->common_runtime_args_data().size() + count_word_offset) * sizeof(uint32_t) ==
+                        common_size);
                     TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
+                    // Back up pointer to include count word for dispatch (same as RTAs)
+                    // common_runtime_args_data().data() points to args; backing up includes count
                     common_rt_data_and_sizes.back().emplace_back(
-                        kernel->common_runtime_args_data().data(),
+                        kernel->common_runtime_args_data().data() - count_word_offset,
                         common_rt_args.size() * sizeof(uint32_t),
                         common_size);
                     common_rt_args_data.back().emplace_back(
@@ -1565,6 +1614,9 @@ public:
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
 
+        // Byte offset to skip count word when watcher enabled. Uses sizeof(uint32_t) instead of 1
+        // because transfer.data and data_collection_location are byte pointers (uint8_t*)
+        uint32_t count_word_byte_offset = is_watcher_assert_enabled() ? sizeof(uint32_t) : 0;
         // Write out batched semaphore + CB multicast transfers.
         for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
             auto& cmd_data = batched_cmd_data[i];
@@ -1624,16 +1676,21 @@ public:
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
                 if (transfer.rta_data) {
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) == transfer.data.data()) {
+                    // When watcher enabled, transfer.data contains [count | args...]
+                    // rt_args_data points to args location (data + offset)
+                    // rta_updates only copy args (count already written during initial copy)
+                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                        (transfer.data.data() + count_word_byte_offset)) {
                         // rt_args_data points to the original vector. Update it so later modifications directly modify
                         // the command stream.
-                        transfer.rta_data->rt_args_data = reinterpret_cast<uint32_t*>(data_collection_location[j]);
+                        transfer.rta_data->rt_args_data =
+                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
                     } else {
                         // rt_args_data points into the command stream. Setup a copy from that other location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
                             transfer.rta_data->rt_args_data,
-                            data_collection_location[j],
-                            static_cast<uint32_t>(transfer.data.size())});
+                            data_collection_location[j] + count_word_byte_offset,
+                            static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
                     }
                 }
                 j++;
