@@ -1,4 +1,4 @@
-name: "Test INSTALLING.md install.sh step"
+name: "Test dispatch"
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
           timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
           chmod +x install.sh
 
-          timeout 600 sudo bash ./install.sh \
+          timeout 600 bash ./install.sh \
             --update-firmware=off \
             --install-metalium-models-container \
             --verbose \
@@ -39,4 +39,5 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          sudo /root/.local/bin/tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
+          export PATH=~/.local/bin:$PATH
+          tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
