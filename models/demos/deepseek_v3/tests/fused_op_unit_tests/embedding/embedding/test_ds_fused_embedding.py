@@ -32,8 +32,7 @@ DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
     ("decode", 32): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 512): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 2048): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
+    ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
 }
 
 
@@ -306,11 +305,9 @@ def _build_embedding_inputs(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     batch_size = USERS_PER_ROW if mode == "decode" else 1
-    num_layers = mesh_device.shape[0]
 
     # Get dimensions from config
     vocab_size = hf_config.vocab_size
-    hidden_size = hf_config.hidden_size
 
     # Input shape: [1, 1, seq_len] for token IDs
     if mode == "decode":

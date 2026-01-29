@@ -33,7 +33,6 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
 }
 
 
@@ -273,19 +272,14 @@ def _build_mul_inputs(
     num_layers = mesh_device.shape[0]
 
     # Get dimensions from config
-    dim = hf_config.hidden_size
     hidden_dim = hf_config.intermediate_size
     _, mesh_width = mesh_device.shape
 
-    # Per-device hidden_dim (sharded on last dimension)
-    per_device_hidden_dim = even_int_div(hidden_dim, mesh_width)
-
-    # Input shape for decode: [num_layers, 1, batch_size, per_device_hidden_dim]
-    # Input shape for prefill: [num_layers, 1, seq_len, per_device_hidden_dim]
+    # Input shape for decode: [num_layers, 1, batch_size, hidden_dim]
+    # Input shape for prefill: [num_layers, 1, seq_len, hidden_dim]
     if mode == "decode":
         # Input tensors come from w1/w3 linear outputs in decode mode
-        # Shape: [1, 1, batch_size, per_device_hidden_dim] per device
-        torch_w1_out = torch.randn(num_layers, 1, batch_size, hidden_dim, dtype=torch.bfloat16)
+        # Shape: [1, 1, batch_size, hidden_dim] per device before sharding
         torch_w3_out = torch.randn(num_layers, 1, batch_size, hidden_dim, dtype=torch.bfloat16)
     else:
         torch_w1_out = torch.randn(num_layers, 1, seq_len, hidden_dim, dtype=torch.bfloat16)

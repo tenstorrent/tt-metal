@@ -33,7 +33,6 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
 }
 
 
@@ -661,7 +660,7 @@ def test_ds_fused_all_gather_preff1_3_device_perf(mode, seq_len):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"ds_fused_all_gather_preff1_3_device_perf_{mode}_seq{seq_len}"
-    test_path = "models/demos/deepseek_v3/tests/unit/fused_op_unit_tests/mlp/test_ds_fused_all_gather_preff1_3.py"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/all_gather/test_ds_fused_all_gather_preff1_3.py"
     trace_filter = "trace" if mode == "decode" else "eager"
     expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_ds_fused_all_gather_preff1_3 -k "{expr}"'

@@ -38,12 +38,7 @@ from models.common.utility_functions import comp_pcc, profiler
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    get_model_config,
-    get_test_weight_config,
-    pad_or_trim_seq_len,
-    system_name_to_mesh_shape,
-)
+from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, pad_or_trim_seq_len
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -404,7 +399,6 @@ def _build_lm_head_inputs(
     - Prefill: height = seq_len (1 user × seq_len tokens)
     """
     hidden_size = hf_config.hidden_size
-    vocab_size = hf_config.vocab_size
 
     # LMHead uses different batch conventions:
     # - Decode: batch_size=32 (USERS_PER_ROW), seq_len=1 → height=32
@@ -586,9 +580,6 @@ def _collect_device_perf(
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # PCC ~0.97 expected for bfloat4_b quantized weights
-        # batch_size=32 for all modes, seq_len=1 for decode
-        # height = batch_size × seq_len = 32 × 1 = 32 for decode
         ("decode", 1, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1 → 32 tokens
         ("prefill", 128, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128 → 4096 tokens
         ("prefill", 1024, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1024 → 32768 tokens
@@ -739,7 +730,6 @@ def test_ds_fused_lm_head_device_perf(mode, seq_len):
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
-    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     # batch_size=32 (USERS_PER_ROW) for all modes
     batch_size = USERS_PER_ROW
 
