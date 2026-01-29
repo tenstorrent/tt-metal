@@ -52,7 +52,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "e2e"
-      - name: Load and filter test matrix
+      - name: Load test matrix
         id: load-test-matrix
         run: |
           set -e
