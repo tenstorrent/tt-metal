@@ -98,10 +98,10 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
-               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
+               const std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> preallocated_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
-               const std::optional<ttnn::Tensor>& indices_tensor) {
+               const std::optional<ttnn::Tensor>& indices_tensor) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     k,
