@@ -145,8 +145,8 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::reduce_policies::PreloadedPolicy,
-        compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+        compute_kernel_lib::InputPolicy::NoWaitNoPop,
+        compute_kernel_lib::DataFormatReconfigMode::NONE>(
         cb_in,
         cb_scaler,
         cb_ex_partial,
@@ -255,8 +255,8 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::reduce_policies::PreloadedPolicy,
-        compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+        compute_kernel_lib::InputPolicy::NoWaitNoPop,
+        compute_kernel_lib::DataFormatReconfigMode::NONE>(
         cb_xmm2,
         cb_scaler,
         cb_ex_partial2,

@@ -311,8 +311,8 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::reduce_policies::PreloadedPolicy,
-                    compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                    compute_kernel_lib::InputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
                     cb_x,
                     cb_scaler,
                     cb_ex_partial,
@@ -327,8 +327,8 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::reduce_policies::StreamingPolicy,
-                    compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
                     cb_ex_external,
                     cb_scaler_global,
                     cb_ex_global,
@@ -443,8 +443,8 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::reduce_policies::PreloadedPolicy,
-                    compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                    compute_kernel_lib::InputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
                     cb_xmm,
                     cb_scaler,
                     cb_ex2_partial,
@@ -457,8 +457,8 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::reduce_policies::StreamingPolicy,
-                    compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
                     cb_ex_external,
                     cb_scaler_global,
                     cb_ex2_global,

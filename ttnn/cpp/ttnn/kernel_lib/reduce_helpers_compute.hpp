@@ -13,7 +13,6 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helper_policies.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -50,6 +49,46 @@
  */
 
 namespace compute_kernel_lib {
+
+// =============================================================================
+// Reconfig Mode - control data format reconfiguration before reduce
+// =============================================================================
+
+/**
+ * @brief Reconfiguration mode for data format setup before reduce operations
+ *
+ * Controls whether unpacker (input) and/or packer (output) are reconfigured:
+ * - NONE: Skip all reconfiguration (reduce is first op or formats match)
+ * - INPUT: Reconfigure unpacker only (input format changed)
+ * - OUTPUT: Reconfigure packer only (output format changed)
+ * - INPUT_AND_OUTPUT: Reconfigure both unpacker and packer (default, safest option)
+ */
+enum class DataFormatReconfigMode {
+    NONE,             // Skip all data format reconfiguration
+    INPUT,            // Reconfigure unpacker only (calls reconfig_data_format)
+    OUTPUT,           // Reconfigure packer only (calls pack_reconfig_data_format)
+    INPUT_AND_OUTPUT  // Reconfigure both unpacker and packer (default)
+};
+
+// =============================================================================
+// Input Policy - control how input tiles are synchronized and consumed
+// =============================================================================
+
+/**
+ * @brief Input synchronization and consumption policy for reduce operations
+ *
+ * Controls when to wait for input tiles and whether to pop them after processing:
+ * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size)
+ * - WaitAndPopPerBatch: Wait for batch, process all, pop batch (optimal when pre-loaded per row)
+ * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse)
+ * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
+ */
+enum class InputPolicy {
+    WaitAndPopPerTile,   // Wait/process/pop one tile at a time (streaming)
+    WaitAndPopPerBatch,  // Wait for batch, process all, pop batch
+    WaitUpfrontNoPop,    // Wait for all tiles upfront, don't pop (persistent)
+    NoWaitNoPop          // Caller manages wait/pop (preloaded)
+};
 
 // =============================================================================
 // Configuration Types
@@ -193,8 +232,8 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX)
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam InputPolicy Input handling policy (default: StreamingPolicy)
- * @tparam ReconfigPolicy Data format reconfiguration policy (default: ReconfigBothPolicy)
+ * @tparam input_policy Input handling policy (default: WaitAndPopPerTile)
+ * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  *
  * @param input_cb Input circular buffer containing tiles to reduce
  * @param scaler_cb Circular buffer containing scaler tile
@@ -207,8 +246,8 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    typename InputPolicy = reduce_policies::StreamingPolicy,
-    typename ReconfigPolicy = reduce_policies::ReconfigBothPolicy,
+    InputPolicy input_policy = InputPolicy::WaitAndPopPerTile,
+    DataFormatReconfigMode reconfig_mode = DataFormatReconfigMode::INPUT_AND_OUTPUT,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(

@@ -136,8 +136,8 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::reduce_policies::PreloadedPolicy,
-        compute_kernel_lib::reduce_policies::ReconfigInputPolicy>(
+        compute_kernel_lib::InputPolicy::NoWaitNoPop,
+        compute_kernel_lib::DataFormatReconfigMode::INPUT>(
         cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::InputBlockShape::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
@@ -154,8 +154,8 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::reduce_policies::StreamingPolicy,
-            compute_kernel_lib::reduce_policies::ReconfigInputPolicy>(
+            compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::DataFormatReconfigMode::INPUT>(
             cb_ex_external2,
             cb_scaler_global,
             cb_reduction_out,
@@ -181,8 +181,8 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::reduce_policies::StreamingPolicy,
-                compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::DataFormatReconfigMode::NONE>(
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
