@@ -286,7 +286,9 @@ jobs:
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
           - name: fabric 2D fixture unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            cmd: |
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTrafficGeneratorKernelIntegrationTest.*"
             timeout: 15
           - name: fabric UDM mode unit tests
             cmd: |

@@ -518,10 +518,53 @@ void py_module(nb::module_& mod) {
                 fused_activation_repr);
         });
 
-    ttnn::bind_function(
+    auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
+        tt_serializable_class<MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(
+            mod, "MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig", R"doc(
+        This program config is a specialised config for batched DRAM sharded operations, where the inputs are sharded along the batch dimension.
+    )doc");
+
+    matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config
+        .def(
+            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
+            nb::kw_only(),
+            nb::arg("in0_block_w").noconvert(),
+            nb::arg("per_core_M").noconvert(),
+            nb::arg("per_core_N").noconvert(),
+            nb::arg("fused_activation") = nb::none())
+        .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig::in0_block_w, R"doc(
+            Block width for both input tensors along the K dimension (shared inner dimension).
+
+            Determines the data granularity by specifying how many tiles wide each block is
+            along the inner dimension for both input_tensor_a and input_tensor_b in batched DRAM-sharded
+            operations. This parameter must be chosen to align with the DRAM sharding
+            strategy and optimize memory bandwidth utilization for both tensors.
+        )doc")
+        .def_rw("per_core_M", &MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig::per_core_M, R"doc(
+            Number of output tiles each core processes along the M dimension.
+
+            Determines how the M dimension is distributed across cores in batched DRAM-sharded
+            scenarios. This must align with the DRAM sharding pattern to ensure optimal
+            performance and avoid memory access conflicts.
+        )doc")
+        .def_rw("per_core_N", &MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig::per_core_N, R"doc(
+            Number of output tiles each core processes along the N dimension.
+
+            Determines how the N dimension is distributed across cores in batched DRAM-sharded
+            scenarios. This parameter affects the multicast efficiency and must be
+            compatible with the DRAM sharding configuration.
+        )doc")
+        .def_rw(
+            "fused_activation", &MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig::fused_activation, R"doc(
+            Optional fused activation function to apply during computation.
+
+            If specified, the activation function is applied directly during the batched DRAM-sharded
+            matmul operation. This can provide significant performance benefits by avoiding
+            additional memory round-trips in DRAM-based operations.
+        )doc");
+
+    ttnn::bind_function<"matmul">(
         mod,
-        "matmul",
-        "ttnn.matmul",
         R"doc(
         Returns the matrix product of two tensors.
 
@@ -643,6 +686,9 @@ void py_module(nb::module_& mod) {
                 * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
                   - Width Sharded (L1)
                   - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
+                  - Height Sharded (L1)
+                  - Height Sharded (DRAM)
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
                   - Interleaved (L1/DRAM)
@@ -676,10 +722,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"linear">(
         mod,
-        "linear",
-        "ttnn.linear",
         R"doc(
         Returns the linear transformation of the inputs.
 
@@ -751,10 +795,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"matmul_batched_weights">(
         mod,
-        "matmul_batched_weights",
-        "ttnn.matmul_batched_weights",
         R"doc(
         DEPRECATED: This is for experimental internal use and is not supported.
 
@@ -819,10 +861,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"addmm">(
         mod,
-        "addmm",
-        "ttnn.addmm",
         R"doc(
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
 
@@ -905,10 +945,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none()));
 
-    ttnn::bind_function(
+    ttnn::bind_function<"sparse_matmul">(
         mod,
-        "sparse_matmul",
-        "ttnn.sparse_matmul",
         R"doc(
         Returns the matrix product of two tensors. Based on `is_input_a_sparse`, `is_input_b_sparse` and the sparsity tensor, some parts of the output computation is skipped.
 

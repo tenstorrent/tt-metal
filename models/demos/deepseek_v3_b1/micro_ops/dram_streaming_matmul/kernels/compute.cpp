@@ -41,8 +41,7 @@
  *     apply optional SFPU activation
  *     pack subblock_w output tiles
  */
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
@@ -123,4 +122,3 @@ void MAIN {
     // Pop in0 (only once at the end)
     cb_pop_front(cb_id_in0, num_tiles_k);
 }
-}  // namespace NAMESPACE

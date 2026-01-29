@@ -275,6 +275,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_custom_mm_init_(
 // - rt_dim = 1 (row tile dimension is 1, single output tile height)
 // - MOP loops kt_dim times, unpacking both SrcA and SrcB with address increments
 // - unpA_partial_face = false (always use full tile unpacking for input A)
+// - in1_k_stride: stride between K tiles in in1 (default 1 for contiguous, use out_w for row-major layout)
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -282,7 +283,8 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t in1_k_stride = 1) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -293,6 +295,9 @@ inline void _llk_unpack_AB_custom_mm_(
 
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t address_b = base_address_b + offset_address_b;
+
+    // Calculate byte stride for in1 (SrcA) - stride in tiles * tile_size
+    const std::uint32_t address_b_stride = tile_size_b * in1_k_stride;
 
     // Need to reset counters and update SrcB base address for each superloop over 128 kt_dim
     // I guess its due to some counters being overflowed
@@ -317,11 +322,11 @@ inline void _llk_unpack_AB_custom_mm_(
             for (std::uint32_t k = 0; k < 8; k++) {
                 wait_for_next_context(2);
                 cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += tile_size_b;
+                address_b += address_b_stride;
                 semaphore_post(semaphore::UNPACK_SYNC);
                 wait_for_next_context(2);
                 cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += tile_size_b;
+                address_b += address_b_stride;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
         }
@@ -332,11 +337,11 @@ inline void _llk_unpack_AB_custom_mm_(
             for (std::uint32_t j = 0; j < remaining_kt / 2; j++) {
                 wait_for_next_context(2);
                 cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                address_b += tile_size_b;
+                address_b += address_b_stride;
                 semaphore_post(semaphore::UNPACK_SYNC);
                 wait_for_next_context(2);
                 cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                address_b += tile_size_b;
+                address_b += address_b_stride;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
             // Last address update if odd number of remaining kt_dim only hits context 0

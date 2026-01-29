@@ -302,6 +302,9 @@ def decode_forward(
     # ==========================================================================
     # STEP 6: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
     # ==========================================================================
+    while len(expert_output_sparse.shape) > 4:
+        expert_output_sparse = ttnn.squeeze(expert_output_sparse, 0)
+
     # Reshape from sparse matmul output to format expected by combine:
     # From: [B*S/block, experts, block, H]
     # To: [experts_per_device, B_global, S, H] (ROW_MAJOR)
@@ -388,7 +391,7 @@ def decode_forward(
     output_all_reduced = ttnn.all_reduce(
         output,
         num_links=1,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=memory_config,
     )
