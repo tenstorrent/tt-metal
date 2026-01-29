@@ -1981,19 +1981,9 @@ class ModelArgs:
 
             model_cls = self.get_hf_model_cls()
 
-            try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            # Use from_config directly to avoid loading checkpoint weights
+            logger.info(f"Creating model with dummy weights using .from_config (no checkpoint loading)")
+            model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()

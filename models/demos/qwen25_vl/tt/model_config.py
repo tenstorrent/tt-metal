@@ -106,10 +106,19 @@ class VisionModelArgs(ModelArgs):
             Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
         )
 
-        print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
+        
+        if self.dummy_weights:
+            # Skip loading checkpoint weights when using dummy_weights
+            # Use from_config to instantiate without loading full checkpoint
+            print("Creating Qwen2.5-VL vision model with dummy weights (no checkpoint loading)")
+            model = AutoModelForCausalLM.from_config(config)
+            # Initialize weights with the model's _init_weights method
+            model.apply(model._init_weights)
+        else:
+            print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+            model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
         return model.visual
 
     def reference_vision_block(self, layer_num=0):
