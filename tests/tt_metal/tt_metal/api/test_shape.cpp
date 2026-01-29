@@ -24,6 +24,16 @@ TEST(TensorShapeTests, DefaultConstructed) {
     EXPECT_EQ(shape.volume(), 0);
 }
 
+TEST(TensorShapeTests, Empty_InitializerList) {
+    Shape shape({});
+    EXPECT_EQ(shape.volume(), 0);
+}
+
+TEST(TensorShapeTests, Empty_Zeroed_InitializerList) {
+    Shape shape({0});
+    EXPECT_EQ(shape.volume(), 0);
+}
+
 TEST(TensorShapeTests, Rank) {
     EXPECT_EQ(Shape({}).rank(), 0);
     EXPECT_EQ(Shape({1}).rank(), 1);
