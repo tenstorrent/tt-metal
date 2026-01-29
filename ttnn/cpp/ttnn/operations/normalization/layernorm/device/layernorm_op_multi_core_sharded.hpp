@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "tt-metalium/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -36,6 +37,12 @@ struct LayerNormShardedProgramFactory {
 
     static cached_program_t create(
         const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,

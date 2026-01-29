@@ -349,6 +349,11 @@ def auto_register_ttnn_cpp_operations(module):
             auto_register_ttnn_cpp_operations(attribute)
 
 
+# Import experimental module BEFORE auto_register_ttnn_cpp_operations to avoid namespace conflicts
+# with ttnn._ttnn.deprecated.operations which gets registered under ttnn.experimental
+import ttnn.experimental
+import ttnn.experimental.programs
+
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
 import ttnn.experimental_loader
@@ -394,6 +399,13 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,

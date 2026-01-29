@@ -121,6 +121,13 @@ ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
+LayerNormType = ttnn._ttnn.operations.normalization.LayerNormType
+DistributedLayerNormStage = ttnn._ttnn.operations.normalization.DistributedLayerNormStage
+LayerNormParams = ttnn._ttnn.operations.normalization.LayerNormParams
+LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
+LayerNormDeviceOperation = ttnn._ttnn.operations.normalization.LayerNormDeviceOperation
+LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
+LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
 
 
 # group norm helper function
