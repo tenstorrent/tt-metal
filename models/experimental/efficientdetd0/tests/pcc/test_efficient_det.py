@@ -24,20 +24,20 @@ torch.manual_seed(0)
 
 
 @pytest.mark.parametrize(
-    "batch, channels, height, width, use_torch_maxpool",
+    "batch, channels, height, width",
     [
-        (1, 3, 512, 512, True),
+        (1, 3, 512, 512),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_efficient_det(batch, channels, height, width, use_torch_maxpool, device, model_location_generator):
+def test_efficient_det(batch, channels, height, width, device):
     PCC_THRESHOLD = 0.92
     num_classes = 90
     torch_model = EfficientDetBackbone(
         num_classes=num_classes,
         compound_coef=0,
     ).eval()
-    load_torch_model_state(torch_model, model_location_generator=model_location_generator)
+    load_torch_model_state(torch_model)
 
     # Run PyTorch forward pass
     torch_inputs = torch.randn(batch, channels, height, width)
@@ -58,7 +58,6 @@ def test_efficient_det(batch, channels, height, width, use_torch_maxpool, device
         parameters=parameters,
         module_args=module_args,
         num_classes=num_classes,
-        use_torch_maxpool=use_torch_maxpool,
     )
     # Convert inputs to TTNN format
     ttnn_input_tensor = ttnn.from_torch(
