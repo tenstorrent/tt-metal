@@ -41,13 +41,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         ack_counters_base_l1_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
         ack_counters({}),
         completion_counter(0) {
-
-        // DPRINT << "RECV_INIT: rx_ch=" << (uint32_t)receiver_channel_index
-        //        << " local_compl_base=" << HEX() << local_receiver_completion_counters_base_address
-        //        << " local_ack_base=" << HEX() << local_receiver_ack_counters_base_address
-        //        << " remote_dest=" << HEX() << to_senders_credits_base_address
-        //        << " tx_bytes=" << total_number_of_receiver_to_sender_credit_num_bytes << ENDL();
-
         // Initialize unpacked completion counters (local and L1)
         // With first-level acks, completions are per receiver channel, not per sender channel
         *completion_counter_l1_ptr = 0;  // Initialize L1 memory!
@@ -63,10 +56,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             // This represents free buffer space on the receiver side
             uint32_t old_val = completion_counter;
             completion_counter++;
-            // DPRINT << "RECV_COMPL: rx_ch=" << (uint32_t)receiver_channel_index
-            //        << " completion_counter=" << old_val << "->" << completion_counter
-            //        << " L1_ptr=" << HEX() << (uint32_t)completion_counter_l1_ptr
-            //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
             *completion_counter_l1_ptr = completion_counter;
             update_sender_side_credits();
         }
@@ -88,12 +77,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     uint8_t new_val = bytes[src_id];
                     uint32_t ack_base = (uint32_t)ack_counters_base_l1_ptr;
                     uint32_t ack_write = (uint32_t)&ack_counters_base_l1_ptr[0];
-                    // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                    //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)new_val
-                    //        << " packed_word0=" << HEX() << ack_counters[0]
-                    //        << " L1_base=" << HEX() << ack_base
-                    //        << " write_addr=" << HEX() << ack_write
-                    //        << " remote_addr=" << HEX() << to_senders_credits_base_address << ENDL();
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
                 } else {
                     // 5-8 channels: span 2 words, use branch to select word
@@ -102,20 +85,12 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                         uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[0]);
                         uint8_t old_val = bytes[src_id];
                         bytes[src_id] += static_cast<uint8_t>(packed_count);
-                        // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                        //        << " byte[" << (uint32_t)src_id << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id]
-                        //        << " packed_word0=" << HEX() << ack_counters[0]
-                        //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[0] << ENDL();
                         ack_counters_base_l1_ptr[0] = ack_counters[0];
                     } else {
                         // Second word (channels 4-7)
                         uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[1]);
                         uint8_t old_val = bytes[src_id - CREDITS_PER_WORD];
                         bytes[src_id - CREDITS_PER_WORD] += static_cast<uint8_t>(packed_count);
-                        // DPRINT << "RECV_ACK: ch=" << (uint32_t)src_id << " +=" << packed_count
-                        //        << " byte[" << (uint32_t)(src_id - CREDITS_PER_WORD) << "]=" << (uint32_t)old_val << "->" << (uint32_t)bytes[src_id - CREDITS_PER_WORD]
-                        //        << " packed_word1=" << HEX() << ack_counters[1]
-                        //        << " L1_addr=" << HEX() << (uint32_t)&ack_counters_base_l1_ptr[1] << ENDL();
                         ack_counters_base_l1_ptr[1] = ack_counters[1];
                     }
                 }
@@ -144,7 +119,9 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     uint32_t old_counter = ack_counters[0];
 
                     // Extract each byte, add with wraparound, pack back
+                    // INEFFICIENT BUT SAFE. STAGING FOR OPTIMIZATION TO BE DONE LATER!!!
                     uint32_t result = 0;
+                    #pragma unroll
                     for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ++ch) {
                         uint8_t old_byte = (old_counter >> (ch * 8)) & 0xFF;
                         uint8_t delta_byte = (packed_val >> (ch * 8)) & 0xFF;
@@ -154,10 +131,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
                     ack_counters[0] = result;
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
-                    // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
-                    //        << " old=" << old_counter
-                    //        << " new=" << ack_counters[0]
-                    //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
                 } else {
                     // 5-8 channels: two words
                     // Add byte-by-byte to prevent carries between channels
@@ -167,7 +140,8 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
                     // Process lower 4 channels (bytes 0-3)
                     uint32_t result_lower = 0;
-                    for (size_t ch = 0; ch < 4; ++ch) {
+                    #pragma unroll
+                    for (size_t ch = 0; ch < CREDITS_PER_WORD; ++ch) {
                         uint8_t old_byte = (old_lower >> (ch * 8)) & 0xFF;
                         uint8_t delta_byte = (lower_word >> (ch * 8)) & 0xFF;
                         uint8_t new_byte = old_byte + delta_byte;
@@ -189,12 +163,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     }
                     ack_counters[1] = result_upper;
                     ack_counters_base_l1_ptr[1] = ack_counters[1];
-                    // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
-                    //        << " lower: old=" << old_lower << " new=" << ack_counters[0]
-                    //        << " upper: old=" << old_upper << " new=" << ack_counters[1]
-                    //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
                 }
-
                 // Wait for eth queue if requested (safer but slower)
 
                 if constexpr (wait_for_txq) {
@@ -246,9 +215,6 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     FORCE_INLINE void send_completion_credit() {
         uint32_t stream_id = sender_channel_packets_completed_stream_ids[0];
         WATCHER_RING_BUFFER_PUSH(0xFCC00000 | (0 << 16) | stream_id);
-        // DPRINT << "RECV_COMPL_STREAM: ch=" << (uint32_t)src_id
-        //        << " stream_id=" << stream_id
-        //        << " remote_update +1" << ENDL();
         remote_update_ptr_val<receiver_txq_id>(stream_id, 1);
     }
 
@@ -256,9 +222,6 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     FORCE_INLINE void send_ack_credit(uint8_t src_id, int count = 1) {
         uint32_t stream_id = sender_channel_packets_ack_stream_ids[src_id];
         WATCHER_RING_BUFFER_PUSH(0xFAA00000 | (src_id << 16) | stream_id);
-        // DPRINT << "RECV_ACK_STREAM: ch=" << (uint32_t)src_id
-        //        << " stream_id=" << stream_id
-        //        << " remote_update +" << count << ENDL();
         remote_update_ptr_val<receiver_txq_id>(stream_id, count);
     }
 
@@ -346,9 +309,9 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     }
 
     // template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
-    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     // FORCE_INLINE std::tuple<uint32_t, uint32_t> get_num_unprocessed_acks_from_receiver() {
-    FORCE_INLINE std::tuple<uint32_t, uint32_t> get_num_unprocessed_acks_from_receiver(uint8_t sender_channel_index) {
+    FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         // static_assert(sender_channel_index * 8 < 32, "Assuming 8-bit credits: sender_channel_index * 8 must fit in 32-bit word");
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         // Mask raw_value before subtraction to prevent borrows/carries from other channels
@@ -356,18 +319,8 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         uint32_t raw_value = *acks_received_counter_ptr;
         uint32_t masked_raw = raw_value & byte_mask;  // Keep only this channel's byte
         uint32_t diff_packed = masked_raw - (acks_received_and_processed & byte_mask);
-                                                                                                                                                                                                                                                                                                                                        
-        // uint32_t masked_processed = acks_received_and_processed & byte_mask;           
-        // if (diff_packed != 0) {
-        // DPRINT << "ACK_CALC[CH"                                                                                                                                                                                                                                                                                                                                                      
-        // << "raw=" << HEX() << raw_value                                                                                                                                                                                                                                                                                                                                                                                 
-        // << " masked_raw=" << masked_raw                                                                                                                                                                                                                                                                                                                                                                                 
-        // << " proc=" << acks_received_and_processed                                                                                                                                                                                                                                                                                                                                                                      
-        // << " masked_proc=" << masked_processed                                                                                                                                                                                                                                                                                                                                                                          
-        // << " diff=" << diff_packed << DEC() << ENDL();    
-        // }
-
-        return std::make_tuple(diff_packed, raw_value);
+                                                                                                      
+        return diff_packed;
     }
 
     template <uint8_t sender_channel_index>
@@ -388,10 +341,6 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
             acks_received_and_processed = static_cast<uint32_t>(
                 static_cast<uint8_t>(acks_received_and_processed) + static_cast<uint8_t>(packed_num_acks)
             );
-            // DPRINT << "SEND_PROC_ACK: ch=" << (uint32_t)sender_channel_index
-            //        << " old=" << (uint32_t)static_cast<uint8_t>(old_val)
-            //        << " delta=" << (uint32_t)static_cast<uint8_t>(packed_num_acks)
-            //        << " new=" << (uint32_t)static_cast<uint8_t>(acks_received_and_processed) << ENDL();
         }
     }
 
@@ -427,34 +376,20 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         uint32_t acks = get_ptr_val(to_sender_packets_acked_stream);
-        // if (acks > 0) {
-        //     DPRINT << "SEND_GET_ACK_STREAM: ch=" << (uint32_t)sender_channel_index
-        //            << " stream_id=" << to_sender_packets_acked_stream
-        //            << " acks=" << acks << ENDL();
-        // }
         return acks;
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) {
-        // DPRINT << "SEND_PROC_ACK_STREAM: stream_id=" << to_sender_packets_acked_stream
-        //        << " decrement -" << num_acks << ENDL();
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         uint32_t completions = get_ptr_val(to_sender_packets_completed_stream);
-        // if (completions > 0) {
-        //     DPRINT << "SEND_GET_COMPL_STREAM: ch=" << (uint32_t)sender_channel_index
-        //            << " stream_id=" << to_sender_packets_completed_stream
-        //            << " completions=" << completions << ENDL();
-        // }
         return completions;
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
-        // DPRINT << "SEND_PROC_COMPL_STREAM: stream_id=" << to_sender_packets_completed_stream
-        //        << " decrement -" << num_completions << ENDL();
         increment_local_update_ptr_val(to_sender_packets_completed_stream, -num_completions);
     }
 
