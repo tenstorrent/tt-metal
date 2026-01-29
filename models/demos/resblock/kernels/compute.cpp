@@ -22,9 +22,23 @@ template <uint32_t icb>
 FORCE_INLINE void init_copy_tile_after_matmul() {
     // Reconfigure unpacker hardware for unary operation (same CB for both A and B)
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-    // Initialize unpacker A for copy operation
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+#ifdef TRISC_UNPACK
+
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    if (enable_unpack_to_dest) {
+        // Initialize unpacker A for copy operation
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    } else {
+        // Initialize unpacker A for copy operation
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    }
+#endif
     // Switch math from matmul mode to datacopy mode
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     // Reconfigure math HW for unary operation (same CB for both srcA and srcB)

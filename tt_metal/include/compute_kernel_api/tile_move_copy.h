@@ -36,8 +36,21 @@ ALWI void copy_tile_to_dst_init_short(
     uint32_t transpose_within_16x16_face = false,
     uint32_t call_line = __builtin_LINE()) {
     state_configure(cbid, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, transpose_within_16x16_face, cbid)));
+#if defined(TRISC_UNPACK)
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(cbid);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+
+    if (enable_unpack_to_dest) {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            transpose, transpose_within_16x16_face, cbid)));
+    } else {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            transpose, transpose_within_16x16_face, cbid)));
+    }
+#endif
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
 /**

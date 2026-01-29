@@ -7,9 +7,11 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#include "llk_math_common_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
+#include "llk_unpack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -108,8 +110,21 @@ ALWI void pack_untilize_dest_init(
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false, false, icb)));  // init must be after configure
+#if defined(TRISC_UNPACK)
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+
+    if (enable_unpack_to_dest) {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            false, false, icb)));  // init must be after configure
+    } else {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            false, false, icb)));  // init must be after configure
+    }
+#endif
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }

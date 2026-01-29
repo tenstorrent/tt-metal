@@ -19,10 +19,26 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
-
+#ifdef TRISC_UNPACK
+#include "llk_unpack_common_api.h"
+#endif
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, true /*transpose within 16x16 face*/, cbid)));
+#ifdef TRISC_UNPACK
+
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(cbid);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+
+    if (enable_unpack_to_dest) {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            transpose, true /*transpose within 16x16 face*/, cbid)));
+    } else {
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+            transpose, true /*transpose within 16x16 face*/, cbid)));
+    }
+#endif
 
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
