@@ -97,7 +97,7 @@ def test_qwen_omni(device):
         **inputs, speaker="Ethan", thinker_return_dict_in_generate=True, use_audio_in_video=USE_AUDIO_IN_VIDEO
     )
     DispatchManager.save_stats_to_file("qwen_omni_timing_stats.csv")
-    breakpoint()
+
     text = processor.batch_decode(
         text_ids[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
