@@ -318,6 +318,100 @@ def _create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor
     return reader_descriptor
 
 
+def _create_compute_descriptor(core_grid, sizes, epsilon):
+    """
+    Create compute kernel descriptor for LayerNorm operation.
+
+    The compute kernel performs:
+    - Tilization of input/gamma/beta
+    - Mean and variance computation
+    - rsqrt(variance + epsilon)
+    - Standardization and affine transformation
+    - Untilization of output
+
+    Args:
+        core_grid: CoreRangeSet specifying which cores to use
+        sizes: Dict from _calculate_sizes()
+        epsilon: Small constant for numerical stability
+
+    Returns:
+        KernelDescriptor for the compute kernel
+    """
+    import pathlib
+    import struct
+
+    # Get kernel path
+    kernel_dir = pathlib.Path(__file__).parent / "kernels"
+    compute_kernel_path = str(kernel_dir / "compute.cpp")
+
+    # Pack epsilon as uint32 (bfloat16 representation packed in uint32)
+    # Convert float to bfloat16 and pack as uint32
+    def float_to_uint32(f):
+        """Pack a float32 value into uint32 representation."""
+        return struct.unpack("I", struct.pack("f", f))[0]
+
+    epsilon_packed = float_to_uint32(epsilon)
+
+    # Compile-time args:
+    # [0] CB_INPUT_RM - input row-major CB
+    # [1] CB_INPUT_TILED - input tiled CB
+    # [2] CB_GAMMA_RM - gamma row-major CB
+    # [3] CB_GAMMA_TILED - gamma tiled CB
+    # [4] CB_BETA_RM - beta row-major CB
+    # [5] CB_BETA_TILED - beta tiled CB
+    # [6] CB_SCALARS - scalar values CB
+    # [7] CB_INTERM - intermediate results CB
+    # [8] CB_OUTPUT_TILED - output tiled CB
+    # [9] CB_OUTPUT_RM - output row-major CB
+    # [10] tiles_per_row - number of tiles per normalization row
+    # [11] num_rows - total number of rows to normalize
+    # [12] W - final dimension (normalization dimension)
+    compile_time_args = [
+        CB_INPUT_RM,
+        CB_INPUT_TILED,
+        CB_GAMMA_RM,
+        CB_GAMMA_TILED,
+        CB_BETA_RM,
+        CB_BETA_TILED,
+        CB_SCALARS,
+        CB_INTERM,
+        CB_OUTPUT_TILED,
+        CB_OUTPUT_RM,
+        sizes["tiles_per_row"],
+        sizes["num_rows"],
+        sizes["W"],
+    ]
+
+    # Runtime args (per core):
+    # [0] epsilon (packed as uint32)
+    runtime_args = ttnn.RuntimeArgs()
+    runtime_args[0][0] = [
+        epsilon_packed,
+    ]
+
+    # Create compute config with appropriate settings for LayerNorm
+    # - Use HiFi4 math fidelity for better precision in normalization
+    # - Enable FP32 dest accumulation for numerical stability in reduce operations
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        dst_full_sync_en=True,
+    )
+
+    # Create kernel descriptor
+    compute_descriptor = ttnn.KernelDescriptor(
+        kernel_source=compute_kernel_path,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=compile_time_args,
+        runtime_args=runtime_args,
+        config=compute_config,
+    )
+
+    return compute_descriptor
+
+
 class LayerNormSingleCore:
     """
     Single-core LayerNorm implementation using generic_op infrastructure.

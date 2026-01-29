@@ -134,7 +134,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Config: `ttnn.ReaderConfigDescriptor()`
     - Return `KernelDescriptor`
 
-- [ ] **1.4.3** Implement compute kernel descriptor creation
+- [x] **1.4.3** Implement compute kernel descriptor creation
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Function: `_create_compute_descriptor(core_grid, sizes, epsilon)`
