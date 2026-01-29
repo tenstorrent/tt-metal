@@ -1756,7 +1756,7 @@ FORCE_INLINE
                 }
                 // if overlay reg based, this will materialize as decrement; but for multi_txq based,
                 // we're using unbounded L1 based counters, so we must increment instead
-                
+
                 uint32_t acks_to_change_by = build_ack_decrement_value<sender_channel_index>(acks_since_last_check);
                 if constexpr (!multi_txq_enabled) {
                     // if not multi-txq, we're using overlay regs so we need
@@ -1929,16 +1929,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if constexpr (enable_debug) {
                 receiver_packets_received += new_credits;
             }
-
-            // DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
-            //        << " new_credits=" << new_credits
-            //     //    << " old_unsent=" << (uint32_t)old_unsent
-            //        << " new_unsent=" << (uint32_t)receiver_channel_pointers.m.unsent_messages
-            //        << " packed_to_clear=" << HEX() << packed_num_packets.get() << DEC() << ENDL();
-
-            // Clear the register(s) by decrementing with the packed value
-            // The updater handles single vs multi-register splitting automatically
-            // credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
@@ -2303,7 +2293,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         set_state_for_batched_credit_transfer_to_sender_over_ethernet();
     }
 
-    
     int count = 0;
     while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         loop_iteration_count++;

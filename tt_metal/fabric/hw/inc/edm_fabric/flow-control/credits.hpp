@@ -862,38 +862,20 @@ public:
         return PackedCreditContainer<NUM_CHANNELS, CREDIT_WIDTH_BITS>{storage.read()};
     }
 
-    /**
-     * Get the raw packed value (for legacy compatibility)
-     */
-    FORCE_INLINE typename PackedCreditContainer<NUM_CHANNELS, CREDIT_WIDTH_BITS>::storage_type get_packed_raw() const {
-        return storage.read();
-    }
+    // /**
+    //  * Get the raw packed value (for legacy compatibility)
+    //  */
+    // FORCE_INLINE typename PackedCreditContainer<NUM_CHANNELS, CREDIT_WIDTH_BITS>::storage_type get_packed_raw() const
+    // {
+    //     return storage.read();
+    // }
 
-    /**
-     * Get the sum of all channel credits
-     */
-    FORCE_INLINE uint32_t get_total() const {
-        return Packing::sum_all_channels(get_packed());
-    }
-
-    /**
-     * Get the credit value for a specific channel
-     */
-    FORCE_INLINE uint32_t get_channel(uint8_t channel_id) const {
-        return Packing::extract_channel(get_packed(), channel_id);
-    }
-
-    template <uint8_t CHANNEL>
-    FORCE_INLINE uint32_t get_channel() const {
-        return Packing::template extract_channel<CHANNEL>(get_packed());
-    }
-
-    /**
-     * Access the underlying storage (for advanced usage)
-     */
-    FORCE_INLINE const StorageBackend& get_storage() const {
-        return storage;
-    }
+    // /**
+    //  * Access the underlying storage (for advanced usage)
+    //  */
+    // FORCE_INLINE const StorageBackend& get_storage() const {
+    //     return storage;
+    // }
 };
 
 /**
