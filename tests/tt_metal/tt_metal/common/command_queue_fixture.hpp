@@ -19,6 +19,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 
@@ -31,6 +32,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices();
         init_max_cbs();
     }
@@ -107,6 +109,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices();
         init_max_cbs();
     }
@@ -176,6 +179,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices(90000000);
         init_max_cbs();
     }

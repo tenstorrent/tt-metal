@@ -64,6 +64,7 @@ protected:
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
     uint32_t max_cbs_{};
+    uint32_t max_runtime_args_{};
 
     MeshDispatchFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :

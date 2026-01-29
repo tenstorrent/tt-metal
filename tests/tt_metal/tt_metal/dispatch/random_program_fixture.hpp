@@ -29,7 +29,6 @@ protected:
     static const uint32_t MAX_KERNEL_RUNTIME_MICROSECONDS = 20000;
 
     static const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
-    static const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
     static const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
     static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
 
@@ -49,7 +48,7 @@ protected:
         uint32_t min_kernel_runtime_microseconds;
         uint32_t max_kernel_runtime_microseconds;
         uint32_t min_num_rt_args;
-        uint32_t max_num_rt_args;
+        uint32_t max_num_rt_args{};
         uint32_t min_num_sems;
         uint32_t max_num_sems;
         uint32_t min_num_cbs;
@@ -60,7 +59,6 @@ protected:
             min_kernel_runtime_microseconds(MIN_KERNEL_RUNTIME_MICROSECONDS),
             max_kernel_runtime_microseconds(MAX_KERNEL_RUNTIME_MICROSECONDS),
             min_num_rt_args(MIN_NUM_RUNTIME_ARGS),
-            max_num_rt_args(MAX_NUM_RUNTIME_ARGS),
             min_num_sems(MIN_NUM_SEMS),
             max_num_sems(MAX_NUM_SEMS),
             min_num_cbs(MIN_NUM_CBS) {}
@@ -91,6 +89,10 @@ protected:
         KernelProperties kernel_properties = KernelProperties()) {
         if (kernel_properties.max_num_cbs == 0) {
             kernel_properties.max_num_cbs = max_cbs_;
+        }
+
+        if (kernel_properties.max_num_rt_args == 0) {
+            kernel_properties.max_num_rt_args = max_runtime_args_;
         }
 
         CoreRangeSet cores = this->get_cores(kernel_core_type);
@@ -164,8 +166,8 @@ protected:
     std::pair<std::vector<uint32_t>, std::vector<uint32_t>> generate_runtime_args(
         const std::vector<uint32_t>& sem_ids,
         const std::vector<uint32_t>& cb_page_sizes,
-        const uint32_t min = MIN_NUM_RUNTIME_ARGS,
-        const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
+        const uint32_t min,
+        const uint32_t max) {
         const uint32_t num_sems = sem_ids.size();
         const uint32_t num_cbs = cb_page_sizes.size();
         TT_FATAL(
@@ -196,7 +198,7 @@ protected:
         small_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
         small_kernel_properties.min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS;
         small_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
-        small_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (3.0 / 10);
+        small_kernel_properties.max_num_rt_args = max_runtime_args_ * (3.0 / 10);
         small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
         small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
         small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
@@ -212,8 +214,8 @@ protected:
         large_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES;
         large_kernel_properties.min_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (9.0 / 10);
         large_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS;
-        large_kernel_properties.min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
-        large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
+        large_kernel_properties.min_num_rt_args = max_runtime_args_ * (9.0 / 10);
+        large_kernel_properties.max_num_rt_args = max_runtime_args_;
         large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
         large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
         large_kernel_properties.min_num_cbs = max_cbs_ * (8.0 / 10);
