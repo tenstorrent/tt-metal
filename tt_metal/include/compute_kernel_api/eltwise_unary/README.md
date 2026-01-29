@@ -16,18 +16,18 @@ Instead of creating a new `llk_math_eltwise_unary_sfpu_<op>.h` for each op, use 
 
 ```cpp
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "ckernel_sfpu_max.h"
+#include "binary_max_min.h"
 
 namespace ckernel {
     // Init function for max
     template <bool fast_and_approx = true>
-    ALWI void max_tile_init() {
+    ALWI void binary_max_tile_init() {
         MATH(SFPU_UNARY_KERNEL_INIT(max, fast_and_approx));
     }
     // Compute function for max
     template <bool fast_and_approx = true>
-    ALWI void max_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL(max, RC, fast_and_approx, idst));
+    ALWI void binary_max_tile(uint32_t idst) {
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_max, RC, fast_and_approx, idst));
     }
 }
 ```
@@ -45,7 +45,7 @@ namespace ckernel {
     }
     template <bool fast_and_approx = true>
     ALWI void negative_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL(negative, RC, fast_and_approx, idst));
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_negative, RC, fast_and_approx, idst));
     }
 }
 ```

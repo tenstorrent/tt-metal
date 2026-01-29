@@ -198,6 +198,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/const_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -347,10 +348,9 @@ if(NOT TARGET TT::Metalium)
             "${TT_METAL_HOME}/tt_metal/include"
             "${TT_METAL_HOME}/tt_stl"
             # TTNN
-            "${TT_METAL_HOME}/ttnn"
-            "${TT_METAL_HOME}/ttnn/api"
-            "${TT_METAL_HOME}/ttnn/cpp"
-            "${TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
+            "$ENV{TT_METAL_HOME}/ttnn"
+            "$ENV{TT_METAL_HOME}/ttnn/api"
+            "$ENV{TT_METAL_HOME}/ttnn/cpp"
             "${reflect_SOURCE_DIR}"
         )
 

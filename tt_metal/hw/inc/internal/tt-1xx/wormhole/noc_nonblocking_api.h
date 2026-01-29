@@ -164,7 +164,7 @@ inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_
     *ptr = id_mask;
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -172,13 +172,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC){
-        static_assert(use_vc, "dynamic noc mode must have use_vc set as true");
-    }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
-    if constexpr (use_vc) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
