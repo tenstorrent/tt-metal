@@ -18,7 +18,7 @@ import ttnn
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-from framework.constants import LEAD_MODELS
+from tests.sweep_framework.framework.constants import LEAD_MODELS
 
 
 # Get the base directory dynamically - import from model_tracer
@@ -239,36 +239,65 @@ class MasterConfigLoader:
                 configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with ttnn::experimental:: namespace (e.g., ttnn::experimental::create_qkv_heads)
-        experimental_full_op_name = f"ttnn::experimental::{operation_name}"
-        if experimental_full_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
-        if operation_name.startswith("experimental::"):
-            experimental_op_name = f"ttnn::{operation_name}"
-            if experimental_op_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+        # Try with both :: and . delimiters for experimental namespace
+        # (e.g., experimental::create_qkv_heads or experimental.create_qkv_heads)
+        for delimiter in ["::", "."]:
+            experimental_full_op_name = f"ttnn{delimiter}experimental{delimiter}{operation_name}"
+            if experimental_full_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
-        transformer_op_name = f"ttnn::transformer::{operation_name}"
-        if transformer_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
+        # Try with experimental:: or experimental. namespace (e.g., experimental::nlp_concat_heads)
+        if operation_name.startswith("experimental::") or operation_name.startswith("experimental."):
+            # Get the base name without experimental prefix
+            if "::" in operation_name:
+                base_name = operation_name.split("::", 1)[1]
+            else:
+                base_name = operation_name.split(".", 1)[1]
 
-        # Try without prefix if it starts with ttnn::
-        if operation_name.startswith("ttnn::"):
-            base_name = operation_name[6:]  # Remove "ttnn::"
+            # Try both delimiter formats
+            for delimiter in ["::", "."]:
+                experimental_op_name = f"ttnn{delimiter}experimental{delimiter}{base_name}"
+                if experimental_op_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+
+        # Try with both :: and . delimiters for transformer namespace
+        # (e.g., transformer::scaled_dot_product_attention or transformer.scaled_dot_product_attention)
+        for delimiter in ["::", "."]:
+            transformer_op_name = f"ttnn{delimiter}transformer{delimiter}{operation_name}"
+            if transformer_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
+
+        # Try with transformer:: or transformer. namespace if it starts with that prefix
+        if operation_name.startswith("transformer::") or operation_name.startswith("transformer."):
+            # Get the base name without transformer prefix
+            if "::" in operation_name:
+                base_name = operation_name.split("::", 1)[1]
+            else:
+                base_name = operation_name.split(".", 1)[1]
+
+            # Try both delimiter formats
+            for delimiter in ["::", "."]:
+                transformer_op_name = f"ttnn{delimiter}transformer{delimiter}{base_name}"
+                if transformer_op_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+
+        # Try without prefix if it starts with ttnn:: or ttnn.
+        if operation_name.startswith("ttnn::") or operation_name.startswith("ttnn."):
+            prefix_len = 6  # Length of "ttnn::" or "ttnn."
+            base_name = operation_name[prefix_len:]
             if base_name in self.master_data.get("operations", {}):
                 configs = self.master_data["operations"][base_name].get("configurations", [])
                 return self._normalize_configs(configs)
-            # Also try with transformer:: namespace
-            transformer_base = f"ttnn::transformer::{base_name}"
-            if transformer_base in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][transformer_base].get("configurations", [])
-                return self._normalize_configs(configs)
+            # Also try with transformer:: and transformer. namespaces
+            for delimiter in ["::", "."]:
+                transformer_base = f"ttnn{delimiter}transformer{delimiter}{base_name}"
+                if transformer_base in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][transformer_base].get("configurations", [])
+                    return self._normalize_configs(configs)
 
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
@@ -281,7 +310,7 @@ class MasterConfigLoader:
             configs: List of configurations (dict with 'arguments' and 'source')
 
         Returns:
-            List of (arguments, source, machine_info) tuples for traceability
+            List of (arguments, source, machine_info, config_id) tuples for traceability
 
         Handles multiple formats:
         - New (executions): {arguments, executions: [{source, machine_info, count}]} - explicit pairs
@@ -296,6 +325,7 @@ class MasterConfigLoader:
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
                 arguments = config["arguments"]
+                config_id = config.get("config_id", "unknown")
 
                 # Check for new "executions" format (explicit source/machine pairs with counts)
                 if "executions" in config:
@@ -310,7 +340,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source):
                                 continue  # Skip this execution
 
-                        normalized.append((arguments, source, machine_info))
+                        normalized.append((arguments, source, machine_info, config_id))
 
                 # Check for mid-level "contexts" format (multiple execution contexts)
                 elif "contexts" in config:
@@ -328,7 +358,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
-                        normalized.append((arguments, source, machine_info))
+                        normalized.append((arguments, source, machine_info, config_id))
 
                 else:
                     # Old format: single source/machine_info (pairing may be lost)
@@ -340,12 +370,12 @@ class MasterConfigLoader:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((arguments, source, machine_info))
+                    normalized.append((arguments, source, machine_info, config_id))
             elif isinstance(config, list):
                 # Legacy list format: use as-is with unknown source
                 # Skip if lead_models_only since we can't determine source
                 if not lead_models_only:
-                    normalized.append((config, "unknown", None))
+                    normalized.append((config, "unknown", None, "unknown"))
             else:
                 # Fallback: wrap in list with unknown source and no machine_info
                 normalized.append((config if isinstance(config, list) else [config], "unknown", None))
@@ -539,6 +569,38 @@ class MasterConfigLoader:
                 return float("nan")
         return value
 
+    @staticmethod
+    def parse_enum_value(value, default=None):
+        """Parse enum types that were captured as {'type': 'EnumName'} during tracing.
+
+        For enums without captured values, we return a sensible default.
+        Currently handles:
+        - Topology: defaults to Linear
+        """
+        if isinstance(value, dict) and "type" in value:
+            enum_type = value["type"]
+
+            # Check if there's a 'value' field with the actual enum value
+            if "value" in value:
+                enum_value = value["value"]
+
+                # Parse based on type
+                if enum_type == "Topology":
+                    if "Linear" in enum_value or "LINEAR" in enum_value:
+                        return ttnn.Topology.Linear
+                    elif "Ring" in enum_value or "RING" in enum_value:
+                        return ttnn.Topology.Ring
+                    else:
+                        return default if default is not None else ttnn.Topology.Linear
+            else:
+                # No value field - use type-based defaults
+                if enum_type == "Topology":
+                    # Default to Linear topology (most common, safest)
+                    return default if default is not None else ttnn.Topology.Linear
+
+        # Not an enum dict, return as-is
+        return value
+
     def _get_generic_parameters(self, operation_name: str, configs: List) -> Dict:
         """Generic parameter extraction for all operations.
 
@@ -548,37 +610,49 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
-        for config_args, source, machine_info in configs:
-            config_dict = {}
-            tensors = []
+        for config_args, source, machine_info, config_id in configs:
+            try:
+                config_dict = {}
+                tensors = []
 
-            # Loop through all positional arguments (arg0, arg1, arg2, ...)
-            arg_idx = 0
-            while f"arg{arg_idx}" in config_args:
-                arg_name = f"arg{arg_idx}"
-                arg_value = config_args[arg_name]
+                # Loop through all positional arguments (arg0, arg1, arg2, ...)
+                arg_idx = 0
+                while f"arg{arg_idx}" in config_args:
+                    arg_name = f"arg{arg_idx}"
+                    arg_value = config_args[arg_name]
 
-                # Try to extract as tensor
-                tensor_config = self._extract_tensor_config(arg_value)
-                if tensor_config:
-                    # It's a tensor - parse and store
-                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                    parsed_layout = self.parse_layout(tensor_config.layout)
-                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+                    # Try to extract as tensor
+                    tensor_config = self._extract_tensor_config(arg_value)
+                    if tensor_config:
+                        # It's a tensor - parse and store
+                        parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                        parsed_layout = self.parse_layout(tensor_config.layout)
+                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
-                    tensors.append(
-                        {
-                            "shape": tuple(tensor_config.shape),
-                            "dtype": parsed_dtype,
-                            "layout": parsed_layout,
-                            "memory_config": parsed_mem_config,
-                        }
-                    )
-                else:
-                    # Not a tensor - pass through as-is (parse special floats)
-                    config_dict[arg_name] = self.parse_special_float(arg_value)
+                        # Skip this config if memory_config parsing returned None
+                        # (happens with mesh-sharded tensors missing grid info)
+                        if parsed_mem_config is None:
+                            raise ValueError(
+                                f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
+                            )
 
-                arg_idx += 1
+                        tensors.append(
+                            {
+                                "shape": tuple(tensor_config.shape),
+                                "dtype": parsed_dtype,
+                                "layout": parsed_layout,
+                                "memory_config": parsed_mem_config,
+                            }
+                        )
+                    else:
+                        # Not a tensor - pass through as-is (parse special floats)
+                        config_dict[arg_name] = self.parse_special_float(arg_value)
+
+                    arg_idx += 1
+            except Exception as e:
+                # Add config_id context to error
+                print(f"⚠️ Skipping config_id={config_id} due to error: {e}")
+                continue
 
             # Skip if no tensors found
             if not tensors:
@@ -614,10 +688,14 @@ class MasterConfigLoader:
                 config_dict["output_memory_config"] = tensors[0]["memory_config"]
 
             # Add all keyword arguments (anything not arg0, arg1, arg2, ...)
-            # Parse special float values in keyword arguments too
+            # Parse special float values and enum types in keyword arguments
             for key, value in config_args.items():
                 if not (key.startswith("arg") and key[3:].isdigit()):
-                    config_dict[key] = self.parse_special_float(value)
+                    # Try enum parsing first, then float parsing
+                    parsed_value = self.parse_enum_value(value)
+                    if parsed_value == value:  # If enum parsing didn't change it, try float
+                        parsed_value = self.parse_special_float(value)
+                    config_dict[key] = parsed_value
 
             # Add metadata
             config_dict["traced_source"] = source
@@ -701,6 +779,8 @@ class MasterConfigLoader:
 
         except Exception as e:
             print(f"❌ Error loading configurations for {operation_name}: {e}")
+            print(f"   This error occurred while processing one or more configs.")
+            print(f"   Check logs above for specific config_id that failed.")
             import traceback
 
             traceback.print_exc()
@@ -798,6 +878,11 @@ class MasterConfigLoader:
                                     input_layouts.append(layout_ttnn)
 
                                 memory_config_ttnn = self.parse_memory_config(tensor_config.memory_config)
+                                # Skip if memory_config parsing returned None
+                                if memory_config_ttnn is None:
+                                    raise ValueError(
+                                        f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
+                                    )
                                 if memory_config_ttnn not in input_memory_configs:
                                     input_memory_configs.append(memory_config_ttnn)
 

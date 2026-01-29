@@ -723,25 +723,43 @@ def parse_shard_spec_string(shard_spec_str):
         eq_pos = shard_spec_str.find("grid=")
         if eq_pos != -1:
             grid_start = eq_pos + 5  # Move to '[' after '='
-            # Find the matching ']' for the grid array, looking for '}], shape='
-            shape_pos = shard_spec_str.find("}], shape=", grid_start)
+            # Find the matching ']' for the grid array by looking for '], shape='
+            # (not '}], shape=' because there might be multiple ranges without } before ])
+            shape_pos = shard_spec_str.find("], shape=", grid_start)
             if shape_pos != -1:
-                grid_json = shard_spec_str[grid_start : shape_pos + 2]  # +2 to include '}]'
+                grid_json = shard_spec_str[grid_start : shape_pos + 1]  # +1 to include ']'
 
                 # Fix malformed JSON: if we have unbalanced braces, add missing '}'
                 # This handles old traces where the C++ operator<< had a bug (now fixed in buffer.cpp)
                 open_count = grid_json.count("{")
                 close_count = grid_json.count("}")
                 if open_count > close_count:
-                    # Add missing closing braces before the final ']'
-                    missing = open_count - close_count
-                    grid_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
+                    # Try to fix by adding missing closing braces
+                    # Common C++ bug: {"end":{"x":7,"y":2}, should be {"end":{"x":7,"y":2}},
+                    # Pattern: "y":<number>} needs an extra } when followed by , or ]
 
-                try:
-                    result["grid"] = json.loads(grid_json)
-                except:
-                    # Silently skip if parsing still fails
-                    pass
+                    # Strategy 1: Smart pattern matching for end coordinates
+                    # Find "y":<number>} followed by either (, {) or (]) and add }
+                    test_json = re.sub(r'("y":\d+)\}(,\s*\{|])', r"\1}}\2", grid_json)
+
+                    try:
+                        result["grid"] = json.loads(test_json)
+                    except:
+                        # Strategy 2: If strategy 1 failed, add all missing braces before final ']'
+                        missing = open_count - close_count
+                        test_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
+                        try:
+                            result["grid"] = json.loads(test_json)
+                        except:
+                            # Both strategies failed, silently skip
+                            pass
+                else:
+                    # No missing braces, try to parse normally
+                    try:
+                        result["grid"] = json.loads(grid_json)
+                    except:
+                        # Silently skip if parsing fails
+                        pass
 
         # Extract shape - it's an array like [128, 576]
         shape_match = re.search(r"shape=\[(\d+),\s*(\d+)\]", shard_spec_str)
