@@ -12,8 +12,17 @@ import ttnn
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
-
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
+
+
+def reference_vision_rms(model_args):
+    """Mistral-specific reference method for vision RMS norm."""
+    model = model_args.reference_vision_transformer(wrap=False)
+    layer = model.vision_tower.transformer.layers[0].ffn_norm
+    layer._load_state_dict = layer.load_state_dict
+    layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, model_args.head_dim))
+    return layer
 
 
 @torch.no_grad()
@@ -48,7 +57,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
-    reference_model = tt_model_args.reference_vision_rms()
+    reference_model = reference_vision_rms(tt_model_args)
 
     first_layer_prefix = "vision_tower.transformer.layers.0.ffn_norm."
 

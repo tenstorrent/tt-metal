@@ -246,8 +246,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    float dropout_probability,
-    bool fp32_dest_acc_en) {
+    float dropout_probability) {
     validate_qkv_shapes(query, key, value);
 
     // Get mask tensor if provided

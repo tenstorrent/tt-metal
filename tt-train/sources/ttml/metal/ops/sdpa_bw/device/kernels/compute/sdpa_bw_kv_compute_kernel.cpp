@@ -83,17 +83,15 @@ constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
-constexpr uint32_t cb_prev_grad_value = tt::CBIndex::c_8;     // used for holding previous grad value
-constexpr uint32_t cb_cur_grad_value = tt::CBIndex::c_9;      // used for holding current grad value
-constexpr uint32_t cb_prev_grad_key = tt::CBIndex::c_10;      // used for holding previous grad key
-constexpr uint32_t cb_cur_grad_key = tt::CBIndex::c_11;       // used for holding current grad key
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_12;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
-constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_13;  // Gradient w.r.t. attention: dL/dP
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_14;        // Gradient w.r.t. QK scores
-constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_15;       // Transpose of attention weights
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_16;       // u_scalar per row
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;           // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;         // Output: grad_V
+constexpr uint32_t cb_grad_value_accum = tt::CBIndex::c_8;    // L1 accumulator for grad_value
+constexpr uint32_t cb_grad_key_accum = tt::CBIndex::c_9;      // L1 accumulator for grad_key
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
+constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
+constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
 
 const uint32_t onetile = 1U;
 
@@ -205,8 +203,7 @@ void MAIN {
                     cb_attention_weights,
                     cb_transpose_wh,
                     cb_grad_output,
-                    alias_cb_prev_grad_value,
-                    alias_cb_cur_grad_value,
+                    cb_grad_value_accum,
                     tiles_per_row,
                     block_size,
                     /* do_accumulate */ q_idx > 0 || head_idx > 0);
@@ -229,16 +226,12 @@ void MAIN {
                     cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
                 // Step 7: compute grad w.r.t. key
-                // dK = scaler * (dZ^T @ Q)
-                // we apply scaler inside compute_grad_scores function to improve numerical stablility of upcoming
-                // matmul for grad K(and grad Q in q kernel)
+                // dK = dS^T @ Q (scaling already applied in compute_grad_scores)
                 update_grad_key(
                     cb_grad_scores,
                     cb_query,
-                    scaler_bits,
                     cb_transpose_wh,
-                    alias_cb_prev_grad_key,
-                    alias_cb_cur_grad_key,
+                    cb_grad_key_accum,
                     tiles_per_row,
                     /* do_accumulate */ q_idx > 0 || head_idx > 0);
 
@@ -263,9 +256,9 @@ void MAIN {
             }
         }
 
-        pack_tiles_to_output(alias_cb_prev_grad_value, cb_grad_value, tiles_per_row);
-
-        pack_tiles_to_output(alias_cb_prev_grad_key, cb_grad_key, tiles_per_row);
+        // Push final grad_value and grad_key to output CBs
+        pack_tiles_to_output(cb_grad_value_accum, cb_grad_value, tiles_per_row);
+        pack_tiles_to_output(cb_grad_key_accum, cb_grad_key, tiles_per_row);
 
         cb_pop_front(cb_key, tiles_per_row);
         cb_pop_front(cb_value, tiles_per_row);
