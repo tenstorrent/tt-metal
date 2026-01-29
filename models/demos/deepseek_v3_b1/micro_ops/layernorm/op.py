@@ -412,6 +412,64 @@ def _create_compute_descriptor(core_grid, sizes, epsilon):
     return compute_descriptor
 
 
+def _create_writer_descriptor(core_grid, output_tensor, sizes):
+    """
+    Create writer kernel descriptor for LayerNorm operation.
+
+    The writer kernel writes:
+    - Output tensor sticks (row-major) from CB_OUTPUT_RM -> DRAM
+
+    Args:
+        core_grid: CoreRangeSet specifying which cores to use
+        output_tensor: Output tensor on device (pre-allocated)
+        sizes: Dict from _calculate_sizes()
+
+    Returns:
+        KernelDescriptor for the writer kernel
+    """
+    import pathlib
+
+    # Get kernel path
+    kernel_dir = pathlib.Path(__file__).parent / "kernels"
+    writer_kernel_path = str(kernel_dir / "writer.cpp")
+
+    # Compile-time args:
+    # [0] CB_OUTPUT_RM - output row-major CB to read from
+    # [1] stick_size (page size for row-major data)
+    # [2] num_rows (total rows/sticks to write)
+    # [3..] TensorAccessorArgs for output tensor
+    compile_time_args = [
+        CB_OUTPUT_RM,
+        sizes["stick_size"],
+        sizes["num_rows"],
+    ]
+
+    # Append TensorAccessorArgs for output tensor
+    output_accessor = ttnn.TensorAccessorArgs(output_tensor)
+    compile_time_args.extend(output_accessor.get_compile_time_args())
+
+    # Runtime args (per core):
+    # [0] output buffer address
+    # [1] start_stick_id for this core (0 for single core)
+    runtime_args = ttnn.RuntimeArgs()
+    runtime_args[0][0] = [
+        output_tensor.buffer_address(),
+        0,  # start_stick_id (single core starts at 0)
+    ]
+
+    # Create kernel descriptor
+    writer_descriptor = ttnn.KernelDescriptor(
+        kernel_source=writer_kernel_path,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=compile_time_args,
+        runtime_args=runtime_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    return writer_descriptor
+
+
 class LayerNormSingleCore:
     """
     Single-core LayerNorm implementation using generic_op infrastructure.
