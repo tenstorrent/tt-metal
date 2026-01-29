@@ -70,13 +70,25 @@ FORCE_INLINE void check_worker_connections(
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
-template <bool RISC_CPU_DATA_CACHE_ENABLED>
+template <bool RISC_CPU_DATA_CACHE_ENABLED, typename AddressType>
 inline void wait_for_notification(uint32_t address, uint32_t value) {
-    volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
-    while (*poll_addr != value) {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        // context switch while waiting to allow slow dispatch traffic to go through
-        run_routing();
+    if constexpr(std::is_same_v<AddressType, volatile tt::tt_fabric::EDMStatus*>) {
+        volatile tt::tt_fabric::EDMStatus* poll_addr =
+            reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(address);
+        while (*poll_addr != value) {
+            //router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+            // context switch while waiting to allow slow dispatch traffic to go through
+            run_routing();
+        }
+    }
+    else {
+        volatile tt_reg_ptr uint32_t* poll_addr =
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(address);
+        while (*poll_addr != value) {
+            router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+            // context switch while waiting to allow slow dispatch traffic to go through
+            run_routing();
+        }
     }
 }
 

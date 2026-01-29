@@ -49,9 +49,6 @@ constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
-const uint32_t constexpr USE_OVERLAY_REGISTER = 0UL;
-const uint32_t constexpr USE_L1_ADDRESS = 1UL;
-
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -147,8 +144,8 @@ void kernel_main() {
     size_t rt_args_idx = 0;
 
     //volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
-    volatile uint32_t* status_ptr = reinterpret_cast<volatile uint32_t*>(status_address);
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
+    volatile uint32_t& status_ptr = *(reinterpret_cast<volatile uint32_t*>(status_address));
+    status_ptr = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -242,7 +239,7 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+    status_ptr = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
@@ -296,6 +293,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    status_ptr = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
 }
