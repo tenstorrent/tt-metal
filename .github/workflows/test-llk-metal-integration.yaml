@@ -78,6 +78,7 @@ env:
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
   GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+  MAX_RETRIES: 3
   POLL_INTERVAL: 120
 
 permissions:
@@ -277,75 +278,74 @@ jobs:
       - name: Trigger and monitor workflow
         id: monitor
         if: matrix.should-run == true || matrix.should-run == 'true'
-        uses: nick-fields/retry@v3
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
           WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
+          MAX_RETRIES: 3
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
           ARCH_PARAM: ${{ needs.setup.outputs.arch-param }}
-        with:
-          timeout_minutes: ${{ inputs.workflow_timeout || 720 }}
-          max_attempts: 3
-          retry_wait_seconds: 60
-          retry_on: error
-          command: |
-            WORKFLOW="${{ matrix.workflow }}"
-            DISPLAY_NAME="${{ matrix.name }}"
-            OUTPUT_KEY="${{ matrix.output-key }}"
+        run: |
+          WORKFLOW="${{ matrix.workflow }}"
+          DISPLAY_NAME="${{ matrix.name }}"
+          OUTPUT_KEY="${{ matrix.output-key }}"
 
-            echo "🚀 Triggering $DISPLAY_NAME ($WORKFLOW)..."
+          echo "🚀 Triggering $DISPLAY_NAME ($WORKFLOW)..."
 
-            # Trigger workflow with appropriate inputs
-            if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
-              gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
-                -f architecture="$ARCH_PARAM" \
-                -f run_cpp_tests=true \
-                -f run_metal_iommu_tests=true \
-                -f run_sd_unit_tests=true \
-                -f run_fd_unit_tests=true \
-                -f run_profiler_regression=true \
-                -f run_tt_train_cpp_unit_tests=true \
-                -f run_models_unit_tests=true \
-                -f run_tt_cnn_unit_tests=true
-            elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
-              gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
-                -f architecture="$ARCH_PARAM"
-            else
-              gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
+          # Trigger workflow with appropriate inputs
+          if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+              -f architecture="$ARCH_PARAM" \
+              -f run_cpp_tests=true \
+              -f run_metal_iommu_tests=true \
+              -f run_sd_unit_tests=true \
+              -f run_fd_unit_tests=true \
+              -f run_profiler_regression=true \
+              -f run_tt_train_cpp_unit_tests=true \
+              -f run_models_unit_tests=true \
+              -f run_tt_cnn_unit_tests=true
+          elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+              -f architecture="$ARCH_PARAM"
+          else
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
+          fi
+
+          # Poll for run ID
+          run_id=""
+          for i in {1..12}; do
+            sleep 5
+            run_data=$(gh run list --workflow "$WORKFLOW" --branch "$PARENT_BRANCH_NAME" --limit 1 \
+              --json databaseId,url --jq '.[0] | select(.databaseId != null) | "\(.databaseId)|\(.url)"' \
+              --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+            if [ -n "$run_data" ] && [ "$run_data" != "null" ]; then
+              run_id=$(echo "$run_data" | cut -d'|' -f1)
+              run_url=$(echo "$run_data" | cut -d'|' -f2)
+              break
             fi
+          done
 
-            # Poll for run ID
-            run_id=""
-            for i in {1..12}; do
-              sleep 5
-              run_data=$(gh run list --workflow "$WORKFLOW" --branch "$PARENT_BRANCH_NAME" --limit 1 \
-                --json databaseId,url --jq '.[0] | select(.databaseId != null) | "\(.databaseId)|\(.url)"' \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
-              if [ -n "$run_data" ] && [ "$run_data" != "null" ]; then
-                run_id=$(echo "$run_data" | cut -d'|' -f1)
-                run_url=$(echo "$run_data" | cut -d'|' -f2)
-                break
-              fi
-            done
+          if [ -z "$run_id" ]; then
+            echo "❌ Failed to get run ID for $DISPLAY_NAME"
+            echo "$OUTPUT_KEY=failure:unknown" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
-            if [ -z "$run_id" ]; then
-              echo "❌ Failed to get run ID for $DISPLAY_NAME"
-              echo "$OUTPUT_KEY=failure:unknown" >> $GITHUB_OUTPUT
-              exit 1
-            fi
+          run_url="https://github.com/${{ env.METAL_REPO }}/actions/runs/$run_id"
+          echo "✅ $DISPLAY_NAME triggered (run ID: $run_id): $run_url"
 
-            run_url="https://github.com/${{ env.METAL_REPO }}/actions/runs/$run_id"
-            echo "✅ $DISPLAY_NAME triggered: $run_url"
+          # Monitor workflow with retry logic for failed jobs
+          attempt=0
+          timeout_seconds=$((WORKFLOW_TIMEOUT * 60))
 
-            # Monitor workflow until completion
-            timeout_seconds=$((WORKFLOW_TIMEOUT * 60))
+          while [ $attempt -lt $MAX_RETRIES ]; do
+            echo "📊 Monitoring $DISPLAY_NAME (attempt $((attempt + 1))/$MAX_RETRIES)..."
             elapsed=0
 
             while [ $elapsed -lt $timeout_seconds ]; do
               status=$(gh run view "$run_id" --json status,conclusion \
-                --jq '.status + ":" + (.conclusion // "unknown")' \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:unknown")
+                --jq '.status + ":" + (.conclusion // "")' \
+                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:")
               run_status=$(echo "$status" | cut -d: -f1)
               conclusion=$(echo "$status" | cut -d: -f2)
 
@@ -355,9 +355,28 @@ jobs:
                   echo "$OUTPUT_KEY=success:$run_url" >> $GITHUB_OUTPUT
                   exit 0
                 else
-                  echo "🛑 $DISPLAY_NAME failed: $run_url"
-                  echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
-                  exit 1
+                  echo "🛑 $DISPLAY_NAME completed with status: $conclusion (attempt $((attempt + 1)))"
+
+                  # Retry failed jobs only
+                  if [ $attempt -lt $((MAX_RETRIES - 1)) ]; then
+                    attempt=$((attempt + 1))
+                    echo "🔄 Retrying failed jobs only (attempt $((attempt + 1))/$MAX_RETRIES)..."
+
+                    if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
+                      echo "✅ Rerun triggered for run ID: $run_id"
+                      sleep 30  # Wait for rerun to start
+                      elapsed=0  # Reset timeout for retry
+                      break  # Break inner loop to start monitoring again
+                    else
+                      echo "❌ Failed to trigger rerun"
+                      echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
+                      exit 1
+                    fi
+                  else
+                    echo "❌ Max retries reached"
+                    echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
+                    exit 1
+                  fi
                 fi
               fi
 
@@ -365,10 +384,18 @@ jobs:
               elapsed=$((elapsed + POLL_INTERVAL))
             done
 
-            # Timeout
-            echo "⏰ $DISPLAY_NAME timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
-            echo "$OUTPUT_KEY=timeout:$run_url" >> $GITHUB_OUTPUT
-            exit 1
+            # Check if we timed out
+            if [ $elapsed -ge $timeout_seconds ]; then
+              echo "⏰ $DISPLAY_NAME timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
+              echo "$OUTPUT_KEY=timeout:$run_url" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          done
+
+          # If we exit the retry loop without success
+          echo "❌ $DISPLAY_NAME failed after $MAX_RETRIES attempts"
+          echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
+          exit 1
 
   # Job 3: Terminate spawned workflows if parent is cancelled
   cancel-on-failure:
