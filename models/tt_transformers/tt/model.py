@@ -163,7 +163,6 @@ class Transformer(LightweightModule):
         logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
-    
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
         """
         Process hidden states after prefill trace, stopping before LM head.
@@ -666,9 +665,5 @@ class Transformer(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         x = self.lm_head(x)
-
-        if mode == "prefill":
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return x
