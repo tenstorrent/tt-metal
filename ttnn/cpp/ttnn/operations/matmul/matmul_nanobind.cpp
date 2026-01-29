@@ -11,6 +11,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
@@ -18,6 +20,22 @@
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
+
+// fmt formatter for UnaryWithParam to enable fmt::format("{}", unary_with_param)
+template <>
+struct fmt::formatter<ttnn::operations::unary::UnaryWithParam> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const ttnn::operations::unary::UnaryWithParam& param, FormatContext& ctx) const {
+        if (param.params.empty()) {
+            return fmt::format_to(ctx.out(), "UnaryWithParam(op_type={})", param.op_type);
+        } else {
+            return fmt::format_to(
+                ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
+        }
+    }
+};
 
 namespace ttnn::operations::matmul {
 
