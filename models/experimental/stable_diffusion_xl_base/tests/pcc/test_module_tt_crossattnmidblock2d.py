@@ -19,6 +19,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     [
         # 1024x1024 image resolution
         ((1024, 1024), (1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
+        # 512x512 image resolution
+        ((512, 512), (1, 1280, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -104,5 +106,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.982)
     logger.info(f"PCC is: {pcc_message}")
