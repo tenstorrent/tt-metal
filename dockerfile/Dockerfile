@@ -3,7 +3,11 @@
 
 #############################################################
 # Tool version and hash configuration (centralized)
+# NOTE: ARGs used in FROM must be declared before any FROM statement
 #############################################################
+
+# Ubuntu base image version
+ARG UBUNTU_VERSION=22.04
 
 # uv - Python package manager
 # Pinned to specific SHA256 for reproducible builds per:
@@ -66,7 +70,6 @@ FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a
 # Base Ubuntu image with system dependencies
 #############################################################
 
-ARG UBUNTU_VERSION=22.04
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
