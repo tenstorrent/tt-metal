@@ -684,6 +684,13 @@ Follow these steps to complete the exercise:
    - Intermediate CB needs to store the partial results, whose size is the same as a full ``C_block``.
      Since the same kernel will both produce and consume the partial results, double buffering
      would not provide any benefit.
+   - Create CBs on all cores participating in computation. Since in this exercise it is not
+     necessary to use the ``split_work_to_cores`` function, you can construct the set of all
+     cores from the core grid dimensions, as follows:
+
+     .. code-block:: cpp
+
+        CoreRangeSet all_cores{CoreRange(CoreCoord(0, 0), CoreCoord(core_grid.x - 1, core_grid.y - 1))};
 
 #. Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
    The reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers
