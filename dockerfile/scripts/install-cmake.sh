@@ -28,6 +28,9 @@ echo "${CMAKE_SHA256}  ${TMPFILE}" | sha256sum -c -
 mkdir -p "${INSTALL_DIR}"
 tar -xzf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
 
+# move doc and man into share to match expected locations
+mv -t "${INSTALL_DIR}"/share "${INSTALL_DIR}"/man "${INSTALL_DIR}"/doc
+
 # Cleanup
 rm -f "${TMPFILE}"
 
