@@ -167,7 +167,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     writer_kernel_id = CreateKernel(
         program,
         rm_layout
-            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+            ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));

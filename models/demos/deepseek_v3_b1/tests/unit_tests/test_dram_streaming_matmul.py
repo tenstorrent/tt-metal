@@ -140,11 +140,11 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
     per_core_N = n_padded // num_banks
 
-    logger.debug(f"n_padded={n_padded}, per_core_N={per_core_N}, Kt={k // tile_w}")
+    logger.info(f"n_padded={n_padded}, per_core_N={per_core_N}, Kt={k // tile_w}")
 
     # Define shapes
     in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k, n]  # Original shape for matmul reference
+    in1_shape = [1, 1, k, n_padded]  # Original shape for matmul reference
 
     # Build CoreRangeSet for specific compute cores (not bounding box)
     compute_core_grid = ttnn.CoreRangeSet(
@@ -176,7 +176,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     in1_shuffled = shuffle_tensor_tiles(in1, tile_w, num_banks)
 
     # WIDTH_SHARDED across N dimension, each bank gets [K, n // num_banks]
-    in1_shard_shape = [k, n // num_banks]
+    in1_shard_shape = [k, n_padded // num_banks]
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
     in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -190,11 +190,11 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     )
 
     # ========== Output tensor - WIDTH_SHARDED in L1 ==========
-    output_shard_width = n // num_banks
+    output_shard_width = n_padded // num_banks
     output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    torch_output_zeros = torch.zeros([1, 1, m, n]).bfloat16().float()
+    torch_output_zeros = torch.zeros([1, 1, m, n_padded]).bfloat16().float()
     ttnn_output = ttnn.from_torch(
         torch_output_zeros,
         dtype=ttnn.bfloat16,
@@ -211,7 +211,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
 
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""
-    logger.info(f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n}, num_cores={num_cores}")
+    logger.info(f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n_padded}, num_cores={num_cores}")
     try:
         ttnn_result = DRAMStreamingMatmul.op(
             in0_t,
