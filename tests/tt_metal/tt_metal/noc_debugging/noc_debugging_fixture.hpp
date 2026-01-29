@@ -40,8 +40,8 @@ public:
         }
         tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
         return noc_debug_state->get_issues(core, processor_id)
-            .has_issue(NOCDebugIssueType(
-                NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*is_mcast=*/true, /*is_semaphore=*/true));
+            .has_issue(
+                NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/true, /*semaphore=*/true));
     }
 
     bool has_unflushed_write_mcast_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
@@ -51,8 +51,8 @@ public:
         }
         tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
         return noc_debug_state->get_issues(core, processor_id)
-            .has_issue(NOCDebugIssueType(
-                NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*is_mcast=*/true, /*is_semaphore=*/false));
+            .has_issue(
+                NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/true, /*semaphore=*/false));
     }
 
     template <typename T>

@@ -102,7 +102,7 @@ struct NOCDebugIssue {
 
     void set_issue(const NOCDebugIssueType& issue_type) { issues.insert(issue_type); }
 
-    bool has_issue(const NOCDebugIssueType& issue_type) const { return issues.count(issue_type) > 0; }
+    bool has_issue(const NOCDebugIssueType& issue_type) const { return issues.contains(issue_type); }
 
     bool any_issue() const { return !issues.empty(); }
 
