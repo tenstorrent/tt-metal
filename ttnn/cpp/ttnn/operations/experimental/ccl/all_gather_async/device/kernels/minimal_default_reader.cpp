@@ -181,6 +181,7 @@ void kernel_main() {
 
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
+    uint32_t slices_forwarded = 0;  // Track forwarded slices separately for split-forwarding
     while (slices_received < slices_expected) {
         // Check if this is the last slice and split forwarding applies
         bool is_last_slice = (slices_received == slices_expected - 1);
@@ -232,6 +233,13 @@ void kernel_main() {
                 should_forward = ((slices_received + 1) < (writes_expected + 1));
             }
         }
+
+        // CRITICAL: For split-forwarding, the writer's split condition is based on FORWARDED slice count
+        // (slice_writes == writes_expected - 1), not RECEIVED slice count.
+        // We must match the writer's logic to avoid CB deadlock.
+        bool is_last_forwarded_slice = should_forward && (slices_forwarded == writes_expected - 1);
+        bool is_split_forwarded_slice = split_forwarding_enabled && is_last_forwarded_slice;
+
         if (should_forward) {
             // read the next slice out of memory, and put it in CB for writer to forward
             tiles_read = input_tile_id_start;
@@ -245,7 +253,8 @@ void kernel_main() {
 
             // For split-forwarding: each direction only handles its half
             // Forward (direction==0): first half, Backward (direction==1): second half
-            if (is_split_slice) {
+            // Use is_split_forwarded_slice (based on forwarded count) to match writer's logic
+            if (is_split_forwarded_slice) {
                 uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
                 uint32_t first_half_tiles = total_tiles / 2;
 
@@ -329,9 +338,10 @@ void kernel_main() {
                 }
 
                 // Reset for next batch, but respect split slice boundaries
+                // Use is_split_forwarded_slice (based on forwarded count) to match writer's logic
                 pages_read_in_row = start_pages_read_in_row;
                 row_offset = start_row_offset;
-                if (is_split_slice) {
+                if (is_split_forwarded_slice) {
                     uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
                     uint32_t first_half_tiles = total_tiles / 2;
                     if (direction == 0) {
@@ -358,6 +368,7 @@ void kernel_main() {
                     tiles_to_read = input_tile_id_end;
                 }
             }
+            slices_forwarded++;  // Track forwarded slices for split-forwarding logic
         } else {
             // Not forwarding - just wait for semaphores indicating data has arrived
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
