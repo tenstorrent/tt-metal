@@ -4,7 +4,9 @@ import argparse
 import shutil
 
 
-def multi_user_containers(num_containers, image, chips_per_container, mesh_descriptor, container_prefix, tray_mapping=None):
+def multi_user_containers(
+    num_containers, image, chips_per_container, mesh_descriptor, container_prefix, tray_mapping=None
+):
     services = {}
 
     user_id = os.environ.get("UID") or os.getuid()
@@ -23,7 +25,9 @@ def multi_user_containers(num_containers, image, chips_per_container, mesh_descr
                     devices.append(f"/dev/tenstorrent/{pair[0]}:/dev/tenstorrent/{pair[0]}")
                     devices.append(f"/dev/tenstorrent/{pair[1]}:/dev/tenstorrent/{pair[1]}")
                 else:
-                    raise ValueError(f"Not enough TP2 pairs for container {i}: have {len(tp2_pairs)}, need {num_containers}")
+                    raise ValueError(
+                        f"Not enough TP2 pairs for container {i}: have {len(tp2_pairs)}, need {num_containers}"
+                    )
             elif "device_mapping" in tray_mapping:
                 # Tray scenario: Use physical topology mapping
                 tray_id = i + 1  # Tray IDs are 1-indexed
