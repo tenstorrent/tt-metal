@@ -3,19 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 import ttnn
-from loguru import logger
-
-from models.common.utility_functions import comp_pcc
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 from tests.nightly.t3000.ccl.test_all_gather_minimal_matmul_async import run_test_linear
-
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-    run_device_profiler,
-)
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
