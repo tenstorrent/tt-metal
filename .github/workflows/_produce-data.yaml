@@ -1,5 +1,9 @@
 name: "[internal] Produce data for external analysis"
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   workflow_call:
     inputs:
@@ -235,3 +239,6 @@ jobs:
       - name: Show files
         shell: bash
         run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'
+
+
+
