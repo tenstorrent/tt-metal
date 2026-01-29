@@ -30,11 +30,11 @@ on:
         default: false
 
 jobs:
-  load-test-matrix-wh:
-    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+      matrix-wh: ${{ steps.filter-wh.outputs.matrix }}
+      matrix-bh: ${{ steps.filter-bh.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
     steps:
@@ -52,7 +52,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "e2e"
-      - name: Load test matrix (wormhole)
+      - name: Load and filter test matrix
         id: load-test-matrix
         run: |
           set -e
@@ -68,65 +68,36 @@ jobs:
           fi
           # Sanitize line endings
           sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
-          # Convert to JSON and filter for wh_galaxy tests
-          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)' | jq '[.[] | select(.sku == "wh_galaxy")]')
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
           # Print the JSON output
-          echo "Read contents of $TESTS_YAML_PATH and filtered for wh_galaxy tests:"
+          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
           echo "${json_output}"
-          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
-
-  load-test-matrix-bh:
-    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
-    env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install dependencies
-        run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
+          echo "full-matrix=${json_output}" >> $GITHUB_OUTPUT
+      - name: Filter for wh_galaxy tests
+        id: filter-wh
         run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e"
-      - name: Load test matrix (blackhole)
-        id: load-test-matrix
+          full_matrix="${{ steps.load-test-matrix.outputs.full-matrix }}"
+          filtered=$(echo "$full_matrix" | jq '[.[] | select(.sku == "wh_galaxy")]')
+          echo "Filtered wh_galaxy tests:"
+          echo "$filtered"
+          echo "matrix=${filtered}" >> $GITHUB_OUTPUT
+      - name: Filter for bh_galaxy tests
+        id: filter-bh
         run: |
-          set -e
-          # Install yq and jq
-          YQ_VERSION="v4.44.1"
-          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
-          apt-get update && apt-get install -y jq
-          # Check if the file exists
-          if [ ! -f "$TESTS_YAML_PATH" ]; then
-            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
-            exit 1
-          fi
-          # Sanitize line endings
-          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
-          # Convert to JSON and filter for bh_galaxy tests
-          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)' | jq '[.[] | select(.sku == "bh_galaxy")]')
-          # Print the JSON output
-          echo "Read contents of $TESTS_YAML_PATH and filtered for bh_galaxy tests:"
-          echo "${json_output}"
-          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+          full_matrix="${{ steps.load-test-matrix.outputs.full-matrix }}"
+          filtered=$(echo "$full_matrix" | jq '[.[] | select(.sku == "bh_galaxy")]')
+          echo "Filtered bh_galaxy tests:"
+          echo "$filtered"
+          echo "matrix=${filtered}" >> $GITHUB_OUTPUT
 
   galaxy-e2e-tests:
-    needs: load-test-matrix-wh
+    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.load-test-matrix-wh.outputs.matrix) }}
-    name: ${{ matrix.test-group.name }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix-wh) }}
     runs-on:
       - arch-wormhole_b0
       - pipeline-functional
@@ -183,12 +154,12 @@ jobs:
         if: always()
 
   galaxy-bh-e2e-tests:
-    needs: load-test-matrix-bh
+    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.load-test-matrix-bh.outputs.matrix) }}
-    name: ${{ matrix.test-group.name }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix-bh) }}
     runs-on:
       - arch-blackhole
       - pipeline-functional
