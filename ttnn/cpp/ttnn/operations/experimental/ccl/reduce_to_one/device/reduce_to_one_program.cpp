@@ -274,9 +274,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     constexpr auto received_cb_r2 = tt::CBIndex::c_5;  // Round 2: ROOT3 → ROOT2/ROOT1 (separate L1 buffer)
     constexpr auto received_cb_r3 = tt::CBIndex::c_6;  // Round 3: ROOT2 → ROOT1 (separate L1 buffer)
     constexpr auto output_cb = tt::CBIndex::c_2;       // Final output (backed by output tensor)
-    constexpr auto scratch_cb = tt::CBIndex::c_4;      // Scratch for intermediate compute
     constexpr auto packet_cb = tt::CBIndex::c_3;
-    constexpr auto scratch_cb2 = tt::CBIndex::c_7;  // Second scratch for compute (NOT globally allocated - stable addr)
+    constexpr auto scratch_cb = tt::CBIndex::c_7;  // Scratch for compute (NOT globally allocated - stable addr)
 
     // === Create CBs backed by tensor buffers ===
     // num_worker_slots = all shard cores per column (all cores send to fabric core)
@@ -337,17 +336,11 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
                                 .set_globally_allocated_address(*output_tensor.buffer());
     auto output_cb_handle = CreateCircularBuffer(program, all_cores_with_fabric, cb_output_config);
 
-    // scratch_cb: scratch space for intermediate compute results
+    // scratch_cb: scratch buffer for compute (NOT globally allocated - stable address)
     auto cb_scratch_config = tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{scratch_cb, input_dataformat}})
                                  .set_page_size(scratch_cb, tile_size_bytes)
                                  .set_tile_dims(scratch_cb, compute_tile);
     CreateCircularBuffer(program, all_cores_with_fabric, cb_scratch_config);
-
-    // scratch_cb2: second scratch buffer for compute (NOT globally allocated - stable address)
-    auto cb_scratch2_config = tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{scratch_cb2, input_dataformat}})
-                                  .set_page_size(scratch_cb2, tile_size_bytes)
-                                  .set_tile_dims(scratch_cb2, compute_tile);
-    CreateCircularBuffer(program, all_cores_with_fabric, cb_scratch2_config);
 
     // packet_cb: staging buffer for workers to assemble packets before fabric core forwards them
     auto cb_packet_config =
@@ -404,10 +397,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     // Worker writer kernel: ALL shard cores assemble and send packets to dedicated fabric core
-    // LEAF: reads from local_cb (no compute), others: reads from scratch_cb2 (compute output)
+    // LEAF: reads from local_cb (no compute), others: reads from scratch_cb (compute output)
     // ROOT1: gathers final results to output core
     // Args: [0] role, [1-2] sizes, [3-4] CBs, [5-7] routing, [8-9] output coords
-    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : scratch_cb2;
+    uint32_t worker_source_cb = is_mesh_leaf ? local_cb : scratch_cb;
     auto output_phys_core = device->worker_core_from_logical_core(output_core);
     std::vector<uint32_t> worker_writer_ct_args = {
         role,
@@ -437,24 +430,16 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::WriterDataMovementConfig(fabric_writer_ct_args));
 
     // Compute kernel: reduction for ROOT devices, early exits for LEAF
-    // Args: [0] role, [1] num_tiles, [2-8] CBs (local, received r1/r2/r3, output, scratch, scratch2)
+    // Args: [0] role, [1] num_tiles, [2-7] CBs (local, received r1/r2/r3, output, scratch)
     std::vector<uint32_t> compute_ct_args = {
-        role,
-        compute_num_tiles,
-        local_cb,
-        received_cb_r1,
-        received_cb_r2,
-        received_cb_r3,
-        output_cb,
-        scratch_cb,
-        scratch_cb2};
+        role, compute_num_tiles, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, output_cb, scratch_cb};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
+            .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_ct_args,
         });

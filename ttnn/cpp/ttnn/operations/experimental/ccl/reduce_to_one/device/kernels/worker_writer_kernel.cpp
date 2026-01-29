@@ -5,7 +5,7 @@
 // Worker writer kernel: non-bottom cores (rows 0,1,2) assemble packets and send to bottom core via NOC.
 //
 // CB convention (unified across all roles):
-//   - source_cb: LEAF uses local_cb (input), others use scratch_cb2 (compute output)
+//   - source_cb: LEAF uses local_cb (input), others use scratch_cb (compute output)
 //
 // Non-ROOT1 Workers:
 // 1. Wait for data in source_cb
@@ -15,7 +15,7 @@
 // 5. Signal arrival to bottom core
 //
 // ROOT1 Workers (output gather):
-// 1. Wait for compute to finish (two rounds of cb_wait/pop)
+// 1. Wait for compute to push final result to source_cb
 // 2. Write shard to output_core at offset shard_idx * payload_size via NOC
 
 #include <stdint.h>
@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t source_cb = get_compile_time_arg_val(3);  // LEAF: local_cb, others: scratch_cb2
+    constexpr uint32_t source_cb = get_compile_time_arg_val(3);  // LEAF: local_cb, others: scratch_cb
     constexpr uint32_t packet_cb = get_compile_time_arg_val(4);
     constexpr uint32_t num_hops = get_compile_time_arg_val(5);
     constexpr uint16_t dst_dev_id = get_compile_time_arg_val(6);
@@ -72,16 +72,11 @@ void kernel_main() {
     // ROOT1: gather final results to output core
     // Each worker writes its shard to output_core at offset shard_idx * payload_size_bytes
     if constexpr (device_role == MESH_ROOT1) {
-        // Calculate destination address on output core: base + shard_idx * payload_size
         uint32_t dst_addr = output_base_addr + shard_idx * payload_size_bytes;
         uint64_t dst_noc_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, dst_addr);
-        // First round is partial results
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
-        // Wait for compute to push final result to source_cb (scratch_cb2)
+        // Wait for compute to push final result to source_cb (scratch_cb)
         cb_wait_front(source_cb, num_tiles);
         uint32_t src_addr = get_read_ptr(source_cb);
-        // NOC write to output core
         noc_async_write(src_addr, dst_noc_addr, payload_size_bytes);
         noc_async_write_barrier();
         cb_pop_front(source_cb, num_tiles);
