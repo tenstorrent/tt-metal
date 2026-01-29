@@ -396,7 +396,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Reader kernel: handles data arrival and pushes to compute
     // Pass all 3 received CB indices - kernel decides which to use based on role/round
     std::vector<uint32_t> reader_ct_args = {
-        role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles, scratch_cb, scratch_cb2};
+        role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles};
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
@@ -405,10 +405,20 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Worker writer kernel: ALL shard cores assemble and send packets to dedicated fabric core
     // LEAF: reads from local_cb (no compute), others: reads from scratch_cb2 (compute output)
-    // ROOT1: waits on output_cb for compute to finish (doesn't send, just synchronizes)
+    // ROOT1: gathers final results to output core
     uint32_t worker_source_cb = is_mesh_leaf ? local_cb : scratch_cb2;
+    auto output_phys_core = device->worker_core_from_logical_core(output_core);
     std::vector<uint32_t> worker_writer_ct_args = {
-        role, worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb, output_cb};
+        role,
+        worker_source_cb,
+        compute_num_tiles,
+        payload_size_bytes,
+        packet_cb,
+        num_hops,
+        dst_fabric_node_id.chip_id,
+        dst_fabric_node_id.mesh_id.get(),
+        output_phys_core.x,
+        output_phys_core.y};
     auto worker_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
@@ -417,15 +427,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Fabric writer kernel: dedicated fabric cores handle fabric communication
     // These cores only forward worker packets, they don't have their own shard data
-    std::vector<uint32_t> fabric_writer_ct_args = {
-        role,
-        packet_cb,  // source_cb not used, but kept for compatibility
-        compute_num_tiles,
-        payload_size_bytes,
-        payload_size_bytes,
-        num_worker_slots,
-        packet_cb,
-        output_cb};
+    std::vector<uint32_t> fabric_writer_ct_args = {role, payload_size_bytes, num_worker_slots, packet_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
@@ -469,48 +471,34 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         worker_sems.push_back(CreateSemaphore(program, fabric_cores_set, 0));
     }
 
-    // Get output core physical coords (for ROOT1 gather)
-    auto output_phys_core = device->worker_core_from_logical_core(output_core);
     uint32_t output_base_addr = output_tensor.buffer()->address();
 
     // Set runtime args for all shard cores (workers)
     for (const auto& c : all_coord_cores) {
-        auto phys_core = device->worker_core_from_logical_core(c);
-        auto core_noc_x = phys_core.x;
-        auto core_noc_y = phys_core.y;
-
         // Get this core's column index and fabric core
         CoreCoord my_fabric_core = column_to_fabric_core.at(c.x);
         auto fabric_phys = device->worker_core_from_logical_core(my_fabric_core);
 
         // === Reader runtime args ===
-        uint32_t my_slot_idx = core_to_slot_idx.at(c);
         std::vector<uint32_t> reader_rt_args = {
-            semaphore_round1.address(), semaphore_round2.address(), semaphore_round3.address(), my_slot_idx};
+            semaphore_round1.address(), semaphore_round2.address(), semaphore_round3.address()};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_rt_args);
+
+        uint32_t my_slot_idx = core_to_slot_idx.at(c);
 
         // === Worker writer runtime args ===
         // Get this core's shard index (position in shard order for output gather)
         uint32_t shard_idx = core_to_shard_idx.at(c);
 
         std::vector<uint32_t> worker_rt_args = {
-            fabric_phys.x,  // Fabric core NOC X
-            fabric_phys.y,  // Fabric core NOC Y
-            my_slot_idx,
-            worker_sems[my_slot_idx],  // This worker's semaphore on fabric core
-            slot_size_bytes,
-            num_hops,
-            core_noc_x,  // Worker's own NOC X (same position on dest device)
-            core_noc_y,  // Worker's own NOC Y (same position on dest device)
-            dst_l1_addr,
-            dst_sem_addr,                      // Destination semaphore for fused atomic inc
-            dst_fabric_node_id.chip_id,        // Destination device ID
-            dst_fabric_node_id.mesh_id.get(),  // Destination mesh ID
-            // ROOT1 output gather args (used only by ROOT1 workers)
-            output_phys_core.x,  // Output core NOC X
-            output_phys_core.y,  // Output core NOC Y
-            output_base_addr,    // Output tensor base address
-            shard_idx            // This core's shard index for output offset
+            fabric_phys.x,             // [0] Fabric core NOC X (per-column)
+            fabric_phys.y,             // [1] Fabric core NOC Y (per-column)
+            my_slot_idx,               // [2] per-core
+            worker_sems[my_slot_idx],  // [3] per-core semaphore
+            dst_l1_addr,               // [4] updated in trace
+            dst_sem_addr,              // [5] updated in trace
+            output_base_addr,          // [6] updated in trace
+            shard_idx                  // [7] per-core
         };
         tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel, c, worker_rt_args);
 
@@ -519,15 +507,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Set runtime args for dedicated fabric cores
     for (const auto& fc : fabric_writer_cores) {
-        auto fabric_phys = device->worker_core_from_logical_core(fc);
-
-        std::vector<uint32_t> fabric_rt_args = {
-            dst_l1_addr,
-            fabric_phys.x,  // This fabric core's NOC X (same position on dest device)
-            fabric_phys.y,  // This fabric core's NOC Y (same position on dest device)
-            dst_sem_addr,   // Destination semaphore for fused atomic inc
-            slot_size_bytes,
-            num_hops};
+        std::vector<uint32_t> fabric_rt_args;
 
         // Append worker semaphore IDs (fabric kernel will convert to addresses)
         for (uint32_t worker_idx = 0; worker_idx < num_worker_slots; worker_idx++) {
@@ -611,37 +591,26 @@ void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
                                                                       : 0;
 
         // Update writer kernel args based on device role
+        auto& worker_writer_args_by_core =
+            tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
+
         if (!shared_variables.is_mesh_root1_device) {
             // Non-ROOT1: update destination addresses for fabric sends
-            auto& worker_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
-            auto& fabric_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_fabric_writer_kernel_id);
-
             uint32_t dst_l1_addr = intermediate_tensors[tensor_idx].buffer()->address();
             uint32_t dst_sem_addr = shared_variables.semaphores[tensor_idx].address();
 
-            // Update all shard cores (workers)
             for (const auto& core : shared_variables.cores) {
                 auto& args = worker_writer_args_by_core[core.x][core.y];
-                args[8] = dst_l1_addr;
-                args[9] = dst_sem_addr;
-            }
-            // Update dedicated fabric cores
-            for (const auto& core : shared_variables.fabric_cores) {
-                auto& args = fabric_writer_args_by_core[core.x][core.y];
-                args[0] = dst_l1_addr;
-                args[3] = dst_sem_addr;
+                args[4] = dst_l1_addr;
+                args[5] = dst_sem_addr;
             }
         } else {
             // ROOT1: update output base address for gather
-            auto& worker_writer_args_by_core =
-                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
             uint32_t output_base_addr = output_tensor.buffer()->address();
 
             for (const auto& core : shared_variables.cores) {
                 auto& args = worker_writer_args_by_core[core.x][core.y];
-                args[14] = output_base_addr;  // output_base_addr is at index 14
+                args[6] = output_base_addr;
             }
         }
     }
