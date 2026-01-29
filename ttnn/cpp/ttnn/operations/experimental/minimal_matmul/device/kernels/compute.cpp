@@ -44,6 +44,11 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
  * If FUSE_BIAS is disabled and FUSE_TERNARY is enabled then:
  *    output = ternary_a + scalar * matmul_result * ternary_b
  *
+ * Tile management strategy:
+ * FUSE_BIAS will read in_cb and bias_cb, add them together through the FPU and write to DST
+ * FUSE_TERNARY uses addcmul LLK and works on DST register
+ * (if FUSE_BIAS disabled, then input and bias are unpacked through copy_tile)
+ *
  * Note: One of FUSE_BIAS or FUSE_TERNARY must be enabled.
  *
  * in_cb: input buffer (matmul result)
@@ -105,9 +110,8 @@ void add_bias_and_addcmul_block(
 #ifdef FUSE_TERNARY
             // Read ternary tensors into destination registers
             reconfig_data_format_srca(ternary_a_cb);
-            // copy_tile_init(ternary_a_cb);
-            // copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
-            // For bcast a single row
+
+            // bcast a single row
             unary_bcast_init<BroadcastType::ROW>(ternary_a_cb, ternary_a_dst_id);
             unary_bcast<BroadcastType::ROW>(ternary_a_cb, tile_id, ternary_a_dst_id);
 
