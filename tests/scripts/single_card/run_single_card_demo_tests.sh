@@ -94,7 +94,9 @@ run_gemma3_perf() {
 }
 
 run_phi3_func() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/microsoft/Phi-3-mini-128k-instruct $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
+  phi3=microsoft/Phi-3-mini-128k-instruct
+  phi3_cache=$TT_CACHE_HOME/$phi3
+  HF_MODEL=$phi3 TT_CACHE_PATH=$phi3_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
   echo "LOG_METAL: Phi-3-Mini-128K-Instruct test completed"
 }
 
