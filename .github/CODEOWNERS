@@ -345,6 +345,7 @@ models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @
 models/perf/ @yieldthought @esmalTT @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorrent/codeowner-bypass
+models/experimental/bevformer/ @njovanovicTT @mbezuljTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/experimental/oft @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @njovanovicTT
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @njovanovicTT
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
