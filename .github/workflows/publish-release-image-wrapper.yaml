@@ -17,7 +17,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "22.04"
+      version: "24.04"
   create-image-tag-name:
     runs-on: ubuntu-latest
     outputs:
