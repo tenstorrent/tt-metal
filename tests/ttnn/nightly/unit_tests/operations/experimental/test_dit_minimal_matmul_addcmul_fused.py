@@ -37,10 +37,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     fp32_acc=True,
 ):
     """
-    Test the dit_minimal_matmul_addcmul_fused operation.
-
-    Current implementation: Tests skeleton that only performs minimal_matmul.
-    Expected behavior: Should match minimal_matmul output (addcmul fusion not yet implemented).
+    Test dit_minimal_matmul_addcmul_fused: output = addcmul_input1 + scalar * matmul(in, w) * addcmul_input2.
     """
     torch.manual_seed(0)
 
@@ -125,20 +122,15 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
 @pytest.mark.parametrize(
     "M, K, N, config_name",
     [
-        (2048, 2048, 2048, "tiny"),
-        # (9472, 3456, 5120, "medium"),
-        # (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
-        # (32760, 5120, 13824, "14B-480p"),  # 21*30*52 = 32760
-        # (75600, 5120, 13824, "14B-720p"),  # 21*45*80 = 75600
-        # (2000, 5120, 13824, "small"),  # Small test shape
+        (9472, 5120, 1280, "wan2.2_14b-720p-glx"),
+        (2368, 5120, 1280, "wan2.2_14b-720p-single"),
     ],
 )
 def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_name):
     """Test with actual Wan2.2 transformer shapes."""
     logger.info(f"Testing Wan2.2 shape configuration: {config_name}")
 
-    # Use appropriate block sizes for large shapes
-    M_block = 8 if M > 10000 else 8
+    M_block = 8
     K_block = 8
     N_block = 8
 
@@ -236,11 +228,7 @@ def test_dit_minimal_matmul_addcmul_fused_various_sizes(device, M, K, N):
 
 
 def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
-    """
-    Compare fused operation with separate minimal_matmul and addcmul calls.
-
-    Note: In skeleton implementation, we only compare with minimal_matmul.
-    """
+    """Fused output should match minimal_matmul and also addcmul(residual, matmul_out, gate)."""
     torch.manual_seed(0)
 
     M, K, N = 512, 1024, 2048
@@ -308,4 +296,4 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     tt_addcmul_torch = ttnn.to_torch(tt_addcmul_output)
     assert_quality(tt_addcmul_torch, tt_fused_torch)
 
-    logger.info("Comparison test passed: fused operation matches separate minimal_matmul")
+    logger.info("Comparison test passed: fused output matches minimal_matmul and addcmul(separate)")

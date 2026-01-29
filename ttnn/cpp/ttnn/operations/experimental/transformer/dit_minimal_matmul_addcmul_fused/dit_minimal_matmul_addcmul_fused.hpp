@@ -14,9 +14,7 @@
 namespace ttnn {
 namespace operations::experimental::transformer {
 
-// Composite operation that fuses minimal_matmul and addcmul operations
-// For now, this is a skeleton that only calls minimal_matmul
-// Future work will modify minimal_matmul kernels to compute addcmul inline
+// Fused minimal_matmul + addcmul. Calls minimal_matmul with fused ternary (addcmul) parameters.
 struct ExecuteDitMinimalMatmulAddcmulFused {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& matmul_input_tensor,

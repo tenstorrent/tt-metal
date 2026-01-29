@@ -403,7 +403,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
             : in1_data_format;
 
-    // Get fused ternary tensor addresses
     auto in3_tile_size = tt::tile_size(in3_data_format);
 
     /**

@@ -314,7 +314,7 @@ void kernel_main() {
 
 #ifdef FUSE_TERNARY
             if constexpr (!is_output_writer) {
-                read_ternary_blocks_sync_v1<M_block_tiles, N_block_tiles>(
+                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
                     ternary_a_reader,
                     ternary_b_reader,
                     out_shape,

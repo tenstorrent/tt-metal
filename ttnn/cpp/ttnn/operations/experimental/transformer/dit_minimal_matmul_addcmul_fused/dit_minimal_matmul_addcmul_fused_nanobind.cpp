@@ -27,9 +27,8 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         Experimental fused operation combining minimal_matmul and addcmul for improved performance in DiT transformer blocks.
         This operation is designed to optimize the common pattern: output = input1 + (scalar * matmul(input, weight) * input2)
 
-        **Current Implementation (Skeleton):**
-        This is an initial skeleton implementation that only performs the minimal_matmul portion.
-        Future work will modify the minimal_matmul kernels to compute the addcmul operation inline for better performance.
+        **Implementation:**
+        Delegates to minimal_matmul with fused addcmul (ternary) parameters; addcmul is computed inline in the matmul kernels.
 
         **Intended Mathematical Operation:**
 
@@ -63,18 +62,16 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             Typically 1.0 in DiT transformer blocks.
 
         addcmul_input_tensor1 : ttnn.Tensor
-            Residual/base tensor for addcmul (the tensor being added to).
+            Residual/base for addcmul (output += this).
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
             - Shape: [..., M, N] - must match matmul output shape.
-            **Note:** Currently unused in skeleton implementation.
 
         addcmul_input_tensor2 : ttnn.Tensor
             Gate/multiplier tensor for addcmul.
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
             - Shape: [..., M, N] or broadcast-compatible shape.
-            **Note:** Currently unused in skeleton implementation.
 
         bias_tensor : Optional[ttnn.Tensor], default: None
             Optional row-broadcast bias added to the matmul result.
@@ -115,8 +112,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         -------
         ttnn.Tensor
             Output tensor with shape [..., M, N], TILE layout, and specified dtype.
-            **Skeleton implementation:** Currently returns only the matmul result.
-            **Future implementation:** Will return the full fused result: addcmul_input_tensor1 + (scalar * matmul_output * addcmul_input_tensor2)
+            Fused result: addcmul_input_tensor1 + (scalar * matmul_output * addcmul_input_tensor2).
 
         Shape Semantics
         ---------------
@@ -133,7 +129,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         - Supported dtypes: BF16, BF8_B, BF4_B, FLOAT32.
         - Weight and bias (if present) must have 1 in all leading dimensions.
         - Activation may have arbitrary upper dimensions (folded into M).
-        - **Skeleton limitation:** addcmul parameters are currently ignored; only matmul is computed.
+        - addcmul is fused and computed inline with matmul.
 
         Use Case
         --------
@@ -152,9 +148,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
 
         Notes on Implementation
         -----------------------
-        - **Current (skeleton):** Only performs minimal_matmul; addcmul params are unused.
-        - **Future:** Will modify minimal_matmul kernels to fuse addcmul computation inline,
-          eliminating intermediate tensor materialization and improving memory bandwidth.
+        - addcmul is computed inline in minimal_matmul kernels (no intermediate matmul tensor write/read).
         - Performance and memory footprint are sensitive to block sizes and subblock shapes.
         )doc",
         ttnn::nanobind_overload_t{
