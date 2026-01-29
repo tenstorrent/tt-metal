@@ -307,21 +307,17 @@ uv pip install -e .
 
 # Create .pth files for ttml if tt-train exists
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
-if [ -d "$SCRIPT_DIR/tt-train/sources/ttml" ]; then
-    echo "Creating ttml .pth files for development"
-    SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
+SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
 
-    # Add ttml Python source code
-    echo "$SCRIPT_DIR/tt-train/sources/ttml" > "$SITE_PACKAGES/ttml.pth"
+# Add ttml Python source code
+echo "$SCRIPT_DIR/tt-train/sources/ttml" > "$SITE_PACKAGES/ttml.pth"
 
-    # Add the built _ttml C++ extension (.so file)
-    # Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
-    echo "$SCRIPT_DIR/build/tt-train/sources/ttml" > "$SITE_PACKAGES/_ttml.pth"
+# Add the built _ttml C++ extension (.so file)
+# Uses the 'build' symlink which points to the active build directory (e.g., build_Release)
+echo "$SCRIPT_DIR/build/tt-train/sources/ttml" > "$SITE_PACKAGES/_ttml.pth"
 
-    echo "  Created: $SITE_PACKAGES/ttml.pth"
-    echo "  Created: $SITE_PACKAGES/_ttml.pth"
-    echo "  Note: Run 'build_metal.sh --build-tt-train' to build the _ttml extension"
-fi
+echo "  Created: $SITE_PACKAGES/ttml.pth"
+echo "  Created: $SITE_PACKAGES/_ttml.pth"
 
 # Do not install hooks when this is a worktree
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
