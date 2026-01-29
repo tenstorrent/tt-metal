@@ -69,6 +69,9 @@ FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
     uint32_t last_mm_core_idx,
     uint32_t chunk_piece_size,
     uint32_t chunk_width_in_tiles) {
+    if (mm_core_idx > last_mm_core_idx) {
+        return 0;
+    }
     uint32_t current_tile_offset = tile_row_in_mm_M_block * chunk_width_in_tiles + chunk_col_in_tiles;
     uint32_t current_block_tiles_remaining = chunk_piece_size - current_tile_offset - 1;
     uint32_t future_blocks_tiles = (last_mm_core_idx - mm_core_idx) * chunk_piece_size;
