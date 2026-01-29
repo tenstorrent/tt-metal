@@ -157,11 +157,10 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& ternary_a_logical = ternary_a.logical_shape();
         const auto& ternary_c_logical = ternary_c.logical_shape();
 
-        // Both tensors should match output shape [M, N]
+        // ternary_a is broadcast [1, N], ternary_c matches output [M, N]
         TT_FATAL(
-            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
-            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
-            M,
+            ternary_a_logical[-2] == 1 && ternary_a_logical[-1] == N,
+            "fused_ternary_input_a shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
             N,
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
