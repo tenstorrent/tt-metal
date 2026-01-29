@@ -38,11 +38,10 @@ struct ReduceToOneOp {
     struct ReduceToOne {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle send_reader_kernel_id;
-            tt::tt_metal::KernelHandle send_worker_writer_kernel_id;  // worker_writer for non-bottom cores
-            tt::tt_metal::KernelHandle send_fabric_writer_kernel_id;  // fabric_writer for bottom cores
-            std::vector<CoreCoord> cores;
-            std::vector<CoreCoord> bottom_cores;
-            std::vector<CoreCoord> non_bottom_cores;
+            tt::tt_metal::KernelHandle send_worker_writer_kernel_id;  // worker_writer for all shard cores
+            tt::tt_metal::KernelHandle send_fabric_writer_kernel_id;  // fabric_writer for dedicated fabric cores
+            std::vector<CoreCoord> cores;                             // all shard cores (workers)
+            std::vector<CoreCoord> fabric_cores;                      // dedicated fabric writer cores
 
             tt::tt_metal::KernelHandle root1_reader_kernel_id;
             tt::tt_metal::KernelHandle root1_writer_kernel_id;

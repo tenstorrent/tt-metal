@@ -250,7 +250,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     torch.manual_seed(42)
 
     for device_idx in range(num_devices):
-        data = torch.ones(tensor_shape, dtype=torch.bfloat16)
+        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
         data_per_device.append(data)
 
     data_all = torch.stack(data_per_device, dim=0)
@@ -284,50 +284,72 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     ttnn.synchronize_device(submesh_device)
 
     # Warmup trace
-    # logger.info("Capturing warmup trace")
-    # trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    # for i in range(30):
-    #     output_tensor = ttnn.reduce_to_one(
-    #         input_tensor,
-    #         root_coord=ttnn.MeshCoordinate(root_coord),
-    #         exit_coord=ttnn.MeshCoordinate(exit_coord),
-    #         topology=topology,
-    #         intermediate_tensors=intermediate_tensors,
-    #     )
-    # ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
-    # ttnn.synchronize_device(submesh_device)
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    for i in range(15):
+        output_tensor = ttnn.reduce_to_one(
+            input_tensor,
+            root_coord=ttnn.MeshCoordinate(root_coord),
+            exit_coord=ttnn.MeshCoordinate(exit_coord),
+            topology=topology,
+            intermediate_tensors=intermediate_tensors,
+        )
+    ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
 
-    # # Capture main trace
-    # logger.info("Capturing main trace")
-    # trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    # for i in range(20):
-    #     output_tensor = ttnn.reduce_to_one(
-    #         input_tensor,
-    #         root_coord=ttnn.MeshCoordinate(root_coord),
-    #         exit_coord=ttnn.MeshCoordinate(exit_coord),
-    #         topology=topology,
-    #         intermediate_tensors=intermediate_tensors,
-    #     )
-    # ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-    # ttnn.synchronize_device(submesh_device)
+    # Capture main trace
+    logger.info("Capturing main trace")
+    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    for i in range(20):
+        output_tensor = ttnn.reduce_to_one(
+            input_tensor,
+            root_coord=ttnn.MeshCoordinate(root_coord),
+            exit_coord=ttnn.MeshCoordinate(exit_coord),
+            topology=topology,
+            intermediate_tensors=intermediate_tensors,
+        )
+    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
+
+    # Capture tail trace
+    logger.info("Capturing tail trace")
+    trace_id_tail = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    for i in range(20):
+        output_tensor = ttnn.reduce_to_one(
+            input_tensor,
+            root_coord=ttnn.MeshCoordinate(root_coord),
+            exit_coord=ttnn.MeshCoordinate(exit_coord),
+            topology=topology,
+            intermediate_tensors=intermediate_tensors,
+        )
+    ttnn.end_trace_capture(submesh_device, trace_id_tail, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
 
     # Execute warmup trace
-    # logger.info("Execute trace warmup")
-    # profiler.start("reduce-to-one-warmup")
-    # ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
-    # ttnn.release_trace(submesh_device, trace_id_warmup)
-    # ttnn.synchronize_device(submesh_device)
-    # profiler.end("reduce-to-one-warmup")
+    logger.info("Execute trace warmup")
+    profiler.start("reduce-to-one-warmup")
+    ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id_warmup)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("reduce-to-one-warmup")
 
-    # # Execute main trace
-    # logger.info("Execute main trace")
-    # signpost("start")
-    # profiler.start("reduce-to-one-trace")
-    # ttnn.execute_trace(submesh_device, trace_id, blocking=False)
-    # ttnn.release_trace(submesh_device, trace_id)
-    # ttnn.synchronize_device(submesh_device)
-    # profiler.end("reduce-to-one-trace")
-    # signpost("stop")
+    # Execute main trace
+    logger.info("Execute main trace")
+    signpost("start")
+    profiler.start("reduce-to-one-trace")
+    ttnn.execute_trace(submesh_device, trace_id, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("reduce-to-one-trace")
+    signpost("stop")
+
+    # Execute main trace
+    logger.info("Execute tail trace")
+    profiler.start("reduce-to-one-tail")
+    ttnn.execute_trace(submesh_device, trace_id_tail, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id_tail)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("reduce-to-one-tail")
 
     # Verify output
     print("\nVerifying trace output...")
