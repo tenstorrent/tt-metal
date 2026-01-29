@@ -563,6 +563,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, true)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, check_linked)                                                 \
+    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
+    LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, true)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir)        \
     debug_sanitize_noc_and_worker_addr(noc_id, noc_a, worker_a, l, multicast, dir, true); \
     LOG_LEN(l)
@@ -653,6 +657,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #else  // !WATCHER_ENABLED
 
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
