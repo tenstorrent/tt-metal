@@ -89,8 +89,11 @@ def choose_height_sharding(
 
     # Each core processes this many complete tiles
     tiles_per_core = Mt // nc
-    shard_rows = tiles_per_core * TILE_SIZE
-    shard_cols = K  # Full width per core (HEIGHT sharding)
+
+    # IMPORTANT: shard shape should be tile-aligned sizes, not raw sizes.
+    shard_rows = tiles_per_core * TILE_SIZE  # multiple of 32
+
+    shard_cols = Kt * TILE_SIZE  # padded to tiles K
 
     return (True, nc, [shard_rows, shard_cols])
 
@@ -133,67 +136,93 @@ def apply_linear_height_sharded(
     *,
     use_sharding: bool = True,
     compute_config=None,
+    allow_k_padding: bool = True,
+    min_tiles_per_core: int = 2,
+    min_K_tiles: int = 1,
+    return_sharded: bool = False,
+    out_memory_config=None,
 ):
-    """
-    Apply linear layer with optional HEIGHT sharding optimization.
+    """Apply linear with optional HEIGHT sharding and reshape to `out_shape`."""
+    # Normalize to matmul view (1,1,M,K) only if needed
+    if (
+        len(x.shape) == 4
+        and int(x.shape[0]) == 1
+        and int(x.shape[1]) == 1
+        and int(x.shape[2]) == M
+        and int(x.shape[3]) == K
+    ):
+        x_2d = x
+        x_was_reshaped = False
+    else:
+        x_2d = ttnn.reshape(x, (1, 1, M, K))
+        x_was_reshaped = True
 
-    This is a convenience wrapper that:
-    1. Decides whether to shard based on dimensions
-    2. Reshapes to 2D if sharding
-    3. Applies HEIGHT_SHARDED linear
-    4. De-shards back to interleaved for compatibility
-    5. Reshapes to output shape
-
-    Args:
-        x: Input tensor (any rank)
-        weight: Weight tensor
-        bias: Bias tensor
-        M: Effective batch size (product of all dims except last)
-        K: Input feature dimension (last dim)
-        out_shape: Target output shape (e.g., (B, C, Np, D))
-        use_sharding: Enable HEIGHT sharding optimization (default: True)
-        compute_config: Compute kernel configuration
-
-    Returns:
-        Output tensor in out_shape with interleaved memory layout
-
-    Example:
-        x: (4, 7, 64, 64) → M=1792, K=64
-        out = apply_linear_height_sharded(
-            x, W, b, M=1792, K=64, out_shape=(4, 7, 64, 128)
-        )
-    """
     if not use_sharding:
-        return ttnn.linear(x, weight, bias=bias, compute_kernel_config=compute_config)
+        out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
+        if x_was_reshaped:
+            ttnn.deallocate(x_2d)
+        out = ttnn.reshape(out_2d, out_shape)
+        return out
 
-    do_shard, nc, shard_shape = choose_height_sharding(M, K)
+    do_shard, nc, shard_shape = choose_height_sharding(
+        M,
+        K,
+        min_tiles_per_core=min_tiles_per_core,
+        min_K_tiles=min_K_tiles,
+    )
 
     if not do_shard:
-        return ttnn.linear(x, weight, bias=bias, compute_kernel_config=compute_config)
+        out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
+        if x_was_reshaped:
+            ttnn.deallocate(x_2d)
+        out = ttnn.reshape(out_2d, out_shape)
+        return out
 
-    # Flatten to 2D matmul view: (1, 1, M, K)
-    x_2d = ttnn.reshape(x, (1, 1, M, K))
+    # shard_shape uses padded K
+    K_pad = shard_shape[1]
 
-    # Convert to HEIGHT_SHARDED layout
+    # If padding is allowed, make the tensor match the padded shard width
+    if K_pad != K:
+        if not allow_k_padding:
+            # fallback (shouldn't happen since you said padding always allowed)
+            out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
+            if x_was_reshaped:
+                ttnn.deallocate(x_2d)
+            out = ttnn.reshape(out_2d, out_shape)
+            ttnn.deallocate(out_2d)
+            return out
+
+        # pad on the right in last dim to K_pad
+        # NOTE: your pad call syntax was incorrect; it must pass "padding=" and a tuple-of-tuples
+        x_2d = ttnn.pad(
+            x_2d,
+            padding=((0, 0), (0, 0), (0, 0), (0, K_pad - K)),
+            value=0.0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        # if x_2d was a reshape-view, it's now replaced by a new tensor anyway
+        x_was_reshaped = True
+
     shard_mem_config = make_height_sharded_mem_config(nc, shard_shape)
     x_sharded = ttnn.to_memory_config(x_2d, shard_mem_config)
+    ttnn.deallocate(x_2d)
 
-    # Compute with sharded layout (output stays sharded in L1)
+    out_cfg = out_memory_config if (return_sharded and out_memory_config is not None) else shard_mem_config
+
     out_sharded = ttnn.linear(
         x_sharded,
         weight,
         bias=bias,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        memory_config=out_cfg,
         compute_kernel_config=compute_config,
     )
     ttnn.deallocate(x_sharded)
 
-    # CRITICAL: Convert back to interleaved for compatibility with
-    # downstream ops (permute, softmax, residual add, etc.)
+    if return_sharded:
+        return ttnn.reshape(out_sharded, out_shape)
+
     out_interleaved = ttnn.sharded_to_interleaved(out_sharded, ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(out_sharded)
 
-    # Reshape to target output shape
     out = ttnn.reshape(out_interleaved, out_shape)
-
     return out
