@@ -361,8 +361,9 @@ private:
     /**
      * Helper: Sum 2 byte-aligned channels from packed value
      */
-    FORCE_INLINE static uint32_t sum_2_byte_aligned_channels(storage_type packed_value) {
-        return static_cast<uint8_t>(packed_value + (packed_value >> 16));
+    FORCE_INLINE static uint8_t sum_2_byte_aligned_channels(storage_type packed_value) {
+        PackedDataView data{packed_value};
+        return data.bytes[0] + data.bytes[1];
     }
 
     /**
@@ -375,8 +376,13 @@ private:
      * - Adding halfs gives: byte0 = (c0 + c2), byte1 = c1
      * - Final sum: (c0 + c2) + c1
      */
-    FORCE_INLINE static uint32_t sum_3_byte_aligned_channels(storage_type packed_value) {
-        return static_cast<uint8_t>((static_cast<uint32_t>(packed_value) * 0x01010101u) >> 24);
+    FORCE_INLINE static uint8_t sum_3_byte_aligned_channels(storage_type packed_value) {        
+        PackedDataView data{packed_value};
+        // Sum upper and lower 16 bits
+        auto partial = PackedDataView{
+            .packed = static_cast<storage_type>((static_cast<uint32_t>(data.halfs[0]) + static_cast<uint32_t>(data.halfs[1])))};
+        // For 3 channels: partial.bytes[1] == data.bytes[1] (both are c1)
+        return partial.bytes[0] + data.bytes[1];
     }
 
     /**

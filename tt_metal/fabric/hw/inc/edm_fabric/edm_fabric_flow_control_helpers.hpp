@@ -218,7 +218,7 @@ struct OutboundReceiverChannelPointers {
         this->completions_received_and_processed = 0;
     }
 
-    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes, volatile uint32_t* completion_counter_ptr = nullptr) {
+    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes, volatile uint32_t* completion_counter_ptr) {
         this->slot_size_bytes = slot_size_bytes;
         this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;

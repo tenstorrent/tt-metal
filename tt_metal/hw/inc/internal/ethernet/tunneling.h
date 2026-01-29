@@ -105,6 +105,17 @@ void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t des
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
+
+
+FORCE_INLINE
+void eth_txq_set_state_no_txq_check(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+    DEBUG_SANITIZE_ETH(src_addr, dest_addr, num_bytes);
+    ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_addr);
+    eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_addr);
+    eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_bytes);
+}
+
 FORCE_INLINE
 void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
     DEBUG_SANITIZE_ETH(src_addr, dest_addr, num_bytes);

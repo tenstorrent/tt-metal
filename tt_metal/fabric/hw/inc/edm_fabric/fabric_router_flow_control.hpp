@@ -139,9 +139,20 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
                 if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word
+                    // Add byte-by-byte to prevent carries between channels
                     uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
                     uint32_t old_counter = ack_counters[0];
-                    ack_counters[0] += packed_val;
+
+                    // Extract each byte, add with wraparound, pack back
+                    uint32_t result = 0;
+                    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ++ch) {
+                        uint8_t old_byte = (old_counter >> (ch * 8)) & 0xFF;
+                        uint8_t delta_byte = (packed_val >> (ch * 8)) & 0xFF;
+                        uint8_t new_byte = old_byte + delta_byte;  // Wraps at 256
+                        result |= (static_cast<uint32_t>(new_byte) << (ch * 8));
+                    }
+
+                    ack_counters[0] = result;
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
                     // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
                     //        << " old=" << old_counter
@@ -149,15 +160,34 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
                 } else {
                     // 5-8 channels: two words
+                    // Add byte-by-byte to prevent carries between channels
                     uint64_t packed_val = packed_value.get();
                     uint32_t lower_word = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
                     uint32_t old_lower = ack_counters[0];
-                    ack_counters[0] += lower_word;
+
+                    // Process lower 4 channels (bytes 0-3)
+                    uint32_t result_lower = 0;
+                    for (size_t ch = 0; ch < 4; ++ch) {
+                        uint8_t old_byte = (old_lower >> (ch * 8)) & 0xFF;
+                        uint8_t delta_byte = (lower_word >> (ch * 8)) & 0xFF;
+                        uint8_t new_byte = old_byte + delta_byte;
+                        result_lower |= (static_cast<uint32_t>(new_byte) << (ch * 8));
+                    }
+                    ack_counters[0] = result_lower;
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
 
                     uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
                     uint32_t old_upper = ack_counters[1];
-                    ack_counters[1] += upper_word;
+
+                    // Process upper channels (bytes 4-7)
+                    uint32_t result_upper = 0;
+                    for (size_t ch = 0; ch < (NUM_SENDER_CHANNELS - 4); ++ch) {
+                        uint8_t old_byte = (old_upper >> (ch * 8)) & 0xFF;
+                        uint8_t delta_byte = (upper_word >> (ch * 8)) & 0xFF;
+                        uint8_t new_byte = old_byte + delta_byte;
+                        result_upper |= (static_cast<uint32_t>(new_byte) << (ch * 8));
+                    }
+                    ack_counters[1] = result_upper;
                     ack_counters_base_l1_ptr[1] = ack_counters[1];
                     // DPRINT << "RECV_WRITE_ACK_L1: packed_delta=" << HEX() << packed_val
                     //        << " lower: old=" << old_lower << " new=" << ack_counters[0]
@@ -310,37 +340,47 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         acks_received_counter_ptr(
             reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),  // Packed: all channels read same address
         acks_received_and_processed(0) {
+        *acks_received_counter_ptr = 0;
         // Note: Completion tracking is now in OutboundReceiverChannelPointers (per-receiver-channel)
         // instead of here (per-sender-channel) since completions are shared across all senders to same receiver
     }
 
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
-    FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
+    // template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
+    // FORCE_INLINE std::tuple<uint32_t, uint32_t> get_num_unprocessed_acks_from_receiver() {
+    FORCE_INLINE std::tuple<uint32_t, uint32_t> get_num_unprocessed_acks_from_receiver(uint8_t sender_channel_index) {
+        // static_assert(sender_channel_index * 8 < 32, "Assuming 8-bit credits: sender_channel_index * 8 must fit in 32-bit word");
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        // For counter-based (BH), ack counters are 8-bit packed and wrap at 256
-        // Must use uint8_t arithmetic to handle wraparound correctly
-        // Return value must be in packed form (byte in correct position)
-        constexpr uint32_t byte_shift = sender_channel_index * 8;
+        // Mask raw_value before subtraction to prevent borrows/carries from other channels
+        uint32_t byte_mask = 0xFF << (sender_channel_index * 8);
         uint32_t raw_value = *acks_received_counter_ptr;
-        uint8_t received = static_cast<uint8_t>(raw_value >> byte_shift);
-        uint8_t processed = static_cast<uint8_t>(acks_received_and_processed >> byte_shift);
-        uint8_t diff = received - processed;  // uint8_t subtraction wraps correctly
-        uint32_t result = static_cast<uint32_t>(diff) << byte_shift;
-        return result;  // Return in packed position
+        uint32_t masked_raw = raw_value & byte_mask;  // Keep only this channel's byte
+        uint32_t diff_packed = masked_raw - (acks_received_and_processed & byte_mask);
+                                                                                                                                                                                                                                                                                                                                        
+        // uint32_t masked_processed = acks_received_and_processed & byte_mask;           
+        // if (diff_packed != 0) {
+        // DPRINT << "ACK_CALC[CH"                                                                                                                                                                                                                                                                                                                                                      
+        // << "raw=" << HEX() << raw_value                                                                                                                                                                                                                                                                                                                                                                                 
+        // << " masked_raw=" << masked_raw                                                                                                                                                                                                                                                                                                                                                                                 
+        // << " proc=" << acks_received_and_processed                                                                                                                                                                                                                                                                                                                                                                      
+        // << " masked_proc=" << masked_processed                                                                                                                                                                                                                                                                                                                                                                          
+        // << " diff=" << diff_packed << DEC() << ENDL();    
+        // }
+
+        return std::make_tuple(diff_packed, raw_value);
     }
 
     template <uint8_t sender_channel_index>
     FORCE_INLINE void increment_num_processed_acks(size_t packed_num_acks) {
         if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-            // Extract this channel's byte from both values, add with wraparound, then pack back
+            static_assert(sender_channel_index * 8 < 32, "Assuming 8-bit credits: sender_channel_index * 8 must fit in 32-bit word");
+            // Add packed values directly, then mask to keep only this channel's byte
+            // Carries are discarded by masking, giving correct wraparound behavior
             constexpr uint32_t byte_shift = sender_channel_index * 8;
             constexpr uint32_t byte_mask = 0xFF << byte_shift;
 
             uint32_t result = acks_received_and_processed + packed_num_acks;
-            // Zbb andn helps here: andn(x, mask) = x & ~mask
             acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | (result & byte_mask);
-
-            // acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | new_byte;
         } else {
             // For counter-based (BH), ack counters are 8-bit and wrap at 256
             // Must use uint8_t semantics to match receiver's wraparound behavior
@@ -359,6 +399,10 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 
     volatile uint32_t* acks_received_counter_ptr;
     uint32_t acks_received_and_processed = 0;
+    
+    /// DEBUG
+    uint32_t last_acks_received_and_processed = 0;
+    uint32_t last_packed_num_acks = 0;
 };
 
 template <bool enable_first_level_ack>
@@ -512,7 +556,7 @@ FORCE_INLINE void receiver_send_received_ack(
  * WH: Unpacks from shared register. BH: Pass-through (already unpacked).
  */
 template <uint8_t sender_channel_index>
-FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
+FORCE_INLINE uint8_t extract_sender_channel_acks(uint32_t packed_acks) {
     if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         if constexpr (multi_txq_enabled) {
             constexpr uint32_t shift = sender_channel_index * 8;
