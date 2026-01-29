@@ -57,7 +57,7 @@ MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs
 
     // Output 0: Tilized output for matmul
     // Output shape: [experts_per_device, total_tokens, hidden_size] - tiled for matmul
-    // TODO: (GR) Remove
+    // TODO: (GR) Remove - temp for testing
     auto output_shape = ttnn::Shape({experts_per_device, total_tokens, hidden_size});
     auto tilized_output_spec = TensorSpec(
         Shape(output_shape),
@@ -98,9 +98,9 @@ MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
     //-------------------------------------------------------------------------
-    // Intermediate used for communication between Tilize and Matmul
+    // Matmul outputs
     //-------------------------------------------------------------------------
-    // TODO: GR
+    // TODO: (GR) - Adrian knows shape???
     auto intermediate_shape = ttnn::Shape({1, 1});
     auto intermediate_spec = TensorSpec(
         Shape(intermediate_shape),
@@ -116,7 +116,7 @@ MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tens
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
     return {
-        create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
+        create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),  // TODO: (GR) remove
         create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[2], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device())};
