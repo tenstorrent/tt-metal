@@ -375,3 +375,137 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
 )
+
+if(BUILD_DEIT_OPENCV)
+    ####################################################################################################################
+    # libtorch : https://pytorch.org/
+    ####################################################################################################################
+    CPMAddPackage(
+        NAME libtorch
+        VERSION 2.7.1+cpu
+        URL
+            https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
+        DOWNLOAD_ONLY ON
+        PATCHES
+            ${PROJECT_SOURCE_DIR}/models/experimental/deit/deit_cpp/aten.patch
+    )
+
+    if(libtorch_ADDED)
+        find_library(LIBC10_LIB NAMES c10 PATHS "${libtorch_SOURCE_DIR}/lib" NO_DEFAULT_PATH)
+        find_library(TORCH_CPU_LIB NAMES torch_cpu PATHS "${libtorch_SOURCE_DIR}/lib" NO_DEFAULT_PATH)
+
+        add_library(libtorch INTERFACE)
+        add_library(torch::torch ALIAS libtorch)
+        target_include_directories(
+            libtorch
+            SYSTEM
+            INTERFACE
+                ${libtorch_SOURCE_DIR}/include
+                ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+        )
+
+        if(LIBC10_LIB AND TORCH_CPU_LIB)
+            add_library(torch_c10 UNKNOWN IMPORTED GLOBAL)
+            set_target_properties(
+                torch_c10
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${LIBC10_LIB}"
+            )
+
+            add_library(torch_cpu_lib UNKNOWN IMPORTED GLOBAL)
+            set_target_properties(
+                torch_cpu_lib
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${TORCH_CPU_LIB}"
+            )
+
+            target_link_libraries(
+                libtorch
+                INTERFACE
+                    torch_c10
+                    torch_cpu_lib
+            )
+        else()
+            message(WARNING "Could not find libc10 or libtorch_cpu in ${libtorch_SOURCE_DIR}/lib")
+        endif()
+    endif()
+
+    ####################################################################################################################
+    # OpenCV : Use CPM to fetch and build OpenCV
+    ####################################################################################################################
+    cmake_policy(SET CMP0148 OLD)
+    set(Protobuf_USE_STATIC_LIBS ON)
+    set(Protobuf_PROTOC_EXECUTABLE "")
+    set(Protobuf_INCLUDE_DIR "" CACHE PATH "" FORCE)
+    set(Protobuf_LIBRARY "" CACHE FILEPATH "" FORCE)
+    set(Protobuf_LIBRARIES "" CACHE STRING "" FORCE)
+
+    CPMAddPackage(
+        NAME OpenCV
+        GITHUB_REPOSITORY opencv/opencv
+        GIT_TAG 4.12.0
+        OPTIONS
+            "BUILD_LIST core,imgproc,imgcodecs"
+            "BUILD_SHARED_LIBS OFF"
+            "WITH_PROTOBUF OFF"
+            "BUILD_PROTOBUF OFF"
+            "PROTOBUF_UPDATE_FILES OFF"
+            "BUILD_opencv_dnn OFF"
+            "WITH_ADE OFF"
+            "BUILD_opencv_gapi OFF"
+            "BUILD_ADE OFF"
+            "WITH_PNG ON"
+            "WITH_JPEG ON"
+            "WITH_TIFF OFF"
+            "WITH_WEBP OFF"
+            "WITH_OPENEXR OFF"
+            "WITH_JASPER OFF"
+            "WITH_OPENJPEG OFF"
+            "WITH_ITT OFF"
+            "WITH_IPP OFF"
+            "OPENCV_DOWNLOAD_IPPICV OFF"
+            "WITH_QUIRC OFF"
+            "BUILD_ZLIB ON"
+            "BUILD_TESTS OFF"
+            "BUILD_PERF_TESTS OFF"
+            "BUILD_EXAMPLES OFF"
+            "BUILD_opencv_apps OFF"
+            "BUILD_JAVA OFF"
+            "BUILD_opencv_python2 OFF"
+            "BUILD_opencv_python3 OFF"
+    )
+
+    if(OpenCV_ADDED)
+        set(OpenCV_INCLUDE_DIRS
+            "${OpenCV_SOURCE_DIR}/include"
+            "${OpenCV_SOURCE_DIR}/modules/core/include"
+            "${OpenCV_SOURCE_DIR}/modules/imgproc/include"
+            "${OpenCV_SOURCE_DIR}/modules/imgcodecs/include"
+            "${OpenCV_BINARY_DIR}"
+            CACHE PATH
+            "OpenCV Include Directories"
+            FORCE
+        )
+
+        target_compile_options(
+            opencv_core
+            PRIVATE
+                -Wno-error
+                -Wno-conditional-uninitialized
+        )
+        target_compile_options(
+            opencv_imgproc
+            PRIVATE
+                -Wno-error
+                -Wno-conditional-uninitialized
+        )
+        target_compile_options(
+            opencv_imgcodecs
+            PRIVATE
+                -Wno-error
+                -Wno-conditional-uninitialized
+        )
+    endif()
+endif()
