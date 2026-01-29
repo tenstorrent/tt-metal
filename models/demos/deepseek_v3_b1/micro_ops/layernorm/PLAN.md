@@ -167,7 +167,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
 
 ### Step 1.5: Program Descriptor Assembly
 
-- [ ] **1.5.1** Implement full `op()` method
+- [x] **1.5.1** Implement full `op()` method
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Validate input shapes (gamma/beta shape matches input[-1])

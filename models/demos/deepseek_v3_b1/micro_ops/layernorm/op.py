@@ -520,4 +520,55 @@ class LayerNormSingleCore:
         Returns:
             output_tensor with results
         """
-        raise NotImplementedError("Op implementation pending - Step 1.5")
+        # Step 1.5.1: Full op() method implementation
+
+        # 1. Validate input shapes
+        input_shape = list(input_tensor.shape)
+        gamma_shape = list(gamma_tensor.shape)
+        beta_shape = list(beta_tensor.shape)
+        output_shape = list(output_tensor.shape)
+
+        # Final dimension (normalization dimension) must match for gamma/beta
+        W = input_shape[-1]
+        gamma_W = gamma_shape[-1]
+        beta_W = beta_shape[-1]
+
+        if gamma_W != W:
+            raise ValueError(
+                f"Gamma tensor final dimension ({gamma_W}) must match " f"input tensor final dimension ({W})"
+            )
+        if beta_W != W:
+            raise ValueError(
+                f"Beta tensor final dimension ({beta_W}) must match " f"input tensor final dimension ({W})"
+            )
+        if output_shape != input_shape:
+            raise ValueError(f"Output tensor shape ({output_shape}) must match " f"input tensor shape ({input_shape})")
+
+        # 2. Calculate all sizes
+        dtype = input_tensor.dtype
+        sizes = _calculate_sizes(input_shape, dtype)
+
+        # 3. Create core grid (single core: CoreCoord(0, 0))
+        core = ttnn.CoreCoord(0, 0)
+        core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+        # 4. Create all CB descriptors
+        cb_descriptors = _create_cb_descriptors(core_grid, sizes, dtype)
+
+        # 5. Create all kernel descriptors
+        reader_descriptor = _create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor, sizes)
+        compute_descriptor = _create_compute_descriptor(core_grid, sizes, epsilon)
+        writer_descriptor = _create_writer_descriptor(core_grid, output_tensor, sizes)
+
+        # 6. Assemble ProgramDescriptor
+        program_descriptor = ttnn.ProgramDescriptor(
+            kernels=[reader_descriptor, compute_descriptor, writer_descriptor],
+            cbs=cb_descriptors,
+        )
+
+        # 7. Call ttnn.generic_op
+        io_tensors = [input_tensor, gamma_tensor, beta_tensor, output_tensor]
+        output = ttnn.generic_op(io_tensors, program_descriptor)
+
+        # 8. Return output tensor
+        return output
