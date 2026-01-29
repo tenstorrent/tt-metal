@@ -133,8 +133,8 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     for (uint32_t i = 0; i < output_tensors.size(); ++i) {
         writer_ct_args.push_back(output_page_size);
     }
-    for (uint32_t i = 0; i < output_tensors.size(); ++i) {
-        TensorAccessorArgs(output_tensors.at(i).buffer()).append_to(writer_ct_args);
+    for (const ttnn::Tensor& output_tensor : output_tensors) {
+        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
     }
 
     const auto* const reader_kernel_file =
@@ -250,8 +250,8 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
 
         std::vector<uint32_t> writer_rt_args = {
             start_tiles_read, start_tiles_to_read, start_slice_row_offset, start_pages_read_in_row};
-        for (uint32_t j = 0; j < output_tensors.size(); ++j) {
-            writer_rt_args.push_back(output_tensors.at(j).buffer()->address());
+        for (const ttnn::Tensor& output_tensor : output_tensors) {
+            writer_rt_args.push_back(output_tensor.buffer()->address());
         }
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }

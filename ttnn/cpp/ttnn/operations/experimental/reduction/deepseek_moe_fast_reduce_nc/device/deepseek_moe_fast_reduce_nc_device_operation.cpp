@@ -85,9 +85,9 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_
     const ttnn::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
 
     const uint32_t num_output_tensors = input_tensor.padded_shape()[-1] / operation_attributes.split_size;
-    std::vector<ttnn::Tensor> output_tensors;
+    std::vector<ttnn::Tensor> output_tensors(num_output_tensors);
     for (uint32_t i = 0; i < num_output_tensors; ++i) {
-        output_tensors.push_back(create_device_tensor(output_tensor_spec, input_tensor.device()));
+        output_tensors[i] = create_device_tensor(output_tensor_spec, input_tensor.device());
     }
 
     return output_tensors;
