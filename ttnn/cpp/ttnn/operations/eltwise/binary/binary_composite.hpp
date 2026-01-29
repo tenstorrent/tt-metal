@@ -29,7 +29,7 @@ namespace operations::binary {
 struct ExecutePower {
     static Tensor invoke(
         const Tensor& input_tensor,
-        uint32_t exponent,
+        int32_t exponent,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 

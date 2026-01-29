@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -63,20 +63,15 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                if constexpr (use_joint_mask) {
-                    /*
-                    If `use_joint_mask`, then one or both of input tensors are padded.
-                    We already know that input tensors are padded up to Sk_chunk_t.
-                    Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
-                    we should generate the vertical mask.
-                    */
-                    if (mask_chunk_0 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
-                    }
-                    if (mask_chunk_1 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
-                    }
-                }
+                generate_mask<false, false, 0, use_joint_mask, cb_mask_in>(
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    q_chunk,
+                    0,
+                    mask_chunk_0 != (uint32_t)(-1),
+                    mask_chunk_1 != (uint32_t)(-1),
+                    unpadded_N,
+                    unpadded_L);
 
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);

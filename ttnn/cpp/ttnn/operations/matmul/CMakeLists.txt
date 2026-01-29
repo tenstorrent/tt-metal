@@ -39,6 +39,7 @@ target_sources(
         device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
         device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
         device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
+        device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
         device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
         # sparse
         device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp

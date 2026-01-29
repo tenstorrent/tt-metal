@@ -8,8 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "common.cpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #ifdef DST_ACCUM_MODE
     constexpr uint32_t max_bct = 4;
 #else
@@ -39,4 +38,3 @@ void MAIN {
     }
     pack_untilize_uninit(out_cb_id);
 }
-}  // namespace NAMESPACE

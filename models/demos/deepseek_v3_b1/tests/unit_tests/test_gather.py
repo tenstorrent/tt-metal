@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_b1.micro_ops.gather.op import GatherSingleCore
     [
         (
             32,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 4),
                 ttnn.CoreCoord(11, 7),
@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_b1.micro_ops.gather.op import GatherSingleCore
         ),  # q_a_proj output, if on 48 cores (could also do 6x8 instead of 12x4 grid)
         (
             32,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
                 ttnn.CoreCoord(11, 7),
@@ -49,7 +49,7 @@ from models.demos.deepseek_v3_b1.micro_ops.gather.op import GatherSingleCore
         ),  # kv_a_proj output, 16 cores (Gather only a subset for kv_a_layernorm)
         (
             128,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
             ttnn.CoreRange(
                 ttnn.CoreCoord(4, 0),
                 ttnn.CoreCoord(11, 7),
@@ -62,7 +62,14 @@ def test_gather(device, width_per_core, gather_core, gather_grid, noc):
     """Test TTNN gather operation from multiple cores to single core"""
     # Truncate number of columns to 11 for P100 for testing
     if gather_core.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating gather_core.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         gather_core = ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, gather_core.y)
+    if gather_grid.end.x >= device.compute_with_storage_grid_size().x:
+        logger.warning(
+            f"Truncating gather_grid.end.x to {device.compute_with_storage_grid_size().x - 1} due to insufficient grid size"
+        )
         gather_grid = ttnn.CoreRange(
             gather_grid.start, ttnn.CoreCoord(device.compute_with_storage_grid_size().x - 1, gather_grid.end.y)
         )
