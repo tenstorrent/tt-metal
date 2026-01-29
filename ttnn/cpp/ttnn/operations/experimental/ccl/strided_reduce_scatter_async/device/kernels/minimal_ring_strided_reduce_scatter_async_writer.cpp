@@ -217,7 +217,6 @@ void kernel_main() {
 
         // Let's set some particular values for the params used
         const uint32_t M_blocks_per_core = 1;
-        const uint32_t chunk_counts_per_width = 1;
         const uint32_t mm_N_blocks_per_slice = 1;
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
