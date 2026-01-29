@@ -21,10 +21,10 @@ namespace {
 void bind_global_typecast(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        Performs {0} on elements of a device tensor to the desired dtype.
+        Performs {0} on elements of a tensor on the host or device to the desired dtype.
 
         Args:
-            input_tensor (ttnn.Tensor): input tensor on device to be typecast.
+            input_tensor (ttnn.Tensor): input tensor to be typecast (can be on the host or device).
             dtype (ttnn.DataType): data type to cast the tensor elements to.
 
         Keyword Args:
@@ -32,7 +32,7 @@ void bind_global_typecast(nb::module_& mod) {
             output_tensor (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
 
         Returns:
-            ttnn.Tensor: The tensor with the updated data type. Output tensor will be on device, in same layout, and have the given data type.
+            ttnn.Tensor: The tensor with the updated data type. The output tensor will be in the same layout as the input tensor and have the given data type.
 
         Note:
             This operations supports tensors according to the following data types and layout:
@@ -52,7 +52,6 @@ void bind_global_typecast(nb::module_& mod) {
                 - Height, Width, and Block Sharded: DRAM and L1
 
             Limitations:
-                -  input_tensor must be on the device.
                 -  ND Sharded tensors are not supported.
                 -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
         )doc",
