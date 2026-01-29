@@ -10,8 +10,7 @@
 
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
     constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(0);
 
@@ -37,4 +36,3 @@ void MAIN {
     // Pop the communication entry
     cb_pop_front(kernel_communication_cb_index, one_tile);
 }
-}  // namespace NAMESPACE

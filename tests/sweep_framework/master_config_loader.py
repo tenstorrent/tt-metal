@@ -68,11 +68,21 @@ class MasterConfigLoader:
         lead_models_only: When True, filters configurations to only include
             those from lead models (e.g., deepseek_v3). Set via set_lead_models_filter()
             before importing sweep modules that use this loader.
+        _use_database: When True, loads configurations from PostgreSQL database
+            instead of the JSON file. Set via set_database_mode().
+        _mesh_filter: When set, filters configurations to a specific mesh shape
+            at the database query level. Set via set_mesh_filter().
     """
 
     # Class-level filter setting (replaces environment variable approach)
     # This is set by sweeps_parameter_generator.py before importing sweep modules
     _lead_models_only: bool = False
+
+    # Database mode settings (Phase 2)
+    _use_database: bool = False
+
+    # Mesh filter for server-side filtering (Phase 3)
+    _mesh_filter: Optional[Tuple[int, int]] = None
 
     @classmethod
     def set_lead_models_filter(cls, enabled: bool) -> None:
@@ -92,6 +102,45 @@ class MasterConfigLoader:
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
         return cls._lead_models_only
+
+    @classmethod
+    def set_database_mode(cls, enabled: bool) -> None:
+        """Enable or disable database loading mode.
+
+        Args:
+            enabled: If True, load configurations from PostgreSQL database.
+                    If False, load from JSON file (default behavior).
+
+        Note:
+            Database mode requires TTNN_OPS_DATABASE_URL or POSTGRES_* environment
+            variables to be set. If database connection fails, it will fall back
+            to JSON file loading.
+        """
+        cls._use_database = enabled
+
+    @classmethod
+    def get_database_mode(cls) -> bool:
+        """Get the current database mode setting."""
+        return cls._use_database
+
+    @classmethod
+    def set_mesh_filter(cls, mesh_shape: Optional[Tuple[int, int]]) -> None:
+        """Set mesh shape filter for server-side filtering.
+
+        Args:
+            mesh_shape: Tuple of (rows, cols) to filter configs by mesh shape,
+                       e.g., (2, 4) for 2x4 mesh. Set to None to disable filtering.
+
+        Note:
+            This filter is applied at the database query level when in database mode,
+            reducing data transfer.
+        """
+        cls._mesh_filter = mesh_shape
+
+    @classmethod
+    def get_mesh_filter(cls) -> Optional[Tuple[int, int]]:
+        """Get the current mesh filter setting."""
+        return cls._mesh_filter
 
     @staticmethod
     def _parse_list_from_string(s: str) -> List:
@@ -204,7 +253,23 @@ class MasterConfigLoader:
 
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
-            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
+            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
+            reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
+
+            if os.path.exists(reconstructed_path):
+                print(
+                    f"✅ Reconstructed JSON from database found at {reconstructed_path}. Using reconstructed master file."
+                )
+                master_file_path = reconstructed_path
+            elif MasterConfigLoader._use_database:
+                print(
+                    f"❌ Reconstructed JSON from database not found at {reconstructed_path}. "
+                    f"Direct database querying is not yet implemented. Resorting to original master file at {original_path}."
+                )
+                master_file_path = original_path
+            else:
+                master_file_path = original_path
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
@@ -302,20 +367,16 @@ class MasterConfigLoader:
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
 
-    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
+    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
         """
-        Normalize configurations to always return list of (argument list, source) tuples.
+        Normalize configurations to always return list of (argument list, source, machine_info, config_id, config_hash) tuples.
+        Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
             configs: List of configurations (dict with 'arguments' and 'source')
 
         Returns:
-            List of (arguments, source, machine_info, config_id) tuples for traceability
-
-        Handles multiple formats:
-        - New (executions): {arguments, executions: [{source, machine_info, count}]} - explicit pairs
-        - Mid (contexts): {arguments, contexts: [{source, machine_info}]} - intermediate format
-        - Old: {arguments, source, machine_info} - merged format (pairing lost)
+            List of (arguments, source, machine_info, config_id, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
         # Uses class-level setting instead of environment variable for cleaner control
@@ -326,6 +387,7 @@ class MasterConfigLoader:
             if isinstance(config, dict) and "arguments" in config:
                 arguments = config["arguments"]
                 config_id = config.get("config_id", "unknown")
+                config_hash = config.get("config_hash", None)
 
                 # Check for new "executions" format (explicit source/machine pairs with counts)
                 if "executions" in config:
@@ -340,7 +402,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source):
                                 continue  # Skip this execution
 
-                        normalized.append((arguments, source, machine_info, config_id))
+                        normalized.append((arguments, source, machine_info, config_id, config_hash))
 
                 # Check for mid-level "contexts" format (multiple execution contexts)
                 elif "contexts" in config:
@@ -358,7 +420,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
-                        normalized.append((arguments, source, machine_info, config_id))
+                        normalized.append((arguments, source, machine_info, config_id, config_hash))
 
                 else:
                     # Old format: single source/machine_info (pairing may be lost)
@@ -370,15 +432,15 @@ class MasterConfigLoader:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((arguments, source, machine_info, config_id))
+                    normalized.append((arguments, source, machine_info, config_id, config_hash))
             elif isinstance(config, list):
                 # Legacy list format: use as-is with unknown source
                 # Skip if lead_models_only since we can't determine source
                 if not lead_models_only:
-                    normalized.append((config, "unknown", None, "unknown"))
+                    normalized.append((config, "unknown", None, "unknown", None))
             else:
                 # Fallback: wrap in list with unknown source and no machine_info
-                normalized.append((config if isinstance(config, list) else [config], "unknown", None))
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None, "unknown", None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
