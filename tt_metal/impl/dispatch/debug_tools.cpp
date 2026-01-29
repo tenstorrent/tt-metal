@@ -186,6 +186,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->write_packed_large.count),
                     val(cmd->write_packed_large.alignment));
                 break;
+            case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+                cq_file << fmt::format(
+                    " (count={}, alignment={})",
+                    val(cmd->write_packed_large_unicast.count),
+                    val(cmd->write_packed_large_unicast.alignment));
+                break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
                     " (flags={}, count={}, addr={:#010x}, stream={})",
