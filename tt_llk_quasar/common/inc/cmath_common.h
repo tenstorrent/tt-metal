@@ -116,7 +116,7 @@ inline void _sfpu_load_config32_(const uint dest, const uint upper16, const uint
  */
 inline void _init_sfpu_config_reg_()
 {
-    _sfpu_load_config32_(0xF, 0x0, 0x0);
+    TTI_SFPCONFIG(0, 0xF, 1);
 }
 
 /**
