@@ -89,3 +89,11 @@ def test_bernoulli(device):
     )
     output = ttnn.bernoulli(input)
     logger.info("TT-NN bernoulli tensor:", output)
+
+
+def test_complex_tensor(device):
+    # Create a TT-NN complex tensor from real and imaginary parts
+    real = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    imag = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    complex_tensor = ttnn.complex_tensor(real, imag)
+    logger.info("TT-NN complex tensor:", complex_tensor)
