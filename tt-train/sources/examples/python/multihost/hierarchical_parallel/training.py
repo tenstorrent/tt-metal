@@ -9,11 +9,8 @@ This script orchestrates the training of transformer models using a 3-tier archi
 - Aggregator: Averages gradients from workers
 - Optimizer: Applies optimizer updates
 """
-import os
+
 import sys
-
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-
 import click
 import ttml
 from ttml.common.config import (
@@ -74,7 +71,7 @@ def main(config: str, worker_type: str):
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
 
-    multihost_config = MultiHostConfig(yaml_config)
+    multihost_config = MultiHostConfig(load_config(yaml_config["training_config"]["multihost_config"]))
     num_workers = multihost_config.num_workers
 
     # Determine architecture based on world_size and num_workers
@@ -127,11 +124,14 @@ def main(config: str, worker_type: str):
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
+    print(f"Device config DDP: {device_config.enable_ddp}, TP: {device_config.enable_tp} on rank {rank}")
+
     # Execute appropriate worker function
     if worker_type == "worker":
         # Training worker - computes forward/backward and uses RemoteOptimizer
         train_losses, val_losses = worker(
             training_cfg,
+            model_factory.transformer_config.max_sequence_length,
             model,
             train_ids,
             val_ids,
@@ -150,9 +150,7 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(
-            model, training_cfg, optimizer_instance, device_config.enable_ddp
-        )
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()

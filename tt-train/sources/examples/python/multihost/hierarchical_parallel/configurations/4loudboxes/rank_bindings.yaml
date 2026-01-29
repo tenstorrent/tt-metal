@@ -12,4 +12,4 @@ rank_bindings:
 
 global_env:
   TT_METAL_HOME: "/data/${USER}/tt-metal"
-mesh_graph_desc_path: "configurations/5loudboxes/mgd.textproto"
+mesh_graph_desc_path: "configurations/4loudboxes/mgd.textproto"

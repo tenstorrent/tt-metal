@@ -3,20 +3,19 @@ training_config:
   seed: 5489
   model_save_interval: 500
   batch_size: 8
-  gradient_accumulation_steps: 8
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 1000
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "model_configs/tinyllama_loudbox_tp.yaml"
-  multihost_config: "multihost_configs/3worker_fabric.yaml"
+  model_config: "model_configs/tinyllama.yaml"
+  multihost_config: "multihost_configs/1worker_fabric.yaml"
 
 device_config:
-  enable_tp: true
+  enable_ddp: true
   mesh_shape: [1, 8]
 
 eval_config:
