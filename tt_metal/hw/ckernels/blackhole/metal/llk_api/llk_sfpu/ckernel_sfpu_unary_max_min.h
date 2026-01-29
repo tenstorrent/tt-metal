@@ -82,4 +82,7 @@ inline void calculate_unary_max_min_int32(uint value) {
     }
 }
 
+template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_max_min_uint32(uint value) {}
+
 }  // namespace ckernel::sfpu
