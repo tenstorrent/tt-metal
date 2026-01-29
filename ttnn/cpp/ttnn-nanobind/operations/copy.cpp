@@ -25,7 +25,7 @@ void bind_global_typecast(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): input tensor on device to be typecast.
-            dtype (ttnn.DataType): data type to cast the ensor elements to.
+            dtype (ttnn.DataType): data type to cast the tensor elements to.
 
         Keyword Args:
             memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
@@ -41,11 +41,11 @@ void bind_global_typecast(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                    - layout
                 * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - TILE
+                    - TILE
                 * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - ROW_MAJOR
+                    - ROW_MAJOR
 
             Memory Support:
                 - Interleaved: DRAM and L1

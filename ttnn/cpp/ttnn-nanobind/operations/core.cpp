@@ -209,11 +209,11 @@ void py_module(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                    - layout
                 * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - TILE
+                    - TILE
                 * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - ROW_MAJOR
+                    - ROW_MAJOR
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -292,7 +292,7 @@ void py_module(nb::module_& mod) {
         Args:
             host_tensor (ttnn.Tensor): the tensor to be copied from host to device.
             device_tensor (ttnn.Tensor): the tensor to be copied to.
-            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
+            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
 
         Note:
             This operations supports tensors according to the following data types and layout:
@@ -301,11 +301,11 @@ void py_module(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                    - layout
                 * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - TILE
+                    - TILE
                 * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - ROW_MAJOR
+                    - ROW_MAJOR
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -334,7 +334,7 @@ void py_module(nb::module_& mod) {
             device_tensor (ttnn.Tensor): the tensor to be copied from device to host.
             host_tensor (ttnn.Tensor): the tensor to be copied to.
             blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
-            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
+            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
 
         Note:
             This operations supports tensors according to the following data types and layout:
@@ -343,11 +343,11 @@ void py_module(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                    - layout
                 * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - TILE
+                    - TILE
                 * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
-                - ROW_MAJOR
+                    - ROW_MAJOR
 
             Memory Support:
                 - Interleaved: DRAM and L1
