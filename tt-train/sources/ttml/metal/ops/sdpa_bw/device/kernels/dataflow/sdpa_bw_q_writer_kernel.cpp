@@ -15,7 +15,7 @@ void kernel_main() {
 
     // Circular buffer indices
     constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_7;  // Matmul row reduce tile
-    constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;     // Output: grad_Q
+    constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;     // Output: grad_Q
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles

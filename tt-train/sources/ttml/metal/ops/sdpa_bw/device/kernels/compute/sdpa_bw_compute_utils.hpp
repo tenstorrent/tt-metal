@@ -32,9 +32,8 @@ constexpr uint32_t onetile = 1U;
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
 //
-// Template parameter pop_mask: if true, pops the mask tile after use (default for arbitrary masks).
-// For causal mask, set to false to reuse the same mask tile across multiple calls.
-template <bool pop_mask = true>
+// Note: Does NOT pop the mask tile - caller must pop explicitly when done with the tile.
+// This allows reusing the same mask tile for causal masks.
 void apply_mask_on_reg(
     const uint32_t register_idx,
     const uint32_t cb_attn_mask,
@@ -66,10 +65,6 @@ void apply_mask_on_reg(
     // unmasked positions remain unchanged
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
-
-    if constexpr (pop_mask) {
-        cb_pop_front(cb_attn_mask, onetile);
-    }
 }
 
 // Recomputes attention weights from pre-softmax scores using stored statistics.

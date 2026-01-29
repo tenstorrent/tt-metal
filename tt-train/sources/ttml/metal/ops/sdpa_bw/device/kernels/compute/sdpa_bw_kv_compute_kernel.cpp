@@ -119,11 +119,11 @@ void MAIN {
         cb_wait_front(cb_key, tiles_per_row);
         cb_wait_front(cb_value, tiles_per_row);
 
+#ifdef CAUSAL_MASK
         // Calculate global position for this K/V row
         const uint32_t global_row_idx = start_row + row;
         const uint32_t k_row_tile = global_row_idx % Ht;  // position within sequence (0 to Ht-1)
 
-#ifdef CAUSAL_MASK
         // For causal mask: only process Q rows from k_row_tile to Ht-1
         // Q rows 0 to k_row_tile-1 have zero attention weights (can't attend to future keys)
         const uint32_t q_start_tile = k_row_tile;
@@ -132,11 +132,6 @@ void MAIN {
         const uint32_t q_start_tile = 0;
         const uint32_t num_q_tiles_to_process = Ht;
 #endif
-
-        uint32_t alias_cb_prev_grad_value = cb_prev_grad_value;
-        uint32_t alias_cb_cur_grad_value = cb_cur_grad_value;
-        uint32_t alias_cb_prev_grad_key = cb_prev_grad_key;
-        uint32_t alias_cb_cur_grad_key = cb_cur_grad_key;
 
         for (uint32_t head_idx = 0; head_idx < heads_per_group; ++head_idx) {
             const uint32_t matmul_accum_reg = 0;
@@ -168,10 +163,9 @@ void MAIN {
 #ifdef CAUSAL_MASK
                 // For causal mask: apply triangular mask on diagonal tile (h == k_row_tile)
                 // Writer generates causal mask tile once, reused for every diagonal
-                // Use <false> to NOT pop the mask - it will be reused
                 if (h == k_row_tile) {
-                    apply_mask_on_reg</*pop_mask=*/false>(
-                        matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                    apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                    // Don't pop - causal mask tile is reused for all diagonal positions
                 } else {
                     // Off-diagonal (h > k_row_tile): just scale, no mask needed
                     binop_with_scalar_tile_init();
@@ -180,8 +174,8 @@ void MAIN {
 #elif defined(USE_ATTN_MASK)
                 // Apply attention mask from DRAM
                 // Transforms mask from 1/0 to 0/-inf and applies it on dest_reg
-                // Use default <true> to pop each unique mask tile after use
                 apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                cb_pop_front(cb_attn_mask, onetile);  // Pop each unique mask tile after use
 #else
                 // No mask: just scale
                 binop_with_scalar_tile_init();
@@ -207,8 +201,7 @@ void MAIN {
                     tiles_per_row,
                     block_size,
                     /* do_accumulate */ q_idx > 0 || head_idx > 0);
-
-                cb_wait_front(alias_cb_cur_grad_value, tiles_per_row);
+                cb_wait_front(cb_grad_value_accum, tiles_per_row);
 
                 // Step 4: calculate u_scalar_row = sum(dO * O) per row
                 // TODO[optimization](vmelnykov): Calculate u_scalar_row once per query row and share with KV kernel
@@ -233,9 +226,9 @@ void MAIN {
                     cb_transpose_wh,
                     cb_grad_key_accum,
                     tiles_per_row,
+                    block_size,
                     /* do_accumulate */ q_idx > 0 || head_idx > 0);
-
-                cb_wait_front(alias_cb_cur_grad_key, tiles_per_row);
+                cb_wait_front(cb_grad_key_accum, tiles_per_row);
 
                 // Pop intermediate results used for computing dK and dV
                 cb_pop_front(cb_u_scalar_row, onetile);
@@ -247,12 +240,6 @@ void MAIN {
                 cb_pop_front(cb_query, tiles_per_row);
                 cb_pop_front(cb_grad_output, tiles_per_row);
                 cb_pop_front(cb_attn_output, tiles_per_row);
-                // Note: Mask pops are handled by apply_mask_on_reg:
-                // - USE_ATTN_MASK: apply_mask_on_reg<true>() pops each unique mask tile
-                // - CAUSAL_MASK: apply_mask_on_reg<false>() doesn't pop (reuses same tile)
-
-                std::swap(alias_cb_prev_grad_value, alias_cb_cur_grad_value);
-                std::swap(alias_cb_prev_grad_key, alias_cb_cur_grad_key);
             }
         }
 

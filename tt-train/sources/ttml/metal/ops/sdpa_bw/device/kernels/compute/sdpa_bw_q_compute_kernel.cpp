@@ -111,11 +111,11 @@ void MAIN {
         compute_u_scalar_row(
             cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
 
+#ifdef CAUSAL_MASK
         // Calculate global position within sequence for causal mask
         const uint32_t global_row_idx = start_row + row;
         const uint32_t q_row_tile = global_row_idx % Ht;  // position within sequence (0 to Ht-1)
 
-#ifdef CAUSAL_MASK
         // For causal mask: only process K/V tiles up to and including the diagonal
         // q_row_tile determines how many K/V chunks we need (0..q_row_tile inclusive)
         const uint32_t num_kv_tiles_to_process = q_row_tile + 1;
@@ -145,10 +145,9 @@ void MAIN {
 #ifdef CAUSAL_MASK
             // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
             // Writer generates causal mask tile once, reused for every diagonal
-            // Use <false> to NOT pop the mask - it will be reused
             if (h == q_row_tile) {
-                apply_mask_on_reg</*pop_mask=*/false>(
-                    matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                // Don't pop - causal mask tile is reused for all diagonal positions
             } else {
                 // Off-diagonal: just scale
                 binop_with_scalar_tile_init();
@@ -157,8 +156,8 @@ void MAIN {
 #elif defined(USE_ATTN_MASK)
             // Apply attention mask from DRAM
             // Transforms mask from 1/0 to 0/-inf and applies it on dest_reg
-            // Use default <true> to pop each unique mask tile after use
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+            cb_pop_front(cb_attn_mask, onetile);  // Pop each unique mask tile after use
 #else
             // No mask: just scale
             binop_with_scalar_tile_init();
@@ -199,9 +198,9 @@ void MAIN {
             cb_pop_front(cb_value, tiles_per_row);
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_grad_attn_weights, onetile);
-            // Note: Mask pops are handled by apply_mask_on_reg:
-            // - USE_ATTN_MASK: apply_mask_on_reg<true>() pops each unique mask tile
-            // - CAUSAL_MASK: apply_mask_on_reg<false>() doesn't pop (reuses same tile)
+            // Note: Mask pops are handled explicitly after apply_mask_on_reg:
+            // - USE_ATTN_MASK: pops each unique mask tile after use
+            // - CAUSAL_MASK: doesn't pop (reuses same tile for all diagonals)
             // Note: cb_grad_scores is popped inside update_grad_query
         }
 
