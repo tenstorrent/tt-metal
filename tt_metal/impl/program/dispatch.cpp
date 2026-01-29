@@ -652,6 +652,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
     // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
     uint32_t per_kernel_crta_multicast_count = 0;
+    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
         auto kernel_id = get_device_local_kernel_handle(kernel_index);
         auto kernel = program.get_kernel(kernel_id);
@@ -663,12 +664,10 @@ BatchedTransfers assemble_runtime_args_commands(
         if (common_rt_args.empty()) {
             continue;
         }
-        uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
         TT_ASSERT(kernel->common_runtime_args_data().data() == common_rt_args.data() + count_word_offset);
         TT_ASSERT(kernel->common_runtime_args_data().size() == common_rt_args.size() - count_word_offset);
         per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
     }
-    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
 
     // kernel_group multicast is best when multiple kernels on the same kernel group have common RTAs. It may also merge
     // CRTA writes with CB and semaphore writes.
