@@ -52,7 +52,7 @@ void kernel_main() {
     constexpr uint32_t k_page_size = get_compile_time_arg_val(21);                     // Page size for DRAM streaming
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(22);                     // Number of pages per K chunk
     constexpr uint32_t k_tile_size_ct = get_compile_time_arg_val(23);                  // K tile size in bytes
-    constexpr uint32_t brisc_ncrisc_sync_semaphore_id = get_compile_time_arg_val(24);  // BRISC->NCRISC sync
+    constexpr uint32_t ncrisc_brisc_sync_semaphore_id = get_compile_time_arg_val(24);  // NCRISC->BRISC sync
 
     // TensorAccessorArgs for K and V (KV cache in DRAM), and pos tensor
     constexpr auto k_args = TensorAccessorArgs<25>();  // After compile-time args (24 + 1 new arg)
@@ -194,13 +194,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_semaphore_addr);
 
-    // Set up BRISC->NCRISC sync semaphore (sender only - signals NCRISC when DRAM read is done)
-    const uint32_t brisc_ncrisc_sync_l1_addr = get_semaphore(brisc_ncrisc_sync_semaphore_id);
-    const uint64_t brisc_ncrisc_sync_noc_addr = get_noc_addr(brisc_ncrisc_sync_l1_addr);
+    // Set up NCRISC->BRISC sync semaphore (sender only - NCRISC signals BRISC when DRAM read is done)
+    const uint32_t ncrisc_brisc_sync_l1_addr = get_semaphore(ncrisc_brisc_sync_semaphore_id);
+    const uint64_t ncrisc_brisc_sync_noc_addr = get_noc_addr(ncrisc_brisc_sync_l1_addr);
 
-    // Use the word after the sync semaphore to communicate K buffer address from BRISC to NCRISC
-    volatile tt_l1_ptr uint32_t* k_addr_for_ncrisc_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_ncrisc_sync_l1_addr + 4);
+    // Use the word after the sync semaphore to communicate K buffer address from NCRISC to BRISC
+    volatile tt_l1_ptr uint32_t* k_addr_for_brisc_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 4);
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -221,7 +221,7 @@ void kernel_main() {
                 const uint32_t k_chunk_bytes = k_chunk_tiles * k_tile_bytes;
 
                 if (is_mcast_sender) {
-                    // Sender: read from DRAM (NCRISC will handle multicast)
+                    // Sender: read from DRAM (BRISC will handle multicast)
                     if constexpr (k_args.is_sharded) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
                         uint64_t k_src_noc_addr;
@@ -264,10 +264,11 @@ void kernel_main() {
                         while (pages_completed < k_num_pages) {
                             // Wait for oldest read to complete
                             noc_async_read_barrier_with_trid(wait_trid);
+                            DPRINT << "done waiting for trid:" << wait_trid << ENDL();
 
-                            // Signal NCRISC that this page is ready
-                            *k_addr_for_ncrisc_ptr = dst_addrs[wait_trid - 1];
-                            noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
+                            // Signal BRISC that this page is ready
+                            *k_addr_for_brisc_ptr = dst_addrs[wait_trid - 1];
+                            noc_semaphore_inc(ncrisc_brisc_sync_noc_addr, 1);
                             pages_completed++;
 
                             // Issue next read if more pages remain
@@ -299,14 +300,14 @@ void kernel_main() {
                         noc_async_read_barrier();
 
                         // For interleaved: signal once after all tiles (not page-pipelined)
-                        *k_addr_for_ncrisc_ptr = k_write_ptr;
-                        noc_semaphore_inc(brisc_ncrisc_sync_noc_addr, 1);
+                        *k_addr_for_brisc_ptr = k_write_ptr;
+                        noc_semaphore_inc(ncrisc_brisc_sync_noc_addr, 1);
                     }
 
                     // Push K to CB (for both sharded and interleaved)
                     cb_push_back(cb_k_in, k_chunk_tiles);
                 } else {
-                    // Receiver: wait for multicast data from sender (sent by NCRISC writer)
+                    // Receiver: wait for multicast data from sender (sent by BRISC writer)
                     DeviceZoneScopedN("mcast-receiver-wait");
                     noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                     noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);

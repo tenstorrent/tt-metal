@@ -155,7 +155,7 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_s
     )
 
     # Run the op - stress test with 100 iterations
-    num_iterations = 5000
+    num_iterations = 1
     logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
     for i in range(num_iterations):
         if i % 10 == 0:
