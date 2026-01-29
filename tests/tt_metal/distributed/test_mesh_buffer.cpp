@@ -876,17 +876,17 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(coord_range),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned_unique);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+    tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
     for (auto coord : coord_range) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
-        auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-        auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
-            *mesh_device_,
-            coordinate_range_set,
-            host_buffer,
-            /*map_to_noc=*/true);
-        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
 
@@ -935,17 +935,17 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(coord_range),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned_unique);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+    tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
     for (auto coord : coord_range) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
-        auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-        auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
-            *mesh_device_,
-            coordinate_range_set,
-            host_buffer,
-            /*map_to_noc=*/true);
-        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
@@ -1000,17 +1000,17 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
     std::vector<uint32_t> dst(num_words, 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(coord_range),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned_unique);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+    tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
     for (auto coord : coord_range) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
-        auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-        auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
-            *mesh_device_,
-            coordinate_range_set,
-            host_buffer,
-            /*map_to_noc=*/true);
-        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
         mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
 
