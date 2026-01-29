@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "tt_metal/include/compute_kernel_api/cb_api.h"
+#include "api/compute/cb_api.h"
 
 namespace norm::kernel_util::compute::memory {
 
