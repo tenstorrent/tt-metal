@@ -86,7 +86,7 @@ You may need CB operations only when:
 Example of valid inter-phase CB management:
 ```cpp
 // Phase 1: Tilize (helper handles cb_in0 -> cb_tilized)
-compute_kernel_lib::tilize(cb_in0, Wt, cb_tilized, num_blocks);
+compute_kernel_lib::tilize<cb_in0, cb_tilized>(Wt, num_blocks);
 
 // Inter-phase: NO CB ops needed if next helper reads from cb_tilized
 

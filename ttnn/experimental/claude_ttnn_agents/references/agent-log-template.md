@@ -316,7 +316,7 @@ Insert after Section 2:
 
 | Helper Used | Wrapper CB Ops Present? | Status |
 |-------------|-------------------------|--------|
-| compute_kernel_lib::tilize() | {YES/NO} | {CLEAN / VIOLATION} |
+| compute_kernel_lib::tilize<...>() | {YES/NO} | {CLEAN / VIOLATION} |
 | compute_kernel_lib::reduce<...>() | {YES/NO} | {CLEAN / VIOLATION} |
 | compute_kernel_lib::untilize<...>() | {YES/NO} | {CLEAN / VIOLATION} |
 

@@ -19,7 +19,7 @@ First read: `.claude/references/logging/common.md`
 ### design_compliance
 Design document adherence:
 ```json
-{"event":"design_compliance","phase":"tilize","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize()","compliant":true}
+{"event":"design_compliance","phase":"tilize","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize<...>()","compliant":true}
 ```
 
 ### cb_wrapper_check
@@ -71,7 +71,7 @@ Include after Section 2 in your execution log:
 
 | Helper Used | Wrapper CB Ops Present? | Status |
 |-------------|-------------------------|--------|
-| compute_kernel_lib::tilize() | YES/NO | CLEAN/VIOLATION |
+| compute_kernel_lib::tilize<...>() | YES/NO | CLEAN/VIOLATION |
 | compute_kernel_lib::reduce<...>() | YES/NO | CLEAN/VIOLATION |
 
 ### Stage 7 Correctness Test Results

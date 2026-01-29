@@ -310,7 +310,7 @@ No additional event types beyond common ones. Uses `action/result` with `type":"
 
 | Event | Purpose | Example |
 |-------|---------|---------|
-| `design_compliance` | Design doc adherence | `{"event":"design_compliance","phase":"tilize","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize()","compliant":true}` |
+| `design_compliance` | Design doc adherence | `{"event":"design_compliance","phase":"tilize","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize<...>()","compliant":true}` |
 | `cb_wrapper_check` | Redundant CB op check | `{"event":"cb_wrapper_check","helper":"tilize","has_wrapper_cb_ops":false,"status":"CLEAN"}` |
 | `correctness_test` | Test case results | `{"event":"correctness_test","test_name":"test_basic","expected":"0.07","actual":"0.07","pass":true}` |
 | `numerical_debug` | Debugging wrong values | `{"event":"numerical_debug","symptom":"values 10x smaller","finding":"scaler format wrong"}` |
