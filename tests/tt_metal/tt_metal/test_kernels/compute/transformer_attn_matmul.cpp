@@ -12,8 +12,7 @@ using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
@@ -84,4 +83,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

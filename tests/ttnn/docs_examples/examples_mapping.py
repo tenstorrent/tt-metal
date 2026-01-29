@@ -47,6 +47,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.linear": matrix_multiplication.test_linear,
     "ttnn.addmm": matrix_multiplication.test_addmm,
     "ttnn.sparse_matmul": matrix_multiplication.test_sparse_matmul,
+    "ttnn.experimental.minimal_matmul": matrix_multiplication.test_minimal_matmul,
+    "ttnn.experimental.minimal_matmul_split": matrix_multiplication.test_minimal_matmul_split,
     # Pointwise Unary
     "ttnn.abs": eltwise_unary.test_abs,
     "ttnn.acos": eltwise_unary.test_acos,

@@ -8,14 +8,12 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::rmsnorm_bw {
+namespace ttml::metal {
 
-struct RMSNormBackwardOperation {
-    static std::vector<std::optional<ttnn::Tensor>> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& gamma_tensor,
-        const ttnn::Tensor& rms_tensor,  // intermediate from fw
-        const ttnn::Tensor& dL_dout_tensor);
-};
+std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    const ttnn::Tensor& rms_tensor,  // intermediate from fw
+    const ttnn::Tensor& dL_dout_tensor);
 
-}  // namespace ttml::metal::ops::rmsnorm_bw
+}  // namespace ttml::metal

@@ -55,8 +55,17 @@ template <
     bool skip_positive_check = false,
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
-    MATH(SFPU_TEMPLATE_PARAMS_KERNEL(
-        exponential, approx, fast_and_approx, DST_ACCUM_MODE, scale_en, skip_positive_check, iterations, idst, vector_mode, scale));
+    MATH(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
+        calculate_exponential,
+        approx,
+        fast_and_approx,
+        DST_ACCUM_MODE,
+        scale_en,
+        skip_positive_check,
+        iterations,
+        idst,
+        vector_mode,
+        scale));
 }
 
 }  // namespace ckernel

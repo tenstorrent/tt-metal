@@ -10,8 +10,14 @@
 namespace tt::tt_metal {
 
 enum class DataMovementProcessor {
-    RISCV_0 = 0,  // BRISC
-    RISCV_1 = 1,  // NCRISC
+    RISCV_0 = 0,  // BRISC; Core DM0 on Quasar
+    RISCV_1 = 1,  // NCRISC; Core DM1 on Quasar
+    RISCV_2 = 2,  // Core DM2 on Quasar
+    RISCV_3 = 3,  // Core DM3 on Quasar
+    RISCV_4 = 4,  // Core DM4 on Quasar
+    RISCV_5 = 5,  // Core DM5 on Quasar
+    RISCV_6 = 6,  // Core DM6 on Quasar
+    RISCV_7 = 7,  // Core DM7 on Quasar
 };
 
 enum NOC : uint8_t {

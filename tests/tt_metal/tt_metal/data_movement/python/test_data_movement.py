@@ -54,7 +54,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Print stats if explicitly requested
     stats_reporter = StatsReporter(
-        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch
+        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch, metadata_loader
     )
 
     if verbose:

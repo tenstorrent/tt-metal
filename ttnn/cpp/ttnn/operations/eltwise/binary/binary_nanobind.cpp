@@ -2084,7 +2084,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
-               uint32_t exponent,
+               int32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);
@@ -2102,7 +2102,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
                const Tensor& input_tensor,
                float exponent,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) -> ttnn::Tensor {
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
@@ -2563,14 +2563,14 @@ void py_module(nb::module_& mod) {
         ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_overload_operation(
         mod,
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation(
         mod,
