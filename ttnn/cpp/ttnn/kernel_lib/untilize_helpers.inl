@@ -31,9 +31,10 @@ constexpr bool is_integer_format() {
            format == 30 ||  // UInt8
            format == 9;     // UInt16
 #else
-    // If header not available, assume integer for wide widths (conservative for pack_untilize)
-    // This ensures wide integer tensors get hardware acceleration
-    return true;  // Changed to true - prefer pack_untilize block-based path
+    // If header not available, assume NOT requiring block pack (conservative)
+    // This ensures formats like bfloat16/bfloat8_b use the standard untilize path
+    // for wide tensors, which works correctly for those formats.
+    return false;
 #endif
 }
 

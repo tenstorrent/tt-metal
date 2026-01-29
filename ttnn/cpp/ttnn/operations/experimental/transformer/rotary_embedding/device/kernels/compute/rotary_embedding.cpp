@@ -108,9 +108,8 @@ void kernel_main() {
 #endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1) using helper
-                compute_kernel_lib::
-                    mul<compute_kernel_lib::BroadcastDim::SCALAR, compute_kernel_lib::BinaryInputMode::STREAMING>(
-                        rotated_in_cb, scalar_cb, rotated_in_interm_cb, compute_kernel_lib::BinaryTileShape::single());
+                compute_kernel_lib::mul<compute_kernel_lib::BroadcastDim::SCALAR, cb_policies::Streaming>(
+                    rotated_in_cb, scalar_cb, rotated_in_interm_cb, compute_kernel_lib::BinaryTileShape::single());
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin

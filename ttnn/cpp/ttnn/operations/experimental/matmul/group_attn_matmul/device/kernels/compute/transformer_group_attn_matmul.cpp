@@ -157,7 +157,7 @@ void kernel_main() {
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
 
             // tilize CB::intermed1 and write to out_cb_id
-            tilize<
+            compute_kernel_lib::tilize<
                 cb_intermed1,
                 out_cb_id,
                 compute_kernel_lib::InitUninitMode::InitAndUninit,
