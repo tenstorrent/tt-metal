@@ -20,23 +20,8 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_output_block = get_compile_time_arg_val(6);
     constexpr uint32_t output_single_block_width_size = get_compile_time_arg_val(7);
 
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(8),    // Memory layout
-        get_compile_time_arg_val(9),    // The number of sharding cores
-        get_compile_time_arg_val(10),   // The page size we offset each write to
-        get_compile_time_arg_val(11),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(12),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(13),   // pages_per_shard_x
-        get_compile_time_arg_val(14)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(1));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-#else
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
-#endif
 
     uint64_t base_dst_noc_addr[tile_height];
 
@@ -63,7 +48,7 @@ void kernel_main() {
             for (uint32_t k = 0; k < tile_height; ++k) {
                 uint32_t num_complete_rows_already_processed = (i * tile_height + k) * num_output_columns_of_blocks;
                 uint32_t stick_id = num_complete_rows_already_processed + j;
-                base_dst_noc_addr[k] = get_noc_addr(stick_id, s);
+                base_dst_noc_addr[k] = s.get_noc_addr(stick_id);
             }
 
             for (uint32_t k = 0; k < num_blocks_per_output_column_row; ++k) {
