@@ -19,11 +19,14 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
+    std::cout << "PROGRAM FACTORY OPENED" << std::endl;
     tt::tt_metal::Program program{};
+    std::cout << "PROGRAM INITIALIZED" << std::endl;
 
     auto input = tensor_args.input_tensor;
     const auto& output = output_tensor;
 
+    std::cout << "SETTING DATA FORMAT FOR CBs" << std::endl;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -34,6 +37,7 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
     uint32_t num_tiles_per_row = input.logical_shape()[1] / TILE_WIDTH;
 
     auto* device = input.device();
+    std::cout << "INPUT DEVICE INITIALIZED" << std::endl;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -51,39 +55,45 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
     uint32_t page_size = single_tile_size;
     uint32_t cb_size = page_size * responsibility;
 
+    std::cout << "CREATING INPUT CB BUFFER" << std::endl;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, page_size);
     CBHandle cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
+    std::cout << "CREATING OUTPUT CB BUFFER" << std::endl;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, page_size);
     CBHandle cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, row_width};
+    std::cout << "SETTING COMPILE TIME ARGS" << std::endl;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, row_width, num_cores_total};
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src1_cb_index, single_tile_size};
 
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
+    std::cout << "CREATING READER KERNEL" << std::endl;
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_width_sharded.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    std::cout << "CREATING WRITER KERNEL" << std::endl;
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_width_sharded.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {uint32_t(responsibility), uint32_t(1)};
+    std::vector<uint32_t> compute_args = {uint32_t(src0_cb_index), uint32_t(src1_cb_index)};
 
-    tt::tt_metal::CreateKernel(
+    std::cout << "CREATING COMPUTE KERNEL" << std::endl;
+    tt::tt_metal::KernelHandle unary_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize_compute_width_sharded.cpp",
         total_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
@@ -93,38 +103,37 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
     // Calculate runtime arguments for reader kernel
     uint32_t src_addr = input.buffer()->address();
     uint32_t height_per_core = input.logical_shape()[0] / TILE_HEIGHT;  // Number of tile-height rows per core
-    uint32_t start_chunk_id = 0;                                   // Will need to be updated per core if needed
-
-    std::vector<uint32_t> reader_runtime_args = {src_addr, height_per_core, responsibility, start_chunk_id};
-
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, total_cores, reader_runtime_args);
 
     uint32_t dst_addr = output.buffer()->address();
     uint32_t core_idx = 0;
 
     // Set per-core writer args based on tile responsibility
-    for (auto core_range : total_cores.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord core = {x, y};
+    std::cout << "SETTING WRITER RUNTIME ARGS" << std::endl;
+    for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
+        // Calculate starting tile ID and number of tiles for this core
+        uint32_t start_tile_id = core_idx * responsibility;
+        uint32_t tiles_for_this_core = responsibility;
 
-                // Calculate starting tile ID and number of tiles for this core
-                uint32_t start_tile_id = core_idx * responsibility;
-                uint32_t tiles_for_this_core = responsibility;
-
-                // Handle the case where last core might have fewer tiles
-                if (start_tile_id + tiles_for_this_core > num_tiles_per_row) {
-                    tiles_for_this_core = num_tiles_per_row - start_tile_id;
-                }
-
-                std::vector<uint32_t> writer_runtime_args = {dst_addr, start_tile_id, tiles_for_this_core};
-
-                tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-
-                core_idx++;
-            }
+        // Handle the case where last core might have fewer tiles
+        if (start_tile_id + tiles_for_this_core > num_tiles_per_row) {
+            tiles_for_this_core = num_tiles_per_row - start_tile_id;
         }
+
+        std::vector<uint32_t> reader_runtime_args = {src_addr, height_per_core, tiles_for_this_core, core_idx};
+
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+
+        std::vector<uint32_t> writer_runtime_args = {dst_addr, start_tile_id, tiles_for_this_core};
+
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+
+        std::vector<uint32_t> compute_runtime_args = {tiles_for_this_core};
+
+        tt::tt_metal::SetRuntimeArgs(program, unary_compute_kernel_id, core, compute_runtime_args);
+
+        core_idx++;
     }
+    std::cout << "RETURNING..." << std::endl;
     return TilizeMultiCoreWidthShardedProgramFactory::cached_program_t{
         std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_src1}};
 }
@@ -135,58 +144,41 @@ void TilizeMultiCoreWidthShardedProgramFactory::override_runtime_arguments(
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
     auto& input = tensor_args.input_tensor;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output_tensor.buffer();
+    tt::tt_metal::Buffer* src_buffer = input.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output_tensor.buffer();
 
-    // Update circular buffer addresses
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.input_cb_handle, *src_buffer);
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.output_cb_handle, *dst_buffer);
+    auto& shared_variables = cached_program.shared_variables;
+    const auto& reader_kernel_id = shared_variables.unary_reader_kernel_id;
 
-    // Update reader kernel runtime arguments
-    auto shard_spec = input.shard_spec().value();
-    uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
-    uint32_t src_addr = src_buffer->address();
-    uint32_t height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t start_chunk_id = 0;
+    auto& program = cached_program.program;
 
-    // Update writer kernel runtime arguments
-    uint32_t dst_addr = dst_buffer->address();
     auto* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
     CoreRangeSet total_cores = CoreRangeSet(default_cores);
-    uint32_t num_cores_total = total_cores.num_cores();
-    uint32_t responsibility = ((num_tiles_per_row - 1) / num_cores_total) + 1;
-    uint32_t core_idx = 0;
 
-    std::vector<uint32_t> reader_runtime_args = {src_addr, height_per_core, responsibility, start_chunk_id};
+    for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
+        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        runtime_args[0] = src_buffer->address();  // src_buffer address
+        runtime_args[1] = dst_buffer->address();  // dst_buffer address
 
-    for (auto core_range : total_cores.ranges()) {
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord core = {x, y};
+        // uint32_t start_tile_id = core_idx * responsibility;
+        // uint32_t tiles_for_this_core = responsibility;
 
-                uint32_t start_tile_id = core_idx * responsibility;
-                uint32_t tiles_for_this_core = responsibility;
+        // // Handle the case where last core might have fewer tiles
+        // if (start_tile_id + tiles_for_this_core > num_tiles_per_row) {
+        //     tiles_for_this_core = num_tiles_per_row - start_tile_id;
+        // }
 
-                // Handle the case where last core might have fewer tiles
-                if (start_tile_id + tiles_for_this_core > num_tiles_per_row) {
-                    tiles_for_this_core = num_tiles_per_row - start_tile_id;
-                }
+        // std::vector<uint32_t> writer_runtime_args = {dst_addr, start_tile_id, tiles_for_this_core};
 
-                std::vector<uint32_t> writer_runtime_args = {dst_addr, start_tile_id, tiles_for_this_core};
+        // tt::tt_metal::SetRuntimeArgs(
+        //     cached_program.program,
+        //     cached_program.shared_variables.unary_writer_kernel_id,
+        //     core,
+        //     writer_runtime_args);
 
-                tt::tt_metal::SetRuntimeArgs(
-                    cached_program.program,
-                    cached_program.shared_variables.unary_writer_kernel_id,
-                    core,
-                    writer_runtime_args);
-
-                core_idx++;
-            }
-        }
+        // core_idx++;
     }
 }
 }  // namespace ttnn::prim
