@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -9,7 +8,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "ttnn_retinanet", 36.3),
+        (1, "ttnn_retinanet", 40),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -18,7 +17,7 @@ def test_perf_device_bare_metal_retinanet(batch_size, model_name, expected_perf)
     num_iterations = 1
     margin = 0.1
 
-    command = "pytest models/experimental/retinanet/tests/pcc/test_retinanet.py"
+    command = f"pytest models/experimental/retinanet/tests/pcc/test_retinanet.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
