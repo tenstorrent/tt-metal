@@ -597,3 +597,93 @@ def test_program_executes(device):
 
     # Note: We do NOT verify numerical correctness here - that's for Stage 2 tests
     # This test only verifies the program infrastructure works
+
+
+# =============================================================================
+# Step 2.1.1: Reader/Writer Passthrough Test
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 32],  # Single row, single tile width
+        [1, 64],  # Single row, two tiles
+        [4, 128],  # 4 rows, 4 tiles
+    ],
+)
+def test_reader_writer_passthrough(device, shape):
+    """
+    Test that reader reads data correctly and the program executes without hanging.
+
+    This test verifies Step 2.1.1 (basic input reading) by:
+    1. Creating an input tensor with known values
+    2. Running the operation with the minimal passthrough compute kernel
+    3. Verifying the program completes without hanging or errors
+
+    Pass criteria: Program completes without timeout or exceptions.
+
+    Note: This test uses a minimal passthrough compute kernel that verifies
+    the reader can push data to CB_INPUT_RM and the writer can read from CB_OUTPUT_RM.
+    The output data is NOT the same as input (no tilize/untilize copy yet).
+    Full data passthrough will be tested in Step 2.2.1 (tilize/untilize passthrough).
+    """
+    torch.manual_seed(42)
+
+    W = shape[-1]
+    dtype = ttnn.bfloat16
+
+    # Create input tensor with known values
+    input_torch = torch.arange(1, shape[0] * shape[1] + 1, dtype=torch.float32).reshape(shape)
+    input_torch = input_torch / (shape[0] * shape[1])  # Normalize to [0, 1] range for bfloat16
+    input_torch = input_torch.to(torch.bfloat16)
+
+    # Gamma and beta (not used in passthrough, but required by the op)
+    gamma_torch = torch.ones(W, dtype=torch.bfloat16)
+    beta_torch = torch.zeros(W, dtype=torch.bfloat16)
+    output_torch = torch.zeros(shape, dtype=torch.bfloat16)
+
+    # Create device tensors
+    input_tensor = ttnn.from_torch(
+        input_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma_tensor = ttnn.from_torch(
+        gamma_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_tensor = ttnn.from_torch(
+        beta_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        output_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    epsilon = 1e-6
+
+    # Execute the LayerNorm op (passthrough mode)
+    # This verifies the reader can read data and push to CB, and writer can consume from CB
+    result = LayerNormSingleCore.op(input_tensor, gamma_tensor, beta_tensor, output_tensor, epsilon)
+
+    # Verify we got a result tensor back with correct shape
+    assert result is not None, "LayerNormSingleCore.op() should return a tensor"
+    result_shape = list(result.shape)
+    assert result_shape == shape, f"Result shape {result_shape} should match input shape {shape}"
+
+    # Note: We do NOT check that output equals input here because the current
+    # passthrough compute kernel doesn't copy data (no tilize/untilize yet).
+    # That will be verified in Step 2.2.1 (tilize/untilize passthrough test).

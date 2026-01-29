@@ -197,7 +197,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
 
 ### Step 2.1: Reader Kernel (NCRISC)
 
-- [ ] **2.1.1** Implement basic input reading
+- [x] **2.1.1** Implement basic input reading
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/kernels/reader.cpp`
   - Requirements:
     - Read compile-time args: CB indices, page sizes, TensorAccessorArgs

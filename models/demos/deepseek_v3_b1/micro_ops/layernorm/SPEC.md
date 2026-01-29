@@ -395,35 +395,119 @@ ttnn.allocate_tensor_on_device(shape, dtype, layout, device, memory_config)
 
 ### C++ Kernel Side
 
+#### Dataflow APIs (reader/writer)
+
 ```cpp
-// Dataflow APIs (reader/writer)
+// NoC operations
 noc_async_read_page(page_id, tensor_accessor, l1_addr)
 noc_async_write_page(page_id, tensor_accessor, l1_addr)
 noc_async_read_barrier()
 noc_async_write_barrier()
+
+// Circular buffer synchronization
 cb_reserve_back(cb_id, num_pages)
 cb_push_back(cb_id, num_pages)
 cb_wait_front(cb_id, num_pages)
 cb_pop_front(cb_id, num_pages)
+```
 
-// Compute APIs
-tilize_init(in_cb, tiles_per_row, out_cb)
-tilize_block(in_cb, tiles_per_row, out_cb)
-tilize_uninit(in_cb, out_cb)
-untilize_init(in_cb)
-untilize_block(in_cb, tiles_per_row, out_cb)
-untilize_uninit(in_cb)
+#### Compute APIs (using Kernel Helper Library)
 
-// Reduction APIs
-reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(in_cb, scalar_cb)
-reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(in_cb, scalar_cb, tile_idx, dst_idx)
+The compute kernel uses the unified helper library from `ttnn/cpp/ttnn/kernel_lib/`.
+All helpers use templates for zero runtime overhead.
 
-// Math APIs
-mul_tiles(cb_a, cb_b, a_idx, b_idx, dst_idx)
-add_tiles(cb_a, cb_b, a_idx, b_idx, dst_idx)
-sub_tiles(cb_a, cb_b, a_idx, b_idx, dst_idx)
-rsqrt_tile(dst_idx)
-bcast_scalar_tile(cb, tile_idx, dst_idx)
+**Required includes:**
+```cpp
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+
+using namespace compute_kernel_lib;
+```
+
+**Hardware initialization (REQUIRED before any helper):**
+```cpp
+compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+```
+
+**Tilize API (row-major sticks → 32×32 tiles):**
+```cpp
+// Template configuration pattern:
+// TilizeConfig<InputCB<N>, OutputCB<N>, TilizeFlags, PreviousCB<N>>
+tilize<TilizeConfig<InputCB<cb_input_rm>, OutputCB<cb_input_tiled>>>(
+    tiles_per_row,    // Number of tiles per output row (W dimension)
+    num_blocks);      // Number of blocks to process
+
+// Available flags: NONE, SKIP_INIT, SKIP_UNINIT, FAST, DT_RECONFIG, SKIP_WAIT
+```
+
+**Untilize API (32×32 tiles → row-major sticks):**
+```cpp
+// Template configuration pattern:
+// UntilizeConfig<WidthInTiles<N>, InputCB<N>, OutputCB<N>, UntilizeFlags>
+untilize<UntilizeConfig<WidthInTiles<tiles_per_row>,
+                        InputCB<cb_output_tiled>,
+                        OutputCB<cb_output_rm>>>(num_rows);
+
+// Auto-dispatches pack_untilize vs standard based on width and datatype
+// DEST limit auto-detected (4-16 tiles based on sync/accum mode)
+```
+
+**Reduce API (row/column/scalar reductions):**
+```cpp
+// Template pattern:
+// reduce<PoolType, ReduceDim, InputPolicy, ReconfigPolicy, AccumT, PostOp>
+reduce<PoolType::SUM, ReduceDim::REDUCE_ROW,
+       reduce_policies::StreamingPolicy,
+       reduce_policies::ReconfigBothPolicy>(
+    cb_input,         // Input CB with tiled data
+    cb_scaler,        // CB containing scale factor tile (1.0 for SUM, 1/W for AVG)
+    cb_output,        // Output CB for reduced result
+    InputBlockShape::of(Ht, Wt, 1));  // Height tiles, Width tiles, batches
+
+// PoolType: SUM, AVG, MAX
+// ReduceDim: REDUCE_ROW (sum across W), REDUCE_COL (sum across H), REDUCE_SCALAR
+// InputPolicy: StreamingPolicy (per-tile), StreamingBatchedPolicy, PreloadedPolicy, PersistentPolicy
+// ReconfigPolicy: ReconfigNonePolicy, ReconfigInputPolicy, ReconfigOutputPolicy, ReconfigBothPolicy
+```
+
+**Binary Operation APIs (element-wise with broadcast):**
+```cpp
+// Convenience functions: add, sub, mul, square
+// BroadcastDim: NONE, ROW, COL, SCALAR
+
+// Subtract row-wise mean (after REDUCE_ROW → use COL broadcast)
+sub<BroadcastDim::COL>(cb_input, cb_mean, cb_centered,
+    BinaryTileShape::grid(Ht, Wt));
+
+// Multiply by scalar (rsqrt variance)
+mul<BroadcastDim::SCALAR>(cb_centered, cb_scale, cb_scaled,
+    BinaryTileShape::grid(Ht, Wt));
+
+// Apply affine transform (gamma/beta broadcast as COL since they span W)
+mul<BroadcastDim::COL>(cb_scaled, cb_gamma, cb_temp,
+    BinaryTileShape::grid(Ht, Wt));
+add<BroadcastDim::COL>(cb_temp, cb_beta, cb_output,
+    BinaryTileShape::grid(Ht, Wt));
+
+// Compute squared differences
+square(cb_centered, cb_squared, BinaryTileShape::grid(Ht, Wt));
+```
+
+**Broadcast-Reduce Relationship:**
+| Reduce Operation | Output Shape | Use Broadcast |
+|-----------------|--------------|---------------|
+| `REDUCE_ROW` | [Ht, 1] | `BroadcastDim::COL` |
+| `REDUCE_COL` | [1, Wt] | `BroadcastDim::ROW` |
+| `REDUCE_SCALAR` | [1, 1] | `BroadcastDim::SCALAR` |
+
+**DEST Register Management:**
+```cpp
+// Auto-detected capacity based on DST_SYNC_MODE and DST_ACCUM_MODE
+constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;  // 4, 8, or 16 tiles
+// Helpers automatically chunk operations to fit within DEST limit
 ```
 
 ---
@@ -431,9 +515,15 @@ bcast_scalar_tile(cb, tile_idx, dst_idx)
 ## Dependencies
 
 - `ttnn.generic_op` infrastructure
-- Kernel helper library:
-  - `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`
-  - `ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp`
+- Kernel helper library (`ttnn/cpp/ttnn/kernel_lib/`):
+  - `tilize_helpers.hpp` - Unified tilize() with TilizeConfig template
+  - `untilize_helpers.hpp` - Unified untilize() with UntilizeConfig template
+  - `reduce_helpers_compute.hpp` - Unified reduce() with multiple policies
+  - `binary_op_helpers.hpp` - add(), sub(), mul(), square() with broadcast support
+  - `dest_helpers.hpp` - DEST_AUTO_LIMIT, auto-detected register capacity
+  - `kernel_lib_types.hpp` - Type-safe template wrappers (InputCB, OutputCB, WidthInTiles)
+  - `cb_policies.hpp` - Circular buffer synchronization policies
+  - `reduce_helper_policies.hpp` - Input/reconfig policies for reduce
 - Existing reader/writer patterns from `ttnn/cpp/ttnn/operations/data_movement/`
 
 ---
