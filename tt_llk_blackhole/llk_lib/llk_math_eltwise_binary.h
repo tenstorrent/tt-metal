@@ -87,8 +87,9 @@ inline void eltwise_binary_reuse_dest_helper_func(
         {
             constexpr uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
             int clear_fp32                   = is_fp32_dest_acc_en && clear_fp32_dst_acc ? 1 : 0;
-            auto buffer_base                 = is_fp32_dest_acc_en && clear_fp32_dst_acc ? get_dest_buffer_base_32b() : get_dest_buffer_base_16b();
-            TT_ZEROACC(ZERO_ACC_MODE, clear_fp32, 0, ADDR_MOD_1, (buffer_base + get_dest_index_in_faces(dst_index, face_base_offset + face_num)));
+            const uint32_t tiles_per_bank    = clear_fp32 ? 4 : 8;
+            const uint32_t local_tile        = dst_index & (tiles_per_bank - 1);
+            TT_ZEROACC(ZERO_ACC_MODE, clear_fp32, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face_base_offset + face_num));
         }
 
         ckernel_template::run();

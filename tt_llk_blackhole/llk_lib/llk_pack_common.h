@@ -45,7 +45,7 @@ inline void _llk_pack_dest_section_done_()
     else
     {
         static_assert(Dst == DstSync::SyncHalf);
-        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, (dest_offset_id) % 2);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
     }
 
     // Tell math that it can write again

@@ -224,20 +224,6 @@ inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
     return ((math_fidelity_desc >> 3) & 0x1) + 1;
 }
 
-// Returns DEST base in faces for 16-bit DEST mode. Half of the DEST can store 32 faces,
-// so "base in faces" is whatever get_dest_buffer_base returns, divided by 16.
-inline std::uint32_t get_dest_buffer_base_16b()
-{
-    return (get_dest_buffer_base() >> 4);
-}
-
-// Returns DEST base in faces for 32-bit DEST mode. Half of the DEST can store 16 faces,
-// so "base in faces" is whatever get_dest_buffer_base returns, divided by 32.
-inline std::uint32_t get_dest_buffer_base_32b()
-{
-    return (get_dest_buffer_base() >> 5);
-}
-
 // Returns the offset represented in DEST rows for a given face of a given tile.
 inline std::uint32_t get_dest_index_in_faces(const std::uint32_t dst_index, const std::uint32_t face_index)
 {
