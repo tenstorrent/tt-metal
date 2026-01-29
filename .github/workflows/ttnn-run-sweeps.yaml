@@ -660,7 +660,7 @@ jobs:
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ (github.event.inputs.use_database == 'true' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -685,7 +685,12 @@ jobs:
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
-    if: github.event.inputs.use_database == 'true'
+    if: |
+      github.event.inputs.use_database == 'true' ||
+      github.event.schedule == '0 4 * * *' ||
+      github.event.schedule == '0 3 * * *' ||
+      github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' ||
+      github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -770,7 +775,12 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 📥 Download database-generated JSON
-        if: github.event.inputs.use_database == 'true'
+        if: |
+          github.event.inputs.use_database == 'true' ||
+          github.event.schedule == '0 4 * * *' ||
+          github.event.schedule == '0 3 * * *' ||
+          github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' ||
+          github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'
         uses: actions/download-artifact@v4
         with:
           name: ttnn-operations-master-json
@@ -907,7 +917,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -952,7 +962,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ (github.event.inputs.use_database == 'true' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -1049,7 +1059,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 4 * * *' || github.event.schedule == '0 3 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -1090,7 +1100,7 @@ jobs:
           echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
           echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_memory == 'true' && 'true' || 'false') }}"
           echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 4 * * *' || github.event.schedule == '0 3 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') && 'true' || 'false' }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
