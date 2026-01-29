@@ -18,9 +18,6 @@ struct MoEMeshWorkloadFactory {
         // Tilize cores
         std::vector<CoreCoord> tilize_cores;
 
-        // Matmul CB handles for sharded circular buffers
-        std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles_sharded;
-
         // Matmul kernel handles
         std::vector<tt::tt_metal::KernelHandle> matmul_kernel_handles;
 

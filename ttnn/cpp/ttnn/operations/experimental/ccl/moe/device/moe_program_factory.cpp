@@ -44,7 +44,7 @@ std::tuple<
     CoreRangeSet,            // T + MM CoreRangeSet
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
-getilize_cores(ttnn::MeshDevice* mesh_device) {
+get_cores(ttnn::MeshDevice* mesh_device) {
     const std::vector<CoreCoord> tilize_cores = {CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
@@ -134,32 +134,34 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     [[maybe_unused]] const ttnn::Tensor& matmul_w2_tensor = tensor_args.matmul_w2_tensor;
 
     // Output tensors
-    const ttnn::Tensor& output_tensor = tensor_return_value[0];
-    const ttnn::Tensor& expert_activation_output_tensor = tensor_return_value[1];
-    const ttnn::Tensor& e_t_output_tensor = tensor_return_value[2];
-    const ttnn::Tensor& intermediate_tensor = tensor_return_value[3];  // TODO: (GR) turn this into a CB
+    const ttnn::Tensor& output_tensor = tensor_return_value.at(0);
+    const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
+    const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
+    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(3);
 
     [[maybe_unused]] const auto& output_shape = output_tensor.tensor_spec().logical_shape();
-    [[maybe_unused]] const auto& expert_activation_output_shape =
-        expert_activation_output_tensor.tensor_spec().logical_shape();
-    [[maybe_unused]] const auto& e_t_output_shape = e_t_output_tensor.tensor_spec().logical_shape();
-    [[maybe_unused]] const auto& intermediate_shape = intermediate_tensor.tensor_spec().logical_shape();
+    [[maybe_unused]] const auto& tilize_expert_activation_output_shape =
+        tilize_expert_activation_output_tensor.tensor_spec().logical_shape();
+    [[maybe_unused]] const auto& tilize_e_t_output_shape = tilize_e_t_output_tensor.tensor_spec().logical_shape();
+    [[maybe_unused]] const auto& matmul_output_shape = matmul_output_tensor.tensor_spec().logical_shape();
 
     const uint32_t output_pages = get_num_pages_st(output_tensor);
-    [[maybe_unused]] const uint32_t expert_activation_output_pages = get_num_pages_st(expert_activation_output_tensor);
-    [[maybe_unused]] const uint32_t e_t_output_pages = get_num_pages_st(e_t_output_tensor);
-    [[maybe_unused]] const uint32_t intermediate_pages = get_num_pages_st(intermediate_tensor);
+    [[maybe_unused]] const uint32_t tilize_expert_activation_output_pages =
+        get_num_pages_st(tilize_expert_activation_output_tensor);
+    [[maybe_unused]] const uint32_t tilize_e_t_output_pages = get_num_pages_st(tilize_e_t_output_tensor);
+    [[maybe_unused]] const uint32_t matmul_output_pages = get_num_pages_st(matmul_output_tensor);
 
     const uint32_t output_page_size = get_page_size_st(output_tensor);
-    const uint32_t expert_activation_output_page_size = get_page_size_st(expert_activation_output_tensor);
-    const uint32_t e_t_output_page_size = get_page_size_st(e_t_output_tensor);
-    [[maybe_unused]] const uint32_t intermediate_page_size = get_page_size_st(intermediate_tensor);
+    const uint32_t tilize_expert_activation_output_page_size = get_page_size_st(tilize_expert_activation_output_tensor);
+    const uint32_t tilize_e_t_output_page_size = get_page_size_st(tilize_e_t_output_tensor);
+    [[maybe_unused]] const uint32_t matmul_output_page_size = get_page_size_st(matmul_output_tensor);
 
     const uint32_t output_aligned_page_size = get_aligned_page_size_st(output_tensor);
-    [[maybe_unused]] const uint32_t expert_activation_output_aligned_page_size =
-        get_aligned_page_size_st(expert_activation_output_tensor);
-    [[maybe_unused]] const uint32_t e_t_output_aligned_page_size = get_aligned_page_size_st(e_t_output_tensor);
-    [[maybe_unused]] const uint32_t intermediate_aligned_page_size = get_aligned_page_size_st(intermediate_tensor);
+    [[maybe_unused]] const uint32_t tilize_expert_activation_output_aligned_page_size =
+        get_aligned_page_size_st(tilize_expert_activation_output_tensor);
+    [[maybe_unused]] const uint32_t tilize_e_t_output_aligned_page_size =
+        get_aligned_page_size_st(tilize_e_t_output_tensor);
+    [[maybe_unused]] const uint32_t matmul_output_aligned_page_size = get_aligned_page_size_st(matmul_output_tensor);
 
     // Mesh
     auto* mesh_device = tilize_input_tensor.device();
@@ -182,7 +184,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
          matmul_core_range_set,
          tilize_matmul_core_range_set,
          tilize_bounding_box,
-         matmul_bounding_box] = getilize_cores(mesh_device);
+         matmul_bounding_box] = get_cores(mesh_device);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
@@ -271,44 +273,55 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
     // for each expert to pass to the other kernels
     uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_0;
-
     tt::tt_metal::create_cb(
         per_expert_total_tokens_cb_id,
         program,
-        tilize_matmul_core_range_set,  // allocated on T and MM cores
-        sizeof(uint32_t),              // at most the value "512" for decode
+        tilize_matmul_core_range_set,
+        sizeof(uint32_t),  // at most the value "512" for decode
         experts_per_device,
         tt::DataFormat::UInt32);
+
+    // stores the chunks sent from the tilize cores to the matmul cores
+    uint32_t cb_s2c_in_id = tt::CBIndex::c_1;
+    tt::tt_metal::create_cb(
+        cb_s2c_in_id,
+        program,
+        tilize_matmul_core_range_set,
+        tt::tile_size(tt::DataFormat::Float16_b),
+        224 * 2,  // TODO: (GR) does this turn into two separate CBs?
+        tt::DataFormat::Float16_b);
 
     //-------------------------------------------------------------------------
     // Tilize CBs
     //-------------------------------------------------------------------------
     // CB for passing total_chunks from writer to compute
-    uint32_t total_chunks_cb_id = tt::CBIndex::c_1;
+    uint32_t total_chunks_cb_id = tt::CBIndex::c_2;
     // full indices buffer
-    uint32_t indices_tensor_cb_id = tt::CBIndex::c_2;
+    uint32_t indices_tensor_cb_id = tt::CBIndex::c_3;
     // full mapping buffer
-    uint32_t mapping_tensor_cb_id = tt::CBIndex::c_3;
+    uint32_t mapping_tensor_cb_id = tt::CBIndex::c_4;
     // full scores buffer
-    uint32_t scores_tensor_cb_id = tt::CBIndex::c_4;
+    uint32_t scores_tensor_cb_id = tt::CBIndex::c_5;
     // Send preparation buffer [E, T] for untilize, capped by -1 to indicate no more tokens to send for this expert
-    uint32_t e_t_cb_id = tt::CBIndex::c_5;
+    uint32_t e_t_cb_id = tt::CBIndex::c_6;
     // tilize input buffer for tokens to be tilized (row-major from reader)
-    uint32_t tilize_input_cb_id = tt::CBIndex::c_6;
+    uint32_t tilize_input_cb_id = tt::CBIndex::c_7;
     // tilize output buffer for tilized tokens (from compute to writer)
-    uint32_t tilize_output_cb_id = tt::CBIndex::c_7;
+    uint32_t tilize_output_cb_id = tt::CBIndex::c_8;
     // Experts activation buffer [T, 2*E + 1] each row is {token id, expert_0_activated, expert_1_activated,...,
     // expert_0_score, expert_1_score, ...} k+1 if not activated, k value in the indices tensor for that token if
     // activated
-    uint32_t expert_activation_cb_id = tt::CBIndex::c_8;
+    uint32_t expert_activation_cb_id = tt::CBIndex::c_9;
     // BRISC's e_t buffer for parallel metadata processing (BRISC processes tokens/2 to tokens)
-    uint32_t brisc_e_t_cb_id = tt::CBIndex::c_9;
+    uint32_t brisc_e_t_cb_id = tt::CBIndex::c_10;
     // BRISC's per-expert token counts to communicate to NCRISC after parallel processing
-    uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_10;
+    uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_11;
     // BRISC's expert activation buffer for parallel processing
-    uint32_t brisc_expert_activation_cb_id = tt::CBIndex::c_11;
+    uint32_t brisc_expert_activation_cb_id = tt::CBIndex::c_12;
     // BRISC's activated token count (single uint32_t)
-    uint32_t brisc_activated_count_cb_id = tt::CBIndex::c_12;
+    uint32_t brisc_activated_count_cb_id = tt::CBIndex::c_13;
+
+    uint32_t remote_counts_cb_id = tt::CBIndex::c_14;
 
     auto tilize_input_data_format = tt::tt_metal::datatype_to_dataformat_converter(tilize_input_tensor.dtype());
     auto tilize_indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(tilize_indices_tensor.dtype());
@@ -330,7 +343,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         e_t_cb_id,
         program,
         tilize_core_range_set,
-        e_t_output_page_size,
+        tilize_e_t_output_page_size,
         experts_per_device,  // number of experts on the device
         tt::DataFormat::UInt32);
 
@@ -423,7 +436,6 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     // CB for receiving counts from non-drain tilize cores (only used on drain core)
     // Each non-drain core sends: [e_t_count_expert0, e_t_count_expert1, activated_count]
     // Layout: 3 values per core × (tilize_num_cores - 1) cores, 16B aligned per core's data
-    uint32_t remote_counts_cb_id = tt::CBIndex::c_13;
     uint32_t counts_per_remote_core = experts_per_device + 1;  // e_t counts + activated count
     uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
     tt::tt_metal::create_cb(
@@ -469,8 +481,8 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_1  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_s2c_in(sh)  | CBIndex::c_2  | Float16_b  | true  |    224*2 |      917504     |
+        | cb_s2c_in      | CBIndex::c_1  | Float16_b  | true  |    224*2 |      917504     |
+        | cb_r2c_w0      | CBIndex::c_2  | Bfp4_b     | true  |    14*6  |      48384      |
         | cb_c2w_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_4  | Float32    | false |    1     |      4          |
         | cb_s2c_in2     | CBIndex::c_5  | Float16_b  | true  |    6*2   |      24576      |
@@ -478,38 +490,24 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in is handled separately as it is sharded CB
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_1, tt::DataFormat::Bfp4_b, true, 14 * 6},
+    // Note: cb_s2c_in is handled separately as it is allocated on both Tilize and Matmul cores
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
+        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 224 * 2},
+        {"cb_r2c_w0", tt::CBIndex::c_2, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 6 * 2},
     };
 
-    std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
+    std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles;
 
     // Create CBs
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : cb_specs0) {
+    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : matmul_cb_specs0) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
-    }
-
-    // Create sharded CBs
-    // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
-    // TODO: (GR)
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
-        sharded_cb_specs = {
-            {"cb_s2c_in", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 224 * 2, intermediate_tensor.buffer()}};
-
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
-        const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
-                                   .set_page_size(index, bytes_per_tile)
-                                   .set_globally_allocated_address(*p_buffer);
-        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
+        matmul_cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
     }
 
     //-------------------------------------------------------------------------
@@ -566,8 +564,8 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         {"indices_page_size", tilize_indices_page_size},
         {"mapping_page_size", tilize_mapping_page_size},
         {"output_page_size", output_page_size},
-        {"expert_activation_output_page_size", expert_activation_output_page_size},
-        {"e_t_output_page_size", e_t_output_page_size},
+        {"expert_activation_output_page_size", tilize_expert_activation_output_page_size},
+        {"e_t_output_page_size", tilize_e_t_output_page_size},
 
         // Aligned page sizes
         {"aligned_input_page_size", tilize_input_aligned_page_size},
@@ -627,8 +625,9 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     tt::tt_metal::TensorAccessorArgs(tilize_input_scores_tensor.buffer()).append_to(tilize_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(tilize_mapping_tensor.buffer()).append_to(tilize_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(expert_activation_output_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(e_t_output_tensor.buffer()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_expert_activation_output_tensor.buffer())
+        .append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_e_t_output_tensor.buffer()).append_to(tilize_compile_time_args);
 
     tt::tt_metal::KernelHandle tilize_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -661,15 +660,13 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
 
     std::vector<uint32_t> tilize_runtime_args = {
-        tilize_input_tensor.buffer()->address(),              // 0
-        tilize_indices_tensor.buffer()->address(),            // 1
-        tilize_input_scores_tensor.buffer()->address(),       // 2
-        tilize_mapping_tensor.buffer()->address(),            // 3
-        output_tensor.buffer()->address(),                    // 4
-        expert_activation_output_tensor.buffer()->address(),  // 5
-        e_t_output_tensor.buffer()->address(),                // 6
-        expert_activation_output_tensor.buffer()
-            ->address(),  // 7  // TODO: (GR) placeholder for matmul_chunk_input_tensor
+        tilize_input_tensor.buffer()->address(),                     // 0
+        tilize_indices_tensor.buffer()->address(),                   // 1
+        tilize_input_scores_tensor.buffer()->address(),              // 2
+        tilize_mapping_tensor.buffer()->address(),                   // 3
+        output_tensor.buffer()->address(),                           // 4
+        tilize_expert_activation_output_tensor.buffer()->address(),  // 5
+        tilize_e_t_output_tensor.buffer()->address(),                // 6
     };
 
     uint32_t is_drain_tilize_core_idx = tilize_runtime_args.size();
@@ -754,17 +751,13 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     // Matmul kernels
     //-------------------------------------------------------------------------
 
-    // TODO: (GR) nuke the input tensor
     // Create compile args for the program
-    const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.tilize_input_tensor,
-        &tensor_args.matmul_w0_w1_tensor,
-        &tensor_args.matmul_w2_tensor,
-        &output_tensor};
+    const auto matmul_tensors =
+        std::vector<const ttnn::Tensor*>{&matmul_w0_w1_tensor, &matmul_w2_tensor, &matmul_output_tensor};
 
-    std::vector<uint32_t> compile_args;
-    for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
+    std::vector<uint32_t> matmul_compile_time_args;
+    for (const auto& tensor : matmul_tensors) {
+        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
 
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
@@ -774,27 +767,27 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     };
 
     // Create kernels for the program
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
+    auto matmul_dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
+            .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
+    auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
+            .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
+    auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
         matmul_core_range_set,
@@ -804,7 +797,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
             .math_approx_mode = true,
-            .compile_args = compile_args,
+            .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
@@ -834,17 +827,17 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     }
 
     // Set the runtime arguments for the kernels
-    std::vector<uint32_t> runtime_args;
-    runtime_args.push_back(0);  // DRAM Bank ID placeholder
-    runtime_args.push_back(0);  // VChannel placeholder
-    for (const auto& tensor : tensors) {
-        runtime_args.push_back(tensor->buffer()->address());
+    std::vector<uint32_t> matmul_runtime_args;
+    matmul_runtime_args.push_back(0);  // DRAM Bank ID placeholder
+    matmul_runtime_args.push_back(0);  // VChannel placeholder
+    for (const auto& tensor : matmul_tensors) {
+        matmul_runtime_args.push_back(tensor->buffer()->address());
     }
     // Add placeholders for neighbor physical coords and semaphore
-    runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
-    runtime_args.push_back(0);                  // Ring core ID placeholder
-    runtime_args.push_back(0);                  // Neighbor physical x
-    runtime_args.push_back(0);                  // Neighbor physical y
+    matmul_runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
+    matmul_runtime_args.push_back(0);                  // Ring core ID placeholder
+    matmul_runtime_args.push_back(0);                  // Neighbor physical x
+    matmul_runtime_args.push_back(0);                  // Neighbor physical y
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -869,17 +862,17 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         const auto [ring_pos, next_bank] = bank2ring_pos[dram_bank];
         const auto& next_physical = mesh_device->worker_core_from_logical_core(matmul_cores[next_bank]);
 
-        runtime_args[0] = dram_bank++;
-        runtime_args[1] = vchannel;
-        // runtime_args[2-5] are already set to tensor addresses
-        // runtime_args[6] is already set to ring_semaphore_id
-        runtime_args[7] = ring_pos;
-        runtime_args[8] = static_cast<uint32_t>(next_physical.x);
-        runtime_args[9] = static_cast<uint32_t>(next_physical.y);
+        matmul_runtime_args[0] = dram_bank++;
+        matmul_runtime_args[1] = vchannel;
+        // matmul_runtime_args[2-4] are already set to tensor addresses
+        // matmul_runtime_args[5] is already set to ring_semaphore_id
+        matmul_runtime_args[6] = ring_pos;
+        matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
+        matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
 
-        tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, matmul_dm0_kernel_handle, core, matmul_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, matmul_dm1_kernel_handle, core, matmul_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, matmul_compute_kernel_handle, core, matmul_runtime_args);
 
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
@@ -892,8 +885,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         std::move(program),
         {.tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id},
          .tilize_cores = tilize_cores,
-         .matmul_cb_handles_sharded = cb_handles_sharded,
-         .matmul_kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
+         .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores}};
 }
 
@@ -902,6 +894,12 @@ void MoEMeshWorkloadFactory::override_runtime_arguments(
     const MoEParams&,
     const MoEInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
+    // output tensors
+    const ttnn::Tensor& output_tensor = tensor_return_value.at(0);
+    const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
+    const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
+    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(3);
+
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
@@ -916,10 +914,9 @@ void MoEMeshWorkloadFactory::override_runtime_arguments(
             tilize_reader_runtime_args.at(1) = tensor_args.tilize_expert_indices_tensor.buffer()->address();
             tilize_reader_runtime_args.at(2) = tensor_args.tilize_expert_scores_tensor.buffer()->address();
             tilize_reader_runtime_args.at(3) = tensor_args.tilize_expert_mapping_tensor.buffer()->address();
-            tilize_reader_runtime_args.at(4) = tensor_return_value.at(0).buffer()->address();
-            tilize_reader_runtime_args.at(5) = tensor_return_value.at(1).buffer()->address();
-            tilize_reader_runtime_args.at(6) =
-                tensor_return_value[1].buffer()->address();  // TODO: (GR) placeholder for matmul_chunk_input_tensor
+            tilize_reader_runtime_args.at(4) = output_tensor.buffer()->address();
+            tilize_reader_runtime_args.at(5) = tilize_expert_activation_output_tensor.buffer()->address();
+            tilize_reader_runtime_args.at(6) = tilize_e_t_output_tensor.buffer()->address();
 
             // writer
             auto& tilize_writer_runtime_args =
@@ -928,30 +925,20 @@ void MoEMeshWorkloadFactory::override_runtime_arguments(
             tilize_writer_runtime_args.at(1) = tensor_args.tilize_expert_indices_tensor.buffer()->address();
             tilize_writer_runtime_args.at(2) = tensor_args.tilize_expert_scores_tensor.buffer()->address();
             tilize_writer_runtime_args.at(3) = tensor_args.tilize_expert_mapping_tensor.buffer()->address();
-            tilize_writer_runtime_args.at(4) = tensor_return_value.at(0).buffer()->address();
-            tilize_writer_runtime_args.at(5) = tensor_return_value.at(1).buffer()->address();
-            tilize_writer_runtime_args.at(6) =
-                tensor_return_value[1].buffer()->address();  // TODO: (GR) placeholder for matmul_chunk_input_tensor
+            tilize_writer_runtime_args.at(4) = output_tensor.buffer()->address();
+            tilize_writer_runtime_args.at(5) = tilize_expert_activation_output_tensor.buffer()->address();
+            tilize_writer_runtime_args.at(6) = tilize_e_t_output_tensor.buffer()->address();
         }
 
         //-------------------------------------------------------------------------
         // Matmul
         //-------------------------------------------------------------------------
-
-        // Update sharded circular buffer addresses
-        // TODO: (GR)
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program,
-            shared_variables.matmul_cb_handles_sharded.at("cb_s2c_in"),
-            *tensor_args.tilize_input_tensor.buffer());
-
-        // Update runtime args for all kernels with new tensor addresses
-        // Runtime args layout: [3] = w0_w1_tensor address, [5] = w2_tensor address
         for (const auto& core : shared_variables.matmul_cores) {
             for (const auto& kernel_handle : shared_variables.matmul_kernel_handles) {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-                runtime_args[3] = tensor_args.matmul_w0_w1_tensor.buffer()->address();
-                runtime_args[4] = tensor_args.matmul_w2_tensor.buffer()->address();
+                auto& matmul_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
+                matmul_runtime_args.at(2) = tensor_args.matmul_w0_w1_tensor.buffer()->address();
+                matmul_runtime_args.at(3) = tensor_args.matmul_w2_tensor.buffer()->address();
+                matmul_runtime_args.at(4) = matmul_output_tensor.buffer()->address();
             }
         }
     }

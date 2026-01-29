@@ -163,13 +163,12 @@ void kernel_main() {
     [[maybe_unused]] uint32_t expert_activation_output_address =
         get_arg_val<uint32_t>(rt_args_idx++);                                                 // 5 - not used by writer
     [[maybe_unused]] uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);      // 6 - not used by writer
-    uint32_t matmul_chunk_input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);        // 7
-    [[maybe_unused]] bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 8
-    uint32_t tilize_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                   // 9
-    uint32_t tilize_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                     // 10
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                         // 11
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                           // 12
-    [[maybe_unused]] uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 13 - not used by writer
+    [[maybe_unused]] bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 7
+    uint32_t tilize_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                   // 8
+    uint32_t tilize_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                     // 9
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                         // 10
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                           // 11
+    [[maybe_unused]] uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 12 - not used by writer
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output,
     // e_t_output
@@ -424,6 +423,7 @@ void kernel_main() {
             }
 
             // == 2 ==
+            uint32_t matmul_chunk_input_tensor_address = 0;  // TODO: (GR) use cb
             uint32_t l1_read_addr = get_read_ptr(tilize_output_cb_id);
             uint32_t l1_write_addr =
                 matmul_chunk_input_tensor_address + (e * tiles_per_row + width_tile_start) * output_page_size;
