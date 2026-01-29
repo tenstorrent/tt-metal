@@ -712,10 +712,18 @@ BatchedTransfers assemble_runtime_args_commands(
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
                     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                        log_info(tt::LogDispatch, "Common RTA (MCAST via kernel_group): core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
-                            core_range.start_coord.x, core_range.start_coord.y, 
-                            core_range.end_coord.x, core_range.end_coord.y,
-                            noc_xy_addr, transfer_info.num_dests, crta_offset, size);
+                        log_info(
+                            tt::LogDispatch,
+                            "Common RTA (MCAST via kernel_group): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                            "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
+                            core_range.start_coord.x,
+                            core_range.start_coord.y,
+                            core_range.end_coord.x,
+                            core_range.end_coord.y,
+                            noc_xy_addr,
+                            transfer_info.num_dests,
+                            crta_offset,
+                            size);
                     }
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
                     transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
@@ -769,10 +777,19 @@ BatchedTransfers assemble_runtime_args_commands(
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
-                            if (total_rta_size > 0 && tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                                log_info(tt::LogDispatch, "Unique RTA (UNICAST): logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}, rta_size={} bytes",
-                                    core_coord.x, core_coord.y, virtual_core.x, virtual_core.y,
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core), total_rta_size);
+                            if (total_rta_size > 0 && tt::tt_metal::MetalContext::instance()
+                                                          .rtoptions()
+                                                          .get_log_dispatch_program_commands()) {
+                                log_info(
+                                    tt::LogDispatch,
+                                    "Unique RTA (UNICAST): logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}, "
+                                    "rta_size={} bytes",
+                                    core_coord.x,
+                                    core_coord.y,
+                                    virtual_core.x,
+                                    virtual_core.y,
+                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
+                                    total_rta_size);
                             }
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr = device->get_noc_unicast_encoding(constants.noc_index, virtual_core)});
@@ -851,16 +868,27 @@ BatchedTransfers assemble_runtime_args_commands(
                             std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
                         if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                            log_info(tt::LogDispatch, "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
-                                kernel->logical_cores().size(), crta_offset, common_size);
+                            log_info(
+                                tt::LogDispatch,
+                                "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
+                                kernel->logical_cores().size(),
+                                crta_offset,
+                                common_size);
                         }
                         for (const auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
                             CoreCoord virtual_core_coords =
                                 device->virtual_core_from_logical_core(core_coord, core_type);
-                            if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                                log_info(tt::LogDispatch, "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
-                                    core_coord.x, core_coord.y, virtual_core_coords.x, virtual_core_coords.y,
+                            if (tt::tt_metal::MetalContext::instance()
+                                    .rtoptions()
+                                    .get_log_dispatch_program_commands()) {
+                                log_info(
+                                    tt::LogDispatch,
+                                    "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
+                                    core_coord.x,
+                                    core_coord.y,
+                                    virtual_core_coords.x,
+                                    virtual_core_coords.y,
                                     device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
                             }
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
@@ -876,21 +904,31 @@ BatchedTransfers assemble_runtime_args_commands(
                             std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
                         multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
                         if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                            log_info(tt::LogDispatch, "Common RTA (MCAST per-kernel): num_ranges={}, L1_addr=0x{:x}, crta_size={} bytes",
-                                dst_noc_multicast_info.size(), crta_offset, common_size);
+                            log_info(
+                                tt::LogDispatch,
+                                "Common RTA (MCAST per-kernel): num_ranges={}, L1_addr=0x{:x}, crta_size={} bytes",
+                                dst_noc_multicast_info.size(),
+                                crta_offset,
+                                common_size);
                         }
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
                             const auto& core_range = std::get<CoreRange>(mcast_dests.cores);
                             auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, core_range);
-                            if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                                log_info(tt::LogDispatch, "  core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}",
-                                    core_range.start_coord.x, core_range.start_coord.y,
-                                    core_range.end_coord.x, core_range.end_coord.y,
-                                    noc_xy, mcast_dests.num_dests);
+                            if (tt::tt_metal::MetalContext::instance()
+                                    .rtoptions()
+                                    .get_log_dispatch_program_commands()) {
+                                log_info(
+                                    tt::LogDispatch,
+                                    "  core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}",
+                                    core_range.start_coord.x,
+                                    core_range.start_coord.y,
+                                    core_range.end_coord.x,
+                                    core_range.end_coord.y,
+                                    noc_xy,
+                                    mcast_dests.num_dests);
                             }
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                                .noc_xy_addr = noc_xy,
-                                .num_mcast_dests = mcast_dests.num_dests});
+                                .noc_xy_addr = noc_xy, .num_mcast_dests = mcast_dests.num_dests});
                         }
                     }
 
@@ -977,10 +1015,18 @@ public:
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
                     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                        log_info(tt::LogDispatch, "Semaphore (MCAST/WORKER): core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, initial_value={}",
-                            core_range.start_coord.x, core_range.start_coord.y,
-                            core_range.end_coord.x, core_range.end_coord.y,
-                            noc_xy_addr, dst_noc_info.num_dests, start_addr, semaphore_data.back());
+                        log_info(
+                            tt::LogDispatch,
+                            "Semaphore (MCAST/WORKER): core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, "
+                            "L1_addr=0x{:x}, initial_value={}",
+                            core_range.start_coord.x,
+                            core_range.start_coord.y,
+                            core_range.end_coord.x,
+                            core_range.end_coord.y,
+                            noc_xy_addr,
+                            dst_noc_info.num_dests,
+                            start_addr,
+                            semaphore_data.back());
                     }
                     RecordDispatchData(program.get_id(), DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
                     batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
@@ -996,15 +1042,23 @@ public:
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
                 if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                    log_info(tt::LogDispatch, "Semaphore (UNICAST/ETH): num_cores={}, L1_offset=0x{:x}, initial_value={}",
-                        dst_noc_unicast_info.size(), semaphore.offset(), semaphore_data.back());
+                    log_info(
+                        tt::LogDispatch,
+                        "Semaphore (UNICAST/ETH): num_cores={}, L1_offset=0x{:x}, initial_value={}",
+                        dst_noc_unicast_info.size(),
+                        semaphore.offset(),
+                        semaphore_data.back());
                 }
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
                     const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
                     auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
                     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                        log_info(tt::LogDispatch, "  virtual_core=({},{}), noc_xy=0x{:x}",
-                            virtual_core.x, virtual_core.y, noc_xy);
+                        log_info(
+                            tt::LogDispatch,
+                            "  virtual_core=({},{}), noc_xy=0x{:x}",
+                            virtual_core.x,
+                            virtual_core.y,
+                            noc_xy);
                     }
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
@@ -1117,11 +1171,22 @@ public:
                 auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                 uint32_t start_addr = program.get_program_config(index).cb_offset;
                 if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                    log_info(tt::LogDispatch, "Circular Buffers (MCAST): logical_range=(({},{})-({},{})), virtual_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
-                        core_range.start_coord.x, core_range.start_coord.y,
-                        core_range.end_coord.x, core_range.end_coord.y,
-                        virtual_start.x, virtual_start.y, virtual_end.x, virtual_end.y,
-                        noc_xy_addr, core_range.size(), start_addr, max_index * sizeof(uint32_t));
+                    log_info(
+                        tt::LogDispatch,
+                        "Circular Buffers (MCAST): logical_range=(({},{})-({},{})), virtual_range=(({},{})-({},{})), "
+                        "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
+                        core_range.start_coord.x,
+                        core_range.start_coord.y,
+                        core_range.end_coord.x,
+                        core_range.end_coord.y,
+                        virtual_start.x,
+                        virtual_start.y,
+                        virtual_end.x,
+                        virtual_end.y,
+                        noc_xy_addr,
+                        core_range.size(),
+                        start_addr,
+                        max_index * sizeof(uint32_t));
                 }
                 RecordDispatchData(program.get_id(), DISPATCH_DATA_CB_CONFIG, max_index * sizeof(uint32_t));
 
@@ -1186,15 +1251,28 @@ public:
                         std::visit(
                             ttsl::overloaded{
                                 [&](const CoreRange& core_range) {
-                                    log_info(tt::LogDispatch, "Kernel Binary (UNICAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, L1_addr=0x{:x}, size={} bytes",
-                                        core_range.start_coord.x, core_range.start_coord.y,
-                                        core_range.end_coord.x, core_range.end_coord.y,
-                                        noc_encoding, kg_transfer_info.dst_base_addrs[kernel_idx], kg_transfer_info.lengths[kernel_idx]);
+                                    log_info(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (UNICAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                                        "L1_addr=0x{:x}, size={} bytes",
+                                        core_range.start_coord.x,
+                                        core_range.start_coord.y,
+                                        core_range.end_coord.x,
+                                        core_range.end_coord.y,
+                                        noc_encoding,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
                                 },
                                 [&](const CoreCoord& core_coord) {
-                                    log_info(tt::LogDispatch, "Kernel Binary (UNICAST): core=({},{}), noc_xy=0x{:x}, L1_addr=0x{:x}, size={} bytes",
-                                        core_coord.x, core_coord.y,
-                                        noc_encoding, kg_transfer_info.dst_base_addrs[kernel_idx], kg_transfer_info.lengths[kernel_idx]);
+                                    log_info(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (UNICAST): core=({},{}), noc_xy=0x{:x}, L1_addr=0x{:x}, size={} "
+                                        "bytes",
+                                        core_coord.x,
+                                        core_coord.y,
+                                        noc_encoding,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
                                 },
                             },
                             cores);
@@ -1265,20 +1343,35 @@ public:
                         std::visit(
                             ttsl::overloaded{
                                 [&](const CoreRange& core_range) {
-                                    log_info(tt::LogDispatch, "Kernel Binary (MCAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, size={} bytes",
-                                        core_range.start_coord.x, core_range.start_coord.y,
-                                        core_range.end_coord.x, core_range.end_coord.y,
-                                        noc_encoding, num_mcast_dests, kg_transfer_info.dst_base_addrs[kernel_idx], kg_transfer_info.lengths[kernel_idx]);
+                                    log_info(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (MCAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                                        "num_dests={}, L1_addr=0x{:x}, size={} bytes",
+                                        core_range.start_coord.x,
+                                        core_range.start_coord.y,
+                                        core_range.end_coord.x,
+                                        core_range.end_coord.y,
+                                        noc_encoding,
+                                        num_mcast_dests,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
                                 },
                                 [&](const CoreCoord& core_coord) {
-                                    log_info(tt::LogDispatch, "Kernel Binary (MCAST): core=({},{}), noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, size={} bytes",
-                                        core_coord.x, core_coord.y,
-                                        noc_encoding, num_mcast_dests, kg_transfer_info.dst_base_addrs[kernel_idx], kg_transfer_info.lengths[kernel_idx]);
+                                    log_info(
+                                        tt::LogDispatch,
+                                        "Kernel Binary (MCAST): core=({},{}), noc_xy=0x{:x}, num_dests={}, "
+                                        "L1_addr=0x{:x}, size={} bytes",
+                                        core_coord.x,
+                                        core_coord.y,
+                                        noc_encoding,
+                                        num_mcast_dests,
+                                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                                        kg_transfer_info.lengths[kernel_idx]);
                                 },
                             },
                             cores);
                     }
-                    
+
                     uint32_t base_address = kernels_buffer->address();
                     uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
 
@@ -1512,22 +1605,27 @@ public:
             }
             std::vector<uint8_t*> data_collection_location;
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                log_info(tt::LogDispatch, "Assembling Batched Transfer Command: num_sub_cmds={}", 
+                log_info(
+                    tt::LogDispatch,
+                    "Assembling Batched Transfer Command: num_sub_cmds={}",
                     batched_dispatch_subcmds[i].size());
                 for (size_t subcmd_idx = 0; subcmd_idx < batched_dispatch_subcmds[i].size(); ++subcmd_idx) {
                     const auto& subcmd = batched_dispatch_subcmds[i][subcmd_idx];
                     bool is_unlinked = (subcmd.flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK) != 0;
-                    log_info(tt::LogDispatch, "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, flags=0x{:x} {}", 
-                        subcmd_idx, 
-                        subcmd.noc_xy_addr, 
-                        subcmd.addr, 
+                    log_info(
+                        tt::LogDispatch,
+                        "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, "
+                        "flags=0x{:x} {}",
+                        subcmd_idx,
+                        subcmd.noc_xy_addr,
+                        subcmd.addr,
                         subcmd.length_minus1 + 1,
                         subcmd.num_mcast_dests,
                         subcmd.flags,
                         is_unlinked ? "(UNLINK)" : "");
                 }
             }
-            
+
             device_command_sequence.add_dispatch_write_packed_large(
                 CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
                 l1_alignment,
@@ -1632,24 +1730,36 @@ public:
                         CoreRange virtual_range(virtual_start, virtual_end);
                         auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                         if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                            log_info(tt::LogDispatch, "Launch Message (MCAST): logical_range=(({},{})-({},{})), virtual_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
-                                core_range.start_coord.x, core_range.start_coord.y,
-                                core_range.end_coord.x, core_range.end_coord.y,
-                                virtual_start.x, virtual_start.y, virtual_end.x, virtual_end.y,
-                                noc_xy, core_range.size(), kernel_group->launch_msg.size());
+                            log_info(
+                                tt::LogDispatch,
+                                "Launch Message (MCAST): logical_range=(({},{})-({},{})), "
+                                "virtual_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
+                                core_range.start_coord.x,
+                                core_range.start_coord.y,
+                                core_range.end_coord.x,
+                                core_range.end_coord.y,
+                                virtual_start.x,
+                                virtual_start.y,
+                                virtual_end.x,
+                                virtual_end.y,
+                                noc_xy,
+                                core_range.size(),
+                                kernel_group->launch_msg.size());
                         }
-                        
+
                         multicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                            .noc_xy_addr = noc_xy,
-                            .num_mcast_dests = (uint32_t)core_range.size()});
+                            .noc_xy_addr = noc_xy, .num_mcast_dests = (uint32_t)core_range.size()});
                         multicast_cmds.data.emplace_back(
                             kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
                     }
                 } else {
                     // Need to unicast to each core in the kernel group
                     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                        log_info(tt::LogDispatch, "Launch Message (UNICAST): num_cores={}, msg_size={} bytes",
-                            kernel_group->core_ranges.num_cores(), kernel_group->launch_msg.size());
+                        log_info(
+                            tt::LogDispatch,
+                            "Launch Message (UNICAST): num_cores={}, msg_size={} bytes",
+                            kernel_group->core_ranges.num_cores(),
+                            kernel_group->launch_msg.size());
                     }
                     for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
                         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1658,11 +1768,20 @@ public:
                                 CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                                     logical_coord, kernel_group->get_core_type());
                                 auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
-                                if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                                    log_info(tt::LogDispatch, "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
-                                        logical_coord.x, logical_coord.y, virtual_coord.x, virtual_coord.y, noc_xy);
+                                if (tt::tt_metal::MetalContext::instance()
+                                        .rtoptions()
+                                        .get_log_dispatch_program_commands()) {
+                                    log_info(
+                                        tt::LogDispatch,
+                                        "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
+                                        logical_coord.x,
+                                        logical_coord.y,
+                                        virtual_coord.x,
+                                        virtual_coord.y,
+                                        noc_xy);
                                 }
-                                unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
+                                unicast_cmds.sub_cmds.emplace_back(
+                                    CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                                 unicast_cmds.data.emplace_back(
                                     kernel_group->launch_msg.data(), kernel_group->launch_msg.size());
                             }
@@ -1862,16 +1981,21 @@ public:
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);
-        
+
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-            log_info(tt::LogDispatch, "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, stream_idx={}", 
+            log_info(
+                tt::LogDispatch,
+                "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, "
+                "stream_idx={}",
                 dispatcher_for_go_signal == DispatcherSelect::DISPATCH_MASTER ? "MASTER" : "SUBORDINATE",
                 sub_device_index,
                 num_noc_unicast_txns,
                 noc_data_start_idx,
-                MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).get_dispatch_stream_index(sub_device_index));
+                MetalContext::instance()
+                    .dispatch_mem_map(constants.dispatch_core_type)
+                    .get_dispatch_stream_index(sub_device_index));
         }
-        
+
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
                                ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
@@ -1887,11 +2011,16 @@ void assemble_device_commands(
     bool use_prefetcher_cache) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
         log_info(tt::LogDispatch, "");
-        log_info(tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
-        log_info(tt::LogDispatch, "Device: {}, SubDevice: {}, Prefetcher Cache: {}", 
-            device->id(), *sub_device_id, use_prefetcher_cache ? "enabled" : "disabled");
+        log_info(
+            tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
+        log_info(
+            tt::LogDispatch,
+            "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
+            device->id(),
+            *sub_device_id,
+            use_prefetcher_cache ? "enabled" : "disabled");
     }
-    
+
     CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
@@ -1982,22 +2111,39 @@ void assemble_device_commands(
     TT_ASSERT(
         program_command_sequence.go_msg_command_sequence.size_bytes() ==
         program_command_sequence.go_msg_command_sequence.write_offset_bytes());
-    
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
         log_info(tt::LogDispatch, "---------- Command Sequence Summary ----------");
-        log_info(tt::LogDispatch, "Preamble:                 {} bytes", program_command_sequence.preamble_command_sequence.size_bytes());
-        log_info(tt::LogDispatch, "Runtime Args Commands:    {} commands", program_command_sequence.runtime_args_command_sequences.size());
+        log_info(
+            tt::LogDispatch,
+            "Preamble:                 {} bytes",
+            program_command_sequence.preamble_command_sequence.size_bytes());
+        log_info(
+            tt::LogDispatch,
+            "Runtime Args Commands:    {} commands",
+            program_command_sequence.runtime_args_command_sequences.size());
         uint32_t total_rta_size = 0;
         for (const auto& cmd : program_command_sequence.runtime_args_command_sequences) {
             total_rta_size += cmd.size_bytes();
         }
         log_info(tt::LogDispatch, "Runtime Args Total Size:  {} bytes", total_rta_size);
-        log_info(tt::LogDispatch, "Program Config Buffer:    {} bytes", program_command_sequence.program_config_buffer_command_sequence.size_bytes());
-        log_info(tt::LogDispatch, "Program Binary:           {} bytes", program_command_sequence.program_binary_command_sequence.size_bytes());
-        log_info(tt::LogDispatch, "Launch Message:           {} bytes", program_command_sequence.launch_msg_command_sequence.size_bytes());
-        log_info(tt::LogDispatch, "Go Signal:                {} bytes", program_command_sequence.go_msg_command_sequence.size_bytes());
-        uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() +
-                              total_rta_size +
+        log_info(
+            tt::LogDispatch,
+            "Program Config Buffer:    {} bytes",
+            program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+        log_info(
+            tt::LogDispatch,
+            "Program Binary:           {} bytes",
+            program_command_sequence.program_binary_command_sequence.size_bytes());
+        log_info(
+            tt::LogDispatch,
+            "Launch Message:           {} bytes",
+            program_command_sequence.launch_msg_command_sequence.size_bytes());
+        log_info(
+            tt::LogDispatch,
+            "Go Signal:                {} bytes",
+            program_command_sequence.go_msg_command_sequence.size_bytes());
+        uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() + total_rta_size +
                               program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
                               program_command_sequence.program_binary_command_sequence.size_bytes() +
                               program_command_sequence.launch_msg_command_sequence.size_bytes() +
@@ -2460,16 +2606,20 @@ void write_program_command_sequence(
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
         log_info(tt::LogDispatch, "");
         log_info(tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
-        log_info(tt::LogDispatch, "Stall First: {}, Stall Before Program: {}, Send Binary: {}", 
-            stall_first, stall_before_program, send_binary);
+        log_info(
+            tt::LogDispatch,
+            "Stall First: {}, Stall Before Program: {}, Send Binary: {}",
+            stall_first,
+            stall_before_program,
+            send_binary);
     }
-    
+
     // Check if it's possible to write all commands in a single fetch queue entry
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
-    
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
         log_info(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     }
@@ -2556,7 +2706,7 @@ void write_program_command_sequence(
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
-    
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
         log_info(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
         log_info(tt::LogDispatch, "");
