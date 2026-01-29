@@ -67,9 +67,7 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
             from huggingface_hub import hf_hub_download
             from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
         except ImportError as exc:
-            raise ImportError(
-                "huggingface_hub is required to resolve HF repo IDs for safetensors loading."
-            ) from exc
+            raise ImportError("huggingface_hub is required to resolve HF repo IDs for safetensors loading.") from exc
 
     def resolve_file(filename, allow_missing=False):
         if is_local_dir:
