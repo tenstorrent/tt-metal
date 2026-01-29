@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
 from loguru import logger
 
 
@@ -79,3 +80,12 @@ def test_from_buffer(device):
         buffer=buffer, shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     logger.info("TT-NN from_buffer tensor:", tensor)
+
+
+def test_bernoulli(device):
+    # Create a TT-NN tensor with random values from a Bernoulli distribution
+    input = ttnn.to_device(
+        ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), device=device
+    )
+    output = ttnn.bernoulli(input)
+    logger.info("TT-NN bernoulli tensor:", output)
