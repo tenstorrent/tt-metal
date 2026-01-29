@@ -472,9 +472,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
-    if (operation_attributes.impl == AllToAllTransferType::FullPacket) {
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
-    }
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -537,7 +535,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
         l1_alignment,
         metadata_buffer_id,
-        operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
+        0,
         linearized_mesh_coord,
 
         // scores tensor args

@@ -66,9 +66,6 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
         Keyword Args:
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
-            topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
-            output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
             drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `(0, 0)`.
             worker_mode (ttnn.WorkerMode, optional): the worker mode for distributing workers across links. Defaults to `ttnn.WorkerMode.DIRECT`.
@@ -79,8 +76,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.
 
-            output_tensor: The output tensor is expected to be [1, B*D[A], S, H] per device if output_concat_dim is 1 or [1, B, S*D[A], H] per device if output_concat_dim is 2, sharded fully such that we have [D, B*D[A], S, H] or [D, B, S*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
-            expert_indices_tensor: The indices tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2. Each row contains all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is L1 sharded to drain_sync_tilizer_core.
+            output_tensor: The output tensor is expected to be [1, T*D[A], H] per device, sharded fully such that we have [D, T*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
+            expert_indices_tensor: The indices tensor is expected to be [1, T*D[A], K] per device. Each row contains all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is L1 sharded to drain_sync_tilizer_core.
             expert_scores_tensor: The scores tensor has the same shape as the indices tensor and contains the corresponding scores. The tensor is L1 sharded to drain_sync_tilizer_core.
 
         Example:
@@ -91,9 +88,6 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             expert_mapping_tensor,
                             cluster_axis=cluster_axis,
                             num_links=num_links,
-                            topology=topology,
-                            memory_config=memory_config,
-                            output_concat_dim=output_concat_dim,
                             drain_sync_tilizer_core=(0, 0),
                             worker_mode=ttnn.WorkerMode.DIRECT,
                             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH)
@@ -110,12 +104,9 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                const ttnn::Tensor& expert_indices_tensor,
                const ttnn::Tensor& expert_scores_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
-               const std::optional<uint32_t> output_concat_dim,
                const std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology,
                const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
                WorkerMode worker_mode,
                DispatchAlgorithm dispatch_algorithm,
@@ -134,9 +125,6 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                     cluster_axis,
                     output_tensors,
                     num_links,
-                    topology,
-                    memory_config,
-                    output_concat_dim,
                     drain_core,
                     worker_mode,
                     dispatch_algorithm,
@@ -149,12 +137,9 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             nb::arg("expert_scores_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("output_concat_dim") = 1,
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensors") = nb::none(),
             nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
             nb::arg("drain_sync_tilizer_core") = nb::none(),
             nb::arg("worker_mode") = WorkerMode::DIRECT,
             nb::arg("dispatch_algorithm") = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH,

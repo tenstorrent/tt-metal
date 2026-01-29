@@ -34,18 +34,11 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
 }  // namespace detail
 
 struct AllToAllDispatchMetadataDeviceOperation {
-    enum AllToAllTransferType {
-        FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
-        PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
-    };
     struct operation_attributes_t {
         const CoreRangeSet worker_core_range_set;
-        const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const AllToAllTransferType impl;
-        const uint32_t output_concat_dim;
         // Core where indices/scores are sharded for selective_tilize
         // Optional: when persistent output tensors are provided, extracted from their shard spec
         const std::optional<CoreCoord> drain_sync_tilizer_core;
@@ -58,12 +51,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const std::optional<GlobalSemaphore> cross_device_semaphore;  // Optional external semaphore for persistent mode
         static constexpr auto attribute_names = std::forward_as_tuple(
             "worker_core_range_set",
-            "output_mem_config",
             "axis",
             "num_links",
             "topology",
-            "impl",
-            "output_concat_dim",
             "drain_sync_tilizer_core",
             "worker_mode",
             "mux_core_range_set",
@@ -71,12 +61,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
         auto attribute_values() const {
             return std::forward_as_tuple(
                 worker_core_range_set,
-                output_mem_config,
                 axis,
                 num_links,
                 topology,
-                impl,
-                output_concat_dim,
                 drain_sync_tilizer_core,
                 worker_mode,
                 mux_core_range_set,
@@ -166,10 +153,7 @@ all_to_all_dispatch_metadata(
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
-    uint32_t output_concat_dim,
     const std::optional<CoreCoord>& drain_sync_tilizer_core,
     ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,

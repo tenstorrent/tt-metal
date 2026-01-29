@@ -148,7 +148,6 @@ def run_all_to_all_dispatch_metadata_test(
     scheme="random_sequential_experts",
     dtype=ttnn.bfloat16,
     profiler=BenchmarkProfiler(),
-    topology=None,
     cluster_axis=1,
     shard_dim=0,
     worker_mode=ttnn.WorkerMode.DIRECT,
@@ -390,8 +389,6 @@ def run_all_to_all_dispatch_metadata_test(
                 expert_mapping_new_tensors[buffer_index],  # New format: [devices, experts]
                 cluster_axis=cluster_axis,
                 num_links=num_links,
-                topology=topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 # Only pass drain_sync_tilizer_core when not using persistent mode
                 # In persistent mode, it's extracted from the tensor's shard spec
                 drain_sync_tilizer_core=None if use_persistent_mode else (0, 0),
@@ -653,7 +650,6 @@ def run_all_to_all_dispatch_metadata_test(
     ],
 )
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "congestion_scheme", ["random_sequential_experts", "worst_congestion_descending", "best_congestion"]
@@ -676,7 +672,6 @@ def test_decode_perf(
     num_iters,
     warmup_iters,
     num_links,
-    topology,
     dtype,
     congestion_scheme,
     use_persistent_mode,
@@ -708,7 +703,6 @@ def test_decode_perf(
         trace_mode,
         num_links=num_links,
         scheme=congestion_scheme,
-        topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
         worker_mode=worker_mode,

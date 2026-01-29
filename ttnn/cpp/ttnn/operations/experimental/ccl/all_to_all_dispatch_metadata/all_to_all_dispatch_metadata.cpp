@@ -23,9 +23,6 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<uint32_t>& output_concat_dim,
     const std::optional<CoreCoord>& drain_sync_tilizer_core,
     WorkerMode worker_mode,
     DispatchAlgorithm dispatch_algorithm,
@@ -36,9 +33,9 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
     log_debug(tt::LogOp, "num_links: {}", num_links_);
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
-    auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
-    uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
+
+    // Always derive topology from mesh - only RING topology is functional
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, std::nullopt, axis);
 
     // Resolve drain_sync_tilizer_core:
     // - If explicitly provided, use it
@@ -65,9 +62,6 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         "drain_sync_tilizer_core must be provided explicitly OR persistent output tensors must be provided "
         "(so drain core can be extracted from their shard spec)");
 
-    AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
-        AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
-
     // Default worker cores: (0,0) to (0,7) - 8 cores for 4 links (2 workers per link)
     CoreRangeSet worker_cores =
         worker_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 7))));
@@ -87,10 +81,7 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         optional_output_tensors,
         num_links_,
         topology_,
-        memory_config_,
         worker_cores,
-        impl,
-        output_concat_dim_,
         resolved_drain_sync_tilizer_core,
         worker_mode,
         mux_cores,

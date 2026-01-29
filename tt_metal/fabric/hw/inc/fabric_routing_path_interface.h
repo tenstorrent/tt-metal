@@ -104,6 +104,7 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
     // Determine number of words based on compile-time define
     constexpr uint32_t num_words = FabricHeaderConfig::LOW_LATENCY_NUM_WORDS;
     constexpr uint32_t max_hops = num_words * RoutingFieldsConstants::LowLatency::BASE_HOPS;
+
     // Bounds check
     if (hops >= max_hops) {
         // Zero output

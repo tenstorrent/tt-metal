@@ -33,7 +33,6 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint16");
     TT_FATAL(scores_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Scores tensor must be bfloat16");
-    TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
     // Validate scores tensor has same shape as indices tensor
     auto indices_shape = indices_tensor.tensor_spec().logical_shape();
@@ -104,11 +103,6 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
             input_shape[i],
             indices_shape[i]);
     }
-    TT_FATAL(
-        operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
-        "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
-        "concat the output tokens along.",
-        operation_attributes.output_concat_dim);
 
     // Validate expert mapping tensor shape: new format is [devices, experts]
     auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
@@ -165,12 +159,13 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
     auto output_shape = ttnn::Shape({1, total_tokens, hidden_size});
     auto metadata_shape = ttnn::Shape({1, total_tokens, selected_experts_k});
 
-    auto mem_config = operation_attributes.output_mem_config;
-
-    // Output tokens tensor - DRAM interleaved
+    // Output tokens tensor - use input tensor's memory config (DRAM interleaved)
+    auto dram_memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto output_tokens_spec = TensorSpec(
         Shape(output_shape),
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), dram_memory_config));
 
     // Create sharded memory config for indices/scores on drain_sync_tilizer_core
     // Use provided drain_sync_tilizer_core, or default to (0, 0) if not provided
@@ -247,10 +242,7 @@ all_to_all_dispatch_metadata(
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
-    uint32_t output_concat_dim,
     const std::optional<CoreCoord>& drain_sync_tilizer_core,
     ttnn::operations::experimental::ccl::WorkerMode worker_mode,
     const CoreRangeSet& mux_core_range_set,
@@ -260,12 +252,9 @@ all_to_all_dispatch_metadata(
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
-            .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .impl = impl,
-            .output_concat_dim = output_concat_dim,
             .drain_sync_tilizer_core = drain_sync_tilizer_core,
             .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
