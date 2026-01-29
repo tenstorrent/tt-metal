@@ -61,6 +61,9 @@ void kernel_main() {
     constexpr uint32_t stride_t = get_compile_time_arg_val(25);
     constexpr uint32_t stride_h = get_compile_time_arg_val(26);
     constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
@@ -76,7 +79,7 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<28>();
+    constexpr auto in_args = TensorAccessorArgs<31>();
     const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
@@ -114,18 +117,19 @@ void kernel_main() {
                                         // For each output coordinate (t, h, w),
                                         // gather the kT*kH*kW patch around (t,h,w).
                                         for (uint32_t kt = 0; kt < kT; kt++) {
-                                            int32_t t_idx = static_cast<int32_t>(t + kt) - padding_t;
+                                            int32_t t_idx = static_cast<int32_t>(t + (kt * dilation_t)) - padding_t;
                                             const bool outside_t = (t_idx < 0 || t_idx >= static_cast<int32_t>(T_in));
                                             t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
 
                                             for (uint32_t kh = 0; kh < kH; kh++) {
-                                                int32_t h_idx = static_cast<int32_t>(h + kh) - padding_h;
+                                                int32_t h_idx = static_cast<int32_t>(h + (kh * dilation_h)) - padding_h;
                                                 const bool outside_h =
                                                     (h_idx < 0 || h_idx >= static_cast<int32_t>(H_in));
                                                 h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
 
                                                 for (uint32_t kw = 0; kw < kW; kw++) {
-                                                    int32_t w_idx = static_cast<int32_t>(w + kw) - padding_w;
+                                                    int32_t w_idx =
+                                                        static_cast<int32_t>(w + (kw * dilation_w)) - padding_w;
                                                     const bool outside_w =
                                                         (w_idx < 0 || w_idx >= static_cast<int32_t>(W_in));
                                                     const bool in_padding = (outside_t || outside_h || outside_w);

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -21,6 +22,7 @@ struct Conv3dConfig {
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
+        std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
@@ -29,6 +31,7 @@ struct Conv3dConfig {
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
         C_in_block(C_in_block_),
+        dilation(dilation_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
     tt::tt_metal::DataType weights_dtype;
@@ -38,6 +41,7 @@ struct Conv3dConfig {
     uint32_t H_out_block;
     uint32_t C_out_block;
     uint32_t C_in_block;
+    std::array<uint32_t, 3> dilation;
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -48,6 +52,7 @@ struct Conv3dConfig {
         "H_out_block",
         "C_out_block",
         "C_in_block",
+        "dilation",
         "compute_with_storage_grid_size");
 
     auto attribute_values() const {
@@ -59,6 +64,7 @@ struct Conv3dConfig {
             this->H_out_block,
             this->C_out_block,
             this->C_in_block,
+            this->dilation,
             this->compute_with_storage_grid_size);
     }
 };
@@ -90,7 +96,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
     const std::array<uint32_t, 3>& stride,
-    const std::array<uint32_t, 3>& kernel_size);
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& dilation);
 }  // namespace detail
 
 }  // namespace ttnn::experimental::prim
