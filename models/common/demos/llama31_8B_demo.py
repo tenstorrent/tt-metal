@@ -32,6 +32,7 @@ Usage:
 import os
 import re
 import subprocess
+import sys
 from contextlib import contextmanager
 
 import pytest
@@ -109,9 +110,11 @@ def collect_baseline_from_simple_text_demo(
 
     logger.info(f"Collecting baseline from simple_text_demo.py ({test_filter})...")
 
-    # Build pytest command
+    # Build pytest command (use sys.executable for CI compatibility)
     cmd = [
-        "python_env/bin/pytest",
+        sys.executable,
+        "-m",
+        "pytest",
         "models/tt_transformers/demo/simple_text_demo.py",
         "-k",
         test_filter,
@@ -395,7 +398,8 @@ def _collect_all_baselines():
     if _baseline_collected:
         return
 
-    device_name = os.environ.get("MESH_DEVICE", "N150")
+    device_name = os.environ.get("MESH_DEVICE")
+    assert device_name is not None, "MESH_DEVICE environment variable is not set"
     logger.info(f"=== Collecting baselines from simple_text_demo.py for {device_name} ===")
 
     # Collect baselines for batch_size x opt_mode combinations
