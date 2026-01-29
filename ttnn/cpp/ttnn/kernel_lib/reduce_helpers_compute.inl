@@ -7,31 +7,31 @@
 namespace compute_kernel_lib {
 
 // =============================================================================
-// DataFormatReconfigMode Helper Functions
+// ReduceDataFormatReconfigMode Helper Functions
 // =============================================================================
 
-constexpr bool reconfig_input(DataFormatReconfigMode mode) {
-    return mode == DataFormatReconfigMode::INPUT || mode == DataFormatReconfigMode::INPUT_AND_OUTPUT;
+constexpr bool reconfig_input(ReduceDataFormatReconfigMode mode) {
+    return mode == ReduceDataFormatReconfigMode::INPUT || mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
 }
 
-constexpr bool reconfig_output(DataFormatReconfigMode mode) {
-    return mode == DataFormatReconfigMode::OUTPUT || mode == DataFormatReconfigMode::INPUT_AND_OUTPUT;
+constexpr bool reconfig_output(ReduceDataFormatReconfigMode mode) {
+    return mode == ReduceDataFormatReconfigMode::OUTPUT || mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
 }
 
 // =============================================================================
-// InputPolicy Helper Functions
+// ReduceInputPolicy Helper Functions
 // =============================================================================
 
-constexpr bool waits_per_tile(InputPolicy p) { return p == InputPolicy::WaitAndPopPerTile; }
-constexpr bool waits_per_batch(InputPolicy p) { return p == InputPolicy::WaitAndPopPerBatch; }
-constexpr bool waits_upfront(InputPolicy p) { return p == InputPolicy::WaitUpfrontNoPop; }
-constexpr bool no_wait(InputPolicy p) { return p == InputPolicy::NoWaitNoPop; }
-constexpr bool should_pop(InputPolicy p) {
-    return p == InputPolicy::WaitAndPopPerTile || p == InputPolicy::WaitAndPopPerBatch;
+constexpr bool waits_per_tile(ReduceInputPolicy p) { return p == ReduceInputPolicy::WaitAndPopPerTile; }
+constexpr bool waits_per_batch(ReduceInputPolicy p) { return p == ReduceInputPolicy::WaitAndPopPerBatch; }
+constexpr bool waits_upfront(ReduceInputPolicy p) { return p == ReduceInputPolicy::WaitUpfrontNoPop; }
+constexpr bool no_wait(ReduceInputPolicy p) { return p == ReduceInputPolicy::NoWaitNoPop; }
+constexpr bool should_pop(ReduceInputPolicy p) {
+    return p == ReduceInputPolicy::WaitAndPopPerTile || p == ReduceInputPolicy::WaitAndPopPerBatch;
 }
-constexpr bool manages_cb(InputPolicy p) {
+constexpr bool manages_cb(ReduceInputPolicy p) {
     // Returns true if the reduce function manages CB wait/reserve/push (not preloaded)
-    return p != InputPolicy::NoWaitNoPop;
+    return p != ReduceInputPolicy::NoWaitNoPop;
 }
 
 // =============================================================================
@@ -88,16 +88,16 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    InputPolicy input_policy,
-    DataFormatReconfigMode reconfig_mode,
+    ReduceInputPolicy input_policy,
+    ReduceDataFormatReconfigMode reconfig_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
     uint32_t input_cb,
     uint32_t scaler_cb,
     uint32_t output_cb,
-    InputBlockShape input_block_shape,
-    InputMemoryLayout input_memory_layout,
+    ReduceInputBlockShape input_block_shape,
+    ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
     // =============================================================================

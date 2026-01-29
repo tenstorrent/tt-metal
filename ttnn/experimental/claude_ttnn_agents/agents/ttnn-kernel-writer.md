@@ -181,7 +181,7 @@ def test_functional_correctness(device):
 When implementing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel_lib/`:
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
-- `reduce_helpers_compute.hpp` - reduce(), InputBlockShape, Accumulation
+- `reduce_helpers_compute.hpp` - reduce(), ReduceInputBlockShape, Accumulation
 - `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim
 - `dest_helpers.hpp` - DEST_AUTO_LIMIT
 
@@ -254,13 +254,13 @@ cb_pop_front(cb_tilized, 1);
 ```cpp
 // Design: USE HELPER: compute_kernel_lib::reduce<AVG, REDUCE_ROW>(...)
 
-// CORRECT - using InputBlockShape API:
+// CORRECT - using ReduceInputBlockShape API:
 compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
     cb_tilized, cb_scaler, cb_reduced,
-    compute_kernel_lib::InputBlockShape::of(Ht, Wt, NC));
+    compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
 ```
 
-**Note**: `InputBlockShape` specifies the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
+**Note**: `ReduceInputBlockShape` specifies the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
 
 ## What You DON'T Do
 

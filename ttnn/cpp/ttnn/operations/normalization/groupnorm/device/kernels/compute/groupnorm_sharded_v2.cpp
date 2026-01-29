@@ -231,16 +231,19 @@ void kernel_main() {
 
             // reduce only one final tile
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::InputBlockShape::single());
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
-                    cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::InputBlockShape::single());
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -326,16 +329,19 @@ void kernel_main() {
             cb_push_back(cb_ex2pe, 1);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::InputBlockShape::single());
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
-                    cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::InputBlockShape::single());
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
+                    compute_kernel_lib::ReduceInputBlockShape::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }

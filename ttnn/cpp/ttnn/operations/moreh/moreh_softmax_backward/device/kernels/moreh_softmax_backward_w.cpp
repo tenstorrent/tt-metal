@@ -33,19 +33,19 @@ void kernel_main() {
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter2, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::InputBlockShape::single());
+                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
             compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::InputPolicy::WaitUpfrontNoPop>(
-                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::InputBlockShape::row(Wt - 1));
+                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::InputBlockShape::single());
+                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::ReduceInputBlockShape::single());
 
             add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
         }
@@ -80,8 +80,8 @@ void kernel_main() {
 
         // step 2, compute sum(y * dy)
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::InputPolicy::WaitAndPopPerBatch>(
-                cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::InputBlockShape::row(Wt));
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+                cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {
