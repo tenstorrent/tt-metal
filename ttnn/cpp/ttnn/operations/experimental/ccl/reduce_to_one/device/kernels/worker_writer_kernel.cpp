@@ -17,6 +17,7 @@
 // Early exits for ROOT1 device (output is in-place, no sending needed).
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -24,6 +25,17 @@
 
 // Device roles
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
+
+// Template helper for routing - allows if constexpr to work
+template <typename packet_header_t>
+FORCE_INLINE void set_unicast_route(
+    volatile tt_l1_ptr packet_header_t* header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t num_hops) {
+    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
+        fabric_set_unicast_route(header, dst_dev_id, dst_mesh_id);
+    } else {
+        fabric_set_unicast_route<false>(header, num_hops);
+    }
+}
 
 void kernel_main() {
     // Compile-time args
@@ -65,6 +77,8 @@ void kernel_main() {
     const uint32_t my_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // Destination semaphore for fused atomic inc
+    const uint16_t dst_dev_id = get_arg_val<uint32_t>(arg_idx++);    // Destination device ID
+    const uint16_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);   // Destination mesh ID
 
     // Get packet buffer address from CB - same address on all cores
     // Workers write to bottom core's packet_cb at this address
@@ -77,8 +91,8 @@ void kernel_main() {
     auto route_id = PacketHeaderPool::allocate_header_n(1);
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
 
-    // Set up routing (linear fabric API)
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header, num_hops);
+    // Set up routing - 1D uses hops, 2D uses device/mesh IDs
+    set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, static_cast<uint16_t>(num_hops));
 
     // Set up fused NOC write + atomic inc command
     // Destination is the same logical core position on the remote device
