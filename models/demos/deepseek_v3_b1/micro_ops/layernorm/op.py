@@ -3,6 +3,8 @@
 
 """LayerNorm single-core generic op implementation using ProgramDescriptor API."""
 
+import torch
+
 
 class LayerNormSingleCore:
     """
@@ -25,7 +27,19 @@ class LayerNormSingleCore:
         Returns:
             torch.Tensor: Normalized output
         """
-        raise NotImplementedError("Golden implementation pending - Step 1.2")
+        # Compute mean along the last dimension (row-wise)
+        mean = input_tensor.mean(dim=-1, keepdim=True)
+
+        # Compute variance along the last dimension (unbiased=False for population variance)
+        var = input_tensor.var(dim=-1, unbiased=False, keepdim=True)
+
+        # Standardize: (x - mean) / sqrt(var + epsilon)
+        normalized = (input_tensor - mean) / torch.sqrt(var + epsilon)
+
+        # Apply affine transformation: gamma * normalized + beta
+        output = normalized * gamma_tensor + beta_tensor
+
+        return output
 
     @staticmethod
     def op(input_tensor, gamma_tensor, beta_tensor, output_tensor, epsilon=1e-6):

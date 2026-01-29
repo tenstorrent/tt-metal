@@ -33,7 +33,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
 
 ### Step 1.2: Golden Reference Implementation
 
-- [ ] **1.2.1** Implement `golden()` method
+- [x] **1.2.1** Implement `golden()` method
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Input: `input_tensor` (torch.Tensor), `gamma_tensor` (torch.Tensor), `beta_tensor` (torch.Tensor), `epsilon` (float)
@@ -43,7 +43,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Compute: `output = normalized * gamma + beta`
     - Return: output tensor
 
-- [ ] **1.2.2** Create golden validation test
+- [x] **1.2.2** Create golden validation test
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/tests/test_layernorm.py`
   - Requirements:
     - Test function: `test_golden_vs_torch()`
@@ -52,7 +52,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Pass criteria: `torch.allclose(golden, torch_ref, rtol=1e-4, atol=1e-4)` for all shapes
   - Verification: `pytest tests/test_layernorm.py::test_golden_vs_torch -v` passes
 
-**Step 1.2 Complete:** [ ]
+**Step 1.2 Complete:** [x]
 
 ---
 
