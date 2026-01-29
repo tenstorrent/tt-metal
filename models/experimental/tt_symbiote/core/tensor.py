@@ -88,5 +88,5 @@ class TorchTTNNTensor(torch.Tensor):
     @property
     def ttnn_distributed_config(self) -> Optional[DistributedTensorConfig]:
         if "distributed_config" in self.__dict__:
-            return self.__dict__["distributed_config"]
+            return self.distributed_config
         return None

@@ -5,10 +5,10 @@
 """Base TTNNModule class for TTNN-accelerated neural network modules."""
 
 import functools
-
+from typing import Optional
 import torch
 
-from models.experimental.tt_symbiote.core.run_config import get_tensor_run_implementation
+from models.experimental.tt_symbiote.core.run_config import get_tensor_run_implementation, DistributedConfig
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
@@ -22,6 +22,7 @@ class TTNNModule:
         self._weights_on_device = False
         self._fallback_torch_layer = None
         self._unique_name = None
+        self._device_state: Optional[DistributedConfig] = None
         self._model_config = {}
 
     def set_model_config(self, model_config):
@@ -84,6 +85,13 @@ class TTNNModule:
         self._device = device
         return self
 
+    def set_device_state(self, device_state: DistributedConfig = None):
+        """Set device-specific state for this module."""
+        self._device_state = device_state
+        if self._device_state is None:
+            self._device_state = DistributedConfig(self.device)
+        return self
+
     @property
     def model_config(self):
         """Get model configuration."""
@@ -93,6 +101,10 @@ class TTNNModule:
     def device(self):
         """Get current device."""
         return self._device
+
+    @property
+    def device_state(self) -> Optional[DistributedConfig]:
+        return self._device_state
 
     @classmethod
     def from_torch(cls, torch_layer, *args, **kwargs):
@@ -106,6 +118,15 @@ class TTNNModule:
         if self.torch_layer is not None:
             self.torch_layer.train(mode)
         return self
+
+    def set_output_tensor_config(self, output):
+        """Set output tensor configuration based on device state."""
+        assert self.device_state is not None
+        return self.set_output_tensor_config_impl(output)
+
+    def set_output_tensor_config_impl(self, output):
+        """Implementation-specific output tensor configuration."""
+        return output
 
     @property
     def module_name(self):

@@ -23,10 +23,50 @@ from models.experimental.tt_symbiote.core.utils import (
 
 
 @dataclass
+class CCLManagerConfig:
+    """Configuration for CCLManager."""
+
+    mesh_device: Any
+    num_links: Optional[int]
+    topology: Optional[Any]
+
+    def __post_init__(self):
+        if self.num_links is None:
+            self.num_links = 1
+        if self.topology is None:
+            self.topology = ttnn.Topology.Linear
+
+
+class CCLManager:
+    """Abstract ca;ss"""
+
+    def __init__(
+        self,
+        ccl_config: CCLManagerConfig,
+    ):
+        self.ccl_config = ccl_config
+
+
+@dataclass
 class DistributedTensorConfig:
     """Configuration for distributed tensor operations."""
 
     mesh_mapper: Any
+
+
+@dataclass
+class DistributedConfig:
+    """Configuration for distributed operations."""
+
+    mesh_device: Any
+    tensor_config: Optional[DistributedTensorConfig] = None
+    ccl_config: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.tensor_config is None:
+            self.tensor_config = DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device))
+        if self.ccl_config is None:
+            self.ccl_config = CCLManager(CCLManagerConfig(mesh_device=self.mesh_device))
 
 
 @contextlib.contextmanager
@@ -317,6 +357,13 @@ def compose_transforms(*transforms):
     return _composed
 
 
+def post_process_ttnn_module_output(self, result):
+    result = tree_map(wrap_to_torch_ttnn_tensor, result)
+    if self.device_state is not None:
+        result = self.set_output_tensor_config(result)
+    return result
+
+
 class NormalRun:
     verbose = False
     signpost_mode = None
@@ -509,8 +556,7 @@ class NormalRun:
         if NormalRun.signpost_mode is not None:
             signpost(f"{self.module_name}", f"{self.__class__.__name__}")
         begin = time.time()
-        result = self.forward(*func_args, **func_kwargs)
-        result = tree_map(wrap_to_torch_ttnn_tensor, result)
+        result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
@@ -578,8 +624,7 @@ class LightweightRun(NormalRun):
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         self.preprocess_weights()
         self.move_weights_to_device()
-        result = self.forward(*func_args, **func_kwargs)
-        result = tree_map(wrap_to_torch_ttnn_tensor, result)
+        result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
         return result
 
 
@@ -610,8 +655,7 @@ class NormalRunWithFallback(NormalRun):
             self.preprocess_weights()
             self.move_weights_to_device()
             try:
-                result = self.forward(*func_args, **func_kwargs)
-                result = tree_map(wrap_to_torch_ttnn_tensor, result)
+                result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             except Exception as e:
                 print(f"Error {e} in {self.__class__.__name__} forward, falling back to torch")
                 assert (
@@ -661,7 +705,7 @@ class SELRun(NormalRun):
             func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
             # Compare outputs
@@ -707,7 +751,7 @@ class DPLRun(NormalRun):
             func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(
                 tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
@@ -764,7 +808,7 @@ class DPLRunNoErrorProp(NormalRun):
             func_kwargs = tree_map(transform, ttnn_no_error_prop_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(
                 tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
