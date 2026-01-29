@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Run trace allocation warning tests with proper environment setup
+# Run nd-tests with proper environment setup
 # Usage:
-#   ./run_trace_allocation_test.sh                    # Run all tests
-#   ./run_trace_allocation_test.sh <test_name>        # Run specific test
+#   ./nd-tests/run_tests.sh                    # Run all tests
+#   ./nd-tests/run_tests.sh <test_name>        # Run specific test
 #
 # Available tests:
 #   test_allocation_during_active_trace_triggers_warning
@@ -16,10 +16,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_HOME="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+TT_METAL_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Set up environment
-export PYTHONPATH="$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME/build/lib:$TT_METAL_HOME:$PYTHONPATH"
+USER_SITE_PACKAGES="$HOME/.local/lib/python3.10/site-packages"
+export PYTHONPATH="$TT_METAL_HOME/ttnn:$TT_METAL_HOME/tools:$TT_METAL_HOME/build/lib:$TT_METAL_HOME:$USER_SITE_PACKAGES:$PYTHONPATH"
 export LD_LIBRARY_PATH="$TT_METAL_HOME/build/lib:$LD_LIBRARY_PATH"
 
 # Activate venv if available
@@ -31,10 +32,14 @@ fi
 
 TEST_FILE="$SCRIPT_DIR/test_trace_allocation_warning.py"
 
+# Run from nd-tests directory to use our local conftest.py
+# Use --ignore to skip root conftest dependencies
+cd "$SCRIPT_DIR"
+
 if [ -n "$1" ]; then
     # Run specific test
-    pytest "$TEST_FILE::$1" -v -s
+    pytest "test_trace_allocation_warning.py::$1" -v -s -p no:cacheprovider --confcutdir="$SCRIPT_DIR"
 else
     # Run all tests
-    pytest "$TEST_FILE" -v -s
+    pytest "test_trace_allocation_warning.py" -v -s -p no:cacheprovider --confcutdir="$SCRIPT_DIR"
 fi
