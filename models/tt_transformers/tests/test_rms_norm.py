@@ -63,8 +63,8 @@ def test_rms_norm_inference(
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
-        sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        sharded_program_config=model_args.get_norm_attn_prgm_cfg(),
+        sharded_output_config=model_args.get_attn_input_mem_config(mode),
         tt_ccl=tt_ccl,
     )
 

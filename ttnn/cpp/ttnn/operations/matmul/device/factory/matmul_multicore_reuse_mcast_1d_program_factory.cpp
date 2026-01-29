@@ -2255,29 +2255,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
 
     /* Runtime args */
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
+    // Calculate DRAM cores and receiver cores per DRAM for bank mapping
+    uint32_t dram_cores = 0;
+    uint32_t num_receiver_cores_per_dram = 0;
     if (in1_is_dram_sharded) {
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
-            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
-            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
-            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
-
-            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
-            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
-            worker_coord_y_to_dram_bank_second_col_mapping[2] = 9;
-            worker_coord_y_to_dram_bank_second_col_mapping[4] = 10;
-            worker_coord_y_to_dram_bank_second_col_mapping[5] = 11;
-            worker_coord_y_to_dram_bank_second_col_mapping[6] = 8;
-            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
-            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
-
-        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
-        } else {
-            TT_THROW("ring gather MM currently not supporting this device arch");
-        }
+        dram_cores = in1_buffer->shard_spec().grid().num_cores();
+        num_receiver_cores_per_dram = ring_size / dram_cores;
+        TT_FATAL(
+            ring_size % dram_cores == 0,
+            "ring_size ({}) must be divisible by dram_cores ({}) for DRAM sharded ring matmul",
+            ring_size,
+            dram_cores);
     }
 
     uint32_t bank_id = 0;
@@ -2319,15 +2307,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             i,                      // ring_idx
         };
         if (in1_is_dram_sharded) {
-            if (core.x <= 3) {
-                bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
-            } else {
-                bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
-            }
-            uint32_t dram_read_offset = 0;
-            if (core.x % 2 == 0) {
-                dram_read_offset = 1;
-            }
+            // Derive bank_id from ring_idx instead of core coordinates
+            // Each DRAM core holds data for num_receiver_cores_per_dram ring cores
+            // ring_idx 0 to (num_receiver_cores_per_dram-1) → DRAM bank 0
+            // ring_idx num_receiver_cores_per_dram to (2*num_receiver_cores_per_dram-1) → DRAM bank 1
+            // etc.
+            bank_id = (i / num_receiver_cores_per_dram) % dram_cores;
+
+            // dram_read_offset: which receiver core within the DRAM bank's group
+            // 0 = first receiver core in group, 1 = second receiver core in group, etc.
+            uint32_t dram_read_offset = i % num_receiver_cores_per_dram;
+
             bank_ids.push_back(bank_id);
             uint32_t vc = 0;
             for (uint32_t j = 0; j < i; ++j) {

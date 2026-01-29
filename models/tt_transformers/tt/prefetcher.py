@@ -188,6 +188,7 @@ class Prefetcher(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         num_tensors: int,
         num_layers: int,
+        num_receiver_cores: int = None,
     ):
         """
         Prefetcher class that prefetches tensors from DRAM to
@@ -200,7 +201,12 @@ class Prefetcher(LightweightModule):
         self.enable_performance_mode = True
         self.worker_sub_device_id = None
         self.global_cb_size = 0
-        self.num_receiver_cores = self.get_optimal_receiver_cores()
+        self.num_receiver_cores = (
+            self.get_optimal_receiver_cores() if num_receiver_cores is None else num_receiver_cores
+        )
+        assert (
+            self.num_receiver_cores > 0 and self.num_receiver_cores <= 2
+        ), "Number of receiver cores must be greater than 0 and less than or equal to 2. Only a max of 2 receiver cores have been tested to be functional on BH/WH"
 
         # Max tensor block size is the largest block size of a tensor in bytes (1 block = tensor volume / (tile size * tile size) // (num_receiver_cores * num_reader_cores))
         self.max_tensor_block_size = 0
@@ -216,6 +222,12 @@ class Prefetcher(LightweightModule):
         ### Prefetcher Hardcoded Core Ranges
         self.all_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
+        )
+
+        # Dynamic worker core grid (for easily grabbing a sub core grid that is of mulitples of 8 cores)
+        self.dynamic_worker_core_grid = lambda num_cores: ttnn.CoreRangeSet(
+            # requested number of cores MUST be multiples of 8
+            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(num_cores // 8, 7))]
         )
 
         # Remaining worker core ranges for the worker sub device
@@ -259,6 +271,7 @@ class Prefetcher(LightweightModule):
     def to_core_range_set(
         self, cores: Union[List[ttnn.CoreCoord], List[ttnn.CoreRange]], return_list: bool = False
     ) -> ttnn.CoreRangeSet:
+        assert len(cores) > 0, "No cores provided to to_core_range_set"
         if isinstance(cores[0], ttnn.CoreCoord):
             return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
         elif isinstance(cores[0], ttnn.CoreRange):
@@ -271,7 +284,7 @@ class Prefetcher(LightweightModule):
 
     def init(self, mode: str = "decode") -> None:
         """
-        Initializes the prefetcher
+        Initializes the prefetcher sub devices
         Args:
             mode: The mode to run the prefetcher in, either "decode" or "prefill"
         """
@@ -321,7 +334,7 @@ class Prefetcher(LightweightModule):
         """
         assert (
             len(self.prefetched_tensor_addr) == self.num_tensors * self.num_layers
-        ), "No tensor addresses have been inserted"
+        ), f"Number of tensor addresses have been inserted does not match the number of tensors to prefetch (num_tensors * num_layers), got {len(self.prefetched_tensor_addr)} != {self.num_tensors * self.num_layers}"
 
         tensor_addrs = torch.tensor(self.prefetched_tensor_addr)
         tensor_addrs = tensor_addrs.repeat(self.mesh_device.dram_grid_size().x, 1)
@@ -345,27 +358,27 @@ class Prefetcher(LightweightModule):
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         """
-        Populates the tensor addressess that need to be prefetched
+        Populates the tensor addresses that need to be prefetched
         """
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
-                f"Tensor volume ({tensor.volume()}) must be divisible by num_receiver_cores * num_reader_cores ({self.num_receiver_cores * self.width_cores}) for prefetcher."
+                f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}) for prefetcher."
             )
         if not tensor.is_sharded() or tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
             raise ValueError(
                 f"Tensor must be DRAM sharded for prefetcher. Got sharded={tensor.is_sharded()}, "
                 f"buffer_type={tensor.memory_config().buffer_type}"
             )
-        self.max_tensor_block_size = max(
-            (math.ceil(tensor.volume() / (ttnn.TILE_SIZE * ttnn.TILE_SIZE)) // (self.ring_size))
-            * bytes_in_tile[tensor.dtype],
-            self.max_tensor_block_size,
-        )
+        h, w = tensor.shape[-2], tensor.shape[-1]
+        h_tiles, w_tiles = math.ceil(h / ttnn.TILE_SIZE), math.ceil(w / ttnn.TILE_SIZE)
+        h_tiles_padded = math.ceil(h_tiles / self.ring_size) * self.ring_size
+        max_tensor_tiles = (h_tiles_padded * w_tiles) // self.ring_size
+        self.max_tensor_block_size = max(max_tensor_tiles * bytes_in_tile[tensor.dtype], self.max_tensor_block_size)
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(
-            f"Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
+            f"[DRAM Prefetcher] Inserted tensor of shape {tensor.shape} into prefetcher, total number of tensors in prefetcher queue: {len(self.prefetched_tensor_addr)}"
         )
 
     def prefetch(self):
@@ -387,6 +400,7 @@ class Prefetcher(LightweightModule):
         # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
             self.global_cb_size = self.max_tensor_block_size
+            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
             self.global_cb = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,

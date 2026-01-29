@@ -104,9 +104,9 @@ def create_weight_tensors(
         # WO: [n_heads*head_dim, dim] -> TP on n_heads*head_dim (K-sharded)
         ("wo", n_heads * head_dim, dim, ttnn.bfloat8_b, (3, 2), "K"),
         # FF1: [dim, hidden_dim] -> TP on hidden_dim (N-sharded)
-        ("ff1", dim, hidden_dim, ttnn.bfloat4_b, (2, 3), "N"),
+        ("ff1", dim, hidden_dim, ttnn.bfloat8_b, (2, 3), "N"),
         # FF3: [dim, hidden_dim] -> TP on hidden_dim (N-sharded)
-        ("ff3", dim, hidden_dim, ttnn.bfloat4_b, (2, 3), "N"),
+        ("ff3", dim, hidden_dim, ttnn.bfloat8_b, (2, 3), "N"),
         # FF2: [hidden_dim, dim] -> TP on hidden_dim (K-sharded)
         ("ff2", hidden_dim, dim, ttnn.bfloat8_b, (3, 2), "K"),
     ]
@@ -262,8 +262,9 @@ def create_input_tensors(mesh_device, model_dims, prefetcher):
     )
 
     def create_input_mem_config(dim_size):
+        dim_size_rounded = round_up(dim_size, ttnn.TILE_SIZE * ring_size)
         return ttnn.create_sharded_memory_config(
-            shape=(32, dim_size // ring_size),
+            shape=(32, dim_size_rounded // ring_size),
             core_grid=receiver_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -349,8 +350,9 @@ def create_output_mem_configs(model_dims, prefetcher, mesh_device):
     )
 
     def create_output_mem_config(n_size):
+        n_size_rounded = round_up(n_size, ttnn.TILE_SIZE * ring_size)
         return ttnn.create_sharded_memory_config(
-            shape=(32, n_size // ring_size),
+            shape=(32, n_size_rounded // ring_size),
             core_grid=receiver_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
