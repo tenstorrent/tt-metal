@@ -8,7 +8,6 @@ set(TT_EAGER_TESTS_OPS
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp
     ops/test_softmax_op.cpp
-    ops/test_layernorm_op.cpp
     ops/test_bcast_op.cpp
     ops/test_bmm_op.cpp
     # ops/test_pad_op.cpp                     # <- not called in run_tt_eager.py
