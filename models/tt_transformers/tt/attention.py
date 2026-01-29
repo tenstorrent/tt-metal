@@ -305,9 +305,7 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
-        self.shard_wo_dims = (
-            (2, 3) if (self.use_fused_all_gather_matmul or self.TG or self.prefetcher is not None) else (3, 2)
-        )
+        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
 
         self.wo_sharded_ring = ttnn.as_tensor(
             pt_wo,
@@ -419,7 +417,9 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
+    def to_qk_fused_memory_config(
+        self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor, sub_core_grids: ttnn.CoreRangeSet
+    ):
         """
         Convert Q and K tensors to height-sharded memory layouts suitable for
         fused QK ops such as rotary_embedding_llama_fused_qk and the subsequent
@@ -428,9 +428,7 @@ class Attention(LightweightModule):
         This function:
         - Infers the number of Q heads and KV heads from the input tensors
         - Shards Q and K along the batch dimension using HEIGHT sharding
-        - Places Q and K on disjoint core regions to avoid overlap (assuming a row size of 8 cores):
-            - For q_batch = 32: 32 cores for Q fill 4 complete rows (32 // 8 = 4), so K starts at row 4, column 0
-            - For q_batch = 1: 1 core for Q starts at (0,0), so K starts at column 1, row 0
+        - Places Q and K on disjoint core regions to avoid overlap within sub_core_grids
         - Uses row-major shard orientation with explicit shard shapes
 
         The resulting memory layouts are compatible with fused attention
@@ -443,6 +441,9 @@ class Attention(LightweightModule):
 
             k_tensor (ttnn.Tensor):
                 Key tensor with shape [..., batch, num_kv_heads, head_dim].
+
+            sub_core_grids (ttnn.CoreRangeSet):
+                The available core grids to place Q and K tensors on.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -566,7 +567,6 @@ class Attention(LightweightModule):
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
             )
-
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )
@@ -663,7 +663,7 @@ class Attention(LightweightModule):
             )
 
             # Fused AGMM only valid for ring topology
-            if self.ccl_topology == ttnn.Topology.Ring:
+            if self.ccl_topology == ttnn.Topology.Ring and self.prefetcher is None:
                 _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                     attn_output_cat,
                     self.wo,
@@ -673,11 +673,9 @@ class Attention(LightweightModule):
                     all_gather_core_grid_offset=(0, 4),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     num_links=self.model_config["ATTN_AGMM_CONFIG"]["num_links"],
-                    memory_config_ag=self.args.get_attn_all_gather_output_mem_config("decode", None, self.ccl_topology),
-                    memory_config_mm=self.args.get_attn_dense_output_mem_config("decode", None, self.ccl_topology),
-                    program_config=self.args.get_attn_all_gather_matmul_program_config(
-                        "decode", None, self.ccl_topology
-                    ),
+                    memory_config_ag=self.args.get_attn_all_gather_output_mem_config("decode", None),
+                    memory_config_mm=self.args.get_attn_dense_output_mem_config("decode", None),
+                    program_config=self.args.get_attn_all_gather_matmul_program_config("decode", None),
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     chunks_per_sync=self.model_config["ATTN_AGMM_CONFIG"]["chunks_per_sync"],
                     num_workers_per_link=self.model_config["ATTN_AGMM_CONFIG"]["num_workers_per_link"],
@@ -692,9 +690,7 @@ class Attention(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=1,
                     topology=self.ccl_topology,
-                    memory_config=self.args.get_attn_all_gather_output_mem_config(
-                        "decode", self.prefetcher, self.ccl_topology
-                    ),
+                    memory_config=self.args.get_attn_all_gather_output_mem_config("decode", self.prefetcher),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     chunks_per_sync=10,
                     num_workers_per_link=2,
@@ -704,10 +700,8 @@ class Attention(LightweightModule):
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
                     self.wo_sharded_ring if self.prefetcher is not None else self.wo,
-                    memory_config=self.args.get_attn_dense_output_mem_config("decode", None, self.prefetcher),
-                    program_config=self.args.get_attn_all_gather_matmul_program_config(
-                        "decode", self.prefetcher, self.ccl_topology
-                    ),
+                    memory_config=self.args.get_attn_dense_output_mem_config("decode", self.prefetcher),
+                    program_config=self.args.get_attn_all_gather_matmul_program_config("decode", self.prefetcher),
                     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                     global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                     sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
@@ -747,7 +741,7 @@ class Attention(LightweightModule):
                 )
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
-            dense_out_sharded = ttnn.matmul(
+            dense_out_sharded = ttnn.linear(
                 attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,

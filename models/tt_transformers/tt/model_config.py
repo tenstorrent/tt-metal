@@ -640,8 +640,10 @@ class ModelArgs:
         self.processor = None if dummy_weights else self.create_processor()
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable or multimodal models
-        self.use_qk_fused = not self.is_multimodal and self.prefetcher is None
+        # We currently disable this fusion of ops for vision-capable or multimodal models and when prefetcher is enabled
+        self.use_qk_fused = not self.is_multimodal
+        if self.prefetcher is not None:
+            self.use_qk_fused = False
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
@@ -701,17 +703,20 @@ class ModelArgs:
                         )
                     lm_head_num_rows = 8
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
+            self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
+                self.lm_head_core_grid, self.prefetcher
+            )
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
             self.prefill_rows = 8  # TODO if BH = 10, if wh = 8
             self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
-            mlp1_3_grid = lambda seq_len: (
+            self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
                 else self.find_prefill_grid(self.prefill_rows, self.dim // self.tile_size)
             )
-            mlp2_grid = lambda seq_len: (
+            self.mlp2_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
                 else self.find_prefill_grid(self.prefill_rows, self.hidden_dim // self.tile_size)
@@ -788,7 +793,7 @@ class ModelArgs:
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
-                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
                 per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
                 per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
                 fused_activation=ttnn.UnaryOpType.SILU,
@@ -797,7 +802,7 @@ class ModelArgs:
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
-                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
                 per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
                 per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
             )
@@ -1030,9 +1035,9 @@ class ModelArgs:
 
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
-            logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")
+            logger.info(f"MLP prefill grids @ 32: w1/w3: {self.mlp1_3_grid(32)}, w2: {self.mlp2_grid(32)}")
             logger.info(
-                f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
+                f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {self.mlp1_3_grid(self.max_seq_len)}, w2: {self.mlp2_grid(self.max_seq_len)}"
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
@@ -1161,7 +1166,7 @@ class ModelArgs:
     def get_mlp_ff1_3_prg_config(self, mode: str, seq_len: int, prefetcher: Prefetcher):
         match mode:
             case "decode":
-                if self.dim >= 4096 and self.args.is_galaxy:
+                if self.dim >= 4096 and self.is_galaxy:
                     return self.matmul_1d_config_from_tensor_shapes(
                         (
                             1,
@@ -1180,11 +1185,11 @@ class ModelArgs:
                         overwrite_subblock_w=1,
                     )
                 else:
-                    if self.prefetcher is not None:
+                    if prefetcher is not None:
                         return self.matmul_1d_ring_config(
                             1,
                             32,
-                            dim,
+                            self.dim,
                             self.hidden_dim // self.cluster_shape[1],  # Use padded N
                             prefetcher.ring_size,
                             num_global_cb_receivers=prefetcher.num_receiver_cores,
@@ -1201,7 +1206,7 @@ class ModelArgs:
                     m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                     k=self.dim // self.cluster_shape[0],
                     n=self.hidden_dim // self.cluster_shape[1],
-                    grid_size=mlp1_3_grid(seq_len),
+                    grid_size=self.mlp1_3_grid(seq_len),
                     per_core_N=math.ceil(
                         self.hidden_dim // self.cluster_shape[1] / (self.tile_size * self.dram_shard_grid_width)
                     )
@@ -1211,10 +1216,10 @@ class ModelArgs:
             case _:
                 raise ValueError(f"Invalid mode: {mode}")
 
-    def get_mlp_ff2_prg_config(self, mode: str, prefetcher: Prefetcher):
+    def get_mlp_ff2_prg_config(self, mode: str, seq_len: int, prefetcher: Prefetcher):
         match mode:
             case "decode":
-                if self.dim >= 4096 and self.args.is_galaxy:
+                if self.dim >= 4096 and self.is_galaxy:
                     return self.matmul_1d_config_from_tensor_shapes(
                         (
                             1,
@@ -1243,23 +1248,29 @@ class ModelArgs:
                             num_global_cb_receivers=prefetcher.num_receiver_cores,
                         )
                     else:
-                        return self.matmul_1d_config_from_tensor_shapes(
-                            (
-                                1,
-                                1,
-                                32,
-                                self.hidden_dim // 8,
-                            ),
-                            (
-                                1,
-                                1,
-                                self.hidden_dim // 8,
-                                self.dim // 4,
-                            ),
-                            grid=ttnn.CoreGrid(x=8, y=2),
-                            overwrite_subblock_h=1,
-                            overwrite_subblock_w=1,
+                        mlp2_core_grid = (
+                            ttnn.CoreGrid(y=1, x=8)
+                            if self.is_galaxy
+                            else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
                         )
+                        return self.dram_matmul_config(
+                            m=self.tile_padded_batch_rows,
+                            k=self.hidden_dim // self.cluster_shape[1],
+                            n=self.dim,
+                            num_cores=mlp2_core_grid.num_cores,
+                        )
+            case "prefill":
+                return self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                    n=self.dim,
+                    grid_size=self.mlp2_grid(seq_len),
+                    per_core_N=math.ceil(self.dim / (self.tile_size * self.dram_shard_grid_width))
+                    if not self.is_galaxy
+                    else None,
+                )
+            case _:
+                raise ValueError(f"Invalid mode: {mode}")
 
     def get_mlp_ff1_3_mem_config(self, mode: str, prefetcher: Prefetcher):
         match mode:
@@ -1281,14 +1292,14 @@ class ModelArgs:
             case _:
                 raise ValueError(f"Invalid mode: {mode}")
 
-    def get_mlp_ff2_mem_config(self, mode: str):
+    def get_mlp_ff2_mem_config(self, mode: str, prefetcher: Prefetcher):
         match mode:
             case "decode":
-                if self.prefetcher is not None:
+                if prefetcher is not None:
                     return ttnn.create_sharded_memory_config(
-                        shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
-                        core_grid=self.prefetcher.to_core_range_set(
-                            self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                        shape=(32, self.dim // prefetcher.ring_size),  # Use padded N
+                        core_grid=prefetcher.to_core_range_set(
+                            prefetcher.receiver_cores(sender_active=True, receiver_active=True)
                         ),
                         strategy=ttnn.ShardStrategy.WIDTH,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1388,6 +1399,10 @@ class ModelArgs:
                         ttnn.ShardOrientation.ROW_MAJOR,
                         use_height_and_width_as_shard_shape=True,
                     )
+            case "prefill":
+                return None
+            case _:
+                raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
     def get_mlp_act_mem_config(self, mode: str):
@@ -1608,14 +1623,14 @@ class ModelArgs:
                     # When using prefetcher, return the current memory config (pass-through)
                     return None  # Caller should use tensor's memory_config()
                 else:
-                    shard_height = self.tile_size * mesh_cols
-                    shard_width = self.dim // qkv_core_grid.num_cores if not self.is_galaxy else 32
                     num_cores = (
                         40 if self.dim == 8192 else (24 if self.dim == 4096 else (20 if self.dim == 3072 else 12))
                     )
                     qkv_core_grid = (
                         self.dram_shard_core_grid_for_k(self.dim) if not self.is_galaxy else num_to_coregrid(num_cores)
                     )
+                    shard_height = self.tile_size * mesh_cols
+                    shard_width = self.dim // qkv_core_grid.num_cores if not self.is_galaxy else 32
                     return ttnn.create_sharded_memory_config(
                         (
                             shard_height,
@@ -1744,15 +1759,14 @@ class ModelArgs:
         match mode:
             case "decode":
                 if prefetcher is not None:
-                    k_wo = self.dim
-                    n_wo = self.dim // self.cluster_shape[1]
-                    return self.matmul_1d_ring_config(
-                        1,
-                        32,
-                        k_wo,
-                        n_wo,
-                        self.prefetcher.ring_size,
-                        num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+                    return ttnn.create_sharded_memory_config(
+                        shape=(32, self.dim // prefetcher.ring_size),  # Use padded N
+                        core_grid=prefetcher.to_core_range_set(
+                            prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                        ),
+                        strategy=ttnn.ShardStrategy.WIDTH,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
                     )
                 else:
                     # All gather matmuls currently only supported on T3K
@@ -1915,22 +1929,23 @@ class ModelArgs:
             case _:
                 raise ValueError(f"Invalid mode: {mode}")
 
-    def get_attn_dense_output_mem_config(self, mode: str, prefetcher, ccl_topology):
+    def get_attn_dense_output_mem_config(self, mode: str, prefetcher):
         """Get the memory config for dense output (after all-reduce) in attention."""
         match mode:
             case "decode":
-                if ccl_topology == ttnn.Topology.Ring:
+                if self.ccl_topology() == ttnn.Topology.Ring and prefetcher is None:
                     return self.get_decode_residual_mem_config("decode", None)
                 else:
                     if prefetcher is not None:
-                        norm_core_range_set = ttnn.CoreRangeSet(
-                            [
-                                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                            ]
+                        wo_out_shard_shape_ring = (
+                            32,
+                            self.dim // self.cluster_shape[1] // prefetcher.ring_size,
                         )
                         return ttnn.create_sharded_memory_config(
-                            shape=(32, self.dim // self.cluster_shape[1] // norm_core_range_set.num_cores()),
-                            core_grid=norm_core_range_set,
+                            shape=wo_out_shard_shape_ring,
+                            core_grid=prefetcher.to_core_range_set(
+                                prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                            ),
                             strategy=ttnn.ShardStrategy.WIDTH,
                             orientation=ttnn.ShardOrientation.ROW_MAJOR,
                             use_height_and_width_as_shard_shape=True,
@@ -2008,13 +2023,12 @@ class ModelArgs:
     # =========================================================================
     def get_norm_config(self, norm_type: str, mode: str, prefetcher=None):
         """Get the norm config dict for attention, ff, or lm_head norms."""
+        prefetcher_norm_grid = ttnn.CoreGrid(y=8, x=4)
         match norm_type:
             case "attn":
-                if prefetcher is not None:
+                if mode == "decode" and prefetcher is not None:
                     return {
-                        "sharded_program_config": self.create_sharded_norm_config(
-                            prefetcher.dynamic_worker_core_grid(32)
-                        ),
+                        "sharded_program_config": self.create_sharded_norm_config(prefetcher_norm_grid),
                         "sharded_output_config": ttnn.create_sharded_memory_config(
                             shape=(
                                 32,
@@ -2044,11 +2058,9 @@ class ModelArgs:
                         "output_mem_config": None,
                     }
             case "ff":
-                if prefetcher is not None:
+                if mode == "decode" and prefetcher is not None:
                     return {
-                        "sharded_program_config": self.create_sharded_norm_config(
-                            prefetcher.dynamic_worker_core_grid(32)
-                        ),
+                        "sharded_program_config": self.create_sharded_norm_config(prefetcher_norm_grid),
                         "sharded_output_config": ttnn.create_sharded_memory_config(
                             shape=(32, self.dim // prefetcher.dynamic_worker_core_grid(32).num_cores()),
                             core_grid=prefetcher.dynamic_worker_core_grid(32),
@@ -2079,11 +2091,9 @@ class ModelArgs:
                         "output_mem_config": None,
                     }
             case "lm_head":
-                if prefetcher is not None:
+                if mode == "decode" and prefetcher is not None:
                     return {
-                        "sharded_program_config": self.create_sharded_norm_config(
-                            prefetcher.dynamic_worker_core_grid(32)
-                        ),
+                        "sharded_program_config": self.create_sharded_norm_config(prefetcher_norm_grid),
                         "sharded_output_config": ttnn.create_sharded_memory_config(
                             shape=(32, self.dim // prefetcher.dynamic_worker_core_grid(32).num_cores()),
                             core_grid=prefetcher.dynamic_worker_core_grid(32),
@@ -2096,7 +2106,7 @@ class ModelArgs:
                 else:
                     return {
                         "sharded_program_config": self.create_sharded_norm_config(self.lm_head_core_grid),
-                        "sharded_output_config": self.get_lm_head_input_mem_config("decode"),
+                        "sharded_output_config": self.get_lm_head_input_mem_config(mode, None),
                         "output_mem_config": None,
                     }
             case _:
@@ -2118,12 +2128,16 @@ class ModelArgs:
         if is_blackhole():
             if self.num_devices == 4:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
-            if self.num_devices == 8:
+            elif self.num_devices == 8:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
-            max_columns_per_device = LLAMA_VOCAB_SIZE // 8
-        return math.ceil(max_columns_per_device / (self.tile_size * prefetcher.ring_size)) * (
-            self.tile_size * prefetcher.ring_size
-        )
+            else:
+                max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
+        if prefetcher is not None:
+            return math.ceil(max_columns_per_device / (self.tile_size * prefetcher.ring_size)) * (
+                self.tile_size * prefetcher.ring_size
+            )
+        else:
+            return max_columns_per_device
 
     def get_lm_head_input_mem_config(self, mode: str, prefetcher: Prefetcher):
         """Get the memory config for LM head input."""
@@ -2148,21 +2162,31 @@ class ModelArgs:
                         use_height_and_width_as_shard_shape=True,
                     )
             case "prefill":
-                return ttnn.DRAM_MEMORY_CONFIG
+                return ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
+                    ),  # Shard shape: [32, 128] -> 1 shard per core
+                    self.lm_head_core_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
             case _:
                 raise ValueError(f"Invalid mode: {mode}")
 
     def get_lm_head_program_config(self, split_size: int, prefetcher=None):
         """Get the program config for LM head matmul."""
         if prefetcher is not None:
-            lm_head_size_per_device = nearest_32(math.ceil(self.padded_vocab_size / self.num_devices / 32) * 32)
             return self.matmul_1d_ring_config(
                 1,
                 32,
                 self.dim,
-                lm_head_size_per_device,
+                self.max_columns_per_device_lm_head,
                 prefetcher.ring_size,
-                num_global_cb_receivers=prefetcher.num_receiver_cores,
+                prefetch=False,
+                num_global_cb_receivers=1,
+                untilize_out=True,
             )
         else:
             return self.dram_matmul_config(
@@ -2204,17 +2228,23 @@ class ModelArgs:
         """Get the memory config for LM head output resharding."""
         if prefetcher is None:
             return ttnn.L1_MEMORY_CONFIG
-        lm_head_size_per_device = nearest_32(math.ceil(self.padded_vocab_size / self.num_devices / 32) * 32)
         lm_head_output_core_range_set = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(prefetcher.num_receiver_cores, 7)),
                 ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(8 + prefetcher.num_receiver_cores - 1, 7)),
             ]
         )
-        lm_head_num_cores = lm_head_output_core_range_set.num_cores()
+
+        def next_power_of_2(n):
+            if n <= 0:
+                return 1
+            return 1 << ((n - 1).bit_length())
+
+        lm_head_size = math.ceil(self.vocab_size / self.num_devices)
+        lm_head_size_per_device = next_power_of_2(lm_head_size)
         return ttnn.create_sharded_memory_config(
-            shape=(32, lm_head_size_per_device // lm_head_num_cores),
-            core_grid=lm_head_output_core_range_set,
+            shape=(32, lm_head_size_per_device // prefetcher.ring_size),
+            core_grid=prefetcher.to_core_range_set(prefetcher.receiver_cores(sender_active=True, receiver_active=True)),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -3307,7 +3337,7 @@ class ModelArgs:
             overwrite_subblock_h=overwrite_subblock_h,
         )
 
-    def create_sharded_norm_config(self, grid, prefetch=False):
+    def create_sharded_norm_config(self, grid):
         """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
 
         Args:
@@ -3321,7 +3351,7 @@ class ModelArgs:
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y] if not prefetch else [4, 8],
+            compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,

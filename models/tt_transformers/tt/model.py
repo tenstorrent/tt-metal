@@ -161,7 +161,7 @@ class Transformer(LightweightModule):
         logits = self.norm(
             logits, mode="prefill", norm_config=self.args.get_norm_config("lm_head", "prefill", self.prefetcher)
         )
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config("prefill")
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config("prefill", None)
         if lm_head_input_mem_cfg.is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
@@ -647,9 +647,13 @@ class Transformer(LightweightModule):
 
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
 
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(mode)
+        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
+            mode, None if mode == "prefill" else self.prefetcher
+        )
         if mode == "prefill" and lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
+        if mode == "decode" and self.prefetcher is not None:
+            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config("decode", self.prefetcher))
 
         x = self.lm_head(x)
         return x

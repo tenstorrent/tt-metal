@@ -50,11 +50,11 @@ class LMHead(LightweightModule):
         num_splits_decode = math.ceil(size_per_device / max_columns_per_device_decode)
         num_splits_prefill = math.ceil(size_per_device / max_columns_per_device_prefill)
 
-        split_sizes_prefill = [min(size_per_device, max_columns_per_device_prefill)] * (num_splits_prefill - 1)
-        split_sizes_prefill.append(size_per_device - sum(split_sizes_prefill))  # remaining columns
+        self.split_sizes_prefill = [min(size_per_device, max_columns_per_device_prefill)] * (num_splits_prefill - 1)
+        self.split_sizes_prefill.append(size_per_device - sum(self.split_sizes_prefill))  # remaining columns
 
-        split_sizes_decode = [min(size_per_device, max_columns_per_device_decode)] * (num_splits_decode - 1)
-        split_sizes_decode.append(size_per_device - sum(split_sizes_decode))  # remaining columns
+        self.split_sizes_decode = [min(size_per_device, max_columns_per_device_decode)] * (num_splits_decode - 1)
+        self.split_sizes_decode.append(size_per_device - sum(self.split_sizes_decode))  # remaining columns
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
 
@@ -72,7 +72,7 @@ class LMHead(LightweightModule):
         self.output_weights_prefill = []
         self.output_weights_decode = []
 
-        for mode, split_sizes in enumerate([split_sizes_prefill, split_sizes_decode]):
+        for mode, split_sizes in enumerate([self.split_sizes_prefill, self.split_sizes_decode]):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
@@ -135,11 +135,12 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == "decode"
-        split_sizes = split_sizes_decode if use_prefetcher else split_sizes_prefill
+        split_sizes = self.split_sizes_decode if use_prefetcher else self.split_sizes_prefill
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
             for split_size in split_sizes
         ]
+
         output_weights = self.output_weights_decode if use_prefetcher else self.output_weights_prefill
 
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
@@ -147,10 +148,6 @@ class LMHead(LightweightModule):
         )
 
         for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
-            if use_prefetcher:
-                lm_head_input_ring_mem_cfg = self.args.get_lm_head_input_ring_mem_config(self.prefetcher)
-                x = ttnn.to_memory_config(x, lm_head_input_ring_mem_cfg)
-
             output = ttnn.linear(
                 x,
                 weight,
@@ -161,14 +158,12 @@ class LMHead(LightweightModule):
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
 
-            if not use_prefetcher:
-                output = ttnn.sharded_to_interleaved(
-                    output, memory_config=self.args.get_lm_head_sharded_output_mem_config(None)
-                )
-            else:
-                output = ttnn.to_memory_config(
-                    output, memory_config=self.args.get_lm_head_sharded_output_mem_config(self.prefetcher)
-                )
+            output = ttnn.to_memory_config(
+                output,
+                memory_config=self.args.get_lm_head_sharded_output_mem_config(
+                    self.prefetcher if use_prefetcher else None
+                ),
+            )
 
             outputs.append(output)
 
