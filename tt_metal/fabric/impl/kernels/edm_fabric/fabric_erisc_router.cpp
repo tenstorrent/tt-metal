@@ -2523,7 +2523,7 @@ FORCE_INLINE void teardown(
         wait_for_other_local_erisc();
     }
     if constexpr (IS_TEARDOWN_MASTER()) {
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
+        edm_status_ptr[0] = tt::tt_fabric::EDMStatus::TERMINATED;
     }
 }
 
@@ -2660,8 +2660,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
     volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
-        //reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(get_stream_scratch_register_address(OVERLAY_REGISTER_ONE));
+        reinterpret_cast<volatile tt_reg_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    //volatile tt::tt_fabric::EDMStatus* edm_status_ptr =    
+    //    reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 
     
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
@@ -2782,19 +2783,23 @@ void kernel_main() {
     [&]<size_t... Is>(std::index_sequence<Is...>) {
         (([&]<size_t I>() {
              if constexpr (is_sender_channel_serviced[I]) {
-                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0U;
-                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0U;
+                 if constexpr(I == 0) {
+                     // Channel 0 uses volatile uint32_t* const
+                     *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0U;
+                 } else {
+                     // Other channels use volatile tt_reg_ptr uint32_t* const
+                     *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(local_sender_channel_connection_semaphore_addrs[I]) = 0U;
+                 }
+                 *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0U;
              }
          }.template operator()<Is>()),
          ...);
     }(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
-    asm volatile("nop");
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
 #endif
     edm_status_ptr[0] = tt::tt_fabric::EDMStatus::STARTED;
-    asm volatile("nop");
 
     //////////////////////////////
     //////////////////////////////
@@ -3130,7 +3135,6 @@ void kernel_main() {
         }
 
         edm_status_ptr[0] = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
-        asm volatile("nop");
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
@@ -3146,7 +3150,6 @@ void kernel_main() {
             }
 
             edm_status_ptr[0] = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
-            asm volatile("nop");
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal
             // 2. All risc cores in master eth core receive signal from host and exits from this wait

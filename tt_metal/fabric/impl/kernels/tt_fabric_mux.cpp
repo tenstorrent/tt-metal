@@ -26,8 +26,8 @@ constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
 constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
 // header only buffer slot size is the same as the edm packet header size
 
-constexpr size_t status_address = get_compile_time_arg_val(5);
-//constexpr uint32_t status_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE);
+//constexpr size_t status_address = get_compile_time_arg_val(5);
+constexpr uint32_t status_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE);
 constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
 constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
@@ -94,7 +94,7 @@ void setup_channel(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_reg_ptr uint32_t* const>(sender_flow_control_address),
             reinterpret_cast<ConnectionLiveSemaphorePtrType>(connection_handshake_address),
-            0 /* unused, sender_sync_noc_cmd_buf */,
+            0, // unused, sender_sync_noc_cmd_buf
             tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
         }
     else {
@@ -160,9 +160,9 @@ void kernel_main() {
     set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
-    volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
+    //volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
+    volatile uint32_t* status_ptr = reinterpret_cast<volatile uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
-    asm volatile("nop");
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -197,8 +197,10 @@ void kernel_main() {
 
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
-    size_t connection_handshake_address = get_stream_scratch_register_address(2U), connection_handshake_base_address;
+    size_t connection_handshake_address = connection_handshake_base_address; //get_stream_scratch_register_address(0U); //, connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
+
+    auto overlay_scratch_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO);
 
     setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, USE_OVERLAY_REGISTER>(
         &full_size_channels[i],
@@ -208,9 +210,14 @@ void kernel_main() {
         BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
         channel_base_address,
         connection_info_address,
-        get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO),
+        overlay_scratch_address,
         sender_flow_control_address,
         StreamId{channel_stream_ids[0UL]});
+
+    // OVERLAY_REGISTER_ZERO used for first channel above
+    // OVERLAY_REGISTER_ONE used for the status_ptr
+    // need to skip both
+    overlay_scratch_address+=2;
 
     #pragma unroll
     for (uint8_t i = 1UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
@@ -222,9 +229,10 @@ void kernel_main() {
             BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
             channel_base_address,
             connection_info_address,
-            connection_handshake_address,
+            overlay_scratch_address, //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]});
+        overlay_scratch_address++;
     }
 
     setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, USE_L1_ADDRESS>(
@@ -235,10 +243,11 @@ void kernel_main() {
         sizeof(PACKET_HEADER_TYPE),
         channel_base_address,
         connection_info_address,
-        connection_handshake_address, // get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO),
+        overlay_scratch_address, //connection_handshake_address,
         sender_flow_control_address,
         StreamId{channel_stream_ids[0UL + NUM_FULL_SIZE_CHANNELS]});
-    
+    overlay_scratch_address++;
+
     #pragma unroll
     for (uint8_t i = 1UL; i < NUM_HEADER_ONLY_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, USE_L1_ADDRESS>(
@@ -249,9 +258,10 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             channel_base_address,
             connection_info_address,
-            connection_handshake_address,
+            overlay_scratch_address, //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]});
+        overlay_scratch_address++;    
     }
 
     volatile auto termination_signal_ptr =
@@ -270,7 +280,6 @@ void kernel_main() {
     fabric_connection.open<use_worker_allocated_credit_address>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
-    asm volatile("nop");
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
@@ -325,6 +334,5 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
-    asm volatile("nop");
     set_l1_data_cache<false>();
 }

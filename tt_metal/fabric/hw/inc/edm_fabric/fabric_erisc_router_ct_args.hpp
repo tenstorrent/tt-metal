@@ -299,8 +299,7 @@ constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAI
 constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
 constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
 
- constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
-//constexpr uint32_t edm_status_ptr_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE);
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
 
 // for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
 // used.
