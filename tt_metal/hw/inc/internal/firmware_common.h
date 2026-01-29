@@ -107,6 +107,9 @@ inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_vi
 FORCE_INLINE
 uint32_t firmware_config_init(
     tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t processor_index) {
+    DPRINT << "firmware_config_init called" << ENDL();
+    DPRINT << "core_type_index = " << (uint32_t)core_type_index << ENDL();
+    DPRINT << "processor_index = " << (uint32_t)processor_index << ENDL();
 #ifdef ARCH_QUASAR
     extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
     extern thread_local uint32_t tt_l1_ptr* crta_l1_base;
@@ -118,18 +121,25 @@ uint32_t firmware_config_init(
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
     uintptr_t kernel_config_base[ProgrammableCoreType::COUNT];
+    DPRINT << "launch_msg_rd_ptr = " << (uint32_t)mailboxes->launch_msg_rd_ptr << ENDL();
     launch_msg_t* launch_msg_address = &(mailboxes->launch[mailboxes->launch_msg_rd_ptr]);
+    DPRINT << "launch_msg_address = " << (uintptr_t)launch_msg_address << ENDL();
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] = launch_msg_address->kernel_config.kernel_config_base[index];
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
+        DPRINT << "kernel_config_base[" << index << "] = " << (uintptr_t)kernel_config_base[index] << ENDL();
+        DPRINT << "sem_l1_base[" << index << "] = " << (uintptr_t)sem_l1_base[index] << ENDL();
     }
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                        launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset);
+                                        launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset) +
+                  MEM_L1_UNCACHED_BASE;
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                         launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
-
+                                         launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset) +
+                   MEM_L1_UNCACHED_BASE;
+    DPRINT << "rta_l1_base = " << (uintptr_t)rta_l1_base << ENDL();
+    DPRINT << "crta_l1_base = " << (uintptr_t)crta_l1_base << ENDL();
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 #ifdef ARCH_QUASAR
     extern thread_local uint32_t rta_count;

@@ -64,7 +64,7 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmRuntimeArgs) {
         distributed::EnqueueMeshWorkload(cq, workload, true);
 
         std::vector<uint32_t> result(num_runtime_args);
-        tt_metal::detail::ReadFromDeviceL1(dev, core, results_addr, sizeof(uint32_t) * num_runtime_args, result);
+        tt_metal::detail::ReadFromDeviceL1(dev, core, (1000 * 1024), sizeof(uint32_t) * num_runtime_args, result);
 
         EXPECT_EQ(result, runtime_args);
     }

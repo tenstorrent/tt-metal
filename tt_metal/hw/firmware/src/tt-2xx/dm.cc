@@ -179,6 +179,66 @@ extern "C" uint32_t _start1() {
                 DeviceZoneScopedMainN("DM0-FW");
                 uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
                 launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+                // Scalar fields
+                DPRINT << "=== kernel_config ===" << ENDL();
+                DPRINT << "enables = 0x" << HEX() << (uint32_t)launch_msg_address->kernel_config.enables << DEC()
+                       << ENDL();
+                DPRINT << "host_assigned_id = " << (uint32_t)launch_msg_address->kernel_config.host_assigned_id
+                       << ENDL();
+                DPRINT << "mode = " << (uint32_t)launch_msg_address->kernel_config.mode << ENDL();
+                DPRINT << "brisc_noc_id = " << (uint32_t)launch_msg_address->kernel_config.brisc_noc_id << ENDL();
+                DPRINT << "brisc_noc_mode = " << (uint32_t)launch_msg_address->kernel_config.brisc_noc_mode << ENDL();
+                DPRINT << "local_cb_offset = " << (uint32_t)launch_msg_address->kernel_config.local_cb_offset << ENDL();
+                DPRINT << "remote_cb_offset = " << (uint32_t)launch_msg_address->kernel_config.remote_cb_offset
+                       << ENDL();
+                DPRINT << "local_cb_mask = 0x" << HEX() << (uint32_t)launch_msg_address->kernel_config.local_cb_mask
+                       << DEC() << ENDL();
+                DPRINT << "min_remote_cb_start_index = "
+                       << (uint32_t)launch_msg_address->kernel_config.min_remote_cb_start_index << ENDL();
+                DPRINT << "exit_erisc_kernel = " << (uint32_t)launch_msg_address->kernel_config.exit_erisc_kernel
+                       << ENDL();
+                DPRINT << "ncrisc_kernel_size16 = " << (uint32_t)launch_msg_address->kernel_config.ncrisc_kernel_size16
+                       << ENDL();
+                DPRINT << "sub_device_origin_x = " << (uint32_t)launch_msg_address->kernel_config.sub_device_origin_x
+                       << ENDL();
+                DPRINT << "sub_device_origin_y = " << (uint32_t)launch_msg_address->kernel_config.sub_device_origin_y
+                       << ENDL();
+                DPRINT << "preload = " << (uint32_t)launch_msg_address->kernel_config.preload << ENDL();
+
+                // Array fields - kernel_config_base[ProgrammableCoreType::COUNT]
+                for (uint32_t i = 0; i < ProgrammableCoreType::COUNT; i++) {
+                    DPRINT << "kernel_config_base[" << i << "] = 0x" << HEX()
+                           << (uint32_t)launch_msg_address->kernel_config.kernel_config_base[i] << DEC() << ENDL();
+                }
+
+                // Array fields - sem_offset[ProgrammableCoreType::COUNT]
+                for (uint32_t i = 0; i < ProgrammableCoreType::COUNT; i++) {
+                    DPRINT << "sem_offset[" << i << "] = " << (uint32_t)launch_msg_address->kernel_config.sem_offset[i]
+                           << ENDL();
+                }
+
+                // Array fields - rta_offset[MaxProcessorsPerCoreType] (struct with rta_offset and crta_offset)
+                for (uint32_t i = 0; i < MaxProcessorsPerCoreType; i++) {
+                    DPRINT << "rta_offset[" << i
+                           << "].rta_offset = " << (uint32_t)launch_msg_address->kernel_config.rta_offset[i].rta_offset
+                           << ENDL();
+                    DPRINT << "rta_offset[" << i << "].crta_offset = "
+                           << (uint32_t)launch_msg_address->kernel_config.rta_offset[i].crta_offset << ENDL();
+                }
+
+                // Array fields - kernel_text_offset[MaxProcessorsPerCoreType]
+                for (uint32_t i = 0; i < MaxProcessorsPerCoreType; i++) {
+                    DPRINT << "kernel_text_offset[" << i << "] = 0x" << HEX()
+                           << (uint32_t)launch_msg_address->kernel_config.kernel_text_offset[i] << DEC() << ENDL();
+                }
+
+                // Array fields - watcher_kernel_ids[MaxProcessorsPerCoreType]
+                for (uint32_t i = 0; i < MaxProcessorsPerCoreType; i++) {
+                    DPRINT << "watcher_kernel_ids[" << i
+                           << "] = " << (uint32_t)launch_msg_address->kernel_config.watcher_kernel_ids[i] << ENDL();
+                }
+
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
                 uint32_t enables = launch_msg_address->kernel_config.enables;

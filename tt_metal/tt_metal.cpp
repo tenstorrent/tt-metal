@@ -943,7 +943,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             auto rta_offset = kernel_config.rta_offset()[processor_index];
                             if (!rt_args.empty()) {
                                 auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
-                                log_trace(
+                                log_info(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
                                     "{}",
@@ -960,7 +960,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
-                                log_trace(
+                                log_info(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
                                     "{}",
