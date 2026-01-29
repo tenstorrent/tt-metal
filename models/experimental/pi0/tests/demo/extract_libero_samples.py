@@ -14,8 +14,10 @@ Usage:
 
 import sys
 from pathlib import Path
+from io import BytesIO
 
 import numpy as np
+from PIL import Image
 
 # Output directory - local to demo folder
 DEMO_DIR = Path(__file__).parent
@@ -55,9 +57,20 @@ def main():
         if ep_idx not in episode_samples and len(episode_samples) < 5:
             episode_samples[ep_idx] = sample
 
-            # Save images
-            img1 = sample["observation.images.image"]
-            img2 = sample["observation.images.image2"]
+            # Save images - convert from dict/bytes to PIL Image
+            img1_data = sample["observation.images.image"]
+            img2_data = sample["observation.images.image2"]
+
+            # Convert bytes to PIL Image if needed
+            if isinstance(img1_data, dict) and "bytes" in img1_data:
+                img1 = Image.open(BytesIO(img1_data["bytes"]))
+            else:
+                img1 = img1_data  # Already a PIL Image
+
+            if isinstance(img2_data, dict) and "bytes" in img2_data:
+                img2 = Image.open(BytesIO(img2_data["bytes"]))
+            else:
+                img2 = img2_data  # Already a PIL Image
 
             # Save main image
             filename1 = f"sample_{sample_count}_main.png"
