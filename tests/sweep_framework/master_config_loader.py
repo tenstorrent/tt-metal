@@ -672,7 +672,7 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
-        for config_args, source, machine_info, config_id in configs:
+        for config_args, source, machine_info, config_id, config_hash in configs:
             try:
                 config_dict = {}
                 tensors = []
