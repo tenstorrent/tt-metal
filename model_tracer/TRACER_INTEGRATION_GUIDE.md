@@ -150,8 +150,21 @@ export NEON_CONNECTION_STRING="postgresql://..."
 # Load JSON to database
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load
 
-# Verify with reconstruction
+# Reconstruct full JSON from database
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct output.json
+
+# Reconstruct single operation (faster for testing)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-op ttnn::add output.json
+
+# Compare original JSON vs reconstructed (verify round-trip)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py verify original.json reconstructed.json
+
+# Detect duplicate configurations in JSON (before loading)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py duplicates input.json
+python tests/sweep_framework/load_ttnn_ops_data_v2.py duplicates input.json ttnn::add  # Filter by operation
+
+# Find line numbers for specific configs (debugging)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py find-lines ttnn::add 0,1,5
 ```
 
 ## Common Pitfalls
@@ -286,7 +299,7 @@ JOIN ttnn_ops.ttnn_configuration c
 |------|---------|
 | `tests/sweep_framework/load_ttnn_ops_data_v2.py` | Load JSON → DB, reconstruct DB → JSON |
 | `model_tracer/generic_ops_tracer.py` | Trace models and output JSON |
-| `model_tracer/create_ttnn_ops_schema_v2.sql` | Database schema DDL |
+| `model_tracer/destructively_create_ttnn_ops_schema_v2.sql` | Database schema DDL |
 
 ## Environment Variables
 
