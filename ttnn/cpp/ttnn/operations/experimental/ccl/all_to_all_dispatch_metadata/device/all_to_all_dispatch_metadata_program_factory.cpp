@@ -35,7 +35,7 @@ auto launch_mux_workers(
     tt::tt_metal::Program& program) {
     auto num_full_size_channels = num_workers;
     constexpr auto num_header_only_channels = 0;
-    constexpr auto num_buffers_full_size_channels = 8;
+    constexpr auto num_buffers_full_size_channels = 2;
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);

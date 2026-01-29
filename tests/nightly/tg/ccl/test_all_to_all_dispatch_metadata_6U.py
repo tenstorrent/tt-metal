@@ -14,6 +14,15 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     tt_to_torch_dtype,
 )
 
+
+def create_fabric_router_config(*, max_payload_size=None):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn.FabricRouterConfig()
+    if max_payload_size is not None:
+        config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
@@ -597,6 +606,7 @@ def run_all_to_all_dispatch_metadata_test(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=7168),
             "trace_region_size": 500000,
         }
     ],

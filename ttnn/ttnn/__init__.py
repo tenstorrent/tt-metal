@@ -158,6 +158,7 @@ from ttnn._ttnn.fabric import (
     FabricTensixConfig,
     FabricUDMMode,
     FabricManagerMode,
+    FabricRouterConfig,
     set_fabric_config,
     MeshId,
     FabricNodeId,
