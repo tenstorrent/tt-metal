@@ -1,0 +1,2 @@
+put -r generated/fabric/latency_results_*.csv
+ls -hal
