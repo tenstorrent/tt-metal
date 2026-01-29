@@ -52,7 +52,7 @@ FORCE_INLINE void matmul_with_relu_block() {
     {
         DeviceZoneScopedN("matmul_tiles");
         if constexpr (UseCustomMM) {
-            custom_mm_block(CbA, CbB, 0, 0, 0, false, NumTilesK);
+            custom_mm_block(CbA, CbB, 0, 0, 0, NumTilesK);
         } else {
             for (uint32_t k = 0; k < NumTilesK; k++) {
                 matmul_tiles(CbA, CbB, k, k, 0);
@@ -106,7 +106,7 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     {
         DeviceZoneScopedN("matmul_tiles");
         if constexpr (UseCustomMM) {
-            custom_mm_block(CbA, CbB, 0, 0, MATMUL_ACC_REG_ID, false, NumTilesK);
+            custom_mm_block(CbA, CbB, 0, 0, MATMUL_ACC_REG_ID, NumTilesK);
         } else {
             for (uint32_t k = 0; k < NumTilesK; k++) {
                 matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
@@ -167,7 +167,7 @@ void MAIN {
     constexpr uint32_t in0_block_w = 1;
 
     if constexpr (use_custom_mm) {
-        custom_mm_block_init(mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, num_tiles_k);
+        custom_mm_block_init<false, true>(mm1_full_cb, weight0_cb, intermediate_pregather_cb);
     } else {
         mm_block_init(
             mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -177,7 +177,7 @@ void MAIN {
     // The ping-pong mcast restores MM1_FULL_CB after each layer
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         if constexpr (use_custom_mm) {
-            custom_mm_block_init(mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, num_tiles_k);
+            custom_mm_block_init<false, true>(mm1_full_cb, weight0_cb, intermediate_pregather_cb);
         } else {
             mm_block_init(
                 mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
