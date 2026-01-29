@@ -33,6 +33,7 @@ from ....utils.test import line_params, ring_params
         [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -40,6 +41,7 @@ from ....utils.test import line_params, ring_params
         "2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -65,6 +67,7 @@ def test_wan_transformer_block(
     prompt_seq_len: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    reset_seeds,
 ) -> None:
     torch_dtype = torch.float32
     parent_mesh_device = mesh_device
