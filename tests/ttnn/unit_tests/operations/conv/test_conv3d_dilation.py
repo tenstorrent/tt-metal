@@ -5,10 +5,8 @@
 # Dilation test cases for Conv3d - Bounty #25940
 
 from loguru import logger
-import torch
 import pytest
 import ttnn
-import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
