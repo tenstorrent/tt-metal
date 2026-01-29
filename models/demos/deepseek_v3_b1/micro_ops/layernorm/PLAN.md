@@ -58,7 +58,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
 
 ### Step 1.3: Circular Buffer Configuration
 
-- [ ] **1.3.1** Define CB indices as constants
+- [x] **1.3.1** Define CB indices as constants
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     ```python
@@ -75,7 +75,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     CB_OUTPUT_RM = 17     # Output row-major sticks
     ```
 
-- [ ] **1.3.2** Implement size calculation helper function
+- [x] **1.3.2** Implement size calculation helper function
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Function: `_calculate_sizes(input_shape, dtype)`
@@ -86,7 +86,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Calculate `tile_size` based on dtype (e.g., 2048 for bfloat16)
     - Return dict with all sizes
 
-- [ ] **1.3.3** Implement CB descriptor creation function
+- [x] **1.3.3** Implement CB descriptor creation function
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Function: `_create_cb_descriptors(core_grid, sizes, dtype)`
@@ -103,7 +103,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - CB_OUTPUT_RM: `total_size = 2 * stick_size` (double buffer)
     - Return list of all CB descriptors
 
-- [ ] **1.3.4** Add CB configuration unit test
+- [x] **1.3.4** Add CB configuration unit test
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/tests/test_layernorm.py`
   - Requirements:
     - Test function: `test_cb_configuration()`
@@ -111,7 +111,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Verify sizes are positive and properly aligned
   - Verification: `pytest tests/test_layernorm.py::test_cb_configuration -v` passes
 
-**Step 1.3 Complete:** [ ]
+**Step 1.3 Complete:** [x]
 
 ---
 
