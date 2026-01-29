@@ -21,6 +21,8 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
+    DPRINT << "ELTWISE_BINARY_SFPU_COMPUTE_ROW_BCAST: tiles=" << num_tiles << ENDL();
+
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
@@ -105,4 +107,5 @@ void kernel_main() {
         cb_pop_front(cb_left, num_tiles_per_cycle);
         cb_pop_front(cb_right, num_tiles_per_cycle);
     }
+    DPRINT << "ELTWISE_BINARY_SFPU_COMPUTE_ROW_BCAST: Kernel complete" << ENDL();
 }

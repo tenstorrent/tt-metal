@@ -15,8 +15,11 @@ void kernel_main() {
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
+    // DPRINT << "UNARY_WRITER: Starting num_pages=" << num_pages << ENDL();
+
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_pages);
+    // DPRINT << "UNARY_WRITER: Kernel complete (sharded)" << ENDL();
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
@@ -38,5 +41,6 @@ void kernel_main() {
         cb_pop_front(cb_id_out, onepage);
     }
     noc_async_write_barrier();
+    // DPRINT << "UNARY_WRITER: Kernel complete " << ENDL();
 #endif
 }

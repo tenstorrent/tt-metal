@@ -44,6 +44,7 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
 }  // namespace detail
 
 void kernel_main() {
+    // DPRINT << "ALL2ALL_WRITER: kernel_main() ENTRY" << ENDL();
     constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
@@ -63,6 +64,7 @@ void kernel_main() {
     constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
     constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
     constexpr auto output_args = TensorAccessorArgs<18>();
+    // DPRINT << "ALL2ALL_WRITER: Compile time args OK, mesh_coord=" << linearized_mesh_coord << ENDL();
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -97,6 +99,7 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
 
+    // DPRINT << "ALL2ALL_WRITER: Reading runtime args" << ENDL();
     size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
@@ -105,10 +108,15 @@ void kernel_main() {
     const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
+    // DPRINT << "ALL2ALL_WRITER: Starting, mesh_coord=" << linearized_mesh_coord << " replicate_group=" << replicate_group_devices << " tokens=[" << token_start_idx << "," << token_end_idx << ")" << ENDL();
+
+    // DPRINT << "ALL2ALL_WRITER: Opening direction connections async" << ENDL();
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
+    // DPRINT << "ALL2ALL_WRITER: Direction connections async opened" << ENDL();
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, data_size_bytes);
 
+    // DPRINT << "ALL2ALL_WRITER: Setting up packet headers" << ENDL();
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
         cb_reserve_back(packet_header_cb_id,1);
@@ -118,7 +126,10 @@ void kernel_main() {
     }
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
 
+    // DPRINT << "ALL2ALL_WRITER: Waiting on direction connections barrier" << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
+    // DPRINT << "ALL2ALL_WRITER: Direction connections barrier complete" << ENDL();
+    // DPRINT << "ALL2ALL_WRITER: Sending init semaphore to configured targets" << ENDL();
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -127,14 +138,21 @@ void kernel_main() {
         mesh_cols,
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+    // DPRINT << "ALL2ALL_WRITER: Init semaphore sent" << ENDL();
 
+    // DPRINT << "ALL2ALL_WRITER: Waiting for local_experts_cb" << ENDL();
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
     bool needs_barrier = false;
+    // DPRINT << "ALL2ALL_WRITER: Waiting on init_semaphore, expecting " << (replicate_group_devices - 1) << " signals" << ENDL();
     noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
+    // DPRINT << "ALL2ALL_WRITER: init_semaphore complete" << ENDL();
     noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
+        // if ((t & 63) == 0) {
+            // DPRINT << "ALL2ALL_WRITER: Processing token " << t << ENDL();
+        // }
         cb_wait_front(metadata_cb_id, 1);
         const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
@@ -208,11 +226,13 @@ void kernel_main() {
 
         cb_pop_front(metadata_cb_id, 1);
     }
+    // DPRINT << "ALL2ALL_WRITER: Token loop complete, processed tokens [" << token_start_idx << "," << token_end_idx << ")" << ENDL();
     cb_pop_front(local_experts_cb_id, 1);
     if (needs_barrier) {
         noc_async_write_barrier();
     }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
+    // DPRINT << "ALL2ALL_WRITER: Sending global semaphore to replicate group" << ENDL();
     // "multicast" semaphore increment to let other devices know we are done
     for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
         const auto & dest_chip_id = dest_chip_ids[device_idx];
@@ -242,9 +262,13 @@ void kernel_main() {
         }
     }
 
+    // DPRINT << "ALL2ALL_WRITER: Closing direction connections" << ENDL();
     close_direction_connections(directions, fabric_connections);
+    // DPRINT << "ALL2ALL_WRITER: Direction connections closed" << ENDL();
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
+    // DPRINT << "ALL2ALL_WRITER: Waiting on global_semaphore for " << replicate_group_devices << " devices" << ENDL();
     noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+    // DPRINT << "ALL2ALL_WRITER: Kernel complete" << ENDL();
     noc_semaphore_set(semaphore_ptr, 0);
 }

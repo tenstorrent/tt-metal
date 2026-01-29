@@ -17,6 +17,7 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(index++);
     const uint32_t Ht = get_arg_val<uint32_t>(index++);
     const uint32_t Wt = get_arg_val<uint32_t>(index++);
+    // DPRINT << "ELTWISE_BINARY_WRITER: tiles=" << dst_num_tiles << " shape=[" << D << "," << N << "," << C << "," << Ht << "," << Wt << "]" << ENDL();
     const uint32_t cND = get_arg_val<uint32_t>(index++);  // collapsed dims > 5
 
     constexpr uint32_t onetile = 1;
@@ -78,5 +79,6 @@ void kernel_main() {
             }
         }
     }
+    // DPRINT << "ELTWISE_BINARY_WRITER: Kernel complete" << ENDL();
 #endif
 }

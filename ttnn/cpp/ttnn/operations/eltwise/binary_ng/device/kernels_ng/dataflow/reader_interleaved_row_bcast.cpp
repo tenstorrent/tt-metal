@@ -22,6 +22,7 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(11);
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
+    // DPRINT << "ELTWISE_BINARY_READER: tiles=" << dst_num_tiles << " shape=[" << D << "," << N << "," << C << "," << Ht << "," << Wt << "] bcast=" << SRC_BCAST << ENDL();
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
     const uint32_t src_addr_b = get_arg_val<uint32_t>(15);
     const uint32_t nD_stride_b = get_arg_val<uint32_t>(16);
@@ -158,5 +159,6 @@ void kernel_main() {
         tile_offset += next_nd_shift;
         tile_offset_b += next_nd_shift_b;
     }
+    // DPRINT << "ELTWISE_BINARY_READER: Kernel complete " << ENDL();
 #endif
 }

@@ -22,6 +22,8 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
+    // DPRINT << "TILIZE_WRITER_WH: Starting" << ENDL();
+
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
         for (uint32_t c = 0; c > -single_block_size_col_arg; c--) {
@@ -43,4 +45,5 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    // DPRINT << "TILIZE_WRITER_WH: Kernel complete" << ENDL();
 }

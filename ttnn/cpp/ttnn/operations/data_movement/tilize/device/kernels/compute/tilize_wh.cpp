@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-// #include "api/debug/dprint.h"
+#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -14,6 +14,7 @@ void MAIN {
     const uint32_t block_size_row = get_compile_time_arg_val(1);
     const uint32_t third_dim = get_compile_time_arg_val(2);
 
+    // DPRINT << "TILIZE_COMPUTE: Starting, blocks=" << (block_size_col * third_dim) << ENDL();
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     tilize_init(tt::CBIndex::c_0, block_size_row, tt::CBIndex::c_16);
     for (uint32_t b = 0; b < block_size_col * third_dim; ++b) {
@@ -26,5 +27,6 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, block_size_row);
     }
     tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    // DPRINT << "TILIZE_COMPUTE: Kernel complete" << ENDL();
 }
 }  // namespace NAMESPACE

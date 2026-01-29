@@ -116,6 +116,8 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
+    DPRINT << "ELTWISE_BINARY_SFPU_COMPUTE_ROW_COL_BCAST: tiles=" << num_tiles << " freq=" << tile_freq << ENDL();
+
     if (num_tiles == 0) {
         return;
     }
@@ -154,4 +156,5 @@ void kernel_main() {
             tile_start,
             num_tiles_per_cycle);
     }
+    DPRINT << "ELTWISE_BINARY_SFPU_COMPUTE_ROW_COL_BCAST: Kernel complete" << ENDL();
 }

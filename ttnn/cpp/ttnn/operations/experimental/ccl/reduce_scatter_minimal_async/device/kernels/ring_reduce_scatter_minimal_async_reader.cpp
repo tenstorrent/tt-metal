@@ -108,7 +108,10 @@ void kernel_main() {
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
+    // DPRINT << "READER: Starting, my_chip_id=" << my_chip_id << " ring_size=" << ring_size << " direction=" << (uint32_t)direction << ENDL();
+
     for (uint32_t b = 0; b < input_tensor_B; b++) {
+        // DPRINT << "READER: Batch " << b << "/" << input_tensor_B << ENDL();
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
@@ -124,6 +127,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < ring_size; ++i) {
             const bool do_reduce = i != 0;
             uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+            // DPRINT << "READER: Batch " << b << " Ring iteration " << i << "/" << ring_size << " do_reduce=" << (uint32_t)do_reduce << " slice_idx=" << slice_idx << ENDL();
 
             uint32_t actual_slice_idx;
             if (direction) {
@@ -181,8 +185,10 @@ void kernel_main() {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                     if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
+                        // DPRINT << "READER: About to wait on out_ready_sem, chunk_count=" << chunk_count << " sem_target=" << sem_target << " waiting_for=" << (sem_target + 1) << ENDL();
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        // DPRINT << "READER: out_ready_sem wait completed, sem_target=" << sem_target << ENDL();
                         sem_target++;
                     }
                     chunk_count++;
@@ -194,6 +200,7 @@ void kernel_main() {
                         tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     }
 
+                    // DPRINT << "READER: cb_reserve_back cb_in0, tiles_read=" << tiles_read << "/" << tiles_to_read << ENDL();
                     cb_reserve_back(cb_in0, tile_granularity);
                     uint32_t l1_write_addr = get_write_ptr(cb_in0);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
@@ -212,6 +219,7 @@ void kernel_main() {
 
                     if (do_reduce) {
                         // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB
+                        // DPRINT << "READER: Reading intermediate data for reduction" << ENDL();
                         cb_reserve_back(cb_intermediate_id, tile_granularity);
                         uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
@@ -272,9 +280,11 @@ void kernel_main() {
 
             if (do_reduce && (i == (ring_size - 1))) {
                 // Reset the semaphore before the next batch
+                // DPRINT << "READER: Resetting out_ready_sem at end of ring iteration" << ENDL();
                 noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                 sem_target = 0;
             }
+            // DPRINT << "READER: Completed ring iteration " << i << ENDL();
         }
     }
 }

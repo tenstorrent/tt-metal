@@ -16,6 +16,8 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
+    DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: tiles=" << num_tiles << " op=" << (uint32_t)BINARY_OP_TYPE << ENDL();
+
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
@@ -41,14 +43,27 @@ void kernel_main() {
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
+    DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: Init complete, starting loop" << ENDL();
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        // if (tile_id == 0 || tile_id % 100 == 0) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: Processing tile " << tile_id << "/" << num_tiles << ENDL();
+        // }
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        // if (tile_id < 100) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: waiting for lhs" << ENDL();
+        // }
         cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
 
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        // if (tile_id < 100) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: waiting for rhs" << ENDL();
+        // }
         cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
 
+        // if (tile_id < 100) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: reserving llk_post" << ENDL();
+        // }
         cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
@@ -63,7 +78,13 @@ void kernel_main() {
 
         cb_pop_front(cb_bcast, num_tiles_per_cycle);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
+        // if (tile_id < 100) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: reserving out" << ENDL();
+        // }
         cb_reserve_back(cb_out, num_tiles_per_cycle);
+        // if (tile_id < 100) {
+        //     DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: waiting for llk_post" << ENDL();
+        // }
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
 
         tile_regs_acquire();
@@ -79,4 +100,6 @@ void kernel_main() {
         cb_pop_front(cb_left, num_tiles_per_cycle);
         cb_pop_front(cb_right, num_tiles_per_cycle);
     }
+    DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: Loop complete" << ENDL();
+    DPRINT << "ELTWISE_BINARY_COMPUTE_ROW_BCAST: Kernel complete" << ENDL();
 }

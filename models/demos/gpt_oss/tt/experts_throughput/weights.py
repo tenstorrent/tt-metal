@@ -164,6 +164,10 @@ def load_throughput_expert_weights(
         get_cache_file_name(tensor_cache_path, "throughput_w3"),
     )
 
+    # w1_bias = w1_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
+    # w3_bias = w3_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
+    # w2_bias = w2_bias.reshape(1, 1, 1, num_experts, 1, hidden_size)
+
     # Load and shard bias (use bfloat16 for better precision)
     # Shard on dim=3 (expert dimension for reshaped bias)
     # After sharding, shape becomes [1, 1, 1, num_experts_per_device, 1, dim]
@@ -172,7 +176,7 @@ def load_throughput_expert_weights(
         num_devices,
         mesh_device,
         ttnn.bfloat16,
-        get_cache_file_name(tensor_cache_path, "throughput_w1_bias"),
+        # get_cache_file_name(tensor_cache_path, "throughput_w1_bias"),
         shard_dim=-3,  # Expert dimension after reshape
     )
 
@@ -181,7 +185,7 @@ def load_throughput_expert_weights(
         num_devices,
         mesh_device,
         ttnn.bfloat16,
-        get_cache_file_name(tensor_cache_path, "throughput_w2_bias"),
+        # get_cache_file_name(tensor_cache_path, "throughput_w2_bias"),
         shard_dim=-3,  # Expert dimension after reshape
     )
 
@@ -190,7 +194,7 @@ def load_throughput_expert_weights(
         num_devices,
         mesh_device,
         ttnn.bfloat16,
-        get_cache_file_name(tensor_cache_path, "throughput_w3_bias"),
+        # get_cache_file_name(tensor_cache_path, "throughput_w3_bias"),
         shard_dim=-3,  # Expert dimension after reshape
     )
 

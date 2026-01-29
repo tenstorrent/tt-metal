@@ -26,6 +26,8 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
 
+    // DPRINT << "TILIZE_READER: Starting, third_dim=" << third_dim << " total_num_rows=" << total_num_rows << ENDL();
+
     const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
 
     auto read_block = [&](uint32_t num_rows,
@@ -95,4 +97,5 @@ void kernel_main() {
         }
         size_2d += total_num_rows;
     }
+    // DPRINT << "TILIZE_READER: Kernel complete" << ENDL();
 }

@@ -171,8 +171,10 @@ void kernel_main() {
         local_buffer_index_address);
 
     // need to wait for fabric mux to be ready to accept connections
+    // DPRINT << "WRITER: Waiting for fabric mux to be ready, chip=" << my_chip_id << " direction=" << (uint32_t)direction << ENDL();
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+    // DPRINT << "WRITER: Fabric mux ready" << ENDL();
 
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
@@ -183,7 +185,9 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
+    // DPRINT << "WRITER: Connecting to fabric mux" << ENDL();
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
+    // DPRINT << "WRITER: Connected to fabric mux" << ENDL();
 
     fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -195,6 +199,7 @@ void kernel_main() {
             static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
         // multicast to entire ring of workers going in the same direction
+        // DPRINT << "WRITER: use_barrier_sem=1, multicasting barrier signal to ring" << ENDL();
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
         ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
@@ -203,8 +208,12 @@ void kernel_main() {
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
+        // DPRINT << "WRITER: Waiting on barrier_sem, expecting " << (ring_size - 1) << " signals from ring" << ENDL();
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        // DPRINT << "WRITER: barrier_sem wait complete, all writers ready" << ENDL();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    } else {
+        // DPRINT << "WRITER: use_barrier_sem=0, skipping barrier sync" << ENDL();
     }
 
     fabric_unicast_noc_scatter_write_set_state<
@@ -226,10 +235,13 @@ void kernel_main() {
             static_cast<uint32_t>(1)});  // increment 1
 
     uint32_t chunk_count = 0;
+    // DPRINT << "WRITER: Starting main loop, input_tensor_B=" << input_tensor_B << " ring_size=" << ring_size << ENDL();
     for (uint32_t b = 0; b < input_tensor_B; b++) {
+        // DPRINT << "WRITER: Batch " << b << "/" << input_tensor_B << ENDL();
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
         for (uint32_t i = 0; i < ring_size; ++i) {
+            // DPRINT << "WRITER: Batch " << b << " Ring iteration " << i << "/" << ring_size << " slice_idx=" << slice_idx << ENDL();
             uint32_t actual_slice_idx;
             if (direction) {
                 actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
@@ -240,6 +252,7 @@ void kernel_main() {
             // If not the last slice, write what's on cb_output_id forward
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             if (i < (ring_size - 1)) {
+                // DPRINT << "WRITER: Writing intermediate result to next chip, i=" << i << ENDL();
                 chunk_count = 0;
 
                 uint32_t intermediate_tile_id_start;
@@ -283,7 +296,9 @@ void kernel_main() {
                             tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                         }
 
+                        // DPRINT << "WRITER: [INTERMEDIATE] cb_wait_front, tiles_read=" << tiles_read << "/" << tiles_to_read << ENDL();
                         cb_wait_front(cb_output_id, tile_granularity);
+                        // DPRINT << "WRITER: [INTERMEDIATE] cb_wait_front completed, sending " << tiles_to_read_in_current_direction << " tiles via fabric" << ENDL();
                         size_t l1_read_addr = get_read_ptr(cb_output_id);
                         while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
                             uint32_t tiles_remaining_to_read_in_current_direction =
@@ -367,12 +382,14 @@ void kernel_main() {
                         chunk_count++;
                         if (chunk_count % chunks_per_sync == 0) {
                             // 2. unicast output ready semaphore
+                            // DPRINT << "WRITER: Signaling out_ready_sem to next chip, chunk_count=" << chunk_count << ENDL();
                             uint64_t out_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                             fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                                 &mux_connection_handle,
                                 pkt_hdr_seminc,
                                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                            // DPRINT << "WRITER: out_ready_sem signal sent" << ENDL();
                         }
                     }
                     intermediate_tile_id_start += input_channel_num_pages;
@@ -390,6 +407,7 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
+                // DPRINT << "WRITER: Writing final output to buffer, batch=" << b << ENDL();
                 uint32_t output_tile_id_start = b * output_batch_num_pages;
                 for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t tiles_read = start_tiles_read;
@@ -456,24 +474,34 @@ void kernel_main() {
             }
         }
         // Reset the global semaphore before the next batch
+        // DPRINT << "WRITER: Waiting on batch_ready_sem barrier, waiting_for=" << (ring_size - 1) << ENDL();
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+        // DPRINT << "WRITER: batch_ready_sem barrier passed, resetting" << ENDL();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+    // DPRINT << "WRITER: Disconnecting from fabric mux" << ENDL();
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
+    // DPRINT << "WRITER: Disconnected, is_termination_master=" << (uint32_t)is_termination_master << ENDL();
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+        // DPRINT << "WRITER: [MASTER] Waiting for termination sync, expecting " << (num_mux_clients - 1) << " signals" << ENDL();
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // DPRINT << "WRITER: [MASTER] Termination sync received, terminating fabric" << ENDL();
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        // DPRINT << "WRITER: [MASTER] Fabric terminated" << ENDL();
     } else {
+        // DPRINT << "WRITER: [WORKER] Signaling termination master" << ENDL();
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
+        // DPRINT << "WRITER: [WORKER] Termination signal sent" << ENDL();
     }
 
     noc_async_write_barrier();
+    // DPRINT << "WRITER: Kernel complete" << ENDL();
 }

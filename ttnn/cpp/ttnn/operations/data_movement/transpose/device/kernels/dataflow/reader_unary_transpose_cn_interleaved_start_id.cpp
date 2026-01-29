@@ -26,6 +26,8 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
+    DPRINT << "TRANSPOSE_READER: Starting num_tiles=" << num_tiles << " N=" << N << " C=" << C << " HtWt=" << HtWt << ENDL();
+
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t tile_idx = start_id;
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -46,4 +48,5 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "TRANSPOSE_READER: Kernel complete" << ENDL();
 }

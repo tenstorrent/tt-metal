@@ -68,6 +68,8 @@ void kernel_main() {
     const auto token_start_idx = get_arg_val<uint32_t>(3);
     const auto token_end_idx = get_arg_val<uint32_t>(4);
 
+    // DPRINT << "ALL2ALL_READER: Starting, mesh_coord=" << linearized_mesh_coord << " tokens=[" << token_start_idx << "," << token_end_idx << ") experts=" << num_local_experts << ENDL();
+
     const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr, metadata_page_size_bytes);
     const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr, mapping_page_size_bytes);
     const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr, data_size_bytes);
@@ -114,4 +116,5 @@ void kernel_main() {
         }
         cb_push_back(metadata_cb_id, 1);
     }
+    // DPRINT << "ALL2ALL_READER: Kernel complete" << ENDL();
 }

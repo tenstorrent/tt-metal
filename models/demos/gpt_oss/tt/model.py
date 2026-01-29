@@ -265,6 +265,7 @@ class Model:
             )
             logger.info(f"[LAYER] {i}/{len(self.layers)} done")
             ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"[LAYER] {i}/{len(self.layers)} synchronize device completed")
         logits = hidden_states
 
         if get_last_token != -1:
