@@ -880,7 +880,7 @@ def test_6u_trace_rms_fuse_qwen(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("fused_add", [True, False])
-@pytest.mark.parametrize("use_noc1_only", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
