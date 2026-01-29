@@ -8,8 +8,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
-from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class ModelOptimizations:
@@ -103,9 +103,9 @@ class VisionModelArgs(ModelArgs):
 
     def reference_vision_model(self, depth=None):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
         from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
             Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-            Qwen2_5_VisionTransformerPretrainedModel,
         )
 
         print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
