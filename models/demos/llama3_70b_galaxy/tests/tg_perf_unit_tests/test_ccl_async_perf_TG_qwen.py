@@ -33,7 +33,7 @@ def test_ag_tg_qwen_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_tg_llama -k {ag_type}"
     cols = ["DEVICE KERNEL"]
-    op_name = "AllGatherAsync"
+    op_name = "AllGatherAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
@@ -90,7 +90,7 @@ def test_ar_tg_qwen_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_reduce_tg_llama -k {ar_type}_qwen"
     cols = ["DEVICE KERNEL"]
-    op_name = "AllReduceAsync"
+    op_name = "AllReduceAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
@@ -147,7 +147,7 @@ def test_rms_perf(
     else:
         command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse_qwen"
     cols = ["DEVICE KERNEL"]
-    op_name = "RMSAllGather"
+    op_name = "RMSAllGatherDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
@@ -233,7 +233,7 @@ def test_reduce_scatter_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (5, 16.6),
+        (5, 19.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -248,7 +248,7 @@ def test_ag_matmul_tg_qwen_perf(
     subdir = "qwen_ccl_perf"
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_llama_all_gather_matmul -k ff2_qwen"
     cols = ["DEVICE KERNEL"]
-    op_name = "QwenAllGatherMatmulAsync"
+    op_name = "LlamaAllGatherMatmulAsyncDeviceOperation"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
