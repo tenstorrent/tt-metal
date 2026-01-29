@@ -21,6 +21,8 @@
 #include <array>
 #include <utility>
 
+using namespace tt::tt_fabric;
+
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
@@ -296,8 +298,8 @@ constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
 constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
 
-constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
-constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0UL>();
+constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1UL>();
 
 constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
 

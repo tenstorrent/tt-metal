@@ -16,8 +16,8 @@
 #include <cstddef>
 #include <array>
 // clang-format on
-constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
-constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0UL>();
+constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1UL>();
 
 constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
 constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
@@ -27,7 +27,7 @@ constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
 // header only buffer slot size is the same as the edm packet header size
 
 //constexpr size_t status_address = get_compile_time_arg_val(5);
-constexpr uint32_t status_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO);
+constexpr uint32_t status_address = OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
 constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
 constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
@@ -186,7 +186,8 @@ void kernel_main() {
     //size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    auto overlay_scratch_address = get_stream_scratch_register_address(OVERLAY_REGISTER_ONE);
+    uint32_t overlay_scratch_address =
+        OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ONE>();
 
     // OVERLAY_REGISTER_ZERO used for status_ptr
     // OVERLAY_REGISTER_ONE used for the channels
@@ -197,7 +198,7 @@ void kernel_main() {
     // to maintain symmetry with the fabric router
     //
     #pragma unroll
-    for (uint32_t i = 0UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
+    for (uint8_t i = 0UL; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],

@@ -7,9 +7,12 @@
 #define __TT_METAL_FABRIC_UARCH_OVERLAYREGISTERFILE_HPP__
 
 #include "../fabric_stream_regs.hpp"
+#include "api/debug/assert.h"
 
 #include <type_traits>
 #include <variant>
+
+namespace tt::tt_fabric {
 
 struct RegisterFile {};
 
@@ -26,6 +29,28 @@ struct OverlayRegisterFile : public RegisterFile {
     using NumLowerBits = std::integral_constant<std::uint32_t, 16U>;
     using NumUpperBits = std::integral_constant<std::uint32_t, 8U>;
     using NumReserveBits = std::integral_constant<std::uint32_t, 8U>;
+
+    template<uint32_t RegIdx>
+    static constexpr FORCE_INLINE uint32_t get_register() {
+        static_assert(RegIdx < NUM_OVERLAY_REGISTERS, "Overlay Register Index out of bounds");
+        return RegIdx;
+    }
+
+    static FORCE_INLINE uint32_t get_register(uint32_t const RegIdx) {
+        //ASSERT(RegIdx < NUM_OVERLAY_REGISTERS);
+        return RegIdx;
+    }
+
+    template<uint32_t RegIdx>
+    static constexpr FORCE_INLINE uint32_t get_register_address() {
+        static_assert(RegIdx < NUM_OVERLAY_REGISTERS, "Overlay Register Index out of bounds");
+        return get_stream_scratch_register_address<RegIdx>();
+    }
+
+    static FORCE_INLINE uint32_t get_register_address(uint32_t const RegIdx) {
+        //ASSERT(RegIdx < NUM_OVERLAY_REGISTERS);
+        return get_stream_scratch_register_address(RegIdx);
+    }
 
     static FORCE_INLINE uint32_t load(uint32_t const register_identifier) {
         return read_stream_scratch_register(register_identifier);
@@ -47,14 +72,9 @@ struct OverlayRegisterFile : public RegisterFile {
         storage.value = value;
         storage.fields.reserved = 0U;
         write_stream_scratch_register(register_identifier, storage.value);
-    }    
-
-    template<uint32_t RegIdx>
-    static constexpr FORCE_INLINE uint32_t get_register() {
-        static_assert(RegIdx < NUM_OVERLAY_REGISTERS, "Overlay Register Index out of bounds");
-        return RegIdx;
     }
-
 };
+
+} // namespace tt::tt_fabric
 
 #endif // end #define __TT_METAL_FABRIC_UARCH_OVERLAYREGISTERFILE_HPP__

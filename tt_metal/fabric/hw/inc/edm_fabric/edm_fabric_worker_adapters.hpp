@@ -25,8 +25,7 @@
 
 namespace tt::tt_fabric {
 
-constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0U>();
-constexpr uint32_t const OVERLAY_REGISTER_ONE = OverlayRegisterFile::get_register<1U>();
+constexpr uint32_t const OVERLAY_REGISTER_ZERO = OverlayRegisterFile::get_register<0UL>();
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
