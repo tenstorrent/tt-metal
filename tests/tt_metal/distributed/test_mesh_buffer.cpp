@@ -885,12 +885,10 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
             host_buffer,
             /*map_to_noc=*/true);
         std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
-
-        auto write_transfer = distributed::ShardDataTransfer{coord}
-                                  .host_data(static_cast<void*>(src->data()))
-                                  .region(BufferRegion(0, bytes_per_device));
-        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
-        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+        auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
+        distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
@@ -946,12 +944,11 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
             host_buffer,
             /*map_to_noc=*/true);
         std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+        auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
+        distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
-        auto write_transfer = distributed::ShardDataTransfer{coord}
-                                  .host_data(static_cast<void*>(src->data()))
-                                  .region(BufferRegion(0, bytes_per_device));
-        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
-        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
@@ -1012,12 +1009,10 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
             host_buffer,
             /*map_to_noc=*/true);
         std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
-
-        auto write_transfer = distributed::ShardDataTransfer{coord}
-                                  .host_data(static_cast<void*>(src_unaligned))
-                                  .region(BufferRegion(0, bytes_per_device));
-        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
-        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+        auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+        tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
+        distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
