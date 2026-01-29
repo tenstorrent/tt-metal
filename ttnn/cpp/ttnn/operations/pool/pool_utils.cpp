@@ -545,31 +545,27 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     // with the sliced shape). So we can use its shard_spec directly.
     auto input_shard_shape = input_memory_config.shard_spec().value().shape;
 
-    // Halo input uses the actual input dtype
-    // For BFLOAT8_B, we need to calculate based on tile size, not element size
-    uint32_t halo_input_size = 0;
-    if (input_dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        // BFLOAT8_B uses block/tile format with 1088 bytes per tile
-        // Need to round up both dimensions independently to tile boundaries
-        uint32_t ntiles_h = tt::div_up(input_shard_shape[0], tt::constants::TILE_HEIGHT);
-        uint32_t ntiles_w = tt::div_up(input_shard_shape[1], tt::constants::TILE_WIDTH);
-        uint32_t num_tiles = ntiles_h * ntiles_w;
-        halo_input_size = num_tiles * tt::tile_size(tt::DataFormat::Bfp8_b);
+    // Halo always converts block float formats (BFLOAT8_B) to BFLOAT16 during untilization
+    // For FLOAT32 inputs, halo preserves FLOAT32; for UINT16, it preserves UINT16
+    // All other types (including BFLOAT8_B, BFLOAT4_B, BFLOAT16) become BFLOAT16
+    tt::tt_metal::DataType halo_working_dtype;
+    if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        halo_working_dtype = tt::tt_metal::DataType::FLOAT32;
     } else {
-        uint32_t halo_input_datum_size = 0;
-        if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
-            halo_input_datum_size = 4;
-        } else if (input_dtype == tt::tt_metal::DataType::BFLOAT16) {
-            halo_input_datum_size = 2;
-        }
-        halo_input_size = input_shard_shape[0] * input_shard_shape[1] * halo_input_datum_size;
+        halo_working_dtype = tt::tt_metal::DataType::BFLOAT16;
     }
+    const uint32_t halo_datum_size = halo_working_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    // Halo output and pool operations use BFLOAT16 (or FLOAT32)
-    // Halo converts BFLOAT8_B -> BFLOAT16, so pool always works with BFLOAT16/FLOAT32
-    const tt::tt_metal::DataType pool_input_dtype =
-        (dtype == tt::tt_metal::DataType::FLOAT32) ? tt::tt_metal::DataType::FLOAT32 : tt::tt_metal::DataType::BFLOAT16;
-    const uint32_t pool_datum_size = pool_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+    // Halo input buffer: For TILE layout inputs, this holds the input CB which uses the original dtype
+    // But when calculating L1 for the halo operation itself, the data is in the untilize output CB
+    // which already uses halo_working_dtype. The input CB and untilize output CB coexist during halo.
+    uint32_t halo_input_cb_size = input_shard_shape[0] * input_shard_shape[1] * halo_datum_size;
+
+    // For tiled inputs, the untilize output CBs hold the converted data in halo_working_dtype
+    // For row-major inputs, there are no untilize CBs
+    // The halo writer reads from untilize CBs (if tiled) or input CB (if row-major) and writes to output buffer
+    const uint32_t pool_datum_size = halo_datum_size;
+    const tt::tt_metal::DataType pool_input_dtype = halo_working_dtype;
 
     // Calculate halo output size using sliding window calculation
     // Create a sliding window config with proper core distribution for halo calculation
@@ -616,6 +612,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
     uint32_t halo_output_size = precise_halo_output_size * pool_datum_size;
 
+    printf("Halo output elems: %u, size: %u bytes\n", precise_halo_output_size, halo_output_size);
+
     // Calculate halo CB overhead (pad CBs and untilize CBs if input is tiled)
     uint32_t halo_cb_overhead = 0;
 
@@ -630,10 +628,16 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     // Halo always operates on row-major data, so tiled inputs need untilization
     // When untilizing, we need 2 CBs for double buffering
     if (input_layout == tt::tt_metal::Layout::TILE) {
-        // Calculate untilize CB size based on the input shard shape
+        // Halo uses a fixed block size for untilization (UNTILIZE_BLOCK_SIZE = 32)
+        // The untilize CB is sized based on this block size, not the full shard height
+        constexpr uint32_t UNTILIZE_BLOCK_SIZE = 32;
         uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], tt::constants::TILE_WIDTH);
         uint32_t input_nblocks_per_core = tt::div_up(input_shard_shape[0], tt::constants::TILE_HEIGHT);
-        uint32_t output_ntiles = input_nblocks_per_core * ntiles_per_block;
+
+        // Clamp block size to actual input height (same logic as halo implementation)
+        uint32_t clamped_block_size_height =
+            std::min(UNTILIZE_BLOCK_SIZE, input_nblocks_per_core * tt::constants::TILE_HEIGHT);
+        uint32_t output_ntiles = (clamped_block_size_height / tt::constants::TILE_HEIGHT) * ntiles_per_block;
 
         // With double buffering: 2 * output_ntiles per CB
         uint32_t untilize_out_cb_num_pages = 2 * output_ntiles;
@@ -687,31 +691,32 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     uint32_t output_tensor_size = pool_output_nhw_per_core * input_shard_shape[1] * output_datum_size;
 
     // Total size calculation with memory reuse:
-    // During halo phase: halo_input + halo_output + halo_cb_overhead
-    // After halo: halo_input is deallocated, halo_output remains (and will be reused for pool input)
+    // During halo phase: halo_input_cb + halo_output + halo_cb_overhead
+    // After halo: halo_input_cb is deallocated, halo_output remains (and will be reused for pool input)
     // During pool phase: halo_output (reused as pool input) + pool_cb_usage (includes all CBs and output buffer)
-    // Since halo_input is deallocated before pool phase and halo_output is reallocated in its place,
-    // we only need to consider: max(halo_input + halo_output + halo_cb_overhead, halo_output + pool_cb_usage)
-    uint32_t halo_phase_size = halo_input_size + halo_output_size + halo_cb_overhead;
-    uint32_t pool_phase_size = halo_output_size + pool_cb_usage;
+    // Since halo_input_cb is deallocated before pool phase and halo_output is reallocated in its place,
+    // we only need to consider: max(halo_input_cb + halo_output + halo_cb_overhead, halo_output + pool_cb_usage)
+    uint32_t halo_phase_size = halo_input_cb_size + halo_output_size + halo_cb_overhead;
+    uint32_t pool_phase_size = halo_output_size + pool_cb_usage + output_tensor_size;
     uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
 
-    log_trace(
-        tt::LogOp,
-        "Pool2D L1 Usage Calculation: halo_input={}, halo_output={}, halo_cb_overhead={}, pool_cb={}, "
-        "output_tensor={}, "
-        "halo_phase={}, pool_phase={}, total={}",
-        halo_input_size,
+    printf(
+        "Pool2D Slice L1 Usage Calculation:\n"
+        "  Halo Input CB Size: %u bytes\n"
+        "  Halo Output Size: %u bytes\n"
+        "  Halo CB Overhead: %u bytes\n"
+        "  Pool CB Usage: %u bytes\n"
+        "  Output Tensor Size: %u bytes\n"
+        "  Total L1 Size (with reuse): %u bytes\n",
+        halo_input_cb_size,
         halo_output_size,
         halo_cb_overhead,
         pool_cb_usage,
         output_tensor_size,
-        halo_phase_size,
-        pool_phase_size,
         total_size);
 
     return pool2d_slice_l1_usage{
-        .halo_input_size = halo_input_size,
+        .halo_input_size = halo_input_cb_size,
         .halo_output_size = halo_output_size,
         .pool_cb_size = pool_cb_usage,
         .output_tensor_size = output_tensor_size,
