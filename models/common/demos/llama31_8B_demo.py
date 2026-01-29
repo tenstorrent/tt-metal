@@ -122,6 +122,8 @@ def collect_baseline_from_simple_text_demo(
     env = os.environ.copy()
     env["MESH_DEVICE"] = device_name
     env["HF_MODEL"] = hf_model
+    # Unset CI to ensure tests run normally (CI=true may skip or alter test behavior)
+    env.pop("CI", None)
 
     try:
         result = subprocess.run(
@@ -397,8 +399,12 @@ def _collect_all_baselines():
     device_name = os.environ.get("MESH_DEVICE", "N150")
     logger.info(f"=== Collecting baselines from simple_text_demo.py for {device_name} ===")
 
-    # Collect baselines for all batch_size x opt_mode combinations
-    for batch_size in [1, 32]:
+    # Collect baselines for batch_size x opt_mode combinations
+    # CI runs batch-32, so skip batch-1 when CI=true
+    is_ci = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+    batch_sizes = [32] if is_ci else [1, 32]
+
+    for batch_size in batch_sizes:
         for opt_mode in ["performance", "accuracy"]:
             cache_key = _get_baseline_cache_key(device_name, batch_size, opt_mode)
             logger.info(f"Collecting baseline for {cache_key}...")
@@ -461,6 +467,7 @@ def test_mlp1d_llama_demo(
     mesh_device: ttnn.MeshDevice,
     optimizations,
     test_config: dict,
+    is_ci_env: bool,
     request,
 ):
     """
@@ -472,6 +479,11 @@ def test_mlp1d_llama_demo(
     3. Measures performance (TTFT, tok/s/u) and/or accuracy (Top-1, Top-5)
     4. Validates results against PERF.md targets
     """
+    test_id = request.node.callspec.id
+
+    if is_ci_env and "batch-1" in test_id:
+        pytest.skip("CI only runs batch-32 and token-accuracy tests")
+
     # Skip TG devices - MLP1D does not support Galaxy
     mesh_shape = mesh_device.shape
     if mesh_shape[0] > 1 or mesh_shape[1] > 8:
@@ -484,7 +496,6 @@ def test_mlp1d_llama_demo(
     measure_accuracy = test_config["measure_accuracy"]
 
     # Get optimization mode from test ID
-    test_id = request.node.callspec.id
     opt_mode = "performance" if "performance" in test_id else "accuracy"
 
     # Get device name
