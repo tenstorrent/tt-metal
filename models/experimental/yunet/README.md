@@ -44,7 +44,7 @@ The model supports two input sizes:
 
 | Input Size | Device FPS (kernel) | E2E FPS (trace+2CQ) |
 |------------|---------------------|---------------------|
-| 320×320    | ~545 samples/s      | ~170 FPS |
+| 320×320    | ~545 samples/s      | ~171 FPS |
 | 640×640    | ~185 samples/s      | ~43 FPS |
 
 ## Usage

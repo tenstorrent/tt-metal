@@ -37,10 +37,7 @@ def get_expected_perf(input_h):
     """Get expected perf based on device architecture."""
     import ttnn
 
-    # Create temporary device to check arch
-    device = ttnn.open_device(device_id=0)
-    is_wormhole = "WORMHOLE" in str(device.arch()).upper()
-    ttnn.close_device(device)
+    is_wormhole = "wormhole_b0" in ttnn.get_arch_name()
 
     if is_wormhole:
         return EXPECTED_PERF_WORMHOLE.get(input_h, 150)

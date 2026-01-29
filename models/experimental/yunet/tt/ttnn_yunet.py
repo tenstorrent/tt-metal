@@ -7,6 +7,7 @@ TTNN YUNet Face Detection Model.
 """
 
 import ttnn
+from ttnn.device import Arch
 from typing import Tuple
 from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
@@ -202,7 +203,7 @@ class TTNNMaxPool:
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
         self._pool_cache = {}
         # Check if Wormhole - needs ROW_MAJOR workaround for max_pool2d
-        self._is_wormhole = "WORMHOLE" in str(device.arch()).upper()
+        self._is_wormhole = device.arch() == Arch.WORMHOLE_B0
 
     def _get_pool(self, batch_size: int, h: int, w: int, c: int):
         key = (batch_size, h, w, c)

@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.device import Arch
 from models.experimental.yunet.runner.performant_runner import YunetPerformantRunner
 from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
 
@@ -108,7 +109,7 @@ def test_yunet_e2e_performant(device, input_size):
     input_height, input_width = input_size
 
     # Select expected FPS based on device architecture
-    is_wormhole = "WORMHOLE" in str(device.arch()).upper()
+    is_wormhole = device.arch() == Arch.WORMHOLE_B0
     if is_wormhole:
         expected_fps = EXPECTED_FPS_WORMHOLE.get(input_height, 30)
     else:
