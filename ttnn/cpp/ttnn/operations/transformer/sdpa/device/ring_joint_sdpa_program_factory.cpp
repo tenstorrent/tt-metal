@@ -109,34 +109,24 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor_q.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : nullptr;
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensor_q,
+        coord,
+        args.all_gather_operation_attributes.cluster_axis.value_or(0) /*why is cluster axis optional?*/);
 
-    std::vector<IDevice*> devices_to_use = {};
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    const auto& mesh_view = input_tensor_q.device()->get_view();
-    devices_to_use = (args.all_gather_operation_attributes.cluster_axis.value() == 0)
-                         ? mesh_view.get_devices_on_column(coord[1])
-                         : mesh_view.get_devices_on_row(coord[0]);
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor_q,
+        coord,
+        1,
+        args.all_gather_operation_attributes.topology,
+        args.all_gather_operation_attributes.cluster_axis.value_or(0));
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < args.all_gather_operation_attributes.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(args.all_gather_operation_attributes.ring_size - 1);
-            }
-            if (i != args.all_gather_operation_attributes.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor_q,
+        coord,
+        -1,
+        args.all_gather_operation_attributes.topology,
+        args.all_gather_operation_attributes.cluster_axis.value_or(0));
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -877,9 +867,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
-        target_device,
-        forward_device,
-        backward_device,
+        coord,
+        forward_coord,
+        backward_coord,
         all_gather_output_tensors,
         args.all_gather_operation_attributes.dim,
         args.all_gather_operation_attributes.num_links,
