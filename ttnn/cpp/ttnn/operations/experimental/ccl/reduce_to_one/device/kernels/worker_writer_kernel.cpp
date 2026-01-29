@@ -5,16 +5,18 @@
 // Worker writer kernel: non-bottom cores (rows 0,1,2) assemble packets and send to bottom core via NOC.
 //
 // CB convention (unified across all roles):
-//   - source_cb: LEAF uses local_cb (input), others use output_cb (compute output)
+//   - source_cb: LEAF uses local_cb (input), others use scratch_cb2 (compute output)
 //
-// Workers:
+// Non-ROOT1 Workers:
 // 1. Wait for data in source_cb
 // 2. Allocate packet header from PacketHeaderPool
 // 3. Set up header with fused write+atomic_inc (data + semaphore increment)
 // 4. Copy (header, payload) to bottom core's packet buffer slot
 // 5. Signal arrival to bottom core
 //
-// Early exits for ROOT1 device (output is in-place, no sending needed).
+// ROOT1 Workers (output gather):
+// 1. Wait for compute to finish (two rounds of cb_wait/pop)
+// 2. Write shard to output_core at offset shard_idx * payload_size via NOC
 
 #include <stdint.h>
 #include <type_traits>
@@ -47,22 +49,6 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(5);           // For ROOT1 to wait on compute
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
-    // ROOT1 doesn't send - wait for compute to finish writing to source_cb (scratch_cb2), then NOC copy to output
-    if constexpr (device_role == MESH_ROOT1) {
-        // First round is partial results
-        cb_wait_front(source_cb, num_tiles);
-        cb_pop_front(source_cb, num_tiles);
-        // Wait for compute to push final result to source_cb (scratch_cb2)
-        cb_wait_front(source_cb, num_tiles);
-        uint32_t src_addr = get_read_ptr(source_cb);
-        uint32_t dst_addr = get_write_ptr(output_cb);
-        // Local NOC copy from scratch_cb2 to output_cb
-        noc_async_write(src_addr, get_noc_addr(dst_addr), payload_size_bytes);
-        noc_async_write_barrier();
-        cb_pop_front(source_cb, num_tiles);
-        return;
-    }
-
     // Runtime args
     uint32_t arg_idx = 0;
     const uint32_t bottom_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -79,6 +65,30 @@ void kernel_main() {
     const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // Destination semaphore for fused atomic inc
     const uint16_t dst_dev_id = get_arg_val<uint32_t>(arg_idx++);    // Destination device ID
     const uint16_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);   // Destination mesh ID
+    // ROOT1 output gather args
+    const uint32_t output_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t shard_idx = get_arg_val<uint32_t>(arg_idx++);
+
+    // ROOT1: gather final results to output core
+    // Each worker writes its shard to output_core at offset shard_idx * payload_size_bytes
+    if constexpr (device_role == MESH_ROOT1) {
+        // Calculate destination address on output core: base + shard_idx * payload_size
+        uint32_t dst_addr = output_base_addr + shard_idx * payload_size_bytes;
+        uint64_t dst_noc_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, dst_addr);
+        // First round is partial results
+        cb_wait_front(source_cb, num_tiles);
+        cb_pop_front(source_cb, num_tiles);
+        // Wait for compute to push final result to source_cb (scratch_cb2)
+        cb_wait_front(source_cb, num_tiles);
+        uint32_t src_addr = get_read_ptr(source_cb);
+        // NOC write to output core
+        noc_async_write(src_addr, dst_noc_addr, payload_size_bytes);
+        noc_async_write_barrier();
+        cb_pop_front(source_cb, num_tiles);
+        return;
+    }
 
     // Get packet buffer address from CB - same address on all cores
     // Workers write to bottom core's packet_cb at this address

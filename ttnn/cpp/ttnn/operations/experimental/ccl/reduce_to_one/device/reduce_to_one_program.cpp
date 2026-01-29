@@ -211,13 +211,22 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const uint32_t shard_height = shard_shape[0];
     const uint32_t shard_width = shard_shape[1];
 
+    // Get cores in shard order (respecting shard orientation)
+    // This determines each core's shard index for output gather
     std::vector<CoreCoord> all_coord_cores;
     for (const auto& core_range : shard_grid.ranges()) {
-        auto cores = corerange_to_cores(core_range, std::nullopt);
+        auto cores =
+            corerange_to_cores(core_range, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
         all_coord_cores.insert(all_coord_cores.end(), cores.begin(), cores.end());
     }
     const CoreRangeSet all_cores = shard_grid;
     const uint32_t num_shard_cores = all_coord_cores.size();
+
+    // Build core to shard index mapping (based on shard order)
+    std::unordered_map<CoreCoord, uint32_t> core_to_shard_idx;
+    for (uint32_t i = 0; i < all_coord_cores.size(); i++) {
+        core_to_shard_idx[all_coord_cores[i]] = i;
+    }
 
     // Build core layout information
     auto cores_info = build_cores_info(all_coord_cores);
@@ -282,6 +291,11 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto& intermediate_tensor_r2 = output_tensors[0][1];
     const auto& intermediate_tensor_r3 = output_tensors[0][2];
     const auto& output_tensor = output_tensors[1][0];
+
+    // Get output core from output tensor's shard spec (for ROOT1 gather)
+    // Validation ensures output is sharded on exactly 1 core
+    const auto& output_shard_spec = output_tensor.shard_spec().value();
+    const CoreCoord output_core = output_shard_spec.grid.ranges().begin()->start_coord;
 
     // Create all CBs on all_cores_with_fabric (shard cores + fabric cores)
 
@@ -350,7 +364,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Log fabric node mapping for debugging
     const char* role_names[] = {"LEAF", "ROOT3", "ROOT2", "ROOT1"};
-    log_info(
+    log_debug(
         tt::LogOp,
         "ReduceToOne: device[{},{}] role={} src_fabric_node={} -> dest[{},{}] dst_fabric_node={}",
         device_coordinate[0],
@@ -454,6 +468,10 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         worker_sems.push_back(CreateSemaphore(program, fabric_cores_set, 0));
     }
 
+    // Get output core physical coords (for ROOT1 gather)
+    auto output_phys_core = device->worker_core_from_logical_core(output_core);
+    uint32_t output_base_addr = output_tensor.buffer()->address();
+
     // Set runtime args for all shard cores (workers)
     for (const auto& c : all_coord_cores) {
         auto phys_core = device->worker_core_from_logical_core(c);
@@ -471,6 +489,9 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_rt_args);
 
         // === Worker writer runtime args ===
+        // Get this core's shard index (position in shard order for output gather)
+        uint32_t shard_idx = core_to_shard_idx.at(c);
+
         std::vector<uint32_t> worker_rt_args = {
             fabric_phys.x,  // Fabric core NOC X
             fabric_phys.y,  // Fabric core NOC Y
@@ -481,9 +502,14 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             core_noc_x,  // Worker's own NOC X (same position on dest device)
             core_noc_y,  // Worker's own NOC Y (same position on dest device)
             dst_l1_addr,
-            dst_sem_addr,                     // Destination semaphore for fused atomic inc
-            dst_fabric_node_id.chip_id,       // Destination device ID
-            dst_fabric_node_id.mesh_id.get()  // Destination mesh ID
+            dst_sem_addr,                      // Destination semaphore for fused atomic inc
+            dst_fabric_node_id.chip_id,        // Destination device ID
+            dst_fabric_node_id.mesh_id.get(),  // Destination mesh ID
+            // ROOT1 output gather args (used only by ROOT1 workers)
+            output_phys_core.x,  // Output core NOC X
+            output_phys_core.y,  // Output core NOC Y
+            output_base_addr,    // Output tensor base address
+            shard_idx            // This core's shard index for output offset
         };
         tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel, c, worker_rt_args);
 
@@ -583,8 +609,9 @@ void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
                               : shared_variables.is_mesh_root2_device ? 2
                                                                       : 0;
 
-        // ROOT1 doesn't send, skip writer updates
+        // Update writer kernel args based on device role
         if (!shared_variables.is_mesh_root1_device) {
+            // Non-ROOT1: update destination addresses for fabric sends
             auto& worker_writer_args_by_core =
                 tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
             auto& fabric_writer_args_by_core =
@@ -604,6 +631,16 @@ void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
                 auto& args = fabric_writer_args_by_core[core.x][core.y];
                 args[0] = dst_l1_addr;
                 args[3] = dst_sem_addr;
+            }
+        } else {
+            // ROOT1: update output base address for gather
+            auto& worker_writer_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_worker_writer_kernel_id);
+            uint32_t output_base_addr = output_tensor.buffer()->address();
+
+            for (const auto& core : shared_variables.cores) {
+                auto& args = worker_writer_args_by_core[core.x][core.y];
+                args[14] = output_base_addr;  // output_base_addr is at index 14
             }
         }
     }
