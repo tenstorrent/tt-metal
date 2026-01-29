@@ -88,6 +88,7 @@ void JitBuildEnv::init(
     uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
+    uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
@@ -95,6 +96,7 @@ void JitBuildEnv::init(
     this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
 
     this->arch_ = arch;
+    this->max_cbs_ = max_cbs;
 
 #ifndef GIT_COMMIT_HASH
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
