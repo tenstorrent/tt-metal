@@ -153,6 +153,14 @@
   team: models
   model-name: qwen3
 
+- name: t3k_qwq3_tests
+  cmd: run_t3000_qwq3_tests
+  sku: wh_llmbox
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  timeout: 40
+  model-name: qwq3
+
 - name: t3k_qwen25_vl_tests
   cmd: run_t3000_qwen25_vl_tests
   skus:
