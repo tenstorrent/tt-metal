@@ -648,11 +648,11 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
+    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     // Calculate the best way to multicast common RTAs.
 
     // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
     uint32_t per_kernel_crta_multicast_count = 0;
-    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
         auto kernel_id = get_device_local_kernel_handle(kernel_index);
         auto kernel = program.get_kernel(kernel_id);
@@ -2653,9 +2653,8 @@ void write_program_command_sequence(
             manager.cq_write(data, size_bytes, one_shot_write_ptr);
             one_shot_write_ptr += size_bytes;
         } else {
-            uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
             manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(data, size_bytes, write_ptr);
+            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
             manager.issue_queue_push_back(size_bytes, command_queue_id);
             manager.fetch_queue_reserve_back(command_queue_id);
             manager.fetch_queue_write(size_bytes, command_queue_id);
