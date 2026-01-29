@@ -19,7 +19,7 @@ void kernel_main() {
     // Initialize hardware before any operations
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
-    // Wait for num_tiles from each input (ready for future multiple tiles support)
+    // Wait for num_tiles from each input
     cb0.wait_front(num_tiles);
     cb1.wait_front(num_tiles);
 
@@ -32,10 +32,7 @@ void kernel_main() {
     tile_regs_acquire();
 
     // Perform fused multiply + reduce scalar
-    ckernel::mul_reduce_scalar_tile<REDUCE_OP>(
-        tt::CBIndex::c_0,  // Input A circular buffer
-        tt::CBIndex::c_1,  // Input B circular buffer
-        num_tiles);        // Number of tiles to process
+    ckernel::mul_reduce_scalar_tile<REDUCE_OP>(tt::CBIndex::c_0, tt::CBIndex::c_1, num_tiles);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -51,7 +48,7 @@ void kernel_main() {
 
     // Push output tile
     cb16.push_back(1);
-    // UNPACK(tt::compute::common::print_full_tile(tt::CBIndex::c_16, 0););
-    //  Uninitialize the operation
+
+    // Uninitialize the operation
     ckernel::mul_reduce_scalar_uninit();
 }

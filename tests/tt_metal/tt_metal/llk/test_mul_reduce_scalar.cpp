@@ -167,7 +167,7 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
 // Test fixture that automatically skips if not on Blackhole
-class MulReduceScalarTest : public MeshDeviceSingleCardFixture {
+class MulReduceScalarTest : public MeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {
 protected:
     void SetUp() override {
         MeshDeviceSingleCardFixture::SetUp();
@@ -177,27 +177,16 @@ protected:
     }
 };
 
-TEST_F(MulReduceScalarTest, MulReduceScalar1Tile) {
+// Single parametrized test
+TEST_P(MulReduceScalarTest, MulReduceScalar) {
     IDevice* device = devices_[0]->get_devices()[0];
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = 1}));
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = num_tiles}));
 }
 
-TEST_F(MulReduceScalarTest, MulReduceScalar2Tiles) {
-    IDevice* device = devices_[0]->get_devices()[0];
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = 2}));
-}
-
-TEST_F(MulReduceScalarTest, MulReduceScalar3Tiles) {
-    IDevice* device = devices_[0]->get_devices()[0];
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = 3}));
-}
-
-TEST_F(MulReduceScalarTest, MulReduceScalar7Tiles) {
-    IDevice* device = devices_[0]->get_devices()[0];
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = 7}));
-}
-
-TEST_F(MulReduceScalarTest, MulReduceScalar8Tiles) {
-    IDevice* device = devices_[0]->get_devices()[0];
-    ASSERT_TRUE(run_mul_reduce_scalar_test(device, {.num_tiles = 8}));
-}
+// Instantiate the test suite with different tile counts
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarTests,
+    MulReduceScalarTest,
+    testing::Values(1, 2, 3, 7, 8),
+    [](const testing::TestParamInfo<int>& info) { return "MulReduceScalar_" + std::to_string(info.param) + "_Tiles"; });

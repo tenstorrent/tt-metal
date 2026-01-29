@@ -16,7 +16,7 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_mul_reduce_scalar_eltwise_init(
+inline void llk_math_eltwise_mul_reduce_scalar_init(
     const std::uint32_t operand_A, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -31,7 +31,7 @@ template <
     bool is_fp32_dest_acc_en,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_mul_reduce_scalar_eltwise(uint dst_index, const bool clear_fp32_dst_acc = true) {
+inline void llk_math_eltwise_mul_reduce_scalar(uint dst_index, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t num_faces = 4;
 
     _llk_math_eltwise_binary_<
