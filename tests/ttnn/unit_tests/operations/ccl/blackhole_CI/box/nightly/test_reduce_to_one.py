@@ -323,7 +323,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
     )
     ttnn.synchronize_device(submesh_device)
 
-    # Helper to run reduce_to_one with all_reduce sync every 2 iterations
+    # Helper to run reduce_to_one with all_reduce sync every 4 iterations
     def run_with_sync(num_iters, sem_offset=0):
         for i in range(num_iters):
             output_tensor = ttnn.experimental.reduce_to_one(
@@ -334,9 +334,9 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
                 output_tensor=output_tensor_preallocated,
                 intermediate_tensors=intermediate_tensors,
             )
-            # Insert all_reduce every 2 iterations for device sync
-            if (i + 1) % 2 == 0:
-                sem_idx = ((i // 2) + sem_offset) % len(sync_semaphores)
+            # Insert all_reduce every 4 iterations for device sync
+            if (i + 1) % 4 == 0:
+                sem_idx = ((i // 4) + sem_offset) % len(sync_semaphores)
                 _ = ttnn.experimental.all_reduce_async(
                     sync_tensor,
                     sync_intermediate_tensors[sem_idx],
