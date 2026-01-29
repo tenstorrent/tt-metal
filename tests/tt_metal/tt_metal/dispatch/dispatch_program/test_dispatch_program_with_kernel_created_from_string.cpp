@@ -51,7 +51,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
     #include "api/debug/dprint.h"
-    #include "compute_kernel_api.h"
+    #include "api/compute/compute_kernel_api.h"
 
 
     void kernel_main() {

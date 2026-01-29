@@ -6,7 +6,7 @@
 #include "api/debug/assert.h"
 
 #if defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 
 namespace NAMESPACE {
 void MAIN {

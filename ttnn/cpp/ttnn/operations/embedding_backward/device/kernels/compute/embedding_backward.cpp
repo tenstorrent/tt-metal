@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/reshuffle.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reshuffle.h"
+#include "api/compute/tile_move_copy.h"
 
 void kernel_main() {
     const uint32_t tiles_per_core = get_arg_val<uint32_t>(0);
