@@ -87,6 +87,35 @@ def setup_reduce_to_one_test(mesh_device):
         )
         intermediate_tensors.append(intermediate_tensor)
 
+    # Create output tensor sharded on a single core (bottom-right of compute grid)
+    # Get the full compute grid and use the bottom-right core
+    compute_grid = submesh_device.compute_with_storage_grid_size()
+    output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    logger.info(f"Compute grid: {compute_grid}, output core: {output_core}")
+    output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(output_core, output_core)})
+    output_shard_shape = tensor_shape  # Full tensor on single core
+    output_shard_spec = ttnn.ShardSpec(
+        output_shard_grid,
+        output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, output_shard_spec
+    )
+
+    # Create output tensor (zeros, will be filled by reduce_to_one)
+    output_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
+    output_tensor = ttnn.from_torch(
+        output_data,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=output_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    logger.info(f"Created output tensor sharded on single core: {output_core}")
+
     # Generate test data
     data_per_device = []
     torch.manual_seed(42)
@@ -115,9 +144,11 @@ def setup_reduce_to_one_test(mesh_device):
         "submesh_device": submesh_device,
         "input_tensor": input_tensor,
         "intermediate_tensors": intermediate_tensors,
+        "output_tensor": output_tensor,
         "ref_output": ref_output,
         "root_coord": root_coord,
         "exit_coord": exit_coord,
+        "output_core": output_core,
     }
 
 
@@ -156,6 +187,7 @@ def run_reduce_to_one(mesh_device, topology):
         root_coord=ttnn.MeshCoordinate(config["root_coord"]),
         exit_coord=ttnn.MeshCoordinate(config["exit_coord"]),
         topology=topology,
+        output_tensor=config["output_tensor"],
         intermediate_tensors=config["intermediate_tensors"],
     )
     ttnn.synchronize_device(config["submesh_device"])
@@ -181,6 +213,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
     submesh_device = config["submesh_device"]
     input_tensor = config["input_tensor"]
     intermediate_tensors = config["intermediate_tensors"]
+    output_tensor_preallocated = config["output_tensor"]
     root_coord = config["root_coord"]
     exit_coord = config["exit_coord"]
     ref_output = config["ref_output"]
@@ -194,6 +227,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
         root_coord=ttnn.MeshCoordinate(root_coord),
         exit_coord=ttnn.MeshCoordinate(exit_coord),
         topology=topology,
+        output_tensor=output_tensor_preallocated,
         intermediate_tensors=intermediate_tensors,
     )
     ttnn.synchronize_device(submesh_device)
@@ -207,6 +241,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),
             topology=topology,
+            output_tensor=output_tensor_preallocated,
             intermediate_tensors=intermediate_tensors,
         )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
@@ -221,6 +256,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),
             topology=topology,
+            output_tensor=output_tensor_preallocated,
             intermediate_tensors=intermediate_tensors,
         )
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
@@ -235,6 +271,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),
             topology=topology,
+            output_tensor=output_tensor_preallocated,
             intermediate_tensors=intermediate_tensors,
         )
     ttnn.end_trace_capture(submesh_device, trace_id_tail, cq_id=0)

@@ -16,24 +16,38 @@
 using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl {
 
-void ReduceToOneOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void ReduceToOneOp::validate(const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
     auto* mesh_device = input.device();
 
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
-        const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-
-        TT_FATAL(
-            output_specs[1][0] == optional_output_tensor.value().tensor_spec(),
-            "Optional output tensor spec {} does not match computed output spec {}",
-            optional_output_tensor.value().tensor_spec(),
-            output_specs[1][0]);
-
         TT_FATAL(
             optional_output_tensor.value().device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
+
+        // Output tensor can have different sharding (e.g., single-core for gather)
+        // but must have same logical shape and dtype
+        const auto& output_spec = optional_output_tensor.value().tensor_spec();
+        const auto& input_spec = input.tensor_spec();
+        TT_FATAL(
+            output_spec.logical_shape() == input_spec.logical_shape(),
+            "Output tensor logical shape {} does not match input logical shape {}",
+            output_spec.logical_shape(),
+            input_spec.logical_shape());
+        TT_FATAL(
+            output_spec.tensor_layout().get_data_type() == input_spec.tensor_layout().get_data_type(),
+            "Output tensor dtype does not match input dtype");
+        TT_FATAL(optional_output_tensor.value().is_sharded(), "Output tensor must be sharded");
+
+        // Output tensor must be sharded on exactly 1 core for gather
+        const auto& output_shard_spec = optional_output_tensor.value().shard_spec().value();
+        uint32_t num_output_cores = 0;
+        for (const auto& core_range : output_shard_spec.grid.ranges()) {
+            num_output_cores += core_range.size();
+        }
+        TT_FATAL(num_output_cores == 1, "Output tensor must be sharded on exactly 1 core, got {}", num_output_cores);
     }
 
     const auto& optional_intermediate_tensors = tensor_args.optional_intermediate_tensors;
@@ -62,6 +76,7 @@ void ReduceToOneOp::validate(const operation_attributes_t& operation_attributes,
 ReduceToOneOp::spec_return_value_t ReduceToOneOp::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    auto* mesh_device = input_tensor.device();
 
     // 3 intermediate tensors for 3 rounds of receiving (prevents data overwrites)
     // - intermediate_r1: LEAF → ROOT* (round 1)
@@ -70,8 +85,28 @@ ReduceToOneOp::spec_return_value_t ReduceToOneOp::compute_output_specs(
     std::vector<TensorSpec> intermediate_specs = {
         input_tensor.tensor_spec(), input_tensor.tensor_spec(), input_tensor.tensor_spec()};
 
-    // Output tensor has the same spec as input
-    std::vector<TensorSpec> final_output_specs = {input_tensor.tensor_spec()};
+    // Output tensor: sharded on single core (bottom-right of compute grid)
+    // All 8 shards from input are gathered to this single core
+    auto compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreCoord output_core = {compute_grid.x - 1, compute_grid.y - 1};
+    CoreRangeSet output_grid = CoreRangeSet({CoreRange(output_core, output_core)});
+
+    const auto& input_spec = input_tensor.tensor_spec();
+    const auto& input_shard_spec = input_tensor.shard_spec().value();
+
+    // Output shard shape = full tensor (all shards combined)
+    // Input is width-sharded across N cores, output is full width on 1 core
+    auto input_shape = input_spec.logical_shape();
+    std::array<uint32_t, 2> output_shard_shape = {input_shape[-2], input_shape[-1]};
+
+    ShardSpec output_shard_spec(output_grid, output_shard_shape, input_shard_spec.orientation);
+    MemoryConfig output_mem_config(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, output_shard_spec);
+
+    TensorSpec output_spec(
+        input_spec.logical_shape(),
+        TensorLayout(input_spec.data_type(), PageConfig(input_spec.layout(), input_spec.tile()), output_mem_config));
+
+    std::vector<TensorSpec> final_output_specs = {output_spec};
 
     return {intermediate_specs, final_output_specs};
 }
