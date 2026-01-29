@@ -34,11 +34,11 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("wq_kv_a", 10, 28.81),
-        ("wq_b", 10, 57.5),
-        ("wkv_b1", 10, 35.63),
-        ("wkv_b2", 10, 142),
-        ("wo", 10, 259.59),
+        ("wq_kv_a", 10, 28.76),
+        ("wq_b", 10, 57.11),
+        ("wkv_b1", 10, 35.62),
+        ("wkv_b2", 10, 141.68),
+        ("wo", 10, 259.56),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -95,7 +95,7 @@ def test_linear_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("mla_reduce_wq_kv_a", 10, 7.75),  # Target based on typical reduce performance
+        ("mla_reduce_wq_kv_a", 10, 7.73),  # Target based on typical reduce performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -152,8 +152,8 @@ def test_fast_reduce_wq_kv_a_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("wq_kv_a_ag_decode", 10, 48.2),  # Target based on typical all-gather performance
-        ("wo_ag_decode", 10, 50.6),  # Target based on typical all-gather performance
+        ("wq_kv_a_ag_decode", 10, 47.91),  # Target based on typical all-gather performance
+        ("wo_ag_decode", 10, 50.19),  # Target based on typical all-gather performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -169,7 +169,7 @@ def test_ag_tg_deepseek_allgather_perf(
     subdir = "deepseek_ccl_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_allgather_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "AllGatherAsync"  # CCL operation name for all-gather
+    op_name = "AllGatherAsyncDeviceOperation"  # CCL operation name for all-gather
     warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
@@ -211,9 +211,9 @@ def test_ag_tg_deepseek_allgather_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_slice", 10, 1.5),  # Target based on typical reduce performance
-        ("kv_nope_slice", 10, 1.3),
-        ("kv_rope_slice", 10, 1),
+        ("q_slice", 10, 1.47),
+        ("kv_nope_slice", 10, 1.26),
+        ("kv_rope_slice", 10, 0.95),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -270,8 +270,8 @@ def test_slice_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_nope_slice", 10, 2.39),  # 2.43 if run on mesh device
-        ("q_rope_slice", 10, 1.88),  # 1.89 if run on mesh device
+        ("q_nope_slice", 10, 2.27),  # 2.29 if run on mesh device
+        ("q_rope_slice", 10, 1.84),  # 1.86 if run on mesh device
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -330,7 +330,7 @@ def test_slice_q_rope_nope_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_norm", 10, 7.34),  # Target based on typical reduce performance
+        ("q_norm", 10, 7.33),
         ("kv_norm", 10, 6.68),
     ],
 )
@@ -391,10 +391,10 @@ def test_rmsnorm_deepseek_perf(
         ("kv_nope_to_interleaved", 10, 0.75, "ShardedToInterleavedDeviceOperation"),
         ("kv_rope_reshard", 10, 1.04, "InterleavedToShardedDeviceOperation"),
         ("kv_rope_out_reshard", 10, 1.19, "ShardedToInterleavedDeviceOperation"),
-        ("kvpe_reshard", 10, 2.8, "InterleavedToShardedDeviceOperation"),
-        ("q_rope_out_reshard", 10, 1.18, "ShardedToInterleavedDeviceOperation"),
-        ("flash_mla_reshard", 10, 9.34, "InterleavedToShardedDeviceOperation"),
-        ("flash_mla_out_reshard", 10, 3.86, "ShardedToInterleavedDeviceOperation"),
+        ("kvpe_reshard", 10, 2.83, "InterleavedToShardedDeviceOperation"),
+        ("q_rope_out_reshard", 10, 1.19, "ShardedToInterleavedDeviceOperation"),
+        ("flash_mla_reshard", 10, 9.41, "InterleavedToShardedDeviceOperation"),
+        ("flash_mla_out_reshard", 10, 3.89, "ShardedToInterleavedDeviceOperation"),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -451,14 +451,14 @@ def test_to_memory_config_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kv_rope_permute_pre", 10, 7.6),
-        ("kv_rope_permute_post", 10, 1.5),
-        ("kvpe_permute", 10, 31),
-        ("q_nope_permute_pre_linear", 10, 6.20),
-        ("q_nope_permute_post_linear", 10, 22.95),
-        ("q_rope_permute", 10, 1.65),
-        ("attn_out_permute_pre_linear", 10, 71),
-        ("v_out_permute", 10, 8),
+        ("kv_rope_permute_pre", 10, 7.45),
+        ("kv_rope_permute_post", 10, 1.30),
+        ("kvpe_permute", 10, 30.95),
+        ("q_nope_permute_pre_linear", 10, 6.23),
+        ("q_nope_permute_post_linear", 10, 23.40),
+        ("q_rope_permute", 10, 1.62),
+        ("attn_out_permute_pre_linear", 10, 70.29),
+        ("v_out_permute", 10, 7.61),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -516,8 +516,8 @@ def test_permute_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kv_rope_decode", 10, 4.5),
-        ("q_rope_decode", 10, 4.5),
+        ("kv_rope_decode", 10, 4.18),
+        ("q_rope_decode", 10, 4.16),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -575,8 +575,8 @@ def test_rope_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kvpe_concat", 10, 1.36),
-        ("q_concat", 10, 7.90),
+        ("kvpe_concat", 10, 1.32),
+        ("q_concat", 10, 8.01),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -634,7 +634,7 @@ def test_concat_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kvpe_pad", 10, 41.2),  # Target based on typical pad performance
+        ("kvpe_pad", 10, 41.25),  # Target based on typical pad performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -689,7 +689,7 @@ def test_pad_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("paged_update_cache_decode", 10, 10),  # Target based on existing test baseline
+        ("paged_update_cache_decode", 10, 9.78),  # Target based on existing test baseline
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -747,8 +747,8 @@ def test_paged_update_cache_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_reshape_decode", 10, 38.71),
-        ("v_out_reshape_decode", 10, 175),
+        ("q_reshape_decode", 10, 38.74),
+        ("v_out_reshape_decode", 10, 174.55),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -764,7 +764,7 @@ def test_reshape_deepseek_perf(
     subdir = "deepseek_reshape_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_reshape_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "ReshapeDeviceOperation"
+    op_name = "ReshapeViewDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)
@@ -863,7 +863,7 @@ def test_alltoall_tg_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kvpe_mesh_partition", 10, 2.54),
+        ("kvpe_mesh_partition", 10, 2.39),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -921,7 +921,7 @@ def test_mesh_partition_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("flash_mla_decode", 10, 193.4),  # Target based on typical flash attention performance
+        ("flash_mla_decode", 10, 192.56),  # Target based on typical flash attention performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -982,7 +982,7 @@ def test_flash_mla_deepseek_perf(
             "wq_kv_a_sequence",
             10,
             146.7,
-        ),  # Sum: linear(28.81) + all-gather(106) + fast_reduce(7.75) + 3*slices(1.5+1.3+1)
+        ),  # Sum: linear(28.76) + all-gather(106) + fast_reduce(7.73) + 3*slices(1.47+1.26+0.95)
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -996,12 +996,12 @@ def test_wq_kv_a_sequence_deepseek_perf(
     Test performance of the complete wq_kv_a sequence from mla1d.py (lines 1092-1134).
 
     This test measures the end-to-end performance of the operation sequence:
-    1. Linear projection (wq_kv_a): 28.81 µs
+    1. Linear projection (wq_kv_a): 28.76 µs
     2. All-gather: 106 µs
-    3. Fast reduce: 7.75 µs
-    4. Slice q: 1.5 µs
-    5. Slice kv_nope: 1.3 µs
-    6. Slice kv_rope: 1 µs
+    3. Fast reduce: 7.73 µs
+    4. Slice q: 1.47 µs
+    5. Slice kv_nope: 1.26 µs
+    6. Slice kv_rope: 0.95 µs
 
     Total expected: 146.36 µs
     """
@@ -1027,7 +1027,7 @@ def test_wq_kv_a_sequence_deepseek_perf(
     measured_avg = 0
     measured_std = 0
     for op in results.keys():
-        if op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::slice::SliceDeviceOperation>":
+        if op == "SliceDeviceOperation":
             measured_min += 3 * results[op][cols[0]]["MIN"]
             measured_max += 3 * results[op][cols[0]]["MAX"]
             measured_avg += 3 * results[op][cols[0]]["AVG"]
@@ -1069,8 +1069,8 @@ def test_wq_kv_a_sequence_deepseek_perf(
         (
             "norm_and_rope_sequence",
             10,
-            119,
-        ),  # Sum: q_norm(7.34) + kv_norm(6.68) + to_mem(0.75) + permute(7.6) + reshard(1.04) + rope(4.5) + reshard(1.19) + permute(1.5) + concat(1.36) + pad(45) + permute(31) + reshard(2.8)
+            120.72,
+        ),  # Sum: q_norm(7.33) + kv_norm(6.68) + to_mem(0.75) + permute(7.45) + reshard(1.04) + rope(4.18) + reshard(1.19) + permute(1.30) + concat(1.32) + pad(41.25) + permute(30.95) + reshard(2.83)
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -1102,12 +1102,12 @@ def test_norm_and_rope_sequence_deepseek_perf(
     measured_avg = 0
     measured_std = 0
     for op in results.keys():
-        if op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::transpose::TransposeDeviceOperation>":
+        if op == "TransposeDeviceOperation":
             measured_min += 3 * results[op][cols[0]]["MIN"]
             measured_max += 3 * results[op][cols[0]]["MAX"]
             measured_avg += 3 * results[op][cols[0]]["AVG"]
             measured_std += 3 * results[op][cols[0]]["STD"]
-        elif op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation>":
+        elif op == "ShardedToInterleavedDeviceOperation":
             measured_min += 2 * results[op][cols[0]]["MIN"]
             measured_max += 2 * results[op][cols[0]]["MAX"]
             measured_avg += 2 * results[op][cols[0]]["AVG"]
@@ -1148,8 +1148,8 @@ def test_norm_and_rope_sequence_deepseek_perf(
         (
             "wkv_b2_sequence",
             10,
-            225,
-        ),  # Sum: reshard(3.86) + permute(71) + linear(142) + permute(8)
+            224.72,
+        ),  # Sum: reshard(3.89) + permute(70.29) + linear(141.68) + permute(7.61)
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -1163,10 +1163,10 @@ def test_wkv_b2_sequence_deepseek_perf(
     Test performance of the complete wkv_b2 sequence from mla1d.py (lines 1331-1348).
 
     This test measures the end-to-end performance of the operation sequence:
-    1. Reshard (flash_mla_out_reshard): 3.86 µs
-    2. Permute (attn_out_permute_pre_linear): 71 µs
-    3. Linear (wkv_b2): 142 µs
-    4. Permute (v_out_permute): 8 µs
+    1. Reshard (flash_mla_out_reshard): 3.89 µs
+    2. Permute (attn_out_permute_pre_linear): 70.29 µs
+    3. Linear (wkv_b2): 141.68 µs
+    4. Permute (v_out_permute): 7.61 µs
 
     Total expected: 224.86 µs
     """
@@ -1192,7 +1192,8 @@ def test_wkv_b2_sequence_deepseek_perf(
     measured_avg = 0
     measured_std = 0
     for op in results.keys():
-        if op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::transpose::TransposeDeviceOperation>":
+        if op == "TransposeDeviceOperation":
+            print(op)
             # There are 2 transpose operations (permutes)
             measured_min += 2 * results[op][cols[0]]["MIN"]
             measured_max += 2 * results[op][cols[0]]["MAX"]
@@ -1234,8 +1235,8 @@ def test_wkv_b2_sequence_deepseek_perf(
         (
             "fwd_decode_q_rope_nope",
             10,
-            184.9,
-        ),  # Sum: linear(57.5) + reshape(39) + slice(2.43+1.89) + permute(6.20) + linear(35.63) + permute(22.95) + permute(1.65) + rotary(4.56) + to_mem(1.18) + concat(7.90)
+            184.16,
+        ),  # Sum: linear(57.11) + reshape(38.74) + slice(2.27+1.84) + permute(6.23) + linear(35.62) + permute(23.40) + permute(1.62) + rotary(4.16) + to_mem(1.19) + concat(8.01)
     ],
 )
 # 33uS slower than sum of unit tests
@@ -1250,19 +1251,19 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     Test performance of the fwd_decode_q_rope_nope sequence from mla1d.py (lines 1234-1295).
 
     This test measures the end-to-end performance of the operation sequence:
-    1. Linear projection (tt_q): 57.5 µs
-    2. Reshape: 38.71 µs
-    3. Slice tt_q_nope: 2.40 µs
-    4. Slice tt_q_rope: 1.87 µs
-    5. Permute tt_q_nope: 6.20 µs
-    6. Linear projection (tt_q_nope): 35.63 µs
-    7. Permute tt_q_nope: 22.95 µs
-    8. Permute tt_q_rope: 1.65 µs
-    9. Rotary embedding tt_q_rope: 4.56 µs
-    10. To memory config: 1.18 µs
-    11. Concat tt_q_nope and tt_q_rope: 7.90 µs
+    1. Linear projection (wq_b): 57.11 µs
+    2. Reshape: 38.74 µs
+    3. Slice tt_q_nope: 2.27 µs
+    4. Slice tt_q_rope: 1.84 µs
+    5. Permute tt_q_nope: 6.23 µs
+    6. Linear projection (wkv_b1): 35.62 µs
+    7. Permute tt_q_nope: 23.40 µs
+    8. Permute tt_q_rope: 1.62 µs
+    9. Rotary embedding tt_q_rope: 4.16 µs
+    10. To memory config: 1.19 µs
+    11. Concat tt_q_nope and tt_q_rope: 8.01 µs
 
-    Total expected: 184.9 µs
+    Total expected: 180.19 µs
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_fwd_decode_q_rope_nope_deepseek.py -k {step_name}"
@@ -1287,9 +1288,9 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     measured_std = 0
     for op in results.keys():
         if op in [
-            "MeshDeviceOperationAdapter<ttnn::operations::data_movement::slice::SliceDeviceOperation>",
-            "MeshDeviceOperationAdapter<ttnn::operations::matmul::MatmulDeviceOperation>",
-            "MeshDeviceOperationAdapter<ttnn::operations::data_movement::PermuteDeviceOperation>",
+            "SliceDeviceOperation",
+            "MatmulDeviceOperation",
+            "PermuteDeviceOperation",
         ]:
             measured_min += 2 * results[op][cols[0]]["MIN"]
             measured_max += 2 * results[op][cols[0]]["MAX"]
