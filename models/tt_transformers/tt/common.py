@@ -79,10 +79,11 @@ class RopeScalingYarn(RopeScaling):
     """RoPE scaling configuration for Yarn."""
 
     # Yarn-specific parameters
-    beta_fast: Optional[int] = 32
-    beta_slow: Optional[int] = 1
+    beta_fast: Optional[float] = 32.0
+    beta_slow: Optional[float] = 1.0
     mscale: Optional[float] = 1.0
     mscale_all_dim: Optional[float] = 0.0
+    truncate: Optional[bool] = True  # Whether to truncate the correction range (floor/ceil)
 
 
 class RopeScalingPhi3(RopeScaling):

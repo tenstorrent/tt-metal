@@ -474,7 +474,9 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None):
+def set_fabric(
+    fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None, fabric_router_config=None
+):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
@@ -492,9 +494,26 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None, 
         if fabric_manager is None:
             fabric_manager = ttnn.FabricManagerMode.DEFAULT
 
-        ttnn.set_fabric_config(
-            fabric_config, reliability_mode, None, fabric_tensix_config, ttnn.FabricUDMMode.DISABLED, fabric_manager
-        )
+        # Build kwargs for set_fabric_config, only include fabric_router_config if provided
+        if fabric_router_config is not None:
+            ttnn.set_fabric_config(
+                fabric_config,
+                reliability_mode,
+                None,
+                fabric_tensix_config,
+                ttnn.FabricUDMMode.DISABLED,
+                fabric_manager,
+                fabric_router_config,
+            )
+        else:
+            ttnn.set_fabric_config(
+                fabric_config,
+                reliability_mode,
+                None,
+                fabric_tensix_config,
+                ttnn.FabricUDMMode.DISABLED,
+                fabric_manager,
+            )
 
 
 def get_default_fabric_tensix_config():
@@ -553,7 +572,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager)
+    fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -648,7 +668,9 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
 
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
@@ -679,7 +701,9 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),

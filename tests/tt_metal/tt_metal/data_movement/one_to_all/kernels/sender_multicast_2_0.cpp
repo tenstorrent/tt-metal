@@ -96,4 +96,6 @@ void kernel_main() {
         DeviceTimestampedData("Subordinate Grid Size X", sub_grid_size_x);
         DeviceTimestampedData("Subordinate Grid Size Y", sub_grid_size_y);
     }
+
+    DeviceTimestampedData("Number of subordinates", num_subordinates);
 }

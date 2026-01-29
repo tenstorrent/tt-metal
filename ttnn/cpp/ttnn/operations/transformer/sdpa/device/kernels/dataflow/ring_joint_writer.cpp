@@ -3,10 +3,68 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+
+template <typename ReaderType, typename TensorAccessorType>
+void read_prev_output_and_lse(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_prev_out,
+    const uint32_t cb_lse_in,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    // Read previous output for this Q chunk
+    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
+
+    // Read previous LSE for this Q chunk
+    cb_reserve_back(cb_lse_in, Sq_chunk_t);
+    uint32_t lse_addr = get_write_ptr(cb_lse_in);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_read_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_lse_in, Sq_chunk_t);
+}
+
+template <typename ReaderType, typename TensorAccessorType>
+void write_output_and_lse(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const TensorAccessorType& lse_writer,
+    const TensorTileShape& lse_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t Sq_chunk_t,
+    const Slice out_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t lse_seq_start_tile,
+    const uint32_t lse_seq_end_tile,
+    const uint32_t cb_out,
+    const uint32_t cb_lse_out,
+    const uint32_t tile_bytes,
+    const uint32_t lse_tile_bytes) {
+    write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+
+    cb_wait_front(cb_lse_out, Sq_chunk_t);
+    uint32_t lse_addr = get_read_ptr(cb_lse_out);
+    for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
+        noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
+        lse_addr += lse_tile_bytes;
+    }
+    noc_async_writes_flushed();
+    cb_pop_front(cb_lse_out, Sq_chunk_t);
+}
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -128,14 +186,15 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            if (ring_iter_needs_global_n_mask) {
-                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_n_within_ring_iter);
-            } else if (ring_iter_needs_local_n_mask) {
-                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, local_padded_N);
-            }
-            if (ring_iter_needs_joint_n_mask) {
-                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, L);
-            }
+            generate_mask<false, false, 0, true, cb_mask_in>(
+                Sq_chunk_t,
+                Sk_chunk_t,
+                q_chunk,
+                0,
+                ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
+                ring_iter_needs_joint_n_mask,
+                ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
+                L);
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;
@@ -168,37 +227,38 @@ void kernel_main() {
             }
 
             if (ring_iter > 0) {
-                // Read previous output for this Q chunk
-                read_block(
+                read_prev_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
+                    lse_writer,
+                    lse_tile_logical,
+                    nb,
+                    nq,
+                    Sq_chunk_t,
                     out_slice,
                     end_seq_tile,
+                    lse_seq_start_tile,
+                    lse_seq_end_tile,
                     cb_prev_out,
+                    cb_lse_in,
                     tile_bytes,
-                    false);
-                // Read previous LSE for this Q chunk
-                cb_reserve_back(cb_lse_in, Sq_chunk_t);
-                uint32_t lse_addr = get_write_ptr(cb_lse_in);
-
-                for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
-                    noc_async_read_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
-                    lse_addr += lse_tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_lse_in, Sq_chunk_t);
+                    lse_tile_bytes);
             }
 
-            write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
-
-            cb_wait_front(cb_lse_out, Sq_chunk_t);
-            uint32_t lse_addr = get_read_ptr(cb_lse_out);
-
-            for (uint32_t i = lse_seq_start_tile; i < lse_seq_end_tile; i++) {
-                noc_async_write_tile(lse_tile_logical.id_of(nb, nq, i, 0), lse_writer, lse_addr);
-                lse_addr += lse_tile_bytes;
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_lse_out, Sq_chunk_t);
+            write_output_and_lse(
+                is_joint_q ? joint_out_generator : out_generator,
+                lse_writer,
+                lse_tile_logical,
+                nb,
+                nq,
+                Sq_chunk_t,
+                out_slice,
+                end_seq_tile,
+                lse_seq_start_tile,
+                lse_seq_end_tile,
+                cb_out,
+                cb_lse_out,
+                tile_bytes,
+                lse_tile_bytes);
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
