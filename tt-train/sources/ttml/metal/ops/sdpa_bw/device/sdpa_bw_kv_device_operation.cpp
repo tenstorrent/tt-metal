@@ -127,6 +127,12 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !(operation_attributes.mask_type == AttentionMaskType::Arbitrary && !tensor_args.attn_mask.has_value()),
         "AttentionMaskType::Arbitrary requires a mask tensor to be provided.");
+
+    TT_FATAL(
+        !(operation_attributes.mask_type != AttentionMaskType::Arbitrary && tensor_args.attn_mask.has_value()),
+        "Mask tensor provided but mask_type is not Arbitrary. "
+        "Use AttentionMaskType::Arbitrary to apply a custom mask, "
+        "or remove the mask tensor for None/Causal modes.");
 }
 
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
