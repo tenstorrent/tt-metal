@@ -125,7 +125,7 @@ void forward_half_block_to_fabric_neighbor(
     while (tiles_read < tiles_to_read) {
         uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
         uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
-        bool offset_l1_read_addr = false;
+        bool reached_half_block_end = false;
 
         uint64_t noc_addrs[4] = {0, 0, 0, 0};
         for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
@@ -134,7 +134,8 @@ void forward_half_block_to_fabric_neighbor(
             if (pages_read_in_row >= half_k_block_tiles) {
                 row_offset += output_tensor_Wt;
                 pages_read_in_row = 0;
-                offset_l1_read_addr = true;  // TODO fix this is read tiles stride row
+                reached_half_block_end = true;
+                tiles_to_put_in_current_packet = i + 1;  // break early because not contiguous in L1
             }
             noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
         }
@@ -152,7 +153,7 @@ void forward_half_block_to_fabric_neighbor(
         noc_async_writes_flushed();
         tiles_read += tiles_to_put_in_current_packet;
         l1_read_addr += (tiles_to_put_in_current_packet * page_size);
-        if (offset_l1_read_addr) {
+        if (reached_half_block_end) {
             l1_read_addr += (half_k_block_tiles * page_size);
         }
     }
@@ -262,6 +263,8 @@ void read_in0_block_sync(
             }
             write_ptr += tile_size_bytes;
         }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
+        write_ptr += (K_block_tiles / 2 - (d1_end_left - d1_start_left)) * tile_size_bytes;
         for (uint32_t j = d1_start_right; j < d1_end_right; j++) {
             if (j < shape.logical_d1) {
 #ifdef READ_FROM_LOCAL_INPUT
@@ -282,8 +285,7 @@ void read_in0_block_sync(
             write_ptr += tile_size_bytes;
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
-        write_ptr += (K_block_tiles - (d1_end_left - d1_start_left) - (d1_end_right - d1_start_right)) *
-                     tile_size_bytes;  // TODO fix this, the zeroes are not in the right spot
+        write_ptr += (K_block_tiles / 2 - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
