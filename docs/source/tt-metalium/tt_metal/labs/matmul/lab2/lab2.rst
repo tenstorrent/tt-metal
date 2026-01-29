@@ -241,15 +241,22 @@ set on the core.
 Create Circular Buffers and Kernels on Multiple Cores
 -----------------------------------------------------
 
-Circular buffers (CBs) have to be created on each core participating in the computation, which can be achieved simply by passing
-``all_cores`` to the function creating circular buffers.
-Each participating core will use its CBs to store required tiles of matrices ``A``, ``B``, and ``C``.
-Note that the ``create_cb`` helper function from Lab 1 needs to be updated to accept a ``CoreRangeSet`` of cores,
-which can then be passed on to the ``CreateCircularBuffer`` function.
-Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function.
+Circular buffers (CBs) have to be created on each core participating in the computation.
+Each participating core will use its CBs to store the required tiles of matrices ``A``, ``B``, and ``C``.
 
-Similarly, reader, compute, and writer kernels need to be created on all cores, and this is also achieved simply by passing
-``all_cores`` to the function creating kernels.
+Each core can access only the CB instances created on that core; CBs are not shared across cores.
+Therefore, CB identifiers, such as ``CBIndex::c_0``, don't have to be unique across cores. In fact,
+it is common to use the same CB identifier for all cores running the same kernels, so that kernel code
+can be reused across cores.
+Given this, CBs can be created on all participating cores simply by passing ``all_cores`` (rather than a single core)
+to the function that creates circular buffers.
+Note that the ``create_cb`` helper function you used in Lab 1 needs to be updated to accept a ``CoreRangeSet`` of cores,
+which can then be passed on to the ``CreateCircularBuffer`` function.
+Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function,
+so it can accept either a single core or a set of cores.
+
+Similarly, reader, compute, and writer kernels need to be created on all participating cores,
+which is also done by passing ``all_cores`` to the function that creates kernels.
 
 
 Set Per-Core Runtime Arguments
