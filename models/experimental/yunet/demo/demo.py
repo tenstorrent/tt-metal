@@ -8,7 +8,7 @@ Usage:
 
 Example:
     python models/experimental/yunet/demo/demo.py --input test.jpg --output result.jpg
-    python models/experimental/yunet/demo/demo.py --input test.jpg --input-size 640
+    python models/experimental/yunet/demo/demo.py --input test.jpg --input-size 320
 """
 
 import argparse
@@ -138,7 +138,7 @@ def run_yunet_demo(
         device: TTNN device
         image_path: Path to input image
         output_path: Optional path to save output image
-        input_size: Model input size (320 or 640, default: 320)
+        input_size: Model input size (320 or 640, default: 640)
         num_iterations: Number of iterations for timing (default: 1)
 
     Returns:
@@ -258,11 +258,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Basic usage (320x320)
+    # Basic usage (640x640)
     python models/experimental/yunet/demo/demo.py --input face.jpg --output result.jpg
 
-    # With 640x640 input size
-    python models/experimental/yunet/demo/demo.py --input face.jpg --output result.jpg --input-size 640
+    # With 320x320 input size
+    python models/experimental/yunet/demo/demo.py --input face.jpg --output result.jpg --input-size 320
 
     # Benchmark with multiple iterations
     python models/experimental/yunet/demo/demo.py --input face.jpg --iterations 100
