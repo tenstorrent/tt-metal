@@ -140,7 +140,7 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 **Exabox Physical Layout:**
 
-![Exabox Diagram](images/exabox_diagram.png)
+![Exabox Diagram](https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/exabox_diagram.png?raw=true)
 
 ## Quick Health Check (For Developers)
 
