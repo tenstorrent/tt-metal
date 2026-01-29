@@ -341,7 +341,6 @@ void configure_cross_host_kernels(
         uint32_t address;
     };
     std::vector<WriteTask> write_tasks;
-    std::unordered_set<ChipId> chips_with_writes;
 
     struct KernelInfo {
         ChipId chip_id;
@@ -373,7 +372,6 @@ void configure_cross_host_kernels(
                      &all_zeros,
                      dst_eth_l1_byte_address});
             }
-            chips_with_writes.insert(my_chip);
 
             // Store kernel info for later
             kernel_infos.push_back(KernelInfo{.chip_id = my_chip, .coord = my_coord, .is_sender = sender});
@@ -384,10 +382,7 @@ void configure_cross_host_kernels(
     const size_t max_concurrent_writes = std::thread::hardware_concurrency();
     execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
         cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
-    });
-    // Execute barriers per chip (wait for all writes to chip, then barrier)
-    std::for_each(chips_with_writes.begin(), chips_with_writes.end(), [&cluster](ChipId chip_id) {
-        cluster.l1_barrier(chip_id);
+        cluster.l1_barrier(task.chip_id);
     });
 
     // Create kernels and set runtime args
@@ -698,8 +693,6 @@ void dump_link_stats(
     auto port_info_map = generate_port_info(ctx.physical_system_descriptor);
 
     struct LinkInfo {
-        tt::tt_metal::AsicID asic_id;
-        uint8_t src_chan;
         ChipId chip_id;
         CoreCoord ethernet_core;
         EthChannelIdentifier channel_id;
@@ -717,9 +710,7 @@ void dump_link_stats(
                 auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
                 links.push_back(
-                    {asic_id,
-                     src_chan,
-                     chip_id,
+                    {chip_id,
                      ethernet_core,
                      EthChannelIdentifier{
                          .host = host_name,
@@ -758,7 +749,7 @@ void dump_link_stats(
     // Process results and build LinkStatus entries
     for (size_t i = 0; i < links.size(); ++i) {
         statuses_per_link[links[i].channel_id].push_back(LinkStatus{
-            .metrics = local_ethernet_metrics.at(links[i].asic_id).at(links[i].src_chan),
+            .metrics = local_ethernet_metrics.at(links[i].channel_id.asic_id).at(links[i].channel_id.channel),
             .traffic_params = TrafficParams{.packet_size_bytes = packet_size_bytes, .data_size = data_size},
             .num_mismatched_words = num_mismatched_words[i],
         });
