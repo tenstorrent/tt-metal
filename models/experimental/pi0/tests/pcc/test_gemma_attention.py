@@ -64,7 +64,7 @@ def create_expert_config() -> GemmaConfig:
         mlp_dim=4096,
         num_heads=8,
         num_kv_heads=1,
-        head_dim=128,
+        head_dim=256,  # Must match pretrained weights (q_proj: 2048 = 8 * 256)
     )
 
 
@@ -72,9 +72,11 @@ def create_random_attention_weights(config: GemmaConfig) -> dict:
     """Create random weights for fast testing."""
     # Fused QKV weight: [hidden_dim, (num_heads + 2*num_kv_heads) * head_dim]
     qkv_dim = (config.num_heads + 2 * config.num_kv_heads) * config.head_dim
+    # o_proj: (hidden_dim, num_heads * head_dim) since output is projected from attention
+    o_proj_input_dim = config.num_heads * config.head_dim
     return {
         "self_attn.qkv_proj.weight": torch.randn(config.width, qkv_dim).T,
-        "self_attn.o_proj.weight": torch.randn(config.width, config.width),
+        "self_attn.o_proj.weight": torch.randn(config.width, o_proj_input_dim),
     }
 
 
@@ -260,16 +262,51 @@ def test_pcc_gemma_expert_attention(device, use_pretrained):
         base=10000.0,
     )
 
+    # Prepare weights for PyTorch and TTNN
+    # Pretrained weights come with separate q/k/v, random weights come fused
+    if use_pretrained:
+        # Pretrained: weights already have separate q_proj, k_proj, v_proj
+        attn_weights_torch = attn_weights.copy()
+        # Fuse for TTNN
+        if "self_attn.q_proj.weight" in attn_weights:
+            q = attn_weights["self_attn.q_proj.weight"]
+            k = attn_weights["self_attn.k_proj.weight"]
+            v = attn_weights["self_attn.v_proj.weight"]
+            wqkv = torch.cat([q, k, v], dim=0)  # Fuse along output dim
+            attn_weights_ttnn_dict = {
+                "self_attn.wqkv": wqkv,
+                "self_attn.o_proj.weight": attn_weights["self_attn.o_proj.weight"],
+            }
+        else:
+            attn_weights_ttnn_dict = attn_weights.copy()
+    else:
+        # Random: weights are fused qkv_proj, need to split for PyTorch
+        attn_weights_torch = split_hf_keys(attn_weights.copy(), config.num_heads, config.num_kv_heads)
+        # Convert qkv_proj.weight to wqkv for TTNN (keep same shape - will be transposed later)
+        attn_weights_ttnn_dict = {}
+        if "self_attn.qkv_proj.weight" in attn_weights:
+            attn_weights_ttnn_dict["self_attn.wqkv"] = attn_weights["self_attn.qkv_proj.weight"]
+        if "self_attn.o_proj.weight" in attn_weights:
+            attn_weights_ttnn_dict["self_attn.o_proj.weight"] = attn_weights["self_attn.o_proj.weight"]
+
     # PyTorch reference
-    attn_torch = GemmaAttentionTorch(config, attn_weights)
-    out_torch = attn_torch.forward(hidden)
+    attn_torch = GemmaAttentionTorch(config, attn_weights_torch, layer_idx=0)
+
+    # Precompute cos/sin for PyTorch RoPE
+    inv_freq = 1.0 / (config.rope_base ** (torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim))
+    t = torch.arange(seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+    cos_pt = torch.cos(freqs)  # [seq_len, head_dim//2]
+    sin_pt = torch.sin(freqs)  # [seq_len, head_dim//2]
+
+    out_torch = attn_torch.forward(hidden, cos_pt, sin_pt)
 
     # TTNN
     attn_weights_ttnn = {}
     for key in ["self_attn.wqkv", "self_attn.o_proj.weight"]:
-        if key in attn_weights:
+        if key in attn_weights_ttnn_dict:
             attn_weights_ttnn[key] = ttnn.from_torch(
-                attn_weights[key].T.contiguous(),
+                attn_weights_ttnn_dict[key].T.contiguous(),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -305,7 +342,8 @@ def test_pcc_gemma_expert_attention(device, use_pretrained):
     if isinstance(out_ttnn, ttnn.Tensor):
         out_ttnn = ttnn.to_torch(out_ttnn)
 
-    pcc = compute_pcc(out_torch, out_ttnn)
+    # Extract first element from tuple output
+    pcc = compute_pcc(out_torch[0], out_ttnn)
 
     weight_type = "pretrained" if use_pretrained else "random"
     print(f"\n✅ Gemma Expert Attention PCC ({weight_type}): {pcc:.6f}")
@@ -352,14 +390,39 @@ def main():
             base=10000.0,
         )
 
-        attn_torch = GemmaAttentionTorch(config, attn_weights)
-        out_torch = attn_torch.forward(hidden)
+        # Prepare weights for PyTorch (pretrained weights have separate q/k/v)
+        attn_weights_torch = attn_weights.copy()
+
+        # Precompute cos/sin for PyTorch RoPE
+        inv_freq = 1.0 / (
+            config.rope_base ** (torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim)
+        )
+        t = torch.arange(seq_len, dtype=torch.float32)
+        freqs = torch.outer(t, inv_freq)
+        cos_pt = torch.cos(freqs)
+        sin_pt = torch.sin(freqs)
+
+        attn_torch = GemmaAttentionTorch(config, attn_weights_torch, layer_idx=0)
+        out_torch = attn_torch.forward(hidden, cos_pt, sin_pt)
+
+        # Fuse q/k/v weights for TTNN if needed
+        if "self_attn.q_proj.weight" in attn_weights:
+            q = attn_weights["self_attn.q_proj.weight"]
+            k = attn_weights["self_attn.k_proj.weight"]
+            v = attn_weights["self_attn.v_proj.weight"]
+            wqkv = torch.cat([q, k, v], dim=0)
+            attn_weights_ttnn_dict = {
+                "self_attn.wqkv": wqkv,
+                "self_attn.o_proj.weight": attn_weights["self_attn.o_proj.weight"],
+            }
+        else:
+            attn_weights_ttnn_dict = attn_weights.copy()
 
         attn_weights_ttnn = {}
         for key in ["self_attn.wqkv", "self_attn.o_proj.weight"]:
-            if key in attn_weights:
+            if key in attn_weights_ttnn_dict:
                 attn_weights_ttnn[key] = ttnn.from_torch(
-                    attn_weights[key].T.contiguous(),
+                    attn_weights_ttnn_dict[key].T.contiguous(),
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
@@ -394,7 +457,8 @@ def main():
         if isinstance(out_ttnn, ttnn.Tensor):
             out_ttnn = ttnn.to_torch(out_ttnn)
 
-        pcc = compute_pcc(out_torch, out_ttnn)
+        # Extract first element from tuple output
+        pcc = compute_pcc(out_torch[0], out_ttnn)
         passed = pcc >= PCC_THRESHOLD
 
         print("\n" + "=" * 70)
