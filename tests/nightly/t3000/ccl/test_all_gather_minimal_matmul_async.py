@@ -8,12 +8,6 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-
-from tracy.process_model_log import (
-    get_latest_ops_log_filename,
-    run_device_profiler,
-)
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -176,7 +170,7 @@ def run_test_linear_impl(
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(
         tt_output,
-        mesh_composer=ConcatMesh2dToTensor(
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
             device, mesh_shape=tuple(device.shape), dims=[2, 3] if use_non_fused else [0, 1]
         ),
     )
