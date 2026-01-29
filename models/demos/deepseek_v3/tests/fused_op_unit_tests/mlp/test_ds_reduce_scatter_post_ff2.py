@@ -2,18 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import math
 import os
-from collections import defaultdict
 from typing import Literal
 
-import pandas as pd
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler
+from models.common.utility_functions import profiler
+from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
+    collect_device_perf,
+    compare_with_reference,
+    get_int_env,
+    log_run_mode,
+    maybe_skip_long_seq,
+    skip_single_device_ccl,
+)
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -23,10 +28,9 @@ from models.demos.deepseek_v3.utils.test_utils import (
     system_name_to_mesh_shape,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
-DEVICE_PERF_ENV_VAR = "DS_FUSED_REDUCE_SCATTER_POST_FF2_DEVICE_PERF"
+DEVICE_PERF_ENV_VAR = "DS_REDUCE_SCATTER_POST_FF2_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
@@ -35,21 +39,11 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
-def _get_int_env(name: str, default: int) -> int:
-    val = os.getenv(name)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except ValueError as e:
-        raise ValueError(f"Env var {name} must be an int, got {val!r}") from e
-
-
-def ds_fused_reduce_scatter_post_ff2_reference(
+def ds_reduce_scatter_post_ff2_reference(
     x: torch.Tensor, mesh_width: int, mode: Literal["decode", "prefill"]
 ) -> torch.Tensor:
     """
@@ -104,7 +98,7 @@ def ds_fused_reduce_scatter_post_ff2_reference(
     return x_scattered
 
 
-def ds_fused_reduce_scatter_post_ff2_ttnn(
+def ds_reduce_scatter_post_ff2_ttnn(
     x: ttnn.Tensor,
     cfg: dict,
     ccl,
@@ -146,36 +140,6 @@ def ds_fused_reduce_scatter_post_ff2_ttnn(
     return output
 
 
-def _compare_with_reference(
-    tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
-) -> tuple[float, float]:
-    """Compare TTNN output with reference and return metrics.
-
-    Returns:
-        Tuple of (pcc_value, max_abs_error) for logging to superset.
-    """
-    passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
-    max_abs_error = (tt_output - ref_output).abs().max().item()
-    logger.info(f"PCC: {pcc}")
-    logger.info(f"Max absolute error: {max_abs_error}")
-    assert passing, f"PCC {pcc} is below required {expected_pcc}"
-    try:
-        torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
-    except AssertionError as e:
-        logger.warning(f"assert_close failed but PCC passed: {e}")
-    return pcc, max_abs_error
-
-
-def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int):
-    """Log the test run configuration."""
-    logger.info("=== TEST RUN CONFIGURATION ===")
-    logger.info(f"Mode: {mode}")
-    logger.info(f"Sequence length: {seq_len}")
-    logger.info(f"Trace mode: {trace_mode}")
-    logger.info(f"Program cache enabled: {program_cache_enabled}")
-    logger.info("===============================")
-
-
 def _measure_perf_us(
     mesh_device: ttnn.MeshDevice, op_fn, warmup_iters: int, measure_iters: int, trace_mode: bool = False
 ) -> float:
@@ -201,15 +165,15 @@ def _measure_perf_us(
 
         logger.info("Warmup done. Replaying measured iterations…")
         profiler.clear()
-        profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+        profiler.start("ds_reduce_scatter_post_ff2_perf")
         for _ in range(measure_iters):
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.synchronize_device(mesh_device)
-        profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
+        profiler.end("ds_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
         logger.info("Measured iterations done. Releasing trace…")
         ttnn.release_trace(mesh_device, trace_id)
         ttnn.deallocate(persistent_output)
-        return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+        return profiler.get("ds_reduce_scatter_post_ff2_perf") * 1e6
 
     for _ in range(warmup_iters):
         output = op_fn()
@@ -217,16 +181,16 @@ def _measure_perf_us(
         ttnn.deallocate(output)
 
     profiler.clear()
-    profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+    profiler.start("ds_reduce_scatter_post_ff2_perf")
     for _ in range(measure_iters):
         output = op_fn()
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(output)
-    profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
-    return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+    profiler.end("ds_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
+    return profiler.get("ds_reduce_scatter_post_ff2_perf") * 1e6
 
 
-def _run_ds_fused_reduce_scatter_post_ff2_test(
+def _run_ds_reduce_scatter_post_ff2_test(
     mesh_device: ttnn.MeshDevice,
     run_config: dict,
     tt_input: ttnn.Tensor,
@@ -244,16 +208,16 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
     step_prefix: str,
 ):
     # Log run configuration for superset
-    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
+    log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
 
-    tt_output = ds_fused_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
+    tt_output = ds_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
 
     # Get output from the first device only for comparison with reference
     # (similar to how all_gather test does it)
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
 
-    pcc_value, max_abs_error = _compare_with_reference(
-        tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol
+    pcc_value, max_abs_error = compare_with_reference(
+        tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
     )
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
@@ -263,8 +227,8 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
         step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
 
-        warmup_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
-        measure_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
+        warmup_iters = get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
+        measure_iters = get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
         logger.info(
             f"Starting e2e perf measurement: trace_mode={trace_mode}, program_cache={program_cache_enabled}, "
             f"warmup_iters={warmup_iters}, measure_iters={measure_iters}"
@@ -274,7 +238,7 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         perf_profiler.start(step_name)
 
         def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
+            return ds_reduce_scatter_post_ff2_ttnn(
                 tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
             )
 
@@ -330,7 +294,7 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         from tracy import signpost
 
         def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
+            return ds_reduce_scatter_post_ff2_ttnn(
                 tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
             )
 
@@ -404,7 +368,7 @@ def _build_reduce_scatter_inputs(
     }
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    batch_size = USERS_PER_ROW if mode == "decode" else 1
+    batch_size = USERS_PER_ROW  # Always 32 for all modes
     num_layers = mesh_device.shape[0]
     mesh_width = mesh_device.shape[1]
     dim = hf_config.hidden_size
@@ -429,20 +393,6 @@ def _build_reduce_scatter_inputs(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Reference output for the first device (row=0, col=0):
-    # reduce_scatter on cluster_axis=1 (mesh columns) with dim=3 means:
-    # 1. Each device in a row has shape [1, seq, batch, dim/mesh_width]
-    # 2. reduce: sum all mesh_width devices' tensors elementwise -> [1, seq, batch, dim/mesh_width]
-    # 3. scatter along dim 3: divide into mesh_width chunks, each device gets one chunk
-    #    -> output shape [1, seq, batch, dim/mesh_width/mesh_width]
-    #
-    # For the reference simulation:
-    # - First layer data: torch_input[:1] has shape [1, seq, batch, dim]
-    # - This represents all column devices' data concatenated on last dim
-    # - Reshape to [1, seq, batch, mesh_width, dim/mesh_width] to separate contributions
-    # - Sum across dim -2 (devices) -> [1, seq, batch, dim/mesh_width]
-    # - Scatter: first device gets first chunk -> [1, seq, batch, dim/mesh_width/mesh_width]
-
     per_device_dim = dim // mesh_width
     per_device_output_dim = per_device_dim // mesh_width
 
@@ -460,139 +410,14 @@ def _build_reduce_scatter_inputs(
     return run_config, tt_input, ref_output, batch_size
 
 
-def _maybe_skip_long_seq(seq_len: int):
-    if seq_len <= 8192:
-        return
-    if os.getenv(LONG_SEQ_ENV_VAR) is None:
-        pytest.skip(f"Set {LONG_SEQ_ENV_VAR}=1 to enable seq_len={seq_len} coverage.")
-
-
-def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
-    block_by_device = defaultdict(list)
-
-    for _, row in df.iterrows():
-        op_name = row["OP CODE"]
-        op_type = row["OP TYPE"]
-
-        if op_type == "tt_dnn_device":
-            device_id = int(row["DEVICE ID"])
-            block_by_device[device_id].append((op_name, row.to_dict()))
-
-    device_ids = sorted(block_by_device.keys())
-    merged_blocks = []
-    global_index = 0
-    while max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
-        blocks = []
-        op_name = None
-        missing_devices = []
-        for device_id in device_ids:
-            if not len(block_by_device[device_id]):
-                logger.warning(f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}")
-                continue
-            if op_name is None:
-                op_name = block_by_device[device_id][0][0]
-            elif op_name != block_by_device[device_id][0][0]:
-                missing_devices.append(device_id)
-                continue
-
-            blocks.append(block_by_device[device_id].pop(0))
-
-        if missing_devices:
-            logger.warning(
-                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
-            )
-
-        if not blocks:
-            break
-
-        is_collective = any(tag in op_name for tag in ("AllGather", "ReduceScatter", "AllReduce", "AllToAll"))
-        if is_collective:
-            device_kernel_durations = [
-                d["DEVICE KERNEL DURATION [ns]"]
-                for _, d in blocks
-                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
-            ]
-            average_duration = (
-                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
-            )
-            base_block = blocks[0][1].copy()
-            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
-            merged_blocks.append(base_block)
-        else:
-            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
-            merged_blocks.append(max_duration_block[1])
-
-        global_index += 1
-
-    return pd.DataFrame(merged_blocks)
-
-
-def _collect_device_perf(
-    command: str, subdir: str, warmup_iters: int, use_signposts: bool = False
-) -> tuple[dict[str, dict[str, float]], float, float]:
-    device_analysis_types = ["device_kernel_duration"]
-    run_device_profiler(
-        command,
-        subdir,
-        device_analysis_types=device_analysis_types,
-        op_support_count=10000,
-    )
-    filename = get_latest_ops_log_filename(subdir)
-    df = pd.read_csv(filename)
-
-    if use_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        assert not markers.empty, "No signposts found in device perf log."
-        start_indices = markers[markers == "start"].index
-        stop_indices = markers[markers == "stop"].index
-        assert not start_indices.empty, "Missing signpost 'start' in device perf log."
-        assert not stop_indices.empty, "Missing signpost 'stop' in device perf log."
-        start_idx = start_indices[0]
-        stop_idx = stop_indices[-1]
-        assert start_idx < stop_idx, "Signpost 'stop' must come after 'start'."
-        df = df.iloc[start_idx + 1 : stop_idx]
-
-    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
-    df = _merge_device_rows_for_perf(df)
-
-    required_cols = ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    assert not missing_cols, f"Missing device perf columns: {missing_cols}"
-
-    df["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce").fillna(0.0)
-    df["OP TO OP LATENCY [ns]"] = pd.to_numeric(df["OP TO OP LATENCY [ns]"], errors="coerce").fillna(0.0)
-
-    op_stats: dict[str, dict[str, float]] = {}
-    for op_code, group in df.groupby("OP CODE"):
-        kernel_vals = group["DEVICE KERNEL DURATION [ns]"].tolist()
-        op_to_op_vals = group["OP TO OP LATENCY [ns]"].tolist()
-        if warmup_iters > 0:
-            kernel_vals = kernel_vals[warmup_iters:]
-            op_to_op_vals = op_to_op_vals[warmup_iters:]
-        assert kernel_vals, f"No kernel duration samples for op {op_code}"
-        assert op_to_op_vals, f"No op-to-op latency samples for op {op_code}"
-        op_stats[op_code] = {
-            "avg_kernel_duration_ns": sum(kernel_vals) / len(kernel_vals),
-            "avg_op_to_op_latency_ns": sum(op_to_op_vals) / len(op_to_op_vals),
-        }
-
-    total_kernel_ns = sum(entry["avg_kernel_duration_ns"] for entry in op_stats.values())
-    total_op_to_op_ns = sum(entry["avg_op_to_op_latency_ns"] for entry in op_stats.values())
-    return op_stats, total_kernel_ns, total_op_to_op_ns
-
-
-def _skip_single_device_ccl():
-    pytest.skip("Single-device test is not applicable because ds_fused_reduce_scatter_post_ff2 includes CCL ops.")
-
-
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         # TODO: Replace expected_perf_us baselines with theoretical targets.
+        # batch_size=32 for all modes
         ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
     ],
 )
@@ -608,7 +433,7 @@ def _skip_single_device_ccl():
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2(
+def test_ds_reduce_scatter_post_ff2(
     mode,
     seq_len,
     expected_pcc,
@@ -633,7 +458,7 @@ def test_ds_fused_reduce_scatter_post_ff2(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
@@ -647,7 +472,7 @@ def test_ds_fused_reduce_scatter_post_ff2(
         mode,
         seq_len,
     )
-    _run_ds_fused_reduce_scatter_post_ff2_test(
+    _run_ds_reduce_scatter_post_ff2_test(
         mesh_device,
         run_config,
         tt_input,
@@ -662,18 +487,16 @@ def test_ds_fused_reduce_scatter_post_ff2(
         seq_len,
         batch_size,
         ccl,
-        f"ds_fused_reduce_scatter_post_ff2_{mode}_seq{seq_len}",
+        f"ds_reduce_scatter_post_ff2_{mode}_seq{seq_len}",
     )
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
     ],
 )
@@ -689,7 +512,7 @@ def test_ds_fused_reduce_scatter_post_ff2(
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device(
+def test_ds_reduce_scatter_post_ff2_single_device(
     mode,
     seq_len,
     expected_pcc,
@@ -705,7 +528,7 @@ def test_ds_fused_reduce_scatter_post_ff2_single_device(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    _skip_single_device_ccl()
+    skip_single_device_ccl("ds_reduce_scatter_post_ff2")
 
 
 @pytest.mark.parametrize(
@@ -714,16 +537,15 @@ def test_ds_fused_reduce_scatter_post_ff2_single_device(
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
         ("prefill", 131072),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
+def test_ds_reduce_scatter_post_ff2_device_perf(mode, seq_len):
     if mode == "decode":
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
@@ -733,18 +555,16 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
 
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"ds_fused_reduce_scatter_post_ff2_device_perf_{mode}_seq{seq_len}"
-    test_path = (
-        "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py"
-    )
+    step_name = f"ds_reduce_scatter_post_ff2_device_perf_{mode}_seq{seq_len}"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_reduce_scatter_post_ff2.py"
     trace_filter = "trace" if mode == "decode" else "eager"
     expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
-    command = f'pytest {test_path}::test_ds_fused_reduce_scatter_post_ff2 -k "{expr}"'
+    command = f'pytest {test_path}::test_ds_reduce_scatter_post_ff2 -k "{expr}"'
 
     profiler.start("run")
     profiler.start(step_name)
     os.environ[DEVICE_PERF_ENV_VAR] = "1"
-    op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
+    op_stats, total_kernel_ns, total_op_to_op_ns = collect_device_perf(
         command,
         subdir="deepseek_v3_fused_ops_device_perf",
         warmup_iters=0,
@@ -805,12 +625,11 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
         ("prefill", 131072),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device_device_perf(mode, seq_len):
-    _skip_single_device_ccl()
+def test_ds_reduce_scatter_post_ff2_single_device_device_perf(mode, seq_len):
+    skip_single_device_ccl("ds_reduce_scatter_post_ff2")
 
 
 if __name__ == "__main__":

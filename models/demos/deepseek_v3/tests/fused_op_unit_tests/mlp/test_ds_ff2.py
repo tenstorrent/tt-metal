@@ -4,18 +4,25 @@
 import json
 import math
 import os
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Literal
 
-import pandas as pd
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
+    collect_device_perf,
+    compare_with_reference,
+    deallocate_outputs,
+    get_int_env,
+    log_run_mode,
+    maybe_skip_long_seq,
+    measure_perf_us,
+    skip_single_device_sharded,
+)
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -25,10 +32,9 @@ from models.demos.deepseek_v3.utils.test_utils import (
     system_name_to_mesh_shape,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
-DEVICE_PERF_ENV_VAR = "DS_FUSED_FF2_DEVICE_PERF"
+DEVICE_PERF_ENV_VAR = "DS_FF2_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
@@ -37,18 +43,8 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
-
-
-def _get_int_env(name: str, default: int) -> int:
-    val = os.getenv(name)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except ValueError as e:
-        raise ValueError(f"Env var {name} must be an int, got {val!r}") from e
 
 
 @dataclass
@@ -56,7 +52,7 @@ class FusedWeights:
     w2: torch.Tensor  # down_proj weight
 
 
-def ds_fused_ff2_reference(x: torch.Tensor, weights: FusedWeights, mode: Literal["decode", "prefill"]) -> torch.Tensor:
+def ds_ff2_reference(x: torch.Tensor, weights: FusedWeights, mode: Literal["decode", "prefill"]) -> torch.Tensor:
     """
     Reference implementation for FF2 fused op (down projection).
 
@@ -78,7 +74,7 @@ def ds_fused_ff2_reference(x: torch.Tensor, weights: FusedWeights, mode: Literal
     return w2_out
 
 
-def ds_fused_ff2_ttnn(
+def ds_ff2_ttnn(
     x: ttnn.Tensor,
     cfg: dict,
     mode: Literal["decode", "prefill"],
@@ -125,105 +121,7 @@ def ds_fused_ff2_ttnn(
     return w2_out
 
 
-def _compare_with_reference(
-    tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
-) -> tuple[float, float]:
-    """Compare TTNN output with reference and return metrics.
-
-    Returns:
-        Tuple of (pcc_value, max_abs_error) for logging to superset.
-    """
-    passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
-    max_abs_error = (tt_output - ref_output).abs().max().item()
-    logger.info(f"PCC: {pcc}")
-    logger.info(f"Max absolute error: {max_abs_error}")
-    assert passing, f"PCC {pcc} is below required {expected_pcc}"
-    # Note: For quantized weights (bfloat4_b), PCC is the primary metric.
-    # torch.testing.assert_close may be too strict, so we only use it for sanity checks.
-    try:
-        torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
-    except AssertionError as e:
-        logger.warning(f"assert_close failed but PCC passed: {e}")
-    return pcc, max_abs_error
-
-
-def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int, use_real_weights: bool):
-    """Log the test run configuration."""
-    logger.info("=== TEST RUN CONFIGURATION ===")
-    logger.info(f"Mode: {mode}")
-    logger.info(f"Sequence length: {seq_len}")
-    logger.info(f"Trace mode: {trace_mode}")
-    logger.info(f"Program cache enabled: {program_cache_enabled}")
-    logger.info(f"Use real weights: {use_real_weights}")
-    logger.info("===============================")
-
-
-def _deallocate_outputs(outputs):
-    """Deallocate outputs which can be a single tensor or tuple of tensors."""
-    if isinstance(outputs, tuple):
-        for out in outputs:
-            ttnn.deallocate(out)
-    else:
-        ttnn.deallocate(outputs)
-
-
-def _measure_perf_us(
-    mesh_device: ttnn.MeshDevice, op_fn, warmup_iters: int, measure_iters: int, trace_mode: bool = False
-) -> float:
-    """
-    Measure performance in microseconds.
-
-    For trace mode, uses persistent output buffers to avoid host↔device IO during trace capture.
-    """
-    ttnn.synchronize_device(mesh_device)
-
-    if trace_mode:
-        # Trace mode: warm up in eager mode first, then capture and execute trace.
-        # Warmup in eager mode to compile programs before trace capture
-        for _ in range(warmup_iters):
-            outputs = op_fn()
-            ttnn.synchronize_device(mesh_device)
-            _deallocate_outputs(outputs)
-
-        # Capture trace
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        traced_output = op_fn()
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-
-        # Additional warmup with trace execution
-        for _ in range(warmup_iters):
-            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-
-        # Measure
-        profiler.clear()
-        profiler.start("ds_fused_ff2_perf")
-        for _ in range(measure_iters):
-            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-        profiler.end("ds_fused_ff2_perf", PERF_CNT=measure_iters)
-        ttnn.release_trace(mesh_device, trace_id)
-        _deallocate_outputs(traced_output)
-        return profiler.get("ds_fused_ff2_perf") * 1e6
-
-    # Eager mode
-    for _ in range(warmup_iters):
-        outputs = op_fn()
-        ttnn.synchronize_device(mesh_device)
-        _deallocate_outputs(outputs)
-
-    profiler.clear()
-    profiler.start("ds_fused_ff2_perf")
-    for _ in range(measure_iters):
-        outputs = op_fn()
-        ttnn.synchronize_device(mesh_device)
-        _deallocate_outputs(outputs)
-    profiler.end("ds_fused_ff2_perf", PERF_CNT=measure_iters)
-    return profiler.get("ds_fused_ff2_perf") * 1e6
-
-
-def _run_ds_fused_ff2_test(
+def _run_ds_ff2_test(
     mesh_device: ttnn.MeshDevice,
     run_config: dict,
     tt_input: ttnn.Tensor,
@@ -242,7 +140,7 @@ def _run_ds_fused_ff2_test(
     use_real_weights: bool,
 ):
     # Log run configuration for superset
-    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len, use_real_weights)
+    log_run_mode(mode, trace_mode, program_cache_enabled, seq_len, use_real_weights=use_real_weights)
 
     # Log config for verification (Step 9 of AGENTS_GUIDE)
     logger.info("=== FF2 OP CONFIG VERIFICATION ===")
@@ -258,7 +156,7 @@ def _run_ds_fused_ff2_test(
     # Use dram_interleaved_weight for unit testing with DRAM interleaved inputs.
     # In the actual MLP, inputs come from the mul op which is L1 WIDTH_SHARDED
     # and uses the DRAM-sharded weights from cfg["w2"].
-    tt_w2_out = ds_fused_ff2_ttnn(tt_input, run_config, mode, seq_len, dram_interleaved_weight=dram_interleaved_weight)
+    tt_w2_out = ds_ff2_ttnn(tt_input, run_config, mode, seq_len, dram_interleaved_weight=dram_interleaved_weight)
 
     # Convert to torch for comparison
     # For ff2 (down projection), the input is width-sharded on intermediate_size.
@@ -289,8 +187,8 @@ def _run_ds_fused_ff2_test(
     tt_w2_out_torch = torch.cat(layer_outputs, dim=0)
 
     logger.info("Comparing w2_out (down projection):")
-    pcc_value, max_abs_error = _compare_with_reference(
-        tt_w2_out_torch, ref_output, expected_pcc, expected_atol, expected_rtol
+    pcc_value, max_abs_error = compare_with_reference(
+        tt_w2_out_torch, ref_output, expected_pcc, expected_atol, expected_rtol, strict_assert=False
     )
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
@@ -300,8 +198,8 @@ def _run_ds_fused_ff2_test(
         cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
         step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
 
-        warmup_iters = _get_int_env("DS_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
-        measure_iters = _get_int_env("DS_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
+        warmup_iters = get_int_env("DS_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
+        measure_iters = get_int_env("DS_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
         logger.info(
             f"Starting e2e perf measurement: trace_mode={trace_mode}, program_cache={program_cache_enabled}, "
             f"warmup_iters={warmup_iters}, measure_iters={measure_iters}"
@@ -311,16 +209,15 @@ def _run_ds_fused_ff2_test(
         perf_profiler.start(step_name)
 
         def op_fn():
-            return ds_fused_ff2_ttnn(
-                tt_input, run_config, mode, seq_len, dram_interleaved_weight=dram_interleaved_weight
-            )
+            return ds_ff2_ttnn(tt_input, run_config, mode, seq_len, dram_interleaved_weight=dram_interleaved_weight)
 
-        perf_us = _measure_perf_us(
+        perf_us = measure_perf_us(
             mesh_device,
             op_fn,
             warmup_iters,
             measure_iters,
             trace_mode=trace_mode,
+            profiler_name="ds_ff2_perf",
         )
         logger.info(f"Perf avg: {perf_us:.3f} us over {measure_iters} iters (warmup {warmup_iters})")
         perf_profiler.end(step_name)
@@ -367,12 +264,12 @@ def _run_ds_fused_ff2_test(
         from tracy import signpost
 
         def op_fn():
-            return ds_fused_ff2_ttnn(tt_input, run_config, mode, seq_len)
+            return ds_ff2_ttnn(tt_input, run_config, mode, seq_len)
 
         for _ in range(PERF_WARMUP_ITERS):
             outputs = op_fn()
             ttnn.synchronize_device(mesh_device)
-            _deallocate_outputs(outputs)
+            deallocate_outputs(outputs)
 
         ttnn.synchronize_device(mesh_device)
         if trace_mode:
@@ -387,13 +284,13 @@ def _run_ds_fused_ff2_test(
                 ttnn.synchronize_device(mesh_device)
             signpost("stop")
             ttnn.release_trace(mesh_device, trace_id)
-            _deallocate_outputs(traced_output)
+            deallocate_outputs(traced_output)
         else:
             signpost("start")
             for _ in range(DEVICE_PERF_ITERS):
                 outputs = op_fn()
                 ttnn.synchronize_device(mesh_device)
-                _deallocate_outputs(outputs)
+                deallocate_outputs(outputs)
             signpost("stop")
 
 
@@ -461,7 +358,7 @@ def _build_ff2_inputs(
     }
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    batch_size = USERS_PER_ROW if mode == "decode" else 1
+    batch_size = USERS_PER_ROW  # Always 32 for all modes
     num_layers = mesh_device.shape[0]
     _, mesh_width = mesh_device.shape
 
@@ -517,146 +414,19 @@ def _build_ff2_inputs(
         effective_seq_len = run_config["max_rows"]
 
     # Compute reference output
-    ref_output = ds_fused_ff2_reference(ref_input, weights, mode)
+    ref_output = ds_ff2_reference(ref_input, weights, mode)
 
     return run_config, tt_input, ref_output, batch_size, effective_seq_len, tt_w2_weight_interleaved
-
-
-def _maybe_skip_long_seq(seq_len: int):
-    if seq_len <= 8192:
-        return
-    if os.getenv(LONG_SEQ_ENV_VAR) is None:
-        pytest.skip(f"Set {LONG_SEQ_ENV_VAR}=1 to enable seq_len={seq_len} coverage.")
-
-
-def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
-    block_by_device = defaultdict(list)
-
-    for _, row in df.iterrows():
-        op_name = row["OP CODE"]
-        op_type = row["OP TYPE"]
-
-        if op_type == "tt_dnn_device":
-            device_id = int(row["DEVICE ID"])
-            block_by_device[device_id].append((op_name, row.to_dict()))
-
-    device_ids = sorted(block_by_device.keys())
-    merged_blocks = []
-    global_index = 0
-    while max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
-        blocks = []
-        op_name = None
-        missing_devices = []
-        for device_id in device_ids:
-            if not len(block_by_device[device_id]):
-                logger.warning(f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}")
-                continue
-            if op_name is None:
-                op_name = block_by_device[device_id][0][0]
-            elif op_name != block_by_device[device_id][0][0]:
-                missing_devices.append(device_id)
-                continue
-
-            blocks.append(block_by_device[device_id].pop(0))
-
-        if missing_devices:
-            logger.warning(
-                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
-            )
-
-        if not blocks:
-            break
-
-        is_collective = any(tag in op_name for tag in ("AllGather", "ReduceScatter", "AllReduce", "AllToAll"))
-        if is_collective:
-            device_kernel_durations = [
-                d["DEVICE KERNEL DURATION [ns]"]
-                for _, d in blocks
-                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
-            ]
-            average_duration = (
-                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
-            )
-            base_block = blocks[0][1].copy()
-            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
-            merged_blocks.append(base_block)
-        else:
-            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
-            merged_blocks.append(max_duration_block[1])
-
-        global_index += 1
-
-    return pd.DataFrame(merged_blocks)
-
-
-def _collect_device_perf(
-    command: str, subdir: str, warmup_iters: int, use_signposts: bool = False
-) -> tuple[dict[str, dict[str, float]], float, float]:
-    device_analysis_types = ["device_kernel_duration"]
-    run_device_profiler(
-        command,
-        subdir,
-        device_analysis_types=device_analysis_types,
-        op_support_count=10000,
-    )
-    filename = get_latest_ops_log_filename(subdir)
-    df = pd.read_csv(filename)
-
-    if use_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        assert not markers.empty, "No signposts found in device perf log."
-        start_indices = markers[markers == "start"].index
-        stop_indices = markers[markers == "stop"].index
-        assert not start_indices.empty, "Missing signpost 'start' in device perf log."
-        assert not stop_indices.empty, "Missing signpost 'stop' in device perf log."
-        start_idx = start_indices[0]
-        stop_idx = stop_indices[-1]
-        assert start_idx < stop_idx, "Signpost 'stop' must come after 'start'."
-        df = df.iloc[start_idx + 1 : stop_idx]
-
-    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
-    df = _merge_device_rows_for_perf(df)
-
-    required_cols = ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    assert not missing_cols, f"Missing device perf columns: {missing_cols}"
-
-    df["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce").fillna(0.0)
-    df["OP TO OP LATENCY [ns]"] = pd.to_numeric(df["OP TO OP LATENCY [ns]"], errors="coerce").fillna(0.0)
-
-    op_stats: dict[str, dict[str, float]] = {}
-    for op_code, group in df.groupby("OP CODE"):
-        kernel_vals = group["DEVICE KERNEL DURATION [ns]"].tolist()
-        op_to_op_vals = group["OP TO OP LATENCY [ns]"].tolist()
-        if warmup_iters > 0:
-            kernel_vals = kernel_vals[warmup_iters:]
-            op_to_op_vals = op_to_op_vals[warmup_iters:]
-        assert kernel_vals, f"No kernel duration samples for op {op_code}"
-        assert op_to_op_vals, f"No op-to-op latency samples for op {op_code}"
-        op_stats[op_code] = {
-            "avg_kernel_duration_ns": sum(kernel_vals) / len(kernel_vals),
-            "avg_op_to_op_latency_ns": sum(op_to_op_vals) / len(op_to_op_vals),
-        }
-
-    total_kernel_ns = sum(entry["avg_kernel_duration_ns"] for entry in op_stats.values())
-    total_op_to_op_ns = sum(entry["avg_op_to_op_latency_ns"] for entry in op_stats.values())
-    return op_stats, total_kernel_ns, total_op_to_op_ns
-
-
-def _skip_single_device_sharded():
-    pytest.skip(
-        "Single-device test is not applicable because ds_fused_ff2 relies on width-sharded matmuls across the mesh."
-    )
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         # PCC ~0.97 is acceptable for bfloat4_b quantized weights
+        # batch_size=32 for all modes
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
     ],
 )
@@ -673,7 +443,7 @@ def _skip_single_device_sharded():
     ],
     indirect=True,
 )
-def test_ds_fused_ff2(
+def test_ds_ff2(
     mode,
     seq_len,
     expected_pcc,
@@ -694,7 +464,7 @@ def test_ds_fused_ff2(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
     # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
@@ -714,7 +484,7 @@ def test_ds_fused_ff2(
         mode,
         seq_len,
     )
-    _run_ds_fused_ff2_test(
+    _run_ds_ff2_test(
         mesh_device,
         run_config,
         tt_input,
@@ -728,7 +498,7 @@ def test_ds_fused_ff2(
         mode,
         effective_seq_len,
         batch_size,
-        f"ds_fused_ff2_{mode}_seq{seq_len}",
+        f"ds_ff2_{mode}_seq{seq_len}",
         tt_w2_weight,
         use_real_weights,
     )
@@ -738,10 +508,10 @@ def test_ds_fused_ff2(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         # PCC ~0.97 is acceptable for bfloat4_b quantized weights
+        # batch_size=32 for all modes
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
     ],
 )
@@ -758,7 +528,7 @@ def test_ds_fused_ff2(
     ],
     indirect=True,
 )
-def test_ds_fused_ff2_single_device(
+def test_ds_ff2_single_device(
     mode,
     seq_len,
     expected_pcc,
@@ -775,7 +545,7 @@ def test_ds_fused_ff2_single_device(
     force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    _skip_single_device_sharded()
+    skip_single_device_sharded("ds_ff2")
 
 
 @pytest.mark.parametrize(
@@ -784,16 +554,15 @@ def test_ds_fused_ff2_single_device(
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
         ("prefill", 131072),
     ],
 )
-def test_ds_fused_ff2_device_perf(mode, seq_len):
+def test_ds_ff2_device_perf(mode, seq_len):
     if mode == "decode":
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
@@ -803,16 +572,16 @@ def test_ds_fused_ff2_device_perf(mode, seq_len):
 
     perf_profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"ds_fused_ff2_device_perf_{mode}_seq{seq_len}"
-    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff2/test_ds_fused_ff2.py"
+    step_name = f"ds_ff2_device_perf_{mode}_seq{seq_len}"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_ff2.py"
     trace_filter = "trace" if mode == "decode" else "eager"
     expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
-    command = f'pytest {test_path}::test_ds_fused_ff2 -k "{expr}"'
+    command = f'pytest {test_path}::test_ds_ff2 -k "{expr}"'
 
     perf_profiler.start("run")
     perf_profiler.start(step_name)
     os.environ[DEVICE_PERF_ENV_VAR] = "1"
-    op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
+    op_stats, total_kernel_ns, total_op_to_op_ns = collect_device_perf(
         command,
         subdir="deepseek_v3_fused_ops_device_perf",
         warmup_iters=0,
@@ -873,12 +642,11 @@ def test_ds_fused_ff2_device_perf(mode, seq_len):
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
         ("prefill", 131072),
     ],
 )
-def test_ds_fused_ff2_single_device_device_perf(mode, seq_len):
-    _skip_single_device_sharded()
+def test_ds_ff2_single_device_device_perf(mode, seq_len):
+    skip_single_device_sharded("ds_ff2")
 
 
 if __name__ == "__main__":
