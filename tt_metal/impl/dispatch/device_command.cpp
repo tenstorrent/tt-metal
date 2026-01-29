@@ -255,7 +255,8 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
         initialize_relay_paged_cmd(relay_paged_cmd_dst);
     }
 
-    this->memcpy((char*)relay_paged_cmd_dst + sizeof(CQPrefetchCmd), &sub_cmds[offset_idx], sub_cmds_sizeB);
+    this->memcpy(
+        reinterpret_cast<char*>(relay_paged_cmd_dst) + sizeof(CQPrefetchCmd), &sub_cmds[offset_idx], sub_cmds_sizeB);
 }
 
 template <bool hugepage_write>
@@ -288,7 +289,9 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
     }
 
     this->memcpy(
-        (char*)relay_linear_packed_cmd_dst + sizeof(CQPrefetchCmdLarge), &sub_cmds[offset_idx], sub_cmds_sizeB);
+        reinterpret_cast<char*>(relay_linear_packed_cmd_dst) + sizeof(CQPrefetchCmdLarge),
+        &sub_cmds[offset_idx],
+        sub_cmds_sizeB);
 }
 
 template <bool hugepage_write>
@@ -1148,7 +1151,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_unicast_inte
     };
     uint32_t sub_cmd_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
     CQDispatchCmd* write_packed_large_unicast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sub_cmd_size);
-    char* write_packed_large_unicast_sub_cmds_dst = (char*)write_packed_large_unicast_cmd_dst + sizeof(CQDispatchCmd);
+    char* write_packed_large_unicast_sub_cmds_dst =
+        reinterpret_cast<char*>(write_packed_large_unicast_cmd_dst) + sizeof(CQDispatchCmd);
 
     if constexpr (hugepage_write) {
         alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_large_unicast_cmd{};

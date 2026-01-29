@@ -724,6 +724,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     uint32_t count = cmd->write_packed_large.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
     uint32_t alignment = cmd->write_packed_large.alignment;
     uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
     uint32_t local_write_offset = write_offset[write_offset_index];
@@ -851,6 +852,7 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     uint32_t count = cmd->write_packed_large_unicast.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
     uint32_t alignment = cmd->write_packed_large_unicast.alignment;
     uint32_t write_offset_index = cmd->write_packed_large_unicast.write_offset_index;
     uint32_t local_write_offset = write_offset[write_offset_index];

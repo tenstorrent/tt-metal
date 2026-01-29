@@ -1531,7 +1531,8 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
     uint32_t scratch_read_addr = scratch_db_top[0];
 
     while (amt_read < amt_to_read) {
-        uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
+        uint32_t amt_to_read2 =
+            (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
         noc_read_64bit_any_len<true>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
         scratch_read_addr += amt_to_read2;
         amt_read += amt_to_read2;

@@ -329,7 +329,7 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed(
     uint32_t src_noc_xy,
     uint32_t dst_noc_xy,
     uint32_t addr,
-    uint64_t total_length) {
+    uint32_t total_length) {
     const uint32_t n_sub_cmds = sub_cmds.size();
     // Calculate the command size using DeviceCommandCalculator
     DeviceCommandCalculator calc;
@@ -891,21 +891,23 @@ protected:
 
         // Source: L1 on worker core (pre-populated with data)
         uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-        
+
         // Source NOC address: worker core where L1 data is located
         const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t src_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
-        
+
         // Destination: DRAM bank 0
         const uint32_t dest_bank_id = 0;
         const uint32_t dest_dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
-        const CoreCoord dest_dram_physical_core = MetalContext::instance()
-                                                      .get_cluster()
-                                                      .get_soc_desc(device_->id())
-                                                      .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
-        const uint32_t dst_noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
+        const CoreCoord dest_dram_physical_core =
+            MetalContext::instance()
+                .get_cluster()
+                .get_soc_desc(device_->id())
+                .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
+        const uint32_t dst_noc_xy =
+            device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
         const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
-        
+
         uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
         const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
@@ -938,12 +940,11 @@ protected:
             }
             EXPECT_GT(lengths.size(), 0u);
 
-            EXPECT_LE(total_length + device_data.size() * sizeof(uint32_t), DEVICE_DATA_SIZE_LARGE);
+            EXPECT_LE(total_length + (device_data.size() * sizeof(uint32_t)), DEVICE_DATA_SIZE_LARGE);
 
             const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
 
-            const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds =
-                build_sub_cmds(lengths, addresses);
+            const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
