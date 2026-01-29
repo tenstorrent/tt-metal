@@ -89,6 +89,7 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
+        pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -113,6 +114,7 @@ def test_wan_transformer_block(
     prompt_seq_len: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    reset_seeds,
 ) -> None:
     MIN_PCC = 0.999_500
     MAX_RMSE = 0.032
