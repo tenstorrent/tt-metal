@@ -189,7 +189,7 @@ std::vector<Tensor> topk(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -288,15 +288,27 @@ std::vector<Tensor> topk(
     output_tensor_vec.push_back(std::move(output_index_tensor));
 
     // Apply post-processing transformations to restore original format
-    return operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
-        transposed_tensor,
-        output_tensor_vec,
-        dim,
-        is_dim_last_idx,
-        k,
-        adjusted_k,
-        original_lshape,
-        input_memory_config);
+    auto post_transform_output_tensors =
+        operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
+            transposed_tensor,
+            output_tensor_vec,
+            dim,
+            is_dim_last_idx,
+            k,
+            adjusted_k,
+            original_lshape,
+            input_memory_config);
+
+    // Check if padding or dtype conversion changed buffer address
+    if (preallocated_output_tensors.has_value()) {
+        if (std::get<0>(preallocated_output_tensors.value()).buffer() != output_tensor_vec.at(0).buffer()) {
+            std::get<0>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(0);
+        }
+        if (std::get<1>(preallocated_output_tensors.value()).buffer() != output_tensor_vec.at(1).buffer()) {
+            std::get<1>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(1);
+        }
+    }
+    return post_transform_output_tensors;
 }
 
 }  // namespace ttnn
