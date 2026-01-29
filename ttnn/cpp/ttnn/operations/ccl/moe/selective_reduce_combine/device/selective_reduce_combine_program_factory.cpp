@@ -135,8 +135,10 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_mesh_workload
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+
+    auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0));
+
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
@@ -330,7 +332,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
-    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value();
+    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
+                                    !operation_attributes.optional_cross_device_semaphore.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -462,7 +465,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
 void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t&,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -483,7 +486,10 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
 
             writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(3) = (uint32_t)shared_variables.init_semaphore.address();
-            writer_runtime_args.at(4) = (uint32_t)shared_variables.cross_device_semaphore.address();
+
+            writer_runtime_args.at(4) = (operation_attributes.optional_cross_device_semaphore.has_value())
+                                            ? operation_attributes.optional_cross_device_semaphore->address()
+                                            : shared_variables.cross_device_semaphore.address();
         }
     }
 }

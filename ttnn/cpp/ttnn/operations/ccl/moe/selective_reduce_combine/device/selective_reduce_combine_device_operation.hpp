@@ -35,6 +35,7 @@ struct SelectiveReduceCombineDeviceOperation {
         const CoreRangeSet worker_core_range_set;
         const CoreRangeSet mux_core_range_set;
         const ttnn::MemoryConfig output_memory_config;
+        const std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
             "hidden_size",
@@ -153,5 +154,6 @@ ttnn::Tensor selective_reduce_combine(
     const CoreRangeSet worker_core_range_set,
     const CoreRangeSet mux_core_range_set,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
 }  // namespace ttnn::prim

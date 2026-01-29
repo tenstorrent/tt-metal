@@ -89,7 +89,8 @@ ttnn::Tensor selective_reduce_combine(
     const CoreRangeSet worker_core_range_set,
     const CoreRangeSet mux_core_range_set,
     const ttnn::MemoryConfig& output_memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     using OperationType = ttnn::operations::ccl::moe::SelectiveReduceCombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -105,7 +106,8 @@ ttnn::Tensor selective_reduce_combine(
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_core_range_set = worker_core_range_set,
             .mux_core_range_set = mux_core_range_set,
-            .output_memory_config = output_memory_config},
+            .output_memory_config = output_memory_config,
+            .optional_cross_device_semaphore = optional_cross_device_semaphore},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
             .dense_metadata_tensor = dense_metadata_tensor,

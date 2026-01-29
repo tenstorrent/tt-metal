@@ -32,7 +32,8 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     const CoreRangeSet worker_core_range_set,
     const CoreRangeSet mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     auto input_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
     return ttnn::prim::selective_reduce_combine(
@@ -53,7 +54,8 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
         worker_core_range_set,
         mux_core_range_set,
         input_memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::operations::ccl::moe
