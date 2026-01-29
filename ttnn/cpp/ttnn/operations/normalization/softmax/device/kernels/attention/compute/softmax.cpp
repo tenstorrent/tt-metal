@@ -28,8 +28,8 @@ void calc_numeric_stable(
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::reduce_policies::PersistentPolicy,
-        compute_kernel_lib::reduce_policies::ReconfigInputPolicy>(
+        compute_kernel_lib::InputPolicy::WaitUpfrontNoPop,
+        compute_kernel_lib::DataFormatReconfigMode::INPUT>(
         cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::InputBlockShape::row(Wt));
 
     // calculate x-max(x)
@@ -264,7 +264,7 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PERSISTENT mode
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::reduce_policies::PersistentPolicy>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::InputPolicy::WaitUpfrontNoPop>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,

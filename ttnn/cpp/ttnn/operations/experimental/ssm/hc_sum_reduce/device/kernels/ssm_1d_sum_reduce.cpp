@@ -55,8 +55,8 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_COL,
-                    compute_kernel_lib::reduce_policies::StreamingPolicy,
-                    compute_kernel_lib::reduce_policies::ReconfigNonePolicy>(
+                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
                     intermed_cb_id0,
                     scalar_cb_id,
                     intermed_cb_id1,

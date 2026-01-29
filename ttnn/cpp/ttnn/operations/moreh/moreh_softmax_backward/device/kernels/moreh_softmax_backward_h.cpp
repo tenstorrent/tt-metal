@@ -37,7 +37,7 @@ void kernel_main() {
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
             compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::reduce_policies::PersistentPolicy>(
+                reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::InputPolicy::WaitUpfrontNoPop>(
                     cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::InputBlockShape::col(Ht - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
@@ -80,7 +80,7 @@ void kernel_main() {
 
         // step 2, compute sum(y * dy)
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::reduce_policies::StreamingBatchedPolicy>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::InputPolicy::WaitAndPopPerBatch>(
                 cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::InputBlockShape::col(Ht));
 
         // step 3, compute final result
