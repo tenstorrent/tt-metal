@@ -127,7 +127,7 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
@@ -304,12 +304,12 @@ jobs:
           fi
       - name: Upload latency data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && steps.check-latency-data.outputs.has_latency == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && steps.check-latency-data.outputs.has_latency_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
