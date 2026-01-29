@@ -181,7 +181,7 @@ def apply_linear_height_sharded(
     # shard_shape uses padded K
     K_pad = shard_shape[1]
 
-    # If padding is allowed, make the tensor match the padded shard width
+    # If padding is allowed, make the tensor and weight match the padded shard width
     if K_pad != K:
         if not allow_k_padding:
             # fallback (shouldn't happen since you said padding always allowed)
@@ -202,10 +202,28 @@ def apply_linear_height_sharded(
         )
         # if x_2d was a reshape-view, it's now replaced by a new tensor anyway
         x_was_reshaped = True
+        # Pad weight along its input-feature dim to match K_pad
+        if len(weight.shape) == 4:
+            weight = ttnn.pad(
+                weight,
+                padding=((0, 0), (0, 0), (0, K_pad - K), (0, 0)),
+                value=0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        elif len(weight.shape) == 2:
+            weight = ttnn.pad(
+                weight,
+                padding=((0, K_pad - K), (0, 0)),
+                value=0.0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     shard_mem_config = make_height_sharded_mem_config(nc, shard_shape)
-    x_sharded = ttnn.to_memory_config(x_2d, shard_mem_config)
-    ttnn.deallocate(x_2d)
+    if x_2d.is_sharded():
+        x_sharded = x_2d
+    else:
+        x_sharded = ttnn.to_memory_config(x_2d, shard_mem_config)
+        ttnn.deallocate(x_2d)
 
     out_cfg = out_memory_config if (return_sharded and out_memory_config is not None) else shard_mem_config
 
@@ -219,7 +237,8 @@ def apply_linear_height_sharded(
     ttnn.deallocate(x_sharded)
 
     if return_sharded:
-        return ttnn.reshape(out_sharded, out_shape)
+        # Avoid reshaping sharded outputs to prevent view-only tensors.
+        return out_sharded
 
     out_interleaved = ttnn.sharded_to_interleaved(out_sharded, ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(out_sharded)
