@@ -16,7 +16,7 @@
 
 namespace nb = nanobind;
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 void bind_reduce_to_one(nb::module_& module) {
     const auto* doc =
@@ -66,4 +66,4 @@ void bind_reduce_to_one(nb::module_& module) {
             nb::arg("intermediate_tensors") = nb::none()});
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

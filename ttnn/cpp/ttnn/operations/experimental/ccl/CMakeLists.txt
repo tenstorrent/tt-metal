@@ -22,6 +22,7 @@ file(
     llama_reduce_scatter_create_heads/device/kernels/*
     neighbor_pad_async/device/kernels/*
     reduce_scatter_minimal_async/device/kernels/*
+    reduce_to_one/device/kernels/*
     ring_attention_all_gather_async/device/kernels/*
     rms_allgather/device/kernels/*
     send_recv_async/send_async/device/kernels/*
@@ -126,6 +127,9 @@ target_sources(
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
+        reduce_to_one/reduce_to_one.cpp
+        reduce_to_one/device/reduce_to_one_op.cpp
+        reduce_to_one/device/reduce_to_one_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

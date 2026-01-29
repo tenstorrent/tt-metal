@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: scratch_cb2
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);  // Total payload size
-    constexpr uint32_t packet_cb = get_compile_time_arg_val(4);  // CB index for worker packets
-    constexpr uint32_t output_cb = get_compile_time_arg_val(5);  // For ROOT1 to wait on compute
+    constexpr uint32_t packet_cb = get_compile_time_arg_val(4);           // CB index for worker packets
+    constexpr uint32_t output_cb = get_compile_time_arg_val(5);           // For ROOT1 to wait on compute
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     // ROOT1 doesn't send - wait for compute to finish writing to source_cb (scratch_cb2), then NOC copy to output

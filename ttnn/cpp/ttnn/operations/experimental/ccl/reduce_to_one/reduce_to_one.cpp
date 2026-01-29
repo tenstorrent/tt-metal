@@ -7,7 +7,7 @@
 #include "device/reduce_to_one_op.hpp"
 #include "reduce_to_one.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteReduceToOne::invoke(
     const ttnn::Tensor& input_tensor,
@@ -22,4 +22,4 @@ ttnn::Tensor ExecuteReduceToOne::invoke(
     return result[1][0];
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

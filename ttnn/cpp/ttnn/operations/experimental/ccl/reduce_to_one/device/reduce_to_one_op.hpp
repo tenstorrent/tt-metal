@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn {
-namespace operations::ccl {
+namespace operations::experimental::ccl {
 
 struct ReduceToOneOp {
     struct operation_attributes_t {
@@ -124,10 +124,10 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
     std::optional<MeshCoordinate>& backward_coord,
     ReduceToOneOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
-}  // namespace operations::ccl
+}  // namespace operations::experimental::ccl
 
 namespace prim {
-ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
+ttnn::operations::experimental::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,

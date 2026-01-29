@@ -133,7 +133,7 @@ def test_reduce_to_one(bh_2d_mesh_device):
 
     # Run reduce_to_one
     print("Running reduce_to_one...")
-    output_tensor = ttnn.reduce_to_one(
+    output_tensor = ttnn.experimental.reduce_to_one(
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         exit_coord=ttnn.MeshCoordinate(exit_coord),
@@ -274,7 +274,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
 
     # Run once to compile
     print("Running reduce_to_one (compiling)...")
-    output_tensor = ttnn.reduce_to_one(
+    output_tensor = ttnn.experimental.reduce_to_one(
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         exit_coord=ttnn.MeshCoordinate(exit_coord),
@@ -287,7 +287,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     logger.info("Capturing warmup trace")
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(15):
-        output_tensor = ttnn.reduce_to_one(
+        output_tensor = ttnn.experimental.reduce_to_one(
             input_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),
@@ -301,7 +301,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     logger.info("Capturing main trace")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(20):
-        output_tensor = ttnn.reduce_to_one(
+        output_tensor = ttnn.experimental.reduce_to_one(
             input_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),
@@ -315,7 +315,7 @@ def test_reduce_to_one_with_trace(bh_2d_mesh_device):
     logger.info("Capturing tail trace")
     trace_id_tail = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(20):
-        output_tensor = ttnn.reduce_to_one(
+        output_tensor = ttnn.experimental.reduce_to_one(
             input_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             exit_coord=ttnn.MeshCoordinate(exit_coord),

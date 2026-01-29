@@ -6,8 +6,8 @@
 
 #include <nanobind/nanobind.h>
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 void bind_reduce_to_one(nanobind::module_& module);
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl
