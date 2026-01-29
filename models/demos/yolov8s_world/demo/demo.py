@@ -11,7 +11,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
+
+# from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     get_mesh_mappers,
@@ -28,7 +29,7 @@ from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerf
 def init_model_and_runner(
     model_location_generator, device, model_type, use_weights_from_ultralytics, batch_size_per_device
 ):
-    disable_persistent_kernel_cache()
+    # disable_persistent_kernel_cache()
 
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
@@ -57,7 +58,7 @@ def init_model_and_runner(
             weights_mesh_mapper=weights_mesh_mapper,
             outputs_mesh_composer=outputs_mesh_composer,
         )
-        performant_runner._capture_yolov8s_world_trace_2cqs()
+        # Trace capture is already done in __init__, no need to call again
 
     return model, performant_runner, outputs_mesh_composer, batch_size
 
