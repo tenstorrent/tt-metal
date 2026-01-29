@@ -14,7 +14,7 @@ from loguru import logger
 # Add parent paths
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from models.experimental.pi0.reference.torch_pi0_model import PI0Model as PI0ModelTorch
+# TTNN implementation
 from models.experimental.pi0.tt.ttnn_pi0_model import PI0ModelTTNN
 from models.experimental.pi0.common.configs import PI0ModelConfig, SigLIPConfig
 from models.experimental.pi0.common.weight_loader import PI0WeightLoader
@@ -76,7 +76,7 @@ def create_config() -> PI0ModelConfig:
     return config
 
 
-def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
+def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     """Create test inputs."""
     image_size = config.siglip_config.image_size
 
@@ -88,6 +88,57 @@ def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
 
     state = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
 
+    images[0] = ttnn.from_torch(
+        images[0],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    images[1] = ttnn.from_torch(
+        images[1],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    img_masks[0] = ttnn.from_torch(
+        img_masks[0].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    img_masks[1] = ttnn.from_torch(
+        img_masks[1].float(),  # (batch_size,)
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    lang_tokens = ttnn.from_torch(
+        lang_tokens,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    lang_masks = ttnn.from_torch(
+        lang_masks,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    state = ttnn.from_torch(
+        state,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
     return {
         "images": images,
         "img_masks": img_masks,
@@ -95,21 +146,6 @@ def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
         "lang_masks": lang_masks,
         "state": state,
     }
-
-
-def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
-    """Compute Pearson Correlation Coefficient."""
-    t1 = tensor1.flatten().float()
-    t2 = tensor2.flatten().float()
-
-    mean1, mean2 = torch.mean(t1), torch.mean(t2)
-    std1, std2 = torch.std(t1), torch.std(t2)
-
-    if std1 == 0 or std2 == 0:
-        return 1.0 if torch.allclose(t1, t2) else 0.0
-
-    covariance = torch.mean((t1 - mean1) * (t2 - mean2))
-    return (covariance / (std1 * std2)).item()
 
 
 # =============================================================================
@@ -138,64 +174,12 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
 
     # Create config and inputs
     config = create_config()
-    inputs = create_test_inputs(config, batch_size=batch_size)
-
-    inputs["images"][0] = ttnn.from_torch(
-        inputs["images"][0],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    inputs["images"][1] = ttnn.from_torch(
-        inputs["images"][1],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    inputs["img_masks"][0] = ttnn.from_torch(
-        inputs["img_masks"][0].float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    inputs["img_masks"][1] = ttnn.from_torch(
-        inputs["img_masks"][1].float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    inputs["lang_tokens"] = ttnn.from_torch(
-        inputs["lang_tokens"],
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
-
-    inputs["lang_masks"] = ttnn.from_torch(
-        inputs["lang_masks"],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    inputs["state"] = ttnn.from_torch(
-        inputs["state"],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
+    inputs = create_test_inputs(config, device, batch_size=batch_size)
 
     # Load weights
     weight_loader = PI0WeightLoader(str(checkpoint_path))
 
     # Initialize models
-    model_torch = PI0ModelTorch(config, weight_loader)
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
 
     run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
