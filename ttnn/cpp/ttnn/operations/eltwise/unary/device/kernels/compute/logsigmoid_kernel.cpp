@@ -39,6 +39,8 @@ void kernel_main() {
             negative_tile_init();
             negative_tile(1);
 
+            // TODO: Cannot use exp that requires the packer ReLU.
+
             // Apply exp with fast+approx mode to DST[1]: exp(-x)
             exp_tile_init<true, true>();  // Fast+approx exp
             exp_tile<true, true>(1);

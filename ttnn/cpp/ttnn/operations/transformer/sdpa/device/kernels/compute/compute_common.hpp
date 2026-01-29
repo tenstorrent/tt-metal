@@ -320,6 +320,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     uint32_t granularity = 1;
 #endif
 
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
@@ -368,6 +370,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     if constexpr (do_reduce) {
         cb_push_back(reduce_cb, rows);
     }
+
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 }
 
 /**
