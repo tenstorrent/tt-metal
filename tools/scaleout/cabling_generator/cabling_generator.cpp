@@ -947,14 +947,13 @@ static void merge_resolved_graph_instances(
             get_source_description(new_source_file)));
     }
 
-    // Merge nodes - if same name exists, validate host_id matches
-    // (motherboard, board count, and architecture are already validated via templates in merge())
+    // Merge nodes - if same name exists, host_id already matches (same hostname -> same host_id)
     for (const auto& [name, source_node] : source.nodes) {
         if (target.nodes.contains(name)) {
-            // Node exists in both - validate host_id matches (instance-specific, not template)
+            // Same hostname -> same host; host_id was collapsed in merge() so they match
             if (target.nodes[name].host_id != source_node.host_id) {
                 throw std::runtime_error(fmt::format(
-                    "Node '{}' has conflicting host_id: {} vs {} from {}",
+                    "Node '{}' has conflicting host_id: {} vs {} from {} (same hostname must map to same host)",
                     name,
                     target.nodes[name].host_id.get(),
                     source_node.host_id.get(),
@@ -1047,7 +1046,6 @@ static void merge_resolved_graph_instances(
     // Merge subgraphs recursively
     for (const auto& [name, source_subgraph] : source.subgraphs) {
         if (target.subgraphs.contains(name)) {
-            // Subgraph exists - merge recursively
             merge_resolved_graph_instances(
                 *target.subgraphs[name], *source_subgraph, existing_source_file, new_source_file, node_templates);
         } else {
@@ -1099,26 +1097,42 @@ void CablingGenerator::merge(
     // Validate and merge node_templates_ (must match exactly, except inter_board_connections can differ)
     validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
 
-    // Find the max host_id in the current (target) topology
+    // Build target node name -> host_id so we can collapse same hostname to same host
+    std::function<void(const ResolvedGraphInstance&, std::map<std::string, HostId>&)> collect_name_to_host_id;
+    collect_name_to_host_id = [&](const ResolvedGraphInstance& graph, std::map<std::string, HostId>& out) {
+        for (const auto& [name, node] : graph.nodes) {
+            out[name] = node.host_id;
+        }
+        for (const auto& [name, subgraph] : graph.subgraphs) {
+            collect_name_to_host_id(*subgraph, out);
+        }
+    };
+    std::map<std::string, HostId> target_name_to_host_id;
+    if (root_instance_) {
+        collect_name_to_host_id(*root_instance_, target_name_to_host_id);
+    }
+
     HostId max_host_id = HostId(0);
     for (const auto& [host_id, node] : host_id_to_node_) {
         if (*host_id > *max_host_id) {
             max_host_id = host_id;
         }
     }
-
-    // Renumber host_ids in the source topology to avoid conflicts
-    // Start from max_host_id + 1
     HostId next_host_id = HostId(*max_host_id + 1);
     std::map<HostId, HostId> host_id_mapping;
 
-    // Build mapping for all nodes in source topology
+    // Build mapping: same hostname -> same host_id (collapse); new hostname -> new host_id
     std::function<void(ResolvedGraphInstance&)> build_host_id_mapping = [&](ResolvedGraphInstance& graph) {
         for (auto& [name, node] : graph.nodes) {
             HostId old_host_id = node.host_id;
             if (!host_id_mapping.contains(old_host_id)) {
-                host_id_mapping[old_host_id] = next_host_id;
-                next_host_id = HostId(*next_host_id + 1);
+                auto it = target_name_to_host_id.find(name);
+                if (it != target_name_to_host_id.end()) {
+                    host_id_mapping[old_host_id] = it->second;  // same hostname -> same host
+                } else {
+                    host_id_mapping[old_host_id] = next_host_id;
+                    next_host_id = HostId(*next_host_id + 1);
+                }
             }
             node.host_id = host_id_mapping[old_host_id];
         }
@@ -1188,14 +1202,23 @@ void CablingGenerator::merge(
     // Regenerate chip_connections_ from merged root_instance (this will mark ports as used)
     generate_logical_chip_connections();
 
-    // Merge deployment_hosts_ - rebuild ordered by host_id after renumbering
-    // Build map from hostname to Host for both sources
+    // Merge deployment_hosts_ - rebuild ordered by host_id; same hostname = one entry (no duplicates)
     std::unordered_map<std::string, Host> hostname_to_host;
     for (const auto& host : deployment_hosts_) {
         hostname_to_host[host.hostname] = host;
     }
-    for (const auto& other_host : other.deployment_hosts_) {
-        hostname_to_host[other_host.hostname] = other_host;
+    for (size_t i = 0; i < other.deployment_hosts_.size(); ++i) {
+        const auto& other_host = other.deployment_hosts_[i];
+        HostId old_id(i);
+        auto map_it = host_id_mapping.find(old_id);
+        if (map_it == host_id_mapping.end()) {
+            continue;
+        }
+        HostId new_id = map_it->second;
+        // Only add hosts that got a new host_id (not collapsed to existing hostname)
+        if (*new_id > *max_host_id) {
+            hostname_to_host[other_host.hostname] = other_host;
+        }
     }
 
     // Helper to get node name from root_instance given its host_id
@@ -1393,6 +1416,45 @@ static void resolved_graph_to_protobuf(
             port_b->set_port_id(*port_b_id);
         }
     }
+}
+
+// Method to emit deployment descriptor (one host per node in host_id order)
+void CablingGenerator::emit_deployment_descriptor(const std::string& output_path) const {
+    deployment::proto::DeploymentDescriptor deployment_desc;
+
+    for (const auto& host : deployment_hosts_) {
+        auto* proto_host = deployment_desc.add_hosts();
+        proto_host->set_hall(host.hall);
+        proto_host->set_aisle(host.aisle);
+        proto_host->set_rack(host.rack);
+        proto_host->set_shelf_u(host.shelf_u);
+        proto_host->set_node_type(host.node_type);
+        proto_host->set_host(host.hostname);
+    }
+
+    std::filesystem::path output_file_path(output_path);
+    if (output_file_path.has_parent_path()) {
+        std::filesystem::create_directories(output_file_path.parent_path());
+    }
+
+    std::ofstream output_file(output_path);
+    if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + output_path);
+    }
+
+    std::string output_string;
+    google::protobuf::TextFormat::Printer printer;
+    printer.SetUseShortRepeatedPrimitives(true);
+    printer.SetUseUtf8StringEscaping(true);
+    printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
+
+    if (!printer.PrintToString(deployment_desc, &output_string)) {
+        throw std::runtime_error("Failed to write deployment descriptor textproto");
+    }
+
+    output_file << output_string;
+    output_file.close();
 }
 
 // Method to emit merged cabling descriptor
