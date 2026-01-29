@@ -37,7 +37,6 @@ struct OverlayRegisterFile : public RegisterFile {
     }
 
     static FORCE_INLINE uint32_t get_register(uint32_t const RegIdx) {
-        //ASSERT(RegIdx < NUM_OVERLAY_REGISTERS);
         return RegIdx;
     }
 
@@ -46,9 +45,8 @@ struct OverlayRegisterFile : public RegisterFile {
         static_assert(RegIdx < NUM_OVERLAY_REGISTERS, "Overlay Register Index out of bounds");
         return get_stream_scratch_register_address<RegIdx>();
     }
-
+    
     static FORCE_INLINE uint32_t get_register_address(uint32_t const RegIdx) {
-        //ASSERT(RegIdx < NUM_OVERLAY_REGISTERS);
         return get_stream_scratch_register_address(RegIdx);
     }
 
