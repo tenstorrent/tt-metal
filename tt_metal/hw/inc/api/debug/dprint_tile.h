@@ -198,7 +198,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 
         // DataFormat, rd/wr pointer, and Tile size all depend on RISC + in/out
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        tile_info_t tile_info = get_tile_info(cb, ptr_type, cb_type);
+        tile_info_t tile_info = get_tile_info(cb, cb_type, ptr_type);
 #else
         tile_info_t tile_info = get_tile_info(cb);
 #endif
