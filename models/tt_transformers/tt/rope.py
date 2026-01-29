@@ -446,7 +446,10 @@ class RotarySetup(LightweightModule):
                         row_wise=True,
                     )
                 else:
-                    return ttnn.CoreGrid(y=4, x=8)
+                    # Use batch_size (which is doubled_batch_size for fused QK) to determine the number of cores
+                    if batch_size % 32 == 0:
+                        return ttnn.CoreGrid(y=8, x=8)
+                    return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
             else:
                 return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
 
@@ -492,6 +495,17 @@ class RotarySetup(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
+
+    def get_trans_mat_on_sub_core_grids(
+        self, x: ttnn.Tensor, sub_core_grids: ttnn.CoreRangeSet, use_qk_fused: bool = False
+    ) -> ttnn.Tensor:
+        # Reshape the cos/sin matrices to the sub-core grids
+        # This function is only used when sub core grids is enabled via prefetcher
+        orig_mem_cfg = x.memory_config()
+        x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x_reshaped = ttnn.reshape(x_dram, [1, 64 if use_qk_fused else 32, 1, 128], sub_core_grids=sub_core_grids)
+        x_restored = ttnn.to_memory_config(x_reshaped, orig_mem_cfg)
+        return x_restored
 
     def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
@@ -559,19 +573,21 @@ class RotarySetup(LightweightModule):
         embedding_layout = ttnn.TILE_LAYOUT
 
         if prefetcher is not None:
+            trans_mat_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core,
+                self.batch_size_per_device_group,
+                prefetcher.all_worker_cores_range_set,
+                row_wise=True,
+            )
             mem_config = ttnn.create_sharded_memory_config(
                 shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core,
-                    self.batch_size_per_device_group,
-                    prefetcher.all_worker_cores_range_set,
-                    row_wise=True,
-                ),
+                core_grid=trans_mat_core_grids,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
         else:
+            trans_mat_core_grids = None
             mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         cos = ttnn.embedding(
@@ -581,20 +597,9 @@ class RotarySetup(LightweightModule):
             rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
 
-        cos = ttnn.reshape(
-            cos,
-            ttnn.Shape([self.batch_size_per_device_group, 1, cos.shape[-1]]),
-            ttnn.Shape(
-                (self.batch_size_per_device_group, 32, sin.shape[-1]),
-            ),
-        )
-        sin = ttnn.reshape(
-            sin,
-            ttnn.Shape([self.batch_size_per_device_group, 1, sin.shape[-1]]),
-            ttnn.Shape(
-                (self.batch_size_per_device_group, 32, sin.shape[-1]),
-            ),
-        )
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE == 0 and prefetcher is not None:
+            cos = self.get_trans_mat_on_sub_core_grids(cos, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
+            sin = self.get_trans_mat_on_sub_core_grids(sin, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
@@ -620,6 +625,7 @@ class RotarySetup(LightweightModule):
             sin = ttnn.interleaved_to_sharded(
                 sin, mem_config
             )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
+
         if return_rot_idxs:
             return [cos, sin], rot_idxs
         return [cos, sin]

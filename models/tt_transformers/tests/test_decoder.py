@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([True]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -49,7 +49,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (1, 32),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
