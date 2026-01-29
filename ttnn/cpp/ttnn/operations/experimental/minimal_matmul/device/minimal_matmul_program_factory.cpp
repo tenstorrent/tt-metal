@@ -322,7 +322,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto ternary_a_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype());
         auto ternary_a_tile_size = tt::tile_size(ternary_a_data_format);
-        uint32_t ternary_a_cb_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
+        uint32_t ternary_a_cb_num_tiles = N_block_tiles;  // Single row (like bias), broadcast across M
 
         uint32_t ternary_a_cb_id = tt::CBIndex::c_5;
         tt::tt_metal::create_cb(

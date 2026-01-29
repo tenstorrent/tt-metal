@@ -332,39 +332,49 @@ void read_ternary_blocks_sync_v1(
 
     uint32_t i = d0_start;
     uint32_t m_id = 0;
+
+    cb_reserve_back(ternary_a_cb, N_block_tiles);
+    uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
+    const uint32_t n_tile_start = i * shape.logical_d1;
+    const uint32_t n_tile_end = std::min(n_tile_start + N_block_tiles, shape.logical_d1);
+    for (uint32_t n_tile_id = n_tile_start; n_tile_id < n_tile_end; n_tile_id++) {
+        noc_async_read_tile(n_tile_id, ternary_a_accessor, ternary_a_write_ptr);
+        ternary_a_write_ptr += tile_size_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(ternary_a_cb, N_block_tiles);
+
     for (; i < d0_end; i++, m_id++) {
-        cb_reserve_back(ternary_a_cb, N_block_tiles);
+        // cb_reserve_back(ternary_a_cb, N_block_tiles);
+
         cb_reserve_back(ternary_b_cb, N_block_tiles);
-        uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
+
         uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
         for (uint32_t j = d1_start, n_id = 0; j < d1_end; j++, n_id++) {
             if (j >= shape.logical_d1) {
-                ternary_a_write_ptr += tile_size_bytes;
                 ternary_b_write_ptr += tile_size_bytes;
                 continue;
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
-                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
                 noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
-            } else {
-                fill_zeros_async(ternary_a_write_ptr, tile_size_bytes);
-                fill_zeros_async(ternary_b_write_ptr, tile_size_bytes);
-            }
-            ternary_a_write_ptr += tile_size_bytes;
+            }  // else {
+               // fill_zeros_async(ternary_a_write_ptr, tile_size_bytes);
+               // fill_zeros_async(ternary_b_write_ptr, tile_size_bytes);
+            // }
             ternary_b_write_ptr += tile_size_bytes;
         }
         noc_async_read_barrier();
 
         // finish up incrementing write_ptr if (d1_end - d1_start) < N_block_tiles
         // write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
-        cb_push_back(ternary_a_cb, N_block_tiles);
+        // cb_push_back(ternary_a_cb, N_block_tiles);
         cb_push_back(ternary_b_cb, N_block_tiles);
     }
     for (; m_id < M_block_tiles; m_id++) {
-        cb_reserve_back(ternary_a_cb, N_block_tiles);
+        // cb_reserve_back(ternary_a_cb, N_block_tiles);
         cb_reserve_back(ternary_b_cb, N_block_tiles);
-        cb_push_back(ternary_a_cb, N_block_tiles);
+        // cb_push_back(ternary_a_cb, N_block_tiles);
         cb_push_back(ternary_b_cb, N_block_tiles);
     }
 }

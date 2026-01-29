@@ -34,116 +34,6 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
 }
 
 /*
- * Alternative: Bias first, then addcmul block
- *
- * This function reduces unpacker reconfiguration overhead by processing in two phases:
- * Phase 1: Add bias to entire block (matmul_result + bias) -> store to out_cb temporarily
- * Phase 2: Apply addcmul reading from out_cb: output = ternary_a + scalar * (matmul+bias) * ternary_b
- *
- * Advantage: Unpacker configured once per phase instead of every tile (O(1) vs O(M*N))
- * Disadvantage: Uses out_cb as intermediate storage, requires careful CB management
- *
- * Note: This approach may not actually reduce reconfigs much in phase 2 due to ternary reads
- *       still requiring format switches. Main benefit is avoiding bias+ternary interleaving.
- *
- * intermediate_cb: input buffer (matmul result)
- * bias_cb: bias buffer
- * ternary_a_cb: ternary a buffer
- * ternary_b_cb: ternary b buffer
- * scalar_value: scalar multiplier
- * out_cb: output buffer (also used as temporary storage for matmul+bias result)
- * M_block_tiles: number of M block tiles
- * N_block_tiles: number of N block tiles
- */
-void add_bias_then_addcmul_block(
-    uint32_t in_cb,
-    uint32_t bias_cb,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
-    uint32_t scalar_value,
-    uint32_t out_cb,
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
-    constexpr uint32_t fused_act_dst_id = 0;
-    constexpr uint32_t ternary_a_dst_id = 1;
-    constexpr uint32_t ternary_b_dst_id = 2;
-
-    uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-
-    // in_cb is currently reserved
-
-    // First part: add bias
-    // If FUSE_TERNARY is set then overwrite in_cb
-
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
-        cb_reserve_back(out_cb, N_block_tiles);
-
-#ifdef FUSE_BIAS
-#ifdef FUSE_TERNARY
-        const uint32_t intermed_cb = in_cb;
-#else
-        const uint32_t intermed_cb = out_cb;
-#endif  // FUSE_TERNARY
-#else
-        const uint32_t intermed_cb = in_cb;
-#endif  // FUSE_BIAS
-
-        add_bcast_rows_init_short(in_cb, bias_cb);
-        reconfig_data_format(in_cb, bias_cb);
-        pack_reconfig_data_format(intermed_cb);
-
-#ifdef FUSE_BIAS
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
-
-#ifdef SFPU_OP_INIT_ACTIVATION
-            SFPU_OP_FUNC_ACTIVATION
-#endif
-
-            pack_tile(fused_act_dst_id, in_cb);
-            release_dst();
-            tile_id++;
-        }
-#endif  // FUSE_BIAS
-
-#ifdef FUSE_TERNARY
-
-        // Read ternary tensors into destination registers
-        unary_op_init_common(in_cb, out_cb);
-
-        addcmul_tile_init();
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
-
-            copy_tile_init(in_cb);
-            copy_tile(intermed_cb, tile_id, ternary_a_dst_id);
-
-            copy_tile_init(ternary_a_cb);
-            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
-
-            copy_tile_init(ternary_a_cb);
-            copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
-
-            addcmul_tile<DataFormat::Float16_b>(
-                ternary_a_dst_id,  // idst0: base value (from ternary_a)
-                fused_act_dst_id,  // idst1: matmul+bias result
-                ternary_b_dst_id,  // idst2: multiplier (from ternary_b)
-                fused_act_dst_id,  // odst: output destination
-                scalar_value);     // value: scalar multiplier
-
-            pack_tile(fused_act_dst_id, out_cb);
-            release_dst();
-            tile_id++;
-        }
-#endif  // FUSE_TERNARY
-
-        cb_push_back(out_cb, N_block_tiles);
-    }
-}
-
-/*
  * Fused bias and addcmul block
  *
  * This functions computes the following operation:
@@ -189,9 +79,11 @@ void add_bias_and_addcmul_block(
     constexpr uint32_t ternary_b_dst_id = 2;
 
     uint32_t tile_id = 0;
+#ifdef FUSE_TERNARY
+    cb_wait_front(ternary_a_cb, N_block_tiles);
+#endif  // FUSE_TERNARY
     for (uint32_t m = 0; m < M_block_tiles; m++) {
 #ifdef FUSE_TERNARY
-        cb_wait_front(ternary_a_cb, N_block_tiles);
         cb_wait_front(ternary_b_cb, N_block_tiles);
 #endif  // FUSE_TERNARY
         for (uint32_t n = 0; n < N_block_tiles; n++) {
@@ -213,8 +105,11 @@ void add_bias_and_addcmul_block(
 #ifdef FUSE_TERNARY
             // Read ternary tensors into destination registers
             reconfig_data_format_srca(ternary_a_cb);
-            copy_tile_init(ternary_a_cb);
-            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
+            // copy_tile_init(ternary_a_cb);
+            // copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
+            // For bcast a single row
+            unary_bcast_init<BroadcastType::ROW>(ternary_a_cb, ternary_a_dst_id);
+            unary_bcast<BroadcastType::ROW>(ternary_a_cb, tile_id, ternary_a_dst_id);
 
             reconfig_data_format_srca(ternary_b_cb);
             copy_tile_init(ternary_b_cb);
@@ -243,120 +138,14 @@ void add_bias_and_addcmul_block(
             tile_id++;
         }
 #ifdef FUSE_TERNARY
-        cb_pop_front(ternary_a_cb, N_block_tiles);
         cb_pop_front(ternary_b_cb, N_block_tiles);
 #endif  // FUSE_TERNARY
         cb_push_back(out_cb, N_block_tiles);
     }
-}
 
-/*
- * Fused bias and addcmul block
- *
- * This functions computes the following operation:
- * If FUSE_BIAS and FUSE_TERNARY are enabled then:
- *   output = ternary_a + scalar * (matmul_result + bias) * ternary_b
- * If FUSE_BIAS is enabled and FUSE_TERNARY is disabled then:
- *   output = matmul_result + bias
- * If FUSE_BIAS is disabled and FUSE_TERNARY is enabled then:
- *    output = ternary_a + scalar * matmul_result * ternary_b
- *
- * Note: One of FUSE_BIAS or FUSE_TERNARY must be enabled.
- *
- * in_cb: input buffer (matmul result)
- * bias_cb: bias buffer
- * ternary_a_cb: ternary a buffer
- * ternary_b_cb: ternary b buffer
- * scalar_value: scalar multiplier
- * out_cb: output buffer
- * M_block_tiles: number of M block tiles
- * N_block_tiles: number of N block tiles
- */
-void add_bias_and_addcmul_block_v1(
-    uint32_t in_cb,
-    uint32_t bias_cb,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
-    uint32_t scalar_value,
-    uint32_t out_cb,
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
-    // Initialize based on whether bias is fused
-#ifdef FUSE_BIAS
-    add_bcast_rows_init_short(in_cb, bias_cb);
-    reconfig_data_format(in_cb, bias_cb);
-#else
-    unary_op_init_common(in_cb, out_cb);
-    copy_tile_to_dst_init_short(in_cb);
-#endif
-    pack_reconfig_data_format(out_cb);
-    constexpr uint32_t fused_act_dst_id = 0;
-
-    constexpr uint32_t ternary_a_dst_id = 1;
-    constexpr uint32_t ternary_b_dst_id = 2;
-
-    uint32_t tile_id = 0;
-    for (uint32_t m = 0; m < M_block_tiles; m++) {
 #ifdef FUSE_TERNARY
-        cb_wait_front(ternary_a_cb, N_block_tiles);
-        cb_wait_front(ternary_b_cb, N_block_tiles);
+    cb_pop_front(ternary_a_cb, N_block_tiles);
 #endif  // FUSE_TERNARY
-
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            tile_regs_acquire();
-
-#ifdef FUSE_BIAS
-#ifdef FUSE_TERNARY
-            // If fused ternary is enabled then we have to reconfigure unpacker every iteration
-            add_bcast_rows_init_short(in_cb, bias_cb);
-            reconfig_data_format(in_cb, bias_cb);
-#endif  // FUSE_TERNARY
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
-#else
-            reconfig_data_format_srca(in_cb);
-            copy_tile_init(in_cb);
-            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
-#endif
-
-#ifdef FUSE_TERNARY
-            // Read ternary tensors into destination registers
-            reconfig_data_format_srca(ternary_a_cb);
-            copy_tile_init(ternary_a_cb);
-            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
-
-            reconfig_data_format_srca(ternary_b_cb);
-            copy_tile_init(ternary_b_cb);
-            copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
-#endif  // FUSE_TERNARY
-
-#ifdef SFPU_OP_INIT_ACTIVATION
-            SFPU_OP_FUNC_ACTIVATION
-#endif
-
-#ifdef FUSE_TERNARY
-            // Perform addcmul: output = ternary_a + (scalar * matmul_result * ternary_b)
-            addcmul_tile_init();
-            addcmul_tile<DataFormat::Float16_b>(
-                ternary_a_dst_id,  // idst0: base value (from ternary_a)
-                fused_act_dst_id,  // idst1: matmul+bias result
-                ternary_b_dst_id,  // idst2: multiplier (from ternary_b)
-                fused_act_dst_id,  // odst: output destination
-                scalar_value);     // value: scalar multiplier
-#endif
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(fused_act_dst_id, out_cb);
-            tile_regs_release();
-            tile_id++;
-        }
-#ifdef FUSE_TERNARY
-        cb_pop_front(ternary_a_cb, N_block_tiles);
-        cb_pop_front(ternary_b_cb, N_block_tiles);
-#endif  // FUSE_TERNARY
-
-        cb_push_back(out_cb, N_block_tiles);
-    }
 }
 
 // Slightly modified from compute_common.hpp

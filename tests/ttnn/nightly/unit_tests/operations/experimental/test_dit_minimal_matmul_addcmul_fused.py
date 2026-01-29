@@ -47,7 +47,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     # Create torch inputs
     torch_matmul_input = torch.randn(M, K, dtype=torch.bfloat16)
     torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
-    torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # residual
+    torch_addcmul_a = torch.randn(1, N, dtype=torch.bfloat16)  # base value (broadcast like bias)
     torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate
 
     torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
@@ -125,9 +125,9 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
 @pytest.mark.parametrize(
     "M, K, N, config_name",
     [
-        # (2048, 2048, 2048, "tiny"),
+        (2048, 2048, 2048, "tiny"),
         # (9472, 3456, 5120, "medium"),
-        (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
+        # (24800, 5120, 13824, "5B-720p"),  # 31*20*40 = 24800
         # (32760, 5120, 13824, "14B-480p"),  # 21*30*52 = 32760
         # (75600, 5120, 13824, "14B-720p"),  # 21*45*80 = 75600
         # (2000, 5120, 13824, "small"),  # Small test shape
@@ -249,7 +249,7 @@ def test_dit_minimal_matmul_addcmul_fused_compare_with_separate_ops(device):
     # Create torch inputs
     torch_matmul_input = torch.randn(M, K, dtype=torch.bfloat16)
     torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
-    torch_addcmul_input1 = torch.randn(M, N, dtype=torch.bfloat16)
+    torch_addcmul_input1 = torch.randn(1, N, dtype=torch.bfloat16)  # base value (broadcast)
     torch_addcmul_input2 = torch.randn(M, N, dtype=torch.bfloat16)
 
     # Convert to ttnn
