@@ -113,138 +113,19 @@ jobs:
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
 
-      # - name: Run DeepSeek module tests
-      #   if: ${{ matrix.test-group.test-type == 'module' }}
-      #   timeout-minutes: ${{ matrix.test-group.timeout }}
-      #   run: |
-      #     pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      #     pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+      - name: Run DeepSeek module tests
+        if: ${{ matrix.test-group.test-type == 'module' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
 
       - name: Run DeepSeek fused op unit tests (MLP - all ops)
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-<<<<<<< HEAD
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
-=======
-          # Fused Op Tests: 1 decode (trace) + 2 prefill (eager: 128, 1024) per op
-          # All tests log to Superset: mode, trace, program_cache, PCC, ATOL, RTOL, avg_us
-
-          echo "=============================================="
-          echo "LM HEAD fused op tests"
-          echo "=============================================="
-          echo "Running LM HEAD (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_lm_head.py::test_ds_fused_lm_head -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running LM HEAD (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_lm_head.py::test_ds_fused_lm_head -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running LM HEAD (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_lm_head.py::test_ds_fused_lm_head -k "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MESH SCATTER fused op tests"
-          echo "=============================================="
-          echo "Running MESH SCATTER (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_mesh_scatter.py::test_ds_fused_mesh_scatter -k "decode and 1 and row_3 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MESH SCATTER (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_mesh_scatter.py::test_ds_fused_mesh_scatter -k "prefill and 128 and row_3 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MESH SCATTER (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_mesh_scatter.py::test_ds_fused_mesh_scatter -k "prefill and 1024 and row_3 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "RMS NORM fused op tests"
-          echo "=============================================="
-          echo "Running RMS NORM (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_rms_norm.py::test_ds_fused_rms_norm -k "decode and 1 and kv_lora_rank_512 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running RMS NORM (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_rms_norm.py::test_ds_fused_rms_norm -k "prefill and 128 and kv_lora_rank_512 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running RMS NORM (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_rms_norm.py::test_ds_fused_rms_norm -k "prefill and 1024 and kv_lora_rank_512 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "DISTRIBUTED NORM fused op tests"
-          echo "=============================================="
-          echo "Running DISTRIBUTED NORM (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_distributed_norm.py::test_ds_fused_distributed_norm -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running DISTRIBUTED NORM (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_distributed_norm.py::test_ds_fused_distributed_norm -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running DISTRIBUTED NORM (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/rms_norm/test_ds_fused_distributed_norm.py::test_ds_fused_distributed_norm -k "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MLP FF1/3 fused op tests"
-          echo "=============================================="
-          echo "Running MLP FF1/3 (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff1_3/test_ds_fused_ff1_3.py::test_ds_fused_ff1_3 -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running MLP FF1/3 (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff1_3/test_ds_fused_ff1_3.py::test_ds_fused_ff1_3 -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running MLP FF1/3 (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff1_3/test_ds_fused_ff1_3.py::test_ds_fused_ff1_3 -k "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MLP FF2 fused op tests"
-          echo "=============================================="
-          echo "Running MLP FF2 (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff2/test_ds_fused_ff2.py::test_ds_fused_ff2 -k "decode and 1 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running MLP FF2 (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff2/test_ds_fused_ff2.py::test_ds_fused_ff2 -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running MLP FF2 (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/ff2/test_ds_fused_ff2.py::test_ds_fused_ff2 -k "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MLP MUL fused op tests"
-          echo "=============================================="
-          echo "Running MLP MUL (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/mul/test_ds_fused_mul.py::test_ds_fused_mul -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP MUL (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/mul/test_ds_fused_mul.py::test_ds_fused_mul -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP MUL (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/mul/test_ds_fused_mul.py::test_ds_fused_mul -k "prefill and 1024 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MLP REDUCE SCATTER fused op tests"
-          echo "=============================================="
-          echo "Running MLP REDUCE SCATTER (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py::test_ds_fused_reduce_scatter_post_ff2 -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP REDUCE SCATTER (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py::test_ds_fused_reduce_scatter_post_ff2 -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP REDUCE SCATTER (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py::test_ds_fused_reduce_scatter_post_ff2 -k "prefill and 1024 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "MLP ALL GATHER fused op tests"
-          echo "=============================================="
-          echo "Running MLP ALL GATHER (decode seq_len=1, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/all_gather/test_ds_fused_all_gather_preff1_3.py::test_ds_fused_all_gather_preff1_3 -k "decode and 1 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP ALL GATHER (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/all_gather/test_ds_fused_all_gather_preff1_3.py::test_ds_fused_all_gather_preff1_3 -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running MLP ALL GATHER (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/all_gather/test_ds_fused_all_gather_preff1_3.py::test_ds_fused_all_gather_preff1_3 -k "prefill and 1024 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "EMBEDDING fused op tests"
-          echo "=============================================="
-          echo "Running EMBEDDING (decode seq_len=32, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "decode and 32 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running EMBEDDING (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-          echo "Running EMBEDDING (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "EMBEDDING ALL GATHER fused op tests"
-          echo "=============================================="
-          echo "Running EMBEDDING ALL GATHER (decode seq_len=32, trace)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/all_gather/test_ds_fused_all_gather_embedding.py::test_ds_fused_all_gather_embedding -k "decode and 32 and trace and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running EMBEDDING ALL GATHER (prefill seq_len=128, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/all_gather/test_ds_fused_all_gather_embedding.py::test_ds_fused_all_gather_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-          echo "Running EMBEDDING ALL GATHER (prefill seq_len=1024, eager)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/all_gather/test_ds_fused_all_gather_embedding.py::test_ds_fused_all_gather_embedding -k "prefill and 1024 and eager and program_cache and not no_program_cache" --timeout 600 --durations=0
-
-          echo "=============================================="
-          echo "All fused op tests completed!"
-          echo "=============================================="
->>>>>>> 1c7b20d219 (op unit test rebase commit)
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

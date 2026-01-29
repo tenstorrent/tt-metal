@@ -397,9 +397,6 @@ def _build_ff1_3_inputs(
     )
 
     x = ttnn.experimental.all_gather_async(tt_input, **ccl.populate_all_gather_runtime_args(run_config["all_gather"]))
-    if mode == "decode":
-        x = ttnn.to_memory_config(x, **run_config["all_gather_reshard"])
-
     # After sharding with dims=(0, -1), each device has num_layers/mesh_rows layers
     # The reshape must use the per-device layer count, not the total
     num_layers_per_device = x.shape[0]
