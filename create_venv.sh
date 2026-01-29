@@ -305,7 +305,7 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-m
 echo "Installing tt-metal"
 uv pip install -e .
 
-# Create .pth files for ttml if tt-train exists
+# Create .pth files for ttml
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
 SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
 
