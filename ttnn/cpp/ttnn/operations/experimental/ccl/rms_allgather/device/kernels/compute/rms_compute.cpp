@@ -136,9 +136,9 @@ void kernel_main() {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::InputPolicy::NoWaitNoPop,
-        compute_kernel_lib::DataFormatReconfigMode::INPUT>(
-        cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::InputBlockShape::row(num_reduce_tiles_per_block_h));
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::ReduceInputBlockShape::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
@@ -154,12 +154,12 @@ void kernel_main() {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::DataFormatReconfigMode::INPUT>(
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
             cb_ex_external2,
             cb_scaler_global,
             cb_reduction_out,
-            compute_kernel_lib::InputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce));
+            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce));
     }
 
     // Waits for stats tensor to have valid data
@@ -181,12 +181,12 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::DataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
-                compute_kernel_lib::InputBlockShape::row(num_distributed_blocks));
+                compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
 
             // 1/[sqrt(Var + eps)],
             reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm

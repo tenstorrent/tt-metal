@@ -253,8 +253,8 @@ void reduce_cb(
         cb_in,
         cb_scaler,
         cb_out,
-        compute_kernel_lib::InputBlockShape::row(cb_length_t),
-        compute_kernel_lib::InputMemoryLayout::contiguous(),
+        compute_kernel_lib::ReduceInputBlockShape::row(cb_length_t),
+        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
         // PostReduceOp: conditionally accumulate with previous result
         [cb_prev_out, use_prev_reduce](uint32_t) {

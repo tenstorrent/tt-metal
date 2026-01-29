@@ -67,8 +67,8 @@ void kernel_main() {
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::InputPolicy::WaitAndPopPerBatch>(
-                cb_x2, cb_reduce, cb_out, compute_kernel_lib::InputBlockShape::row(Wt));
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         /*
          * sum(x)
@@ -76,8 +76,8 @@ void kernel_main() {
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::InputPolicy::WaitAndPopPerBatch>(
-                cb_inp, cb_reduce, cb_out, compute_kernel_lib::InputBlockShape::row(Wt));
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+                cb_inp, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
     cb_pop_front(cb_reduce, 1);
 }

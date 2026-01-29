@@ -55,12 +55,12 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_COL,
-                    compute_kernel_lib::InputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::DataFormatReconfigMode::NONE>(
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     intermed_cb_id0,
                     scalar_cb_id,
                     intermed_cb_id1,
-                    compute_kernel_lib::InputBlockShape::single());  // 1 x B
+                    compute_kernel_lib::ReduceInputBlockShape::single());  // 1 x B
             }
             // Get full tile back from writer and transpose it
             pack_reconfig_data_format(intermed_cb_id0, output_cb_id);
