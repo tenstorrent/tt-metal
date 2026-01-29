@@ -333,14 +333,12 @@ void kernel_main() {
     [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4 - not used by reader
     uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);        // 5
     uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                      // 6
-    [[maybe_unused]] uint32_t matmul_chunk_input_tensor_address =
-        get_arg_val<uint32_t>(rt_args_idx++);                                // 7 - not used by reader
-    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 8
-    uint32_t tilize_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);  // 9
-    uint32_t tilize_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);    // 10
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);        // 11
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);          // 12
-    uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 13
+    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                  // 7
+    uint32_t tilize_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                  // 8
+    uint32_t tilize_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                    // 9
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                        // 10
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                          // 11
+    uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                         // 12
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output
     constexpr auto input_args = TensorAccessorArgs<0>();

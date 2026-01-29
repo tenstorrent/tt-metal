@@ -29,8 +29,7 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
@@ -38,7 +37,6 @@ void kernel_main() {
     uint32_t argidx = 0;
     const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
@@ -48,8 +46,8 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_2;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_2;
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
