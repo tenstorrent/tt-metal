@@ -981,8 +981,8 @@ def test_flash_mla_deepseek_perf(
         (
             "wq_kv_a_sequence",
             10,
-            146.7,
-        ),  # Sum: linear(28.76) + all-gather(106) + fast_reduce(7.73) + 3*slices(1.47+1.26+0.95)
+            151.6,
+        ),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

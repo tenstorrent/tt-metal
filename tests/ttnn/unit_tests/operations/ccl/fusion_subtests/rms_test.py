@@ -171,6 +171,27 @@ def run_rms_trace_deepseek(
     )
     ttnn.synchronize_device(mesh_device)
 
+    # PCC checking with compile run output
+    tt_out_torch = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=(num_devices, 1)),
+    )[0].unsqueeze(0)
+    if fused_add:
+        residual_out_torch = ttnn.to_torch(
+            residual_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=(num_devices, 1)),
+        )[0].unsqueeze(0)
+        ref_res_add = input_tensor_torch + residual_torch
+        passing, output = comp_pcc(residual_out_torch, ref_res_add, 0.9999)
+        logger.info(output)
+        assert passing
+    else:
+        ref_res_add = input_tensor_torch
+    ref_lnorm = get_torch_rms(ref_res_add, [3], gamma_torch, epsilon)
+    passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
+    logger.info(output)
+    assert passing
+
     logger.info("Capturing trace")
     if warmup_iters > 0:
         trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
