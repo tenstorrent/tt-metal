@@ -877,6 +877,15 @@ class ModelOptimisations512x512:
             "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             "negative_mask": False,
         }
+        self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=4, x=4),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
         self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
@@ -1267,15 +1276,24 @@ class ModelOptimisations512x512:
         return mask, negative_mask, gamma, beta
 
     def _get_groupnorm_config(self, module_path):
-        if "up_blocks.2" in module_path and "norm1" in module_path:
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
+        # GroupNorm configs for Resnets
         if "resnets" in module_path:
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+            if "down_blocks.2" in module_path:
+                if "norm1" in module_path:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
+            if "up_blocks.0" in module_path:
+                if "norm1" in module_path:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
+
+        # GroupNorm configs for Attentions
         if "attentions" in module_path:
             if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
                 return self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"]
-            else:
-                return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+
+            # Default config for attentions
+            return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+
+        # Default GroupNorm config
         return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
 
     def get_groupnorm_params(self, module_path, weights, bias, groups, device):
