@@ -2,31 +2,38 @@
 # Install cmake from official tarball
 # Usage: CMAKE_VERSION=4.2.3 CMAKE_SHA256=... INSTALL_DIR=/install ./install-cmake.sh
 
-set -e
+set -euo pipefail
 
 CMAKE_VERSION=${CMAKE_VERSION:?CMAKE_VERSION is required}
 CMAKE_SHA256=${CMAKE_SHA256:?CMAKE_SHA256 is required}
 INSTALL_DIR=${INSTALL_DIR:-/usr/local}
 
 TARBALL_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
-TARBALL_FILE="cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+TMPFILE="/tmp/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
 
-echo "[INFO] Downloading cmake ${CMAKE_VERSION}..."
-wget -q --show-progress "${TARBALL_URL}" -O "/tmp/${TARBALL_FILE}"
+echo "Installing cmake ${CMAKE_VERSION}..."
 
-echo "[INFO] Verifying SHA256 checksum..."
-echo "${CMAKE_SHA256}  /tmp/${TARBALL_FILE}" | sha256sum -c -
+# Download (use curl if wget not available)
+if command -v wget &> /dev/null; then
+    wget -q --show-progress "${TARBALL_URL}" -O "${TMPFILE}"
+else
+    curl -fsSL -o "${TMPFILE}" "${TARBALL_URL}"
+fi
 
-echo "[INFO] Extracting cmake..."
-mkdir -p /tmp/cmake-extract
-tar -xzf "/tmp/${TARBALL_FILE}" -C /tmp/cmake-extract --strip-components=1
+# Verify hash
+echo "${CMAKE_SHA256}  ${TMPFILE}" | sha256sum -c -
 
-echo "[INFO] Installing cmake to ${INSTALL_DIR}..."
+# Extract to install directory
+# The tarball contains cmake-X.Y.Z-linux-x86_64/{bin, doc, man, share}
 mkdir -p "${INSTALL_DIR}"
-cp -r /tmp/cmake-extract/* "${INSTALL_DIR}/"
+tar -xzf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
 
-echo "[INFO] Cleaning up..."
-rm -rf /tmp/cmake-extract "/tmp/${TARBALL_FILE}"
+# Cleanup
+rm -f "${TMPFILE}"
 
-echo "[INFO] cmake ${CMAKE_VERSION} installed successfully"
-"${INSTALL_DIR}/bin/cmake" --version
+# Verify installation (skip if binary can't run, e.g., glibc binary on musl/Alpine)
+if "${INSTALL_DIR}/bin/cmake" --version 2>/dev/null; then
+    echo "cmake ${CMAKE_VERSION} installed and verified successfully"
+else
+    echo "cmake ${CMAKE_VERSION} installed (verification skipped - binary may require glibc)"
+fi
