@@ -264,6 +264,9 @@ class RunTimeOptions {
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
+    // Log dispatch program commands (RTAs, semaphores, CBs, binaries, etc.)
+    bool log_dispatch_program_commands = false;
+
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
@@ -620,6 +623,8 @@ public:
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+
+    bool get_log_dispatch_program_commands() const { return log_dispatch_program_commands; }
 
     // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
     // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.

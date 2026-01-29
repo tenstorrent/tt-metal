@@ -90,6 +90,7 @@ enum class EnvVarID {
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
+    TT_METAL_LOG_DISPATCH_PROGRAM_COMMANDS, // Log dispatch program commands (RTAs, CBs, binaries, etc.)
     TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
     TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
@@ -612,6 +613,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (no logging)
         // Usage: export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
         case EnvVarID::TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: this->log_kernels_compilation_commands = true; break;
+
+        // TT_METAL_LOG_DISPATCH_PROGRAM_COMMANDS
+        // Log dispatch program commands (RTAs, semaphores, CBs, kernel binaries, launch messages, etc.).
+        // Useful for debugging dispatch and understanding what data is sent to device cores.
+        // Default: false (no logging)
+        // Usage: export TT_METAL_LOG_DISPATCH_PROGRAM_COMMANDS=1
+        case EnvVarID::TT_METAL_LOG_DISPATCH_PROGRAM_COMMANDS: this->log_dispatch_program_commands = true; break;
 
         // TT_METAL_SLOW_DISPATCH_MODE
         // Use slow dispatch mode for debugging.
