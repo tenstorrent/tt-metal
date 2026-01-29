@@ -273,6 +273,7 @@ class Generator:
         model_id_warmup=None,
         start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
+        warmup_prefill=True,
         **kwargs,
     ):
         self.mode = "prefill"
@@ -283,7 +284,8 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        if warmup_prefill:
+            self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -302,11 +304,14 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
+        # For row-sharded users, use max_local_batch_size (users per row) for group_user_id
+        local_batch_size = getattr(self.model_args[0], "max_local_batch_size", max_batch_size_per_model)
+
         out_list = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            group_user_id = user_id % local_batch_size if page_table is None else 0
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
@@ -353,7 +358,7 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
-
+            local_kwargs["global_user_id"] = user_id
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,

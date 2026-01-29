@@ -195,7 +195,14 @@ class Transformer(LightweightModule):
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_prefill(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ namespace ttnn::prim {
 struct TopKSingleCoreSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
     tt::tt_metal::KernelHandle binary_writer_kernel_id{};
-    tt::tt_metal::CoreCoord core;
+    std::vector<tt::tt_metal::CoreCoord> cores;
 };
 
 struct TopKSingleCoreProgramFactory {

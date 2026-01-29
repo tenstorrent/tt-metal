@@ -212,7 +212,7 @@ run_t3000_falcon40b_tests() {
 }
 
 run_t3000_gemma3-small_tests() {
-  pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
+  pytest models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {
@@ -538,6 +538,20 @@ run_t3000_qwen25_vl_unit_tests() {
   echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
+run_t3000_qwen3_vl_unit_tests() {
+  # install qwen3_vl requirements
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
+
+  # run unit tests
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+}
+
 run_t3000_deepseek_tests() {
   uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
@@ -690,10 +704,10 @@ run_t3000_gpt_oss_unit_tests() {
   uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

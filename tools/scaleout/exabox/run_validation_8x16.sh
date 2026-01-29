@@ -37,12 +37,12 @@ for i in {1..50}; do
         echo ""
 
         echo "Running tt-smi -glx_reset..."
-        mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo tt-smi -glx_reset
+        mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
         sleep 5
 
         echo ""
         echo "Running cluster validation..."
-        ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --factory-descriptor-path /data/scaleout_configs/5xBH_8x16_intrapod/fsd.textproto --send-traffic --num-iterations 10
+        ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto --send-traffic --num-iterations 10
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
