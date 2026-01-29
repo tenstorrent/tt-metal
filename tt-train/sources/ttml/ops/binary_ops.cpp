@@ -24,9 +24,6 @@ namespace ttml::ops {
 
 namespace {
 
-// Empty span for unary activations parameter
-constexpr auto none = tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-
 bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
     auto input_shape = input->get_value().logical_shape();
     auto grad_shape = grad.logical_shape();
@@ -126,39 +123,18 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(ttnn::multiply(
         a->get_value(),
         b->get_value(),
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        none,
-        none,
-        none,
-        std::nullopt,
-        true));
+        /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
         tt::tt_metal::MemoryConfig mem_config;
         // TODO: support broadcasting (or not)
         auto a_grad = ttnn::multiply(
             out->get_grad(),
             b->get_value(),
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            std::nullopt,
-            true);
+            /* fast_and_approximate_mode*/ true);
         auto b_grad = ttnn::multiply(
             out->get_grad(),
             a->get_value(),
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            std::nullopt,
-            true);
+            /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
         b->add_grad(b_grad);
@@ -172,8 +148,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
     autograd::GradFunction grad = [a, b, out]() {
-        auto a_grad = ttnn::multiply(
-            out->get_grad(), b, std::nullopt, std::nullopt, std::nullopt, none, none, none, std::nullopt, true);
+        auto a_grad = ttnn::multiply(out->get_grad(), b, /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
     };

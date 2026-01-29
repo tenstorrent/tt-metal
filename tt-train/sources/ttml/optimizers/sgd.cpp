@@ -14,11 +14,6 @@
 
 namespace ttml::optimizers {
 
-namespace {
-// Empty span for unary activations parameter
-constexpr auto none = tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-}  // namespace
-
 SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
@@ -59,14 +54,7 @@ void SGD::step() {
                 ttnn::multiply(
                     tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
                     m_config.weight_decay,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    none,
-                    none,
-                    none,
-                    std::nullopt,
-                    true),
+                    /* fast_and_approximate_mode*/ true),
                 gradients);
         }
 
@@ -76,14 +64,7 @@ void SGD::step() {
                 theta = ttnn::multiply(
                     theta,
                     m_config.momentum,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    none,
-                    none,
-                    none,
-                    std::nullopt,
-                    true);
+                    /* fast_and_approximate_mode*/ true);
                 // dampening
                 if (m_config.dampening != 0.0F) {
                     theta = ttnn::add(
@@ -91,14 +72,7 @@ void SGD::step() {
                         ttnn::multiply(
                             gradients,
                             1 - m_config.dampening,
-                            std::nullopt,
-                            std::nullopt,
-                            std::nullopt,
-                            none,
-                            none,
-                            none,
-                            std::nullopt,
-                            true));
+                            /* fast_and_approximate_mode*/ true));
                 } else {
                     theta = ttnn::add(theta, gradients);
                 }
@@ -112,14 +86,7 @@ void SGD::step() {
                     ttnn::multiply(
                         theta,
                         m_config.momentum,
-                        std::nullopt,
-                        std::nullopt,
-                        std::nullopt,
-                        none,
-                        none,
-                        none,
-                        std::nullopt,
-                        true));
+                        /* fast_and_approximate_mode*/ true));
             } else {
                 gradients = theta;
             }
@@ -130,14 +97,7 @@ void SGD::step() {
             ttnn::multiply(
                 gradients,
                 m_config.lr,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                none,
-                none,
-                none,
-                std::nullopt,
-                true)));
+                /* fast_and_approximate_mode*/ true)));
     }
     m_steps++;
 }

@@ -103,6 +103,11 @@ struct MulOperationWithFastApprox {
         const std::optional<bool>& use_legacy = std::nullopt,
         const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+    // Simplified overloads for fast_and_approximate_mode
+    static Tensor invoke(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
+
+    static Tensor invoke(const Tensor& lhs, float rhs, bool fast_and_approximate_mode);
 };
 
 template <BinaryOpType binary_op_type>

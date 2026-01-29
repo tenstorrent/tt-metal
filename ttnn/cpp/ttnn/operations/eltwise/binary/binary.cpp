@@ -616,6 +616,40 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
+Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
+    const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode) {
+    return invoke(
+        lhs,
+        rhs,
+        std::nullopt,  // output_dtype
+        std::nullopt,  // memory_config
+        std::nullopt,  // output
+        {},            // post_activations
+        {},            // lhs_activations
+        {},            // rhs_activations
+        std::nullopt,  // use_legacy
+        fast_and_approximate_mode,
+        std::nullopt);  // sub_core_grids
+}
+
+template <BinaryOpType binary_op_type>
+Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
+    const Tensor& lhs, float rhs, bool fast_and_approximate_mode) {
+    return invoke(
+        lhs,
+        rhs,
+        std::nullopt,  // output_dtype
+        std::nullopt,  // memory_config
+        std::nullopt,  // output
+        {},            // post_activations
+        {},            // lhs_activations
+        {},            // rhs_activations
+        std::nullopt,  // use_legacy
+        fast_and_approximate_mode,
+        std::nullopt);  // sub_core_grids
+}
+
+template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
     const Tensor& lhs,
     const Tensor& rhs,
