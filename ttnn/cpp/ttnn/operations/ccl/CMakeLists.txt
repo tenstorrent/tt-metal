@@ -18,7 +18,6 @@ file(
     kernels/*
     all_to_all_combine/device/kernels/*
     all_to_all_dispatch/device/kernels/*
-    moe/selective_reduce_combine/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -95,9 +94,6 @@ target_sources(
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
-        moe/selective_reduce_combine/selective_reduce_combine.cpp
-        moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
-        moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
         reduce_to_root/reduce_to_root.cpp
         reduce_to_root/device/reduce_to_root_op.cpp
         reduce_to_root/device/reduce_to_root_program.cpp
