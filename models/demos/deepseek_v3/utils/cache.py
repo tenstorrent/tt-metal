@@ -1,7 +1,7 @@
 import inspect
 import json
 from hashlib import md5
-from typing import Callable
+from typing import Callable, Sequence
 
 import torch
 
@@ -21,7 +21,7 @@ def compute_func_fingerprint(func: Callable) -> str:
 
 
 def create_manifest(
-    name: str,
+    name: str | Sequence[str],
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
     hf_config: dict,
@@ -31,9 +31,16 @@ def create_manifest(
     """
     The manifest does not use the content of the tensor and only uses the 'name' (i.e. the one in the HF state dict).
     If the contents of the tensors in the state dict changes we would need to explicitly bust the cache.
+    For multiple names, uses a deterministic sorted list for cache key stability.
     """
+    if isinstance(name, str):
+        names_key = "name"
+        names_value = name
+    else:
+        names_key = "names"
+        names_value = json.dumps(sorted(name), sort_keys=True)
     return {
-        "name": name,
+        names_key: names_value,
         "dtype": dtype.__name__,
         "layout": layout.__name__,
         "hf_config": json.dumps(hf_config, sort_keys=True),
@@ -92,22 +99,29 @@ class TensorCache:
 
     def get_tensor(
         self,
-        name: str,
+        name: str | Sequence[str],
         dtype: ttnn.DataType,
         layout: ttnn.Layout,
         preprocessor: Callable = lambda x: x,
         postprocessor: Callable = lambda x: x,
     ) -> ttnn.Tensor:
-        manifest = create_manifest(name, dtype, layout, self.hf_config, preprocessor, postprocessor)
+        names = [name] if isinstance(name, str) else list(name)
+        manifest = create_manifest(names, dtype, layout, self.hf_config, preprocessor, postprocessor)
         fingerprint = compute_fingerprint(manifest)
 
         if not self.cache_entry_exists_for_fingerprint(fingerprint):
-            if name not in self.state_dict:
-                raise KeyError(
-                    f"Tensor '{name}' not found in state_dict. Available keys: {list(self.state_dict.keys())}"
-                )
-            hf_tensor = self.state_dict[name]
-            preprocessed_hf_tensor = preprocessor(hf_tensor)
+            for n in names:
+                if n not in self.state_dict:
+                    raise KeyError(
+                        f"Tensor '{n}' not found in state_dict. Available keys: {list(self.state_dict.keys())}"
+                    )
+            # Use sorted order for deterministic cache key and consistent preprocessor input
+            ordered_names = sorted(names)
+            hf_tensors = [self.state_dict[n] for n in ordered_names]
+            if len(hf_tensors) == 1:
+                preprocessed_hf_tensor = preprocessor(hf_tensors[0])
+            else:
+                preprocessed_hf_tensor = preprocessor(hf_tensors)
             tensor = self.converter(preprocessed_hf_tensor, dtype, layout)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)

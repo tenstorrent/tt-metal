@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class RMSNorm(RMSNormBase):
@@ -36,15 +36,36 @@ class RMSNorm(RMSNormBase):
 
         # Return WeightSpec - conversion will happen at top level
         # The weight name "weight" must match the op name used in the model config
-        # so that RunConfig can populate it with the actual weight tensors at runtime
+        # so that RunConfig can populate it with the actual weight tensors at runtime.
+        # name + preprocessor support cache path; torch_tensor supports disk path.
         return {
             "weight": WeightSpec(
+                name="weight",
                 torch_tensor=torch_metaweight,
                 shard_dims=(0, None),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 preprocessor=lambda t: t.reshape((num_shards, 1, -1, ttnn.TILE_SIZE)),
+            ),
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls, hf_config: PretrainedConfig, mesh_shape: (int, int), context: WeightSpecContext
+    ) -> ModuleWeightSpec:
+        def preprocessor(t: torch.Tensor) -> torch.Tensor:
+            assert len(t.shape) == 1, "Weight expected to be a 1D tensor"
+            return t.reshape((1, 1, -1, ttnn.TILE_SIZE)).repeat(mesh_shape[0], 1, 1, 1)
+
+        return {
+            "weight": WeightSpec(
+                name="weight",
+                shard_dims=(0, None),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                preprocessor=preprocessor,
             ),
         }
 

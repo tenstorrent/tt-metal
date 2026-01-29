@@ -91,6 +91,11 @@ def convert_weight_spec_to_saved(
     Returns:
         SavedWeight with the converted weight saved to disk
     """
+    if weight_spec.torch_tensor is None:
+        raise ValueError(
+            "WeightSpec has no torch_tensor; this spec must be materialized via TensorCache "
+            "(create_weight_config_from_weight_spec) rather than convert_weight_spec_to_saved."
+        )
     # Apply preprocessing
     torch_tensor = weight_spec.preprocessor(weight_spec.torch_tensor)
 

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 import torch
 
@@ -28,6 +30,16 @@ def sample_state_dict():
 def sample_hf_config():
     """Create a sample HF config for testing."""
     return {"factor": 2, "hidden_size": 128}
+
+
+@pytest.fixture
+def sample_state_dict_same_shape():
+    """State dict with multiple tensors of the same shape for multi-source stack tests."""
+    return {
+        "weight1": torch.zeros((128, 128), dtype=torch.bfloat16),
+        "weight2": torch.ones((128, 128), dtype=torch.bfloat16),
+        "weight3": torch.randn((128, 128), dtype=torch.bfloat16),
+    }
 
 
 @pytest.fixture
@@ -161,6 +173,29 @@ def test_create_manifest_basic(sample_hf_config):
     assert "hf_config" in manifest
     assert "preprocessor" in manifest
     assert "postprocessor" in manifest
+
+
+def test_create_manifest_multi_name(sample_hf_config):
+    """Test manifest creation with multiple names uses 'names' key."""
+
+    def preprocessor(x):
+        return x
+
+    def postprocessor(x):
+        return x
+
+    manifest = create_manifest(
+        name=["weight_a", "weight_b"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        hf_config=sample_hf_config,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+    )
+    assert "names" in manifest
+    assert manifest["names"] == json.dumps(sorted(["weight_a", "weight_b"]))
+    assert "dtype" in manifest
+    assert "layout" in manifest
 
 
 def test_compute_fingerprint_stable():
@@ -552,3 +587,108 @@ def test_tensor_cache_hf_config_changes_cache(tensor_cache, sample_state_dict, c
     assert tensor1 is not tensor2
     assert tensor2 is not tensor3
     assert tensor1 is tensor3
+
+
+def test_tensor_cache_multi_source_cache_miss_hit(
+    sample_state_dict_same_shape, sample_hf_config, cache_storage, monkeypatch
+):
+    """Test multi-source get_tensor: first call cache miss, second call cache hit."""
+    cache = TensorCache(sample_state_dict_same_shape, sample_hf_config, cache_storage)
+    call_tracker = setup_cache_tracker(cache, monkeypatch)
+
+    def stack_preprocessor(tensors):
+        return torch.stack(tensors, dim=0)
+
+    tensor1 = cache.get_tensor(
+        name=["weight1", "weight2"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=stack_preprocessor,
+    )
+    assert tensor1 is not None
+    assert tensor1.dtype == ttnn.bfloat16
+    assert tensor1.layout == ttnn.TILE_LAYOUT
+    assert_cache_miss(call_tracker)
+
+    tensor2 = cache.get_tensor(
+        name=["weight1", "weight2"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=stack_preprocessor,
+    )
+    assert tensor1 is tensor2
+    assert_cache_hit(call_tracker)
+
+
+def test_tensor_cache_multi_source_different_names_different_entries(
+    sample_state_dict_same_shape, sample_hf_config, cache_storage, monkeypatch
+):
+    """Test that different name lists produce different cache entries."""
+    cache = TensorCache(sample_state_dict_same_shape, sample_hf_config, cache_storage)
+    call_tracker = setup_cache_tracker(cache, monkeypatch)
+
+    def stack_preprocessor(tensors):
+        return torch.stack(tensors, dim=0)
+
+    tensor_1_2 = cache.get_tensor(
+        name=["weight1", "weight2"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=stack_preprocessor,
+    )
+    assert_cache_miss(call_tracker)
+
+    tensor_2_3 = cache.get_tensor(
+        name=["weight2", "weight3"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=stack_preprocessor,
+    )
+    assert tensor_1_2 is not tensor_2_3
+    assert_cache_miss(call_tracker)
+
+
+def test_tensor_cache_multi_source_different_preprocessor_different_entries(
+    sample_state_dict_same_shape, sample_hf_config, cache_storage, monkeypatch
+):
+    """Test that same names with different preprocessors produce different cache entries."""
+    cache = TensorCache(sample_state_dict_same_shape, sample_hf_config, cache_storage)
+    call_tracker = setup_cache_tracker(cache, monkeypatch)
+
+    def stack_preprocessor(tensors):
+        return torch.stack(tensors, dim=0)
+
+    def sum_preprocessor(tensors):
+        return sum(tensors)
+
+    tensor_stack = cache.get_tensor(
+        name=["weight1", "weight2"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=stack_preprocessor,
+    )
+    assert_cache_miss(call_tracker)
+
+    tensor_sum = cache.get_tensor(
+        name=["weight1", "weight2"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        preprocessor=sum_preprocessor,
+    )
+    assert tensor_stack is not tensor_sum
+    assert_cache_miss(call_tracker)
+
+
+def test_tensor_cache_multi_source_missing_tensor(tensor_cache):
+    """Test that requesting with a missing name in the list raises KeyError."""
+
+    def stack_preprocessor(tensors):
+        return torch.stack(tensors, dim=0)
+
+    with pytest.raises(KeyError, match="Tensor 'nonexistent' not found"):
+        tensor_cache.get_tensor(
+            name=["weight1", "nonexistent"],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            preprocessor=stack_preprocessor,
+        )

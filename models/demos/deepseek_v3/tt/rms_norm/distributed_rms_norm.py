@@ -46,10 +46,12 @@ class DistributedRMSNorm(RMSNormBase):
 
         # Return WeightSpec - conversion will happen at top level
         # The nested structure "rms_norm_post_all_gather.weight" must match the op name used in the model config
-        # so that RunConfig can populate it with the actual weight tensors at runtime
+        # so that RunConfig can populate it with the actual weight tensors at runtime.
+        # name + preprocessor support cache path; torch_tensor supports disk path.
         return {
             "rms_norm_post_all_gather": {
                 "weight": WeightSpec(
+                    name="weight",
                     torch_tensor=torch_metaweight,
                     shard_dims=(0, -2),
                     dtype=ttnn.bfloat16,
