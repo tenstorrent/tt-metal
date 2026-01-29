@@ -99,11 +99,10 @@ int main(int argc, char** argv) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Initialize parallelism context for TP+DP
-    ttml::autograd::ctx().initialize_parallelism_context({.enable_dp = true, .enable_tp = true});
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = true, .enable_tp = true});
 
     // Get parallelism parameters from context
     const auto& pctx = ttml::autograd::ctx().get_parallelism_context();
-    auto dp_axis = pctx.get_ddp_axis();
     auto tp_axis = pctx.get_tp_axis();
     const uint32_t dp_size = pctx.get_ddp_size();
     const uint32_t tp_size = pctx.get_tp_size();
@@ -252,7 +251,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DP groups (average gradients for data parallelism)
-            ttml::core::distributed::synchronize_gradients(model->parameters(), dp_axis);
+            ttml::core::distributed::synchronize_gradients(model->parameters());
 
             // Optimizer step
             optimizer.step();

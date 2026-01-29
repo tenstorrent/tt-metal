@@ -19,7 +19,7 @@ namespace ttml::autograd {
 enum class GradMode { ENABLED, DISABLED };
 
 struct DistributedConfig {
-    bool enable_dp = false;
+    bool enable_ddp = false;
     bool enable_tp = false;
 };
 

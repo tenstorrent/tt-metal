@@ -320,7 +320,7 @@ def main():
 
     # Initialize parallelism context for TP+DP
     autograd_ctx.initialize_parallelism_context(
-        DistributedConfig(enable_dp=True, enable_tp=True)
+        DistributedConfig(enable_ddp=True, enable_tp=True)
     )
 
     # Get parallelism parameters from context
@@ -523,7 +523,7 @@ def main():
             loss.backward(False)
 
             # Synchronize gradients across DP groups
-            ttml.core.distributed.synchronize_gradients(model.parameters(), dp_axis)
+            ttml.core.distributed.synchronize_gradients(model.parameters())
 
             # Optimizer step
             optimizer.step()

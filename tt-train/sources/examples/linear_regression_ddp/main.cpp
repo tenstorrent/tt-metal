@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
     ttml::autograd::ctx().open_device(logical_mesh_shape);
 
     // Initialize parallelism context for DDP only
-    ttml::autograd::ctx().initialize_parallelism_context({.enable_dp = true, .enable_tp = false});
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = true, .enable_tp = false});
 
     // Get parallelism parameters from context
     const auto& pctx = ttml::autograd::ctx().get_parallelism_context();
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DDP devices
-            ttml::core::distributed::synchronize_gradients(model->parameters(), dp_axis);
+            ttml::core::distributed::synchronize_gradients(model->parameters());
 
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
