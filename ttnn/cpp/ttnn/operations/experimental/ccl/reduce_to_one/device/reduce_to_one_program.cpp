@@ -348,10 +348,21 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(dest_coord);
 
-    // Calculate num_hops as Manhattan distance between source and destination mesh coordinates
-    auto abs_diff = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a - b : b - a; };
-    const uint32_t num_hops =
-        abs_diff(device_coordinate[0], dest_coord[0]) + abs_diff(device_coordinate[1], dest_coord[1]);
+    // Log fabric node mapping for debugging
+    const char* role_names[] = {"LEAF", "ROOT3", "ROOT2", "ROOT1"};
+    log_info(
+        tt::LogOp,
+        "ReduceToOne: device[{},{}] role={} src_fabric_node={} -> dest[{},{}] dst_fabric_node={}",
+        device_coordinate[0],
+        device_coordinate[1],
+        role_names[role],
+        src_fabric_node_id,
+        dest_coord[0],
+        dest_coord[1],
+        dst_fabric_node_id);
+
+    // Set hop = 1 for neighbour exchange
+    const uint32_t num_hops = 1;
 
     // Destination L1 address depends on role - each round writes to a different buffer
     // - LEAF: writes to received_cb_r1 (intermediate_tensor_r1)
@@ -470,7 +481,9 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             core_noc_x,  // Worker's own NOC X (same position on dest device)
             core_noc_y,  // Worker's own NOC Y (same position on dest device)
             dst_l1_addr,
-            dst_sem_addr  // Destination semaphore for fused atomic inc
+            dst_sem_addr,                     // Destination semaphore for fused atomic inc
+            dst_fabric_node_id.chip_id,       // Destination device ID
+            dst_fabric_node_id.mesh_id.get()  // Destination mesh ID
         };
         tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel, c, worker_rt_args);
 
