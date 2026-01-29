@@ -13,7 +13,7 @@ MAddOperation::spec_return_value_t MAddOperation::compute_output_specs(
     const Tensor& a = tensor_args.a;
 
     const ttnn::Shape output_shape = a.logical_shape();
-    const tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;  // upsample only outputs row major data
+    const tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
     const tt::tt_metal::DataType output_data_type = a.dtype();
 
     return tt::tt_metal::TensorSpec(
