@@ -1022,16 +1022,21 @@ def test_wq_kv_a_sequence_deepseek_perf(
     profiler.end(step_name)
     profiler.end("run")
     # Get the measured performance
-    print(results)
     measured_min = 0
     measured_max = 0
     measured_avg = 0
     measured_std = 0
     for op in results.keys():
-        measured_min += results[op][cols[0]]["MIN"]
-        measured_max += results[op][cols[0]]["MAX"]
-        measured_avg += results[op][cols[0]]["AVG"]
-        measured_std += results[op][cols[0]]["STD"]
+        if op == "MeshDeviceOperationAdapter<ttnn::operations::data_movement::slice::SliceDeviceOperation>":
+            measured_min += 3 * results[op][cols[0]]["MIN"]
+            measured_max += 3 * results[op][cols[0]]["MAX"]
+            measured_avg += 3 * results[op][cols[0]]["AVG"]
+            measured_std += 3 * results[op][cols[0]]["STD"]
+        else:
+            measured_min += results[op][cols[0]]["MIN"]
+            measured_max += results[op][cols[0]]["MAX"]
+            measured_avg += results[op][cols[0]]["AVG"]
+            measured_std += results[op][cols[0]]["STD"]
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
@@ -1092,7 +1097,6 @@ def test_norm_and_rope_sequence_deepseek_perf(
     profiler.end(step_name)
     profiler.end("run")
     # Get the measured performance
-    print(results)
     measured_min = 0
     measured_max = 0
     measured_avg = 0
@@ -1183,7 +1187,6 @@ def test_wkv_b2_sequence_deepseek_perf(
     profiler.end(step_name)
     profiler.end("run")
     # Get the measured performance
-    print(results)
     measured_min = 0
     measured_max = 0
     measured_avg = 0
@@ -1247,17 +1250,17 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     Test performance of the fwd_decode_q_rope_nope sequence from mla1d.py (lines 1234-1295).
 
     This test measures the end-to-end performance of the operation sequence:
-    1. Linear projection (tt_q): 57.5 µs(measured single) ? 46.72 (measured here)
-    2. Reshape: 38.71 µs ? 38.57
-    3. Slice tt_q_nope: 2.40 µs ? 2.82
-    4. Slice tt_q_rope: 1.87 µs ? 2.82
-    5. Permute tt_q_nope: 6.20 µs ? 4.75
-    6. Linear projection (tt_q_nope): 35.63 µs ? 46.72
-    7. Permute tt_q_nope: 22.95 µs ? 23.56 (transpose)
-    8. Permute tt_q_rope: 1.65 µs ? 4.75
-    9. Rotary embedding tt_q_rope: 4.56 µs ? 4.56
-    10. To memory config: 1.18 µs ? 2.34
-    11. Concat tt_q_nope and tt_q_rope: 7.90 µs ? 7.26
+    1. Linear projection (tt_q): 57.5 µs
+    2. Reshape: 38.71 µs
+    3. Slice tt_q_nope: 2.40 µs
+    4. Slice tt_q_rope: 1.87 µs
+    5. Permute tt_q_nope: 6.20 µs
+    6. Linear projection (tt_q_nope): 35.63 µs
+    7. Permute tt_q_nope: 22.95 µs
+    8. Permute tt_q_rope: 1.65 µs
+    9. Rotary embedding tt_q_rope: 4.56 µs
+    10. To memory config: 1.18 µs
+    11. Concat tt_q_nope and tt_q_rope: 7.90 µs
 
     Total expected: 184.9 µs
     """
@@ -1278,7 +1281,6 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     profiler.end(step_name)
     profiler.end("run")
     # Get the measured performance
-    print(results)
     measured_min = 0
     measured_max = 0
     measured_avg = 0
