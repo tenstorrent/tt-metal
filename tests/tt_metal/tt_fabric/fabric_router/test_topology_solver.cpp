@@ -2058,6 +2058,41 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
     }
 }
 
+// Test that 2 disconnected logical nodes map to 2 different physical nodes
+// Logical graph: 2 disconnected nodes (no edges between them)
+// Physical graph: 3 fully connected nodes (complete graph/clique)
+// This verifies that the solver correctly rejects constraints that force two logical nodes
+// to map to the same physical node
+TEST_F(TopologySolverTest, SolveTopologyMapping_DisconnectedNodesToFullyConnected_ShouldMapToDifferentNodes) {
+    // Create target graph: 2 disconnected nodes (no edges)
+    // Node 0 and Node 1 are isolated (no connection between them)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {};  // Node 0 has no neighbors
+    target_adj_map[1] = {};  // Node 1 has no neighbors
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 3 fully connected nodes (complete graph/clique)
+    // All nodes are connected to each other: 100 <-> 101 <-> 102 (all pairs connected)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[100] = {101, 102};  // Node 100 connects to 101 and 102
+    global_adj_map[101] = {100, 102};  // Node 101 connects to 100 and 102
+    global_adj_map[102] = {100, 101};  // Node 102 connects to 100 and 101
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add constraints to force both logical nodes to map to the same physical node
+    // This should cause the solver to fail because two different logical nodes
+    // cannot map to the same physical node
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(0, 100);  // Force logical node 0 -> physical node 100
+    constraints.add_required_constraint(1, 100);  // Force logical node 1 -> physical node 100 (SAME as node 0!)
+
+    // Solve - should FAIL because both logical nodes are constrained to the same physical node
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should fail - cannot map two different logical nodes to the same physical node
+    EXPECT_FALSE(result.success) << "Solver should reject mapping two logical nodes to the same physical node";
+}
+
 // Tests for public API: solve_topology_mapping
 TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
     // Create simple target graph: 1 -> 2
