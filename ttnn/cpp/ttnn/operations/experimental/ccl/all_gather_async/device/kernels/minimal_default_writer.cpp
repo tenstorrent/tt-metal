@@ -481,13 +481,6 @@ void kernel_main() {
         if (direction == 1) {
             slice_chip_id = my_chip_id + slice_writes + 1;
             actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
-            // For 4-device ring split forwarding: backward worker forwards same data as forward worker
-            if (split_forwarding_enabled && is_last_slice && ring_size == 4) {
-                // The backward worker should forward the same source data that forward worker forwards
-                // This is the device 2 hops away in backward direction
-                slice_chip_id = my_chip_id - 2;
-                actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
-            }
         } else {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
