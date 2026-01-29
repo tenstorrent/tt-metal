@@ -16,7 +16,7 @@ from models.tt_transformers.tt.load_checkpoints import (  # convert_vision_hf_to
     convert_hf_qkv_to_meta_format,
     convert_vision_hf_to_meta,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.experimental.gemma3_4b.tt.model_config import ModelArgs
 
 from models.experimental.gemma3_4b.tt.gemma_image_attention import TtGemmaImageAttention
 from models.experimental.gemma3_4b.tests.references import reference_vision_attention

@@ -388,7 +388,7 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
-        decode_residual_mem_cfg = self.args.get_decode_residual_mem_config("decode", self.prefetcher)
+        decode_residual_mem_cfg = self.args.get_residual_mem_config("decode", self.prefetcher)
         tt_tokens = self.embd(
             tokens,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
@@ -612,7 +612,7 @@ class Transformer(LightweightModule):
             if mode == "decode" and not self.args.is_galaxy:
                 x = ttnn.to_memory_config(
                     x,
-                    self.args.get_decode_residual_mem_config("decode", self.prefetcher),
+                    self.args.get_residual_mem_config("decode", self.prefetcher),
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
@@ -643,8 +643,6 @@ class Transformer(LightweightModule):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=4,y=7)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 64]),grid={[(x=1,y=0) - (x=4,y=7)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
-
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(

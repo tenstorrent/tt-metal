@@ -123,7 +123,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_decode_residual_mem_config("decode"),
+            model_args.get_residual_mem_config("decode"),
         )
 
         rot_mats = rope_setup.get_rot_mats(start_pos_ids)
