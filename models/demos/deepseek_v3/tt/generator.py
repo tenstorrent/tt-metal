@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -82,6 +83,7 @@ class DeepseekGenerator:
         dense_layers: int | None = None,
         override_num_layers: int | None = None,
         single_layer: str | None = None,
+        max_seq_len: int | None = None,
         enable_trace: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
@@ -94,8 +96,22 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 1024
+        # Ensure max_seq_len matches the reference config expectations (e.g. YARN-scaled context length)
+        self._ensure_max_seq_len(self.hf_config)
+        # Allow a smaller explicit max_seq_len to limit KV cache size (e.g. 32k).
+        # Default to 4096 unless DEEPSEEK_V3_MAX_SEQ_LEN is provided (issue #36180).
+        if max_seq_len is None:
+            env_max_seq_len = os.getenv("DEEPSEEK_V3_MAX_SEQ_LEN")
+            if env_max_seq_len:
+                try:
+                    max_seq_len = int(env_max_seq_len)
+                except Exception as e:
+                    logger.warning(f"Ignoring invalid DEEPSEEK_V3_MAX_SEQ_LEN='{env_max_seq_len}': {e}")
+                    max_seq_len = 4096
+            else:
+                max_seq_len = 4096
+        if max_seq_len is not None:
+            self.hf_config.max_seq_len = int(max_seq_len)
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -129,6 +145,22 @@ class DeepseekGenerator:
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
         self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
 
+        # Debug logging for investigation runs (opt-in via env var)
+        self.debug_investigation = os.environ.get("TT_DEBUG_INVESTIGATION") == "1"
+        if self.debug_investigation:
+            self._debug_prefill_seen = {}
+            self._debug_decode_logged = False
+            self._debug_decode_negative_logged = False
+            logger.info(
+                "[INV] DeepseekGenerator init: mesh_shape={} dp_factor={} batch_size_per_row={} batch_size={} paged_block_size={} max_num_blocks={}",
+                mesh_shape,
+                self.dp_factor,
+                self.batch_size_per_row,
+                self.batch_size,
+                self.paged_config.block_size if self.paged_config is not None else None,
+                self.paged_config.max_num_blocks if self.paged_config is not None else None,
+            )
+
         self.random_weights = random_weights
         self.single_layer = single_layer
 
@@ -155,14 +187,22 @@ class DeepseekGenerator:
         if getattr(hf_config, "max_seq_len", None) is not None:
             return
         try:
+            max_pos = getattr(hf_config, "max_position_embeddings", None)
+            scaled = None
             if getattr(hf_config, "rope_scaling", None):
                 factor = hf_config.rope_scaling.get("factor")
                 orig = hf_config.rope_scaling.get("original_max_position_embeddings")
                 if factor and orig:
-                    hf_config.max_seq_len = int(factor * orig)
-                    return
-            if getattr(hf_config, "max_position_embeddings", None):
-                hf_config.max_seq_len = int(hf_config.max_position_embeddings)
+                    scaled = int(factor * orig)
+            if max_pos is not None and scaled is not None:
+                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
+                hf_config.max_seq_len = int(max(max_pos, scaled))
+                return
+            if scaled is not None:
+                hf_config.max_seq_len = int(scaled)
+                return
+            if max_pos is not None:
+                hf_config.max_seq_len = int(max_pos)
                 return
         except Exception:
             pass
@@ -443,6 +483,28 @@ class DeepseekGenerator:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             dtype=ttnn.int32,
         )
+        if self.debug_investigation:
+            pos_t = positions if isinstance(positions, torch.Tensor) else torch.as_tensor(positions)
+            pos_min = int(pos_t.min().item()) if pos_t.numel() else 0
+            pos_max = int(pos_t.max().item()) if pos_t.numel() else 0
+            if not self._debug_decode_logged:
+                self._debug_decode_logged = True
+                logger.info(
+                    "[INV] decode_step: tokens_shape={} positions[min,max]=({},{}) batch_size_per_row={} page_table_shape={}",
+                    tuple(tokens_step.shape),
+                    pos_min,
+                    pos_max,
+                    batch_size_per_row,
+                    None if page_table is None else tuple(page_table.shape),
+                )
+            if pos_min < 0 and not self._debug_decode_negative_logged:
+                self._debug_decode_negative_logged = True
+                logger.warning(
+                    "[INV] decode_step: negative positions detected positions[min,max]=({},{}) tokens_shape={}",
+                    pos_min,
+                    pos_max,
+                    tuple(tokens_step.shape),
+                )
 
         if page_table is not None:
             page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
@@ -1011,6 +1073,38 @@ class DeepseekGenerator:
 
         # Extract the user's block table row
         idx = local_user_id if local_user_id is not None else user_id
+        if self.debug_investigation:
+            debug_max = int(os.environ.get("TT_DEBUG_INVESTIGATION_MAX", "64"))
+            local_user_idx = user_id % batch_per_shard
+            col_idx_guess = user_id // batch_per_shard
+            local_user_idx_from_local = local_user_id % batch_per_shard if local_user_id is not None else None
+            col_idx_from_local = local_user_id // batch_per_shard if local_user_id is not None else None
+            key = (local_user_idx, col_idx_guess)
+            prev_user = self._debug_prefill_seen.get(key)
+            if prev_user is not None and prev_user != user_id:
+                logger.warning(
+                    "[INV] page_table collision: key={} prev_user_id={} new_user_id={} local_user_id={} batch_per_shard={}",
+                    key,
+                    prev_user,
+                    user_id,
+                    local_user_id,
+                    batch_per_shard,
+                )
+            else:
+                self._debug_prefill_seen[key] = user_id
+            if len(self._debug_prefill_seen) <= debug_max:
+                logger.info(
+                    "[INV] page_table map: user_id={} local_user_id={} batch_per_shard={} blocks_per_user={} local_user_idx={} col_idx_guess={} local_user_idx_from_local={} col_idx_from_local={} page_table_shape={}",
+                    user_id,
+                    local_user_id,
+                    batch_per_shard,
+                    blocks_per_user,
+                    local_user_idx,
+                    col_idx_guess,
+                    local_user_idx_from_local,
+                    col_idx_from_local,
+                    tuple(page_table.shape),
+                )
         user_blocks = page_table[
             idx, : min(blocks_per_user, page_table.shape[1])
         ].clone()  # [max_num_blocks_per_req] or less
@@ -1057,6 +1151,9 @@ class DeepseekGenerator:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Paged ops expect UINT16 for sharded page tables and INT32 otherwise.
+        if page_table_tt.is_sharded():
+            page_table_tt = ttnn.typecast(page_table_tt, dtype=ttnn.uint16)
 
         return tuple(page_table_tt for _ in range(self.hf_config.num_hidden_layers))
 
