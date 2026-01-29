@@ -370,6 +370,7 @@ Tests:
 
     patterns:
       - type: sequential_neighbor_exchange
+  # ======================================================================================
   # Test 14: NOC ID Selection
   # This demonstrates how to explicitly select which NOC (0 or 1) to use by worker cores.
   # By default, NOC 0 is used. This test uses NOC 1.
@@ -388,3 +389,31 @@ Tests:
             num_packets: 100
             destination:
               device: [0, [0, 1]]
+
+  # ======================================================================================
+  # Test 15: Core Sweep
+  # This test shows the core sweeping feature available. It will generate sequential tests
+  # which sweep across all worker core pairs from src to destination depending on whether
+  # a core coordinate or `all` is specified for the field. To be used with caution as
+  # many tests can be generated
+  # ======================================================================================
+
+  - name: "CoreSweep"
+    fabric_setup:
+      topology: Linear
+
+    benchmark_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, [0, 1]]
+
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+              core: all
