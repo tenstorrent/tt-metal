@@ -46,6 +46,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
