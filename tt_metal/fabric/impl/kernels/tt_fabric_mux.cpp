@@ -53,9 +53,9 @@ namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionLiveSemaphorePtrType>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>& worker_interface) {
     while (!connect_is_requested(*worker_interface.get_connection_live_semaphore())) {
         invalidate_l1_cache();
     }
@@ -63,10 +63,10 @@ void wait_for_static_connection_to_ready(
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionLiveSemaphorePtrType>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -84,8 +84,6 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
-
     new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_reg_ptr uint32_t* const>(sender_flow_control_address),
@@ -97,10 +95,10 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, typename ConnectionLiveSemaphorePtrType>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS, ConnectionLiveSemaphorePtrType>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
@@ -156,11 +154,12 @@ void kernel_main() {
     }
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
+    using ConnectionLiveSemaphorePtrType = volatile uint32_t*;
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, ConnectionLiveSemaphorePtrType>,
         NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
@@ -168,7 +167,7 @@ void kernel_main() {
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL, ConnectionLiveSemaphorePtrType>,
         NUM_HEADER_ONLY_CHANNELS>
         header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
