@@ -31,6 +31,8 @@ def run_alltoall_deepseek_with_trace(
         input_tensor_mesh,
         in_dim=in_dim,
         out_dim=out_dim,
+        persistent_output_buffer=None,
+        num_links=4,
         cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=topology,
@@ -46,7 +48,9 @@ def run_alltoall_deepseek_with_trace(
             input_tensor_mesh,
             in_dim=in_dim,
             out_dim=out_dim,
+            persistent_output_buffer=None,
             cluster_axis=cluster_axis,
+            num_links=4,
             memory_config=output_mem_config,
             topology=topology,
             subdevice_id=subdevice_id,
@@ -64,6 +68,8 @@ def run_alltoall_deepseek_with_trace(
             in_dim=in_dim,
             out_dim=out_dim,
             cluster_axis=cluster_axis,
+            persistent_output_buffer=None,
+            num_links=4,
             memory_config=output_mem_config,
             topology=topology,
             subdevice_id=subdevice_id,
@@ -116,14 +122,15 @@ def run_alltoall_deepseek_with_trace(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("warmup_iters, num_iters", [(10, 100)])
 @pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="8x4_grid")], indirect=True)
+# We are flipping the mesh shape so we can test the 8 device version on cluster axis 1 to simulate the dual and quad galaxy setup
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "trace_region_size": 550912,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -226,7 +233,7 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
         ),
     )
 
-    topology = ttnn.Topology.Linear
+    topology = ttnn.Topology.Ring
     profiler = BenchmarkProfiler()
 
     if trace_mode:
@@ -251,6 +258,8 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
             input_tensor_mesh,
             in_dim=in_dim,
             out_dim=out_dim,
+            persistent_output_buffer=None,
+            num_links=4,
             cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=topology,
