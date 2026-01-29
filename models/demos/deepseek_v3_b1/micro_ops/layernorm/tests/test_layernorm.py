@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.layernorm.op import (
     LayerNormSingleCore,
     _calculate_sizes,
     _create_cb_descriptors,
+    _create_reader_descriptor,
 )
 
 
@@ -204,3 +205,98 @@ def test_cb_configuration(shape):
             assert (
                 cb_desc.total_size == expected_sizes[buffer_index]
             ), f"CB {buffer_index} total_size should be {expected_sizes[buffer_index]}, got {cb_desc.total_size}"
+
+
+# =============================================================================
+# Step 1.4.5: Kernel Descriptor Tests
+# =============================================================================
+
+
+@pytest.fixture
+def device():
+    """Get a device for testing."""
+    device = ttnn.open_device(device_id=0)
+    yield device
+    ttnn.close_device(device)
+
+
+def test_reader_descriptor(device):
+    """
+    Test that reader kernel descriptor is created correctly.
+
+    Verifies:
+    - Descriptor is created without errors
+    - Compile-time args are populated (CB indices, sizes, TensorAccessorArgs)
+    - Runtime args are populated (buffer addresses, start_stick_id)
+    """
+    torch.manual_seed(42)
+
+    # Test shape
+    shape = [4, 128]
+    W = shape[-1]
+    dtype = ttnn.bfloat16
+
+    # Create torch tensors
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    gamma_torch = torch.randn(W, dtype=torch.bfloat16)
+    beta_torch = torch.randn(W, dtype=torch.bfloat16)
+
+    # Create device tensors (row-major, DRAM interleaved)
+    input_tensor = ttnn.from_torch(
+        input_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma_tensor = ttnn.from_torch(
+        gamma_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_tensor = ttnn.from_torch(
+        beta_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Calculate sizes
+    sizes = _calculate_sizes(shape, dtype)
+
+    # Create core grid (single core)
+    core = ttnn.CoreCoord(0, 0)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    # Create reader descriptor
+    reader_desc = _create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor, sizes)
+
+    # Verify descriptor was created
+    assert reader_desc is not None, "Reader descriptor should not be None"
+
+    # Verify compile-time args are populated
+    # At minimum: 5 base args + TensorAccessorArgs for 3 tensors
+    assert (
+        len(reader_desc.compile_time_args) >= 5
+    ), f"Compile-time args should have at least 5 elements, got {len(reader_desc.compile_time_args)}"
+
+    # Verify first 5 compile-time args match expected values
+    assert reader_desc.compile_time_args[0] == CB_INPUT_RM, "First compile-time arg should be CB_INPUT_RM"
+    assert reader_desc.compile_time_args[1] == CB_GAMMA_RM, "Second compile-time arg should be CB_GAMMA_RM"
+    assert reader_desc.compile_time_args[2] == CB_BETA_RM, "Third compile-time arg should be CB_BETA_RM"
+    assert reader_desc.compile_time_args[3] == sizes["stick_size"], "Fourth compile-time arg should be stick_size"
+    assert reader_desc.compile_time_args[4] == sizes["num_rows"], "Fifth compile-time arg should be num_rows"
+
+    # Verify runtime args are populated for core (0, 0)
+    # Runtime args should have buffer addresses
+    rt_args = reader_desc.runtime_args[0][0]
+    assert len(rt_args) >= 4, f"Runtime args should have at least 4 elements, got {len(rt_args)}"
+
+    # Verify buffer addresses are non-zero
+    assert rt_args[0] > 0, "Input buffer address should be non-zero"
+    assert rt_args[1] > 0, "Gamma buffer address should be non-zero"
+    assert rt_args[2] > 0, "Beta buffer address should be non-zero"
+    assert rt_args[3] == 0, "start_stick_id should be 0 for single core"

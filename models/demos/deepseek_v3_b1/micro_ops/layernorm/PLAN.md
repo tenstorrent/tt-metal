@@ -125,7 +125,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/kernels/writer.cpp`
     - Minimal writer that does nothing
 
-- [ ] **1.4.2** Implement reader kernel descriptor creation
+- [x] **1.4.2** Implement reader kernel descriptor creation
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/op.py`
   - Requirements:
     - Function: `_create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor, sizes)`

@@ -241,6 +241,83 @@ def _create_cb_descriptors(core_grid, sizes, dtype):
     return cb_descriptors
 
 
+def _create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor, sizes):
+    """
+    Create reader kernel descriptor for LayerNorm operation.
+
+    The reader kernel reads:
+    - Input tensor sticks (row-major) -> CB_INPUT_RM
+    - Gamma tensor sticks (row-major, once) -> CB_GAMMA_RM
+    - Beta tensor sticks (row-major, once) -> CB_BETA_RM
+
+    Args:
+        core_grid: CoreRangeSet specifying which cores to use
+        input_tensor: Input tensor on device
+        gamma_tensor: Gamma (scale) tensor on device
+        beta_tensor: Beta (shift) tensor on device
+        sizes: Dict from _calculate_sizes()
+
+    Returns:
+        KernelDescriptor for the reader kernel
+    """
+    import pathlib
+
+    # Get kernel path
+    kernel_dir = pathlib.Path(__file__).parent / "kernels"
+    reader_kernel_path = str(kernel_dir / "reader.cpp")
+
+    # Compile-time args:
+    # [0] CB_INPUT_RM
+    # [1] CB_GAMMA_RM
+    # [2] CB_BETA_RM
+    # [3] stick_size (page size for row-major data)
+    # [4] num_rows (total rows to process)
+    # [5..] TensorAccessorArgs for input
+    # [..] TensorAccessorArgs for gamma
+    # [..] TensorAccessorArgs for beta
+    compile_time_args = [
+        CB_INPUT_RM,
+        CB_GAMMA_RM,
+        CB_BETA_RM,
+        sizes["stick_size"],
+        sizes["num_rows"],
+    ]
+
+    # Append TensorAccessorArgs for each input tensor
+    input_accessor = ttnn.TensorAccessorArgs(input_tensor)
+    gamma_accessor = ttnn.TensorAccessorArgs(gamma_tensor)
+    beta_accessor = ttnn.TensorAccessorArgs(beta_tensor)
+
+    compile_time_args.extend(input_accessor.get_compile_time_args())
+    compile_time_args.extend(gamma_accessor.get_compile_time_args())
+    compile_time_args.extend(beta_accessor.get_compile_time_args())
+
+    # Runtime args (per core):
+    # [0] input buffer address
+    # [1] gamma buffer address
+    # [2] beta buffer address
+    # [3] start_stick_id for this core (0 for single core)
+    runtime_args = ttnn.RuntimeArgs()
+    runtime_args[0][0] = [
+        input_tensor.buffer_address(),
+        gamma_tensor.buffer_address(),
+        beta_tensor.buffer_address(),
+        0,  # start_stick_id (single core starts at 0)
+    ]
+
+    # Create kernel descriptor
+    reader_descriptor = ttnn.KernelDescriptor(
+        kernel_source=reader_kernel_path,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=compile_time_args,
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    return reader_descriptor
+
+
 class LayerNormSingleCore:
     """
     Single-core LayerNorm implementation using generic_op infrastructure.
