@@ -175,7 +175,7 @@ inline void llk_pack_untilize_init(
     const std::uint32_t output_id = get_output_id(output);
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, 4);
 }
 
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
