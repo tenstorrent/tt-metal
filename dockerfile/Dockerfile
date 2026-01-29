@@ -197,13 +197,15 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
-# Set up virtual environment
+ARG UBUNTU_VERSION=22.04
+
+# Set up virtual environment with the correct Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-# Set umask 000 to allow all users to write (required for uv pip install at runtime)
-# SECURITY NOTE: This enables any user in the container to modify the Python environment.
-# This is acceptable for single-user containers but should be reconsidered for multi-tenant
-# or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
+    umask 000 && uv venv --relocatable --python python3.12 $PYTHON_ENV_DIR; \
+    else \
+    umask 000 && uv venv --relocatable --python python3.10 $PYTHON_ENV_DIR; \
+    fi
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
