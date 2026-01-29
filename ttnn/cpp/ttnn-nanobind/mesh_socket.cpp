@@ -14,8 +14,17 @@
 #include <nanobind/stl/shared_ptr.h>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <ttnn/distributed/create_socket.hpp>
+#include <ttnn/distributed/isocket.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 namespace ttnn::mesh_socket {
+
+struct DistributedISocket {
+    std::unique_ptr<ttnn::distributed::ISocket> socket;
+    explicit DistributedISocket(std::unique_ptr<ttnn::distributed::ISocket>&& s) : socket(std::move(s)) {}
+};
 
 void py_module_types(nb::module_& mod) {
     nb::class_<tt::tt_metal::distributed::MeshCoreCoord>(mod, "MeshCoreCoord")
@@ -111,6 +120,27 @@ void py_module_types(nb::module_& mod) {
                     Sockets should typically be created in pairs using create_socket_pair()
                     rather than using this constructor directly.
             )doc");
+
+    nb::enum_<ttnn::distributed::SocketType>(mod, "DistributedSocketType")
+        .value("MPI", ttnn::distributed::SocketType::MPI)
+        .value("FABRIC", ttnn::distributed::SocketType::FABRIC);
+    nb::enum_<ttnn::distributed::EndpointSocketType>(mod, "DistributedEndpointSocketType")
+        .value("SENDER", ttnn::distributed::EndpointSocketType::SENDER)
+        .value("RECEIVER", ttnn::distributed::EndpointSocketType::RECEIVER)
+        .value("BIDIRECTIONAL", ttnn::distributed::EndpointSocketType::BIDIRECTIONAL);
+
+    nb::class_<DistributedISocket>(mod, "DistributedISocket")
+        .def(
+            "send",
+            [](DistributedISocket& self, const ttnn::Tensor& tensor) { self.socket->send(tensor); },
+            nb::arg("tensor"))
+        .def(
+            "recv",
+            [](DistributedISocket& self, ttnn::Tensor& tensor) { self.socket->recv(tensor); },
+            nb::arg("tensor"))
+        .def("get_rank", [](DistributedISocket& self) { return self.socket->get_rank(); })
+        .def(
+            "get_distributed_context", [](DistributedISocket& self) { return self.socket->get_distributed_context(); });
 }
 
 void py_module(nb::module_& mod) {
@@ -131,6 +161,40 @@ void py_module(nb::module_& mod) {
             Returns:
                 Tuple[MeshSocket, MeshSocket]: The pair of sockets.
             )doc");
+
+    mod.def(
+        "create_distributed_socket",
+        [](ttnn::distributed::SocketType socket_type,
+           ttnn::distributed::EndpointSocketType endpoint_socket_type,
+           std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+           int other_rank,
+           tt::tt_metal::distributed::SocketConfig socket_config) -> DistributedISocket {
+            // Ensure distributed_context is set (required by MPISocket)
+            if (!socket_config.distributed_context) {
+                if (!tt::tt_metal::distributed::multihost::DistributedContext::is_initialized()) {
+                    throw std::runtime_error(
+                        "Distributed context not initialized. Run with tt-run or call init_distributed_context().");
+                }
+                socket_config.distributed_context =
+                    tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+            }
+            auto rank = tt::tt_metal::distributed::multihost::Rank(other_rank);
+            auto sock =
+                ttnn::distributed::create_socket(socket_type, endpoint_socket_type, mesh_device, rank, socket_config);
+            return DistributedISocket(std::move(sock));
+        },
+        nb::arg("socket_type"),
+        nb::arg("endpoint_socket_type"),
+        nb::arg("mesh_device"),
+        nb::arg("other_rank"),
+        nb::arg("socket_config"),
+        R"doc(
+            Create a distributed tensor socket between this rank and `other_rank`.
+
+            Returns a `DistributedISocket` with:
+              - send(ttnn.Tensor)
+              - recv(ttnn.Tensor)
+        )doc");
 }
 
 }  // namespace ttnn::mesh_socket
