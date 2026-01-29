@@ -43,7 +43,7 @@ def choose_height_sharding(
     Decide whether to use HEIGHT sharding based on tile dimensions.
 
     HEIGHT sharding distributes rows (M dimension) across cores while keeping
-    the K dimension intact on each core. This is optimal for matmuls where:
+    the K dimension intact on each core. This is optimal when:
     - M (batch * sequence) is large enough to parallelize
     - K (feature dimension) is not tiny (to avoid padding overhead)
 
@@ -136,7 +136,6 @@ def apply_linear_height_sharded(
     *,
     use_sharding: bool = True,
     compute_config=None,
-    allow_k_padding: bool = True,
     min_tiles_per_core: int = 2,
     min_K_tiles: int = 1,
     return_sharded: bool = False,
@@ -181,19 +180,8 @@ def apply_linear_height_sharded(
     # shard_shape uses padded K
     K_pad = shard_shape[1]
 
-    # If padding is allowed, make the tensor and weight match the padded shard width
+    # Pad to match the padded shard width when needed
     if K_pad != K:
-        if not allow_k_padding:
-            # fallback (shouldn't happen since you said padding always allowed)
-            out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
-            if x_was_reshaped:
-                ttnn.deallocate(x_2d)
-            out = ttnn.reshape(out_2d, out_shape)
-            ttnn.deallocate(out_2d)
-            return out
-
-        # pad on the right in last dim to K_pad
-        # NOTE: your pad call syntax was incorrect; it must pass "padding=" and a tuple-of-tuples
         x_2d = ttnn.pad(
             x_2d,
             padding=((0, 0), (0, 0), (0, 0), (0, K_pad - K)),
@@ -226,6 +214,12 @@ def apply_linear_height_sharded(
         ttnn.deallocate(x_2d)
 
     out_cfg = out_memory_config if (return_sharded and out_memory_config is not None) else shard_mem_config
+    if out_memory_config is None:
+        out_k = int(out_shape[-1])
+        out_k_pad = _to_tiles(out_k) * TILE_SIZE
+        if out_k_pad != shard_shape[1]:
+            out_shard_shape = [shard_shape[0], out_k_pad]
+            out_cfg = make_height_sharded_mem_config(nc, out_shard_shape)
 
     out_sharded = ttnn.linear(
         x_sharded,
