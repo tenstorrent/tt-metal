@@ -262,6 +262,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     const uint32_t shard_elements = shard_height * shard_width;
     const uint32_t compute_num_tiles = tt::div_up(shard_elements, compute_tile_elements);
     const auto compute_tile = tt::tt_metal::Tile({compute_tile_height, compute_tile_width});
+    TT_FATAL(compute_num_tiles == 1, "compute_num_tiles must be 1");
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // CB size must be tile-aligned for compute kernel
