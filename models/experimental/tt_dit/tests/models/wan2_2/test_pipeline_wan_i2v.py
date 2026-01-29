@@ -18,6 +18,7 @@ import PIL
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -26,6 +27,7 @@ import PIL
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
+        "1x8sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
     ],
