@@ -639,7 +639,7 @@ def _run_test(
                 select_experts_k,
                 experts,
                 cluster_axis,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 num_links=num_links,
                 num_token_parallel_cores=num_token_parallel_cores,
                 num_data_parallel_cores=num_data_parallel_cores,
@@ -805,7 +805,7 @@ def test_decode_trace(
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
 @pytest.mark.parametrize("num_outer_test_iters", [1])
-@pytest.mark.parametrize("num_test_iters", [10])
+@pytest.mark.parametrize("num_test_iters", [40])
 def test_deepseek_perf(
     mesh_device,
     batch,
