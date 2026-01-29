@@ -26,11 +26,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
@@ -68,9 +64,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
@@ -80,9 +74,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
-        ),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, model_args.cluster_shape, dims=(1, 3)),
     )
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 

@@ -19,11 +19,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -76,17 +72,11 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+            mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=(
-            (
-                tt_model.model_config["MLP_ACT_MEMCFG"]
-                if model_args.is_galaxy
-                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-            )
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG
+            model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),
         layout=ttnn.TILE_LAYOUT,
     )
