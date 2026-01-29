@@ -2,10 +2,10 @@
 # Install doxygen from upstream binary release
 set -euo pipefail
 
-DOXYGEN_VERSION="${DOXYGEN_VERSION:-1.9.6}"
-# SHA256 for doxygen-1.9.6.linux.bin.tar.gz
+DOXYGEN_VERSION="${DOXYGEN_VERSION:-1.16.1}"
+# SHA256 for doxygen-1.16.1.linux.bin.tar.gz
 # Verified by downloading and computing hash with compute-hashes.sh
-DOXYGEN_SHA256="${DOXYGEN_SHA256:-8354583f86416586d35397c8ee7e719f5aa5804140af83cf7ba39a8c5076bdb8}"
+DOXYGEN_SHA256="${DOXYGEN_SHA256:-a56f885d37e3aae08a99f638d17bbb381224c03a878d9e2dda4f9fa4baf1d8bd}"
 
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 DOWNLOAD_URL="https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
@@ -29,20 +29,13 @@ echo "${DOXYGEN_SHA256}  ${TMPDIR}/doxygen.tar.gz" | sha256sum -c -
 # Extract
 tar -xzf "${TMPDIR}/doxygen.tar.gz" -C "${TMPDIR}" --strip-components=1
 
-# Create install prefix directory
+# Create install directory
 mkdir -p "${INSTALL_PREFIX}/bin"
 
-# Build and install (doxygen binary release uses DESTDIR for installation root)
-make -C "${TMPDIR}" -j"$(nproc)"
-# Use DESTDIR to redirect installation - files go to $DESTDIR/usr/local/...
-make -C "${TMPDIR}" install DESTDIR="${INSTALL_PREFIX}"
-
-# Move from DESTDIR structure to flat structure for easier COPY in Dockerfile
-# /staging/usr/local/bin/doxygen -> /staging/bin/doxygen
-if [ -d "${INSTALL_PREFIX}/usr/local/bin" ]; then
-    mv "${INSTALL_PREFIX}/usr/local/bin/"* "${INSTALL_PREFIX}/bin/" 2>/dev/null || true
-    rm -rf "${INSTALL_PREFIX}/usr"
-fi
+# The doxygen binary release Makefile has hardcoded paths, so copy directly
+# The binary is at bin/doxygen after extraction
+cp "${TMPDIR}/bin/doxygen" "${INSTALL_PREFIX}/bin/doxygen"
+chmod 755 "${INSTALL_PREFIX}/bin/doxygen"
 
 # Cleanup
 rm -rf "${TMPDIR}"
