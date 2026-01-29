@@ -592,11 +592,11 @@ Tests:
       size: 1024
 
     senders:
-      - device: [0, [0, 1]]
+      - device: [0, 1]
 
         patterns:
           - destination:
-              device: [0, [1, 0]]
+              device: [0, 0]
               core: all
 
   - name: "CoreSweepAllToOne"
@@ -612,9 +612,9 @@ Tests:
       size: 1024
 
     senders:
-      - device: [0, [0, 1]]
+      - device: [0, 1]
         core: all
         patterns:
           - destination:
-              device: [0, [1, 0]]
+              device: [0, 0]
               core: [0, 5]
