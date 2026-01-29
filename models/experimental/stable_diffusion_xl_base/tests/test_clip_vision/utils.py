@@ -2,53 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import ttnn
-
-
-# Wrapper to abstract const-eval logic out of runtime funcs to keep them
-# cleaner. Invokes constEvalFunc iff key is not in cacheDict.
-def constEvalFuncWrapper(constEvalFunc, inputs, cacheDict, key, device):
-    if key not in cacheDict:
-        cacheDict[key] = constEvalFunc(inputs, device)
-    return cacheDict[key]
-
-
-# Wrapper to abstract const-eval logic out of runtime funcs to keep them
-# cleaner. Invokes constEvalFunc iff key is not in cacheDict.
-# This is an overload of constEvalFuncWrapper for const-eval functions that
-# take zero arguments (but still need device).
-def constEvalFuncWrapperZeroArg(constEvalFunc, cacheDict, key, device):
-    if key not in cacheDict:
-        cacheDict[key] = constEvalFunc(device)
-    return cacheDict[key]
-
-
-def get_scalar_from_tensor(tensor: ttnn.Tensor) -> int:
-    assert tensor.logical_volume() == 1, "expected scalar tensor"
-    assert tensor.dtype == ttnn.DataType.UINT32, "expected uint32 tensor"
-
-    host_tensor = ttnn.from_device(tensor)
-    return host_tensor.item()
-
-
-def load_weight_from_pytorch(
-    state_dict: dict,
-    weight_name: str,
-    layout,
-    dtype,
-    device,
-    memory_config,
-) -> ttnn.Tensor:
-    """Load a weight from PyTorch state_dict and convert to TTNN tensor."""
-    pt_tensor = state_dict[weight_name]
-
-    # Convert PyTorch tensor to TTNN tensor
-    ttnn_tensor = ttnn.from_torch(pt_tensor, dtype=dtype, layout=layout)
-
-    if device is not None:
-        ttnn_tensor = ttnn.to_device(ttnn_tensor, device, memory_config)
-
-    return ttnn_tensor
 
 
 def calculate_pcc(x, y):

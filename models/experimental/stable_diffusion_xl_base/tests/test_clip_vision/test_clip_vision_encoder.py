@@ -4,13 +4,12 @@
 import time
 
 import pytest
-import utils
-from model_pt import CLIPVisionEncoderAndResamplerPT, get_input, run_pytorch_model
+import torch
+import ttnn
+from model_pt import CLIPVisionEncoderAndResamplerPT, get_input
 from model_ttnn import CLIPVisionEncoderAndResamplerTTNN
 from tracy import signpost
-from weight_loader import load_weights_from_pytorch
-
-import ttnn
+from utils import calculate_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
@@ -26,23 +25,22 @@ def test_clip_vision_encoder(mesh_device):
         2. Extracts penultimate hidden layer [batch, 257, 1280]
         3. Resampler produces IP-Adapter tokens [batch, 16, 2048]
     """
+
     # Load input tensor
     input_torch = get_input()
 
     # Calculate torch output
-    output_torch = run_pytorch_model(input_torch)
+    model_torch = CLIPVisionEncoderAndResamplerPT()
+    with torch.inference_mode():
+        output_torch = model_torch(**input_torch)
 
     # Convert torch input to host TTNN tensor
     input_ttnn_host = ttnn.from_torch(input_torch["pixel_values"])
     input_ttnn_host = ttnn.to_layout(input_ttnn_host, ttnn.Layout.TILE)
     input_ttnn_host = ttnn.to_dtype(input_ttnn_host, ttnn.DataType.BFLOAT16)
 
-    # Load PyTorch and TTNN models
-    # Use PyTorch model weights for TTNN model
-    model_pt = CLIPVisionEncoderAndResamplerPT()
-    model_ttnn = CLIPVisionEncoderAndResamplerTTNN(
-        load_weights_from_pytorch(model_pt.state_dict(), mesh_device), mesh_device
-    )
+    # Load TTNN model
+    model_ttnn = CLIPVisionEncoderAndResamplerTTNN(mesh_device, model_torch.state_dict())
 
     # Run ttnn model
     for i in range(3):
@@ -62,7 +60,7 @@ def test_clip_vision_encoder(mesh_device):
         # Calculate FPS and PCC
         duration = (end_time - start_time) * 1000
         fps = 1.0 / (end_time - start_time)  # batch size is 1
-        pcc = utils.calculate_pcc(output_torch, ttnn.to_torch(out_ttnn_host))
+        pcc = calculate_pcc(output_torch, ttnn.to_torch(out_ttnn_host))
 
         # Print results
         print(f"Iteration {i}")

@@ -94,13 +94,3 @@ def get_input():
     input_data = processor(images=raw_image, return_tensors="pt")
     input_data["pixel_values"] = input_data["pixel_values"].to(DTYPE)
     return input_data
-
-
-def run_pytorch_model(input_data, model=None):
-    if model is None:
-        model = CLIPVisionEncoderAndResamplerPT()
-
-    with torch.inference_mode():
-        outputs = model(**input_data)
-
-    return outputs

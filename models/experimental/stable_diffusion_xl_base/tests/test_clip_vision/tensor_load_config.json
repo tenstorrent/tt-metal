@@ -1,3908 +1,2787 @@
 {
-  "arg0": {
-    "tensor_idx": 0,
+  "resampler.norm_out.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.norm_out.bias"
+    "on_device": true
   },
-  "arg1": {
-    "tensor_idx": 1,
+  "resampler.norm_out.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.norm_out.weight"
+    "on_device": true
   },
-  "arg2": {
-    "tensor_idx": 2,
+  "resampler.proj_out.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "resampler.proj_out.bias"
+    "on_device": false
   },
-  "arg3": {
-    "tensor_idx": 3,
+  "resampler.proj_out.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.proj_out.weight"
+    "on_device": true
   },
-  "arg4": {
-    "tensor_idx": 4,
+  "resampler.latents": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.latents"
+    "on_device": true
   },
-  "arg5": {
-    "tensor_idx": 5,
+  "resampler.layers.0.attn.to_out.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.attn.to_out.0.weight"
+    "on_device": true
   },
-  "arg6": {
-    "tensor_idx": 6,
+  "resampler.layers.0.attn.to_v.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.attn.to_v.weight"
+    "on_device": true
   },
-  "arg7": {
-    "tensor_idx": 7,
+  "resampler.layers.0.ln1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "resampler.layers.0.ln1.bias"
+    "on_device": false
   },
-  "arg8": {
-    "tensor_idx": 8,
+  "resampler.layers.0.ln1.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "resampler.layers.0.ln1.weight"
+    "on_device": false
   },
-  "arg9": {
-    "tensor_idx": 9,
+  "resampler.layers.0.ln0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ln0.bias"
+    "on_device": true
   },
-  "arg10": {
-    "tensor_idx": 10,
+  "resampler.layers.0.ln0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ln0.weight"
+    "on_device": true
   },
-  "arg11": {
-    "tensor_idx": 11,
+  "resampler.proj_in.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "resampler.proj_in.bias"
+    "on_device": false
   },
-  "arg12": {
-    "tensor_idx": 12,
+  "resampler.proj_in.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.proj_in.weight"
+    "on_device": true
   },
-  "arg13": {
-    "tensor_idx": 13,
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg14": {
-    "tensor_idx": 14,
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg15": {
-    "tensor_idx": 15,
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg16": {
-    "tensor_idx": 16,
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg17": {
-    "tensor_idx": 17,
+  "image_encoder.vision_model.encoder.layers.30.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm2.bias"
+    "on_device": true
   },
-  "arg18": {
-    "tensor_idx": 18,
+  "image_encoder.vision_model.encoder.layers.30.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm2.weight"
+    "on_device": true
   },
-  "arg19": {
-    "tensor_idx": 19,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg20": {
-    "tensor_idx": 20,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg21": {
-    "tensor_idx": 21,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg22": {
-    "tensor_idx": 22,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg23": {
-    "tensor_idx": 23,
+  "image_encoder.vision_model.encoder.layers.30.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm1.bias"
+    "on_device": true
   },
-  "arg24": {
-    "tensor_idx": 24,
+  "image_encoder.vision_model.encoder.layers.30.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.layer_norm1.weight"
+    "on_device": true
   },
-  "arg25": {
-    "tensor_idx": 25,
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg26": {
-    "tensor_idx": 26,
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg27": {
-    "tensor_idx": 27,
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg28": {
-    "tensor_idx": 28,
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg29": {
-    "tensor_idx": 29,
+  "image_encoder.vision_model.encoder.layers.29.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm2.bias"
+    "on_device": true
   },
-  "arg30": {
-    "tensor_idx": 30,
+  "image_encoder.vision_model.encoder.layers.29.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm2.weight"
+    "on_device": true
   },
-  "arg31": {
-    "tensor_idx": 31,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg32": {
-    "tensor_idx": 32,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg33": {
-    "tensor_idx": 33,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg34": {
-    "tensor_idx": 34,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg35": {
-    "tensor_idx": 35,
+  "image_encoder.vision_model.encoder.layers.29.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm1.bias"
+    "on_device": true
   },
-  "arg36": {
-    "tensor_idx": 36,
+  "image_encoder.vision_model.encoder.layers.29.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.layer_norm1.weight"
+    "on_device": true
   },
-  "arg37": {
-    "tensor_idx": 37,
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg38": {
-    "tensor_idx": 38,
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg39": {
-    "tensor_idx": 39,
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg40": {
-    "tensor_idx": 40,
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg41": {
-    "tensor_idx": 41,
+  "image_encoder.vision_model.encoder.layers.28.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm2.bias"
+    "on_device": true
   },
-  "arg42": {
-    "tensor_idx": 42,
+  "image_encoder.vision_model.encoder.layers.28.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm2.weight"
+    "on_device": true
   },
-  "arg43": {
-    "tensor_idx": 43,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg44": {
-    "tensor_idx": 44,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg45": {
-    "tensor_idx": 45,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg46": {
-    "tensor_idx": 46,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg47": {
-    "tensor_idx": 47,
+  "image_encoder.vision_model.encoder.layers.28.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm1.bias"
+    "on_device": true
   },
-  "arg48": {
-    "tensor_idx": 48,
+  "image_encoder.vision_model.encoder.layers.28.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.layer_norm1.weight"
+    "on_device": true
   },
-  "arg49": {
-    "tensor_idx": 49,
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg50": {
-    "tensor_idx": 50,
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg51": {
-    "tensor_idx": 51,
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg52": {
-    "tensor_idx": 52,
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg53": {
-    "tensor_idx": 53,
+  "image_encoder.vision_model.encoder.layers.27.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm2.bias"
+    "on_device": true
   },
-  "arg54": {
-    "tensor_idx": 54,
+  "image_encoder.vision_model.encoder.layers.27.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm2.weight"
+    "on_device": true
   },
-  "arg55": {
-    "tensor_idx": 55,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg56": {
-    "tensor_idx": 56,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg57": {
-    "tensor_idx": 57,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg58": {
-    "tensor_idx": 58,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg59": {
-    "tensor_idx": 59,
+  "image_encoder.vision_model.encoder.layers.27.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm1.bias"
+    "on_device": true
   },
-  "arg60": {
-    "tensor_idx": 60,
+  "image_encoder.vision_model.encoder.layers.27.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.layer_norm1.weight"
+    "on_device": true
   },
-  "arg61": {
-    "tensor_idx": 61,
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg62": {
-    "tensor_idx": 62,
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg63": {
-    "tensor_idx": 63,
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg64": {
-    "tensor_idx": 64,
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg65": {
-    "tensor_idx": 65,
+  "image_encoder.vision_model.encoder.layers.26.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm2.bias"
+    "on_device": true
   },
-  "arg66": {
-    "tensor_idx": 66,
+  "image_encoder.vision_model.encoder.layers.26.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm2.weight"
+    "on_device": true
   },
-  "arg67": {
-    "tensor_idx": 67,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg68": {
-    "tensor_idx": 68,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg69": {
-    "tensor_idx": 69,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg70": {
-    "tensor_idx": 70,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg71": {
-    "tensor_idx": 71,
+  "image_encoder.vision_model.encoder.layers.26.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm1.bias"
+    "on_device": true
   },
-  "arg72": {
-    "tensor_idx": 72,
+  "image_encoder.vision_model.encoder.layers.26.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.layer_norm1.weight"
+    "on_device": true
   },
-  "arg73": {
-    "tensor_idx": 73,
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg74": {
-    "tensor_idx": 74,
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg75": {
-    "tensor_idx": 75,
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg76": {
-    "tensor_idx": 76,
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg77": {
-    "tensor_idx": 77,
+  "image_encoder.vision_model.encoder.layers.25.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm2.bias"
+    "on_device": true
   },
-  "arg78": {
-    "tensor_idx": 78,
+  "image_encoder.vision_model.encoder.layers.25.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm2.weight"
+    "on_device": true
   },
-  "arg79": {
-    "tensor_idx": 79,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg80": {
-    "tensor_idx": 80,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg81": {
-    "tensor_idx": 81,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg82": {
-    "tensor_idx": 82,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg83": {
-    "tensor_idx": 83,
+  "image_encoder.vision_model.encoder.layers.25.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm1.bias"
+    "on_device": true
   },
-  "arg84": {
-    "tensor_idx": 84,
+  "image_encoder.vision_model.encoder.layers.25.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.layer_norm1.weight"
+    "on_device": true
   },
-  "arg85": {
-    "tensor_idx": 85,
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg86": {
-    "tensor_idx": 86,
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg87": {
-    "tensor_idx": 87,
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg88": {
-    "tensor_idx": 88,
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg89": {
-    "tensor_idx": 89,
+  "image_encoder.vision_model.encoder.layers.24.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm2.bias"
+    "on_device": true
   },
-  "arg90": {
-    "tensor_idx": 90,
+  "image_encoder.vision_model.encoder.layers.24.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm2.weight"
+    "on_device": true
   },
-  "arg91": {
-    "tensor_idx": 91,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg92": {
-    "tensor_idx": 92,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg93": {
-    "tensor_idx": 93,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg94": {
-    "tensor_idx": 94,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg95": {
-    "tensor_idx": 95,
+  "image_encoder.vision_model.encoder.layers.24.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm1.bias"
+    "on_device": true
   },
-  "arg96": {
-    "tensor_idx": 96,
+  "image_encoder.vision_model.encoder.layers.24.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.layer_norm1.weight"
+    "on_device": true
   },
-  "arg97": {
-    "tensor_idx": 97,
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg98": {
-    "tensor_idx": 98,
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg99": {
-    "tensor_idx": 99,
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg100": {
-    "tensor_idx": 100,
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg101": {
-    "tensor_idx": 101,
+  "image_encoder.vision_model.encoder.layers.23.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm2.bias"
+    "on_device": true
   },
-  "arg102": {
-    "tensor_idx": 102,
+  "image_encoder.vision_model.encoder.layers.23.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm2.weight"
+    "on_device": true
   },
-  "arg103": {
-    "tensor_idx": 103,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg104": {
-    "tensor_idx": 104,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg105": {
-    "tensor_idx": 105,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg106": {
-    "tensor_idx": 106,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg107": {
-    "tensor_idx": 107,
+  "image_encoder.vision_model.encoder.layers.23.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm1.bias"
+    "on_device": true
   },
-  "arg108": {
-    "tensor_idx": 108,
+  "image_encoder.vision_model.encoder.layers.23.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.layer_norm1.weight"
+    "on_device": true
   },
-  "arg109": {
-    "tensor_idx": 109,
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg110": {
-    "tensor_idx": 110,
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg111": {
-    "tensor_idx": 111,
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg112": {
-    "tensor_idx": 112,
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg113": {
-    "tensor_idx": 113,
+  "image_encoder.vision_model.encoder.layers.22.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm2.bias"
+    "on_device": true
   },
-  "arg114": {
-    "tensor_idx": 114,
+  "image_encoder.vision_model.encoder.layers.22.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm2.weight"
+    "on_device": true
   },
-  "arg115": {
-    "tensor_idx": 115,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg116": {
-    "tensor_idx": 116,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg117": {
-    "tensor_idx": 117,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg118": {
-    "tensor_idx": 118,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg119": {
-    "tensor_idx": 119,
+  "image_encoder.vision_model.encoder.layers.22.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm1.bias"
+    "on_device": true
   },
-  "arg120": {
-    "tensor_idx": 120,
+  "image_encoder.vision_model.encoder.layers.22.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.layer_norm1.weight"
+    "on_device": true
   },
-  "arg121": {
-    "tensor_idx": 121,
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg122": {
-    "tensor_idx": 122,
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg123": {
-    "tensor_idx": 123,
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg124": {
-    "tensor_idx": 124,
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg125": {
-    "tensor_idx": 125,
+  "image_encoder.vision_model.encoder.layers.21.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm2.bias"
+    "on_device": true
   },
-  "arg126": {
-    "tensor_idx": 126,
+  "image_encoder.vision_model.encoder.layers.21.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm2.weight"
+    "on_device": true
   },
-  "arg127": {
-    "tensor_idx": 127,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg128": {
-    "tensor_idx": 128,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg129": {
-    "tensor_idx": 129,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg130": {
-    "tensor_idx": 130,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg131": {
-    "tensor_idx": 131,
+  "image_encoder.vision_model.encoder.layers.21.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm1.bias"
+    "on_device": true
   },
-  "arg132": {
-    "tensor_idx": 132,
+  "image_encoder.vision_model.encoder.layers.21.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.layer_norm1.weight"
+    "on_device": true
   },
-  "arg133": {
-    "tensor_idx": 133,
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg134": {
-    "tensor_idx": 134,
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg135": {
-    "tensor_idx": 135,
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg136": {
-    "tensor_idx": 136,
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg137": {
-    "tensor_idx": 137,
+  "image_encoder.vision_model.encoder.layers.20.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm2.bias"
+    "on_device": true
   },
-  "arg138": {
-    "tensor_idx": 138,
+  "image_encoder.vision_model.encoder.layers.20.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm2.weight"
+    "on_device": true
   },
-  "arg139": {
-    "tensor_idx": 139,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg140": {
-    "tensor_idx": 140,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg141": {
-    "tensor_idx": 141,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg142": {
-    "tensor_idx": 142,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg143": {
-    "tensor_idx": 143,
+  "image_encoder.vision_model.encoder.layers.20.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm1.bias"
+    "on_device": true
   },
-  "arg144": {
-    "tensor_idx": 144,
+  "image_encoder.vision_model.encoder.layers.20.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.layer_norm1.weight"
+    "on_device": true
   },
-  "arg145": {
-    "tensor_idx": 145,
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg146": {
-    "tensor_idx": 146,
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg147": {
-    "tensor_idx": 147,
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg148": {
-    "tensor_idx": 148,
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg149": {
-    "tensor_idx": 149,
+  "image_encoder.vision_model.encoder.layers.19.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm2.bias"
+    "on_device": true
   },
-  "arg150": {
-    "tensor_idx": 150,
+  "image_encoder.vision_model.encoder.layers.19.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm2.weight"
+    "on_device": true
   },
-  "arg151": {
-    "tensor_idx": 151,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg152": {
-    "tensor_idx": 152,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg153": {
-    "tensor_idx": 153,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg154": {
-    "tensor_idx": 154,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg155": {
-    "tensor_idx": 155,
+  "image_encoder.vision_model.encoder.layers.19.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm1.bias"
+    "on_device": true
   },
-  "arg156": {
-    "tensor_idx": 156,
+  "image_encoder.vision_model.encoder.layers.19.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.layer_norm1.weight"
+    "on_device": true
   },
-  "arg157": {
-    "tensor_idx": 157,
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg158": {
-    "tensor_idx": 158,
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg159": {
-    "tensor_idx": 159,
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg160": {
-    "tensor_idx": 160,
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg161": {
-    "tensor_idx": 161,
+  "image_encoder.vision_model.encoder.layers.18.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm2.bias"
+    "on_device": true
   },
-  "arg162": {
-    "tensor_idx": 162,
+  "image_encoder.vision_model.encoder.layers.18.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm2.weight"
+    "on_device": true
   },
-  "arg163": {
-    "tensor_idx": 163,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg164": {
-    "tensor_idx": 164,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg165": {
-    "tensor_idx": 165,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg166": {
-    "tensor_idx": 166,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg167": {
-    "tensor_idx": 167,
+  "image_encoder.vision_model.encoder.layers.18.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm1.bias"
+    "on_device": true
   },
-  "arg168": {
-    "tensor_idx": 168,
+  "image_encoder.vision_model.encoder.layers.18.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.layer_norm1.weight"
+    "on_device": true
   },
-  "arg169": {
-    "tensor_idx": 169,
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg170": {
-    "tensor_idx": 170,
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg171": {
-    "tensor_idx": 171,
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg172": {
-    "tensor_idx": 172,
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg173": {
-    "tensor_idx": 173,
+  "image_encoder.vision_model.encoder.layers.17.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm2.bias"
+    "on_device": true
   },
-  "arg174": {
-    "tensor_idx": 174,
+  "image_encoder.vision_model.encoder.layers.17.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm2.weight"
+    "on_device": true
   },
-  "arg175": {
-    "tensor_idx": 175,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg176": {
-    "tensor_idx": 176,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg177": {
-    "tensor_idx": 177,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg178": {
-    "tensor_idx": 178,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg179": {
-    "tensor_idx": 179,
+  "image_encoder.vision_model.encoder.layers.17.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm1.bias"
+    "on_device": true
   },
-  "arg180": {
-    "tensor_idx": 180,
+  "image_encoder.vision_model.encoder.layers.17.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.layer_norm1.weight"
+    "on_device": true
   },
-  "arg181": {
-    "tensor_idx": 181,
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg182": {
-    "tensor_idx": 182,
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg183": {
-    "tensor_idx": 183,
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg184": {
-    "tensor_idx": 184,
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg185": {
-    "tensor_idx": 185,
+  "image_encoder.vision_model.encoder.layers.16.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm2.bias"
+    "on_device": true
   },
-  "arg186": {
-    "tensor_idx": 186,
+  "image_encoder.vision_model.encoder.layers.16.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm2.weight"
+    "on_device": true
   },
-  "arg187": {
-    "tensor_idx": 187,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg188": {
-    "tensor_idx": 188,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg189": {
-    "tensor_idx": 189,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg190": {
-    "tensor_idx": 190,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg191": {
-    "tensor_idx": 191,
+  "image_encoder.vision_model.encoder.layers.16.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm1.bias"
+    "on_device": true
   },
-  "arg192": {
-    "tensor_idx": 192,
+  "image_encoder.vision_model.encoder.layers.16.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.layer_norm1.weight"
+    "on_device": true
   },
-  "arg193": {
-    "tensor_idx": 193,
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg194": {
-    "tensor_idx": 194,
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg195": {
-    "tensor_idx": 195,
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg196": {
-    "tensor_idx": 196,
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg197": {
-    "tensor_idx": 197,
+  "image_encoder.vision_model.encoder.layers.15.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm2.bias"
+    "on_device": true
   },
-  "arg198": {
-    "tensor_idx": 198,
+  "image_encoder.vision_model.encoder.layers.15.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm2.weight"
+    "on_device": true
   },
-  "arg199": {
-    "tensor_idx": 199,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg200": {
-    "tensor_idx": 200,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg201": {
-    "tensor_idx": 201,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg202": {
-    "tensor_idx": 202,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg203": {
-    "tensor_idx": 203,
+  "image_encoder.vision_model.encoder.layers.15.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm1.bias"
+    "on_device": true
   },
-  "arg204": {
-    "tensor_idx": 204,
+  "image_encoder.vision_model.encoder.layers.15.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.layer_norm1.weight"
+    "on_device": true
   },
-  "arg205": {
-    "tensor_idx": 205,
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg206": {
-    "tensor_idx": 206,
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg207": {
-    "tensor_idx": 207,
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg208": {
-    "tensor_idx": 208,
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg209": {
-    "tensor_idx": 209,
+  "image_encoder.vision_model.encoder.layers.14.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm2.bias"
+    "on_device": true
   },
-  "arg210": {
-    "tensor_idx": 210,
+  "image_encoder.vision_model.encoder.layers.14.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm2.weight"
+    "on_device": true
   },
-  "arg211": {
-    "tensor_idx": 211,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg212": {
-    "tensor_idx": 212,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg213": {
-    "tensor_idx": 213,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg214": {
-    "tensor_idx": 214,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg215": {
-    "tensor_idx": 215,
+  "image_encoder.vision_model.encoder.layers.14.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm1.bias"
+    "on_device": true
   },
-  "arg216": {
-    "tensor_idx": 216,
+  "image_encoder.vision_model.encoder.layers.14.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.layer_norm1.weight"
+    "on_device": true
   },
-  "arg217": {
-    "tensor_idx": 217,
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg218": {
-    "tensor_idx": 218,
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg219": {
-    "tensor_idx": 219,
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg220": {
-    "tensor_idx": 220,
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg221": {
-    "tensor_idx": 221,
+  "image_encoder.vision_model.encoder.layers.13.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm2.bias"
+    "on_device": true
   },
-  "arg222": {
-    "tensor_idx": 222,
+  "image_encoder.vision_model.encoder.layers.13.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm2.weight"
+    "on_device": true
   },
-  "arg223": {
-    "tensor_idx": 223,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg224": {
-    "tensor_idx": 224,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg225": {
-    "tensor_idx": 225,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg226": {
-    "tensor_idx": 226,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg227": {
-    "tensor_idx": 227,
+  "image_encoder.vision_model.encoder.layers.13.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm1.bias"
+    "on_device": true
   },
-  "arg228": {
-    "tensor_idx": 228,
+  "image_encoder.vision_model.encoder.layers.13.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.layer_norm1.weight"
+    "on_device": true
   },
-  "arg229": {
-    "tensor_idx": 229,
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg230": {
-    "tensor_idx": 230,
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg231": {
-    "tensor_idx": 231,
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg232": {
-    "tensor_idx": 232,
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg233": {
-    "tensor_idx": 233,
+  "image_encoder.vision_model.encoder.layers.12.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm2.bias"
+    "on_device": true
   },
-  "arg234": {
-    "tensor_idx": 234,
+  "image_encoder.vision_model.encoder.layers.12.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm2.weight"
+    "on_device": true
   },
-  "arg235": {
-    "tensor_idx": 235,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg236": {
-    "tensor_idx": 236,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg237": {
-    "tensor_idx": 237,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg238": {
-    "tensor_idx": 238,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg239": {
-    "tensor_idx": 239,
+  "image_encoder.vision_model.encoder.layers.12.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm1.bias"
+    "on_device": true
   },
-  "arg240": {
-    "tensor_idx": 240,
+  "image_encoder.vision_model.encoder.layers.12.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.layer_norm1.weight"
+    "on_device": true
   },
-  "arg241": {
-    "tensor_idx": 241,
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg242": {
-    "tensor_idx": 242,
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg243": {
-    "tensor_idx": 243,
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg244": {
-    "tensor_idx": 244,
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg245": {
-    "tensor_idx": 245,
+  "image_encoder.vision_model.encoder.layers.11.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm2.bias"
+    "on_device": true
   },
-  "arg246": {
-    "tensor_idx": 246,
+  "image_encoder.vision_model.encoder.layers.11.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm2.weight"
+    "on_device": true
   },
-  "arg247": {
-    "tensor_idx": 247,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg248": {
-    "tensor_idx": 248,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg249": {
-    "tensor_idx": 249,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg250": {
-    "tensor_idx": 250,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg251": {
-    "tensor_idx": 251,
+  "image_encoder.vision_model.encoder.layers.11.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm1.bias"
+    "on_device": true
   },
-  "arg252": {
-    "tensor_idx": 252,
+  "image_encoder.vision_model.encoder.layers.11.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.layer_norm1.weight"
+    "on_device": true
   },
-  "arg253": {
-    "tensor_idx": 253,
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg254": {
-    "tensor_idx": 254,
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg255": {
-    "tensor_idx": 255,
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg256": {
-    "tensor_idx": 256,
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg257": {
-    "tensor_idx": 257,
+  "image_encoder.vision_model.encoder.layers.10.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm2.bias"
+    "on_device": true
   },
-  "arg258": {
-    "tensor_idx": 258,
+  "image_encoder.vision_model.encoder.layers.10.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm2.weight"
+    "on_device": true
   },
-  "arg259": {
-    "tensor_idx": 259,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg260": {
-    "tensor_idx": 260,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg261": {
-    "tensor_idx": 261,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg262": {
-    "tensor_idx": 262,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg263": {
-    "tensor_idx": 263,
+  "image_encoder.vision_model.encoder.layers.10.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm1.bias"
+    "on_device": true
   },
-  "arg264": {
-    "tensor_idx": 264,
+  "image_encoder.vision_model.encoder.layers.10.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.layer_norm1.weight"
+    "on_device": true
   },
-  "arg265": {
-    "tensor_idx": 265,
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg266": {
-    "tensor_idx": 266,
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg267": {
-    "tensor_idx": 267,
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg268": {
-    "tensor_idx": 268,
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg269": {
-    "tensor_idx": 269,
+  "image_encoder.vision_model.encoder.layers.9.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm2.bias"
+    "on_device": true
   },
-  "arg270": {
-    "tensor_idx": 270,
+  "image_encoder.vision_model.encoder.layers.9.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm2.weight"
+    "on_device": true
   },
-  "arg271": {
-    "tensor_idx": 271,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg272": {
-    "tensor_idx": 272,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg273": {
-    "tensor_idx": 273,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg274": {
-    "tensor_idx": 274,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg275": {
-    "tensor_idx": 275,
+  "image_encoder.vision_model.encoder.layers.9.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm1.bias"
+    "on_device": true
   },
-  "arg276": {
-    "tensor_idx": 276,
+  "image_encoder.vision_model.encoder.layers.9.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.layer_norm1.weight"
+    "on_device": true
   },
-  "arg277": {
-    "tensor_idx": 277,
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg278": {
-    "tensor_idx": 278,
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg279": {
-    "tensor_idx": 279,
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg280": {
-    "tensor_idx": 280,
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg281": {
-    "tensor_idx": 281,
+  "image_encoder.vision_model.encoder.layers.8.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm2.bias"
+    "on_device": true
   },
-  "arg282": {
-    "tensor_idx": 282,
+  "image_encoder.vision_model.encoder.layers.8.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm2.weight"
+    "on_device": true
   },
-  "arg283": {
-    "tensor_idx": 283,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg284": {
-    "tensor_idx": 284,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg285": {
-    "tensor_idx": 285,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg286": {
-    "tensor_idx": 286,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg287": {
-    "tensor_idx": 287,
+  "image_encoder.vision_model.encoder.layers.8.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm1.bias"
+    "on_device": true
   },
-  "arg288": {
-    "tensor_idx": 288,
+  "image_encoder.vision_model.encoder.layers.8.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.layer_norm1.weight"
+    "on_device": true
   },
-  "arg289": {
-    "tensor_idx": 289,
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg290": {
-    "tensor_idx": 290,
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg291": {
-    "tensor_idx": 291,
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg292": {
-    "tensor_idx": 292,
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg293": {
-    "tensor_idx": 293,
+  "image_encoder.vision_model.encoder.layers.7.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm2.bias"
+    "on_device": true
   },
-  "arg294": {
-    "tensor_idx": 294,
+  "image_encoder.vision_model.encoder.layers.7.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm2.weight"
+    "on_device": true
   },
-  "arg295": {
-    "tensor_idx": 295,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg296": {
-    "tensor_idx": 296,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg297": {
-    "tensor_idx": 297,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg298": {
-    "tensor_idx": 298,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg299": {
-    "tensor_idx": 299,
+  "image_encoder.vision_model.encoder.layers.7.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm1.bias"
+    "on_device": true
   },
-  "arg300": {
-    "tensor_idx": 300,
+  "image_encoder.vision_model.encoder.layers.7.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.layer_norm1.weight"
+    "on_device": true
   },
-  "arg301": {
-    "tensor_idx": 301,
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg302": {
-    "tensor_idx": 302,
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg303": {
-    "tensor_idx": 303,
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg304": {
-    "tensor_idx": 304,
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg305": {
-    "tensor_idx": 305,
+  "image_encoder.vision_model.encoder.layers.6.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm2.bias"
+    "on_device": true
   },
-  "arg306": {
-    "tensor_idx": 306,
+  "image_encoder.vision_model.encoder.layers.6.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm2.weight"
+    "on_device": true
   },
-  "arg307": {
-    "tensor_idx": 307,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg308": {
-    "tensor_idx": 308,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg309": {
-    "tensor_idx": 309,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg310": {
-    "tensor_idx": 310,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg311": {
-    "tensor_idx": 311,
+  "image_encoder.vision_model.encoder.layers.6.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm1.bias"
+    "on_device": true
   },
-  "arg312": {
-    "tensor_idx": 312,
+  "image_encoder.vision_model.encoder.layers.6.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.layer_norm1.weight"
+    "on_device": true
   },
-  "arg313": {
-    "tensor_idx": 313,
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg314": {
-    "tensor_idx": 314,
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg315": {
-    "tensor_idx": 315,
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg316": {
-    "tensor_idx": 316,
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg317": {
-    "tensor_idx": 317,
+  "image_encoder.vision_model.encoder.layers.5.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm2.bias"
+    "on_device": true
   },
-  "arg318": {
-    "tensor_idx": 318,
+  "image_encoder.vision_model.encoder.layers.5.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm2.weight"
+    "on_device": true
   },
-  "arg319": {
-    "tensor_idx": 319,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg320": {
-    "tensor_idx": 320,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg321": {
-    "tensor_idx": 321,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg322": {
-    "tensor_idx": 322,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg323": {
-    "tensor_idx": 323,
+  "image_encoder.vision_model.encoder.layers.5.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm1.bias"
+    "on_device": true
   },
-  "arg324": {
-    "tensor_idx": 324,
+  "image_encoder.vision_model.encoder.layers.5.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.layer_norm1.weight"
+    "on_device": true
   },
-  "arg325": {
-    "tensor_idx": 325,
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg326": {
-    "tensor_idx": 326,
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg327": {
-    "tensor_idx": 327,
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg328": {
-    "tensor_idx": 328,
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg329": {
-    "tensor_idx": 329,
+  "image_encoder.vision_model.encoder.layers.4.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm2.bias"
+    "on_device": true
   },
-  "arg330": {
-    "tensor_idx": 330,
+  "image_encoder.vision_model.encoder.layers.4.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm2.weight"
+    "on_device": true
   },
-  "arg331": {
-    "tensor_idx": 331,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg332": {
-    "tensor_idx": 332,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg333": {
-    "tensor_idx": 333,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg334": {
-    "tensor_idx": 334,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg335": {
-    "tensor_idx": 335,
+  "image_encoder.vision_model.encoder.layers.4.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm1.bias"
+    "on_device": true
   },
-  "arg336": {
-    "tensor_idx": 336,
+  "image_encoder.vision_model.encoder.layers.4.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.layer_norm1.weight"
+    "on_device": true
   },
-  "arg337": {
-    "tensor_idx": 337,
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg338": {
-    "tensor_idx": 338,
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg339": {
-    "tensor_idx": 339,
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg340": {
-    "tensor_idx": 340,
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg341": {
-    "tensor_idx": 341,
+  "image_encoder.vision_model.encoder.layers.3.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm2.bias"
+    "on_device": true
   },
-  "arg342": {
-    "tensor_idx": 342,
+  "image_encoder.vision_model.encoder.layers.3.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm2.weight"
+    "on_device": true
   },
-  "arg343": {
-    "tensor_idx": 343,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg344": {
-    "tensor_idx": 344,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg345": {
-    "tensor_idx": 345,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg346": {
-    "tensor_idx": 346,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg347": {
-    "tensor_idx": 347,
+  "image_encoder.vision_model.encoder.layers.3.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm1.bias"
+    "on_device": true
   },
-  "arg348": {
-    "tensor_idx": 348,
+  "image_encoder.vision_model.encoder.layers.3.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.layer_norm1.weight"
+    "on_device": true
   },
-  "arg349": {
-    "tensor_idx": 349,
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg350": {
-    "tensor_idx": 350,
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg351": {
-    "tensor_idx": 351,
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg352": {
-    "tensor_idx": 352,
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg353": {
-    "tensor_idx": 353,
+  "image_encoder.vision_model.encoder.layers.2.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm2.bias"
+    "on_device": true
   },
-  "arg354": {
-    "tensor_idx": 354,
+  "image_encoder.vision_model.encoder.layers.2.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm2.weight"
+    "on_device": true
   },
-  "arg355": {
-    "tensor_idx": 355,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg356": {
-    "tensor_idx": 356,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg357": {
-    "tensor_idx": 357,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg358": {
-    "tensor_idx": 358,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg359": {
-    "tensor_idx": 359,
+  "image_encoder.vision_model.encoder.layers.2.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm1.bias"
+    "on_device": true
   },
-  "arg360": {
-    "tensor_idx": 360,
+  "image_encoder.vision_model.encoder.layers.2.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.layer_norm1.weight"
+    "on_device": true
   },
-  "arg361": {
-    "tensor_idx": 361,
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg362": {
-    "tensor_idx": 362,
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg363": {
-    "tensor_idx": 363,
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg364": {
-    "tensor_idx": 364,
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg365": {
-    "tensor_idx": 365,
+  "image_encoder.vision_model.encoder.layers.1.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm2.bias"
+    "on_device": true
   },
-  "arg366": {
-    "tensor_idx": 366,
+  "image_encoder.vision_model.encoder.layers.1.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm2.weight"
+    "on_device": true
   },
-  "arg367": {
-    "tensor_idx": 367,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg368": {
-    "tensor_idx": 368,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg369": {
-    "tensor_idx": 369,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg370": {
-    "tensor_idx": 370,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg371": {
-    "tensor_idx": 371,
+  "image_encoder.vision_model.encoder.layers.1.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm1.bias"
+    "on_device": true
   },
-  "arg372": {
-    "tensor_idx": 372,
+  "image_encoder.vision_model.encoder.layers.1.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.layer_norm1.weight"
+    "on_device": true
   },
-  "arg373": {
-    "tensor_idx": 373,
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc2.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc2.bias"
+    "on_device": false
   },
-  "arg374": {
-    "tensor_idx": 374,
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc2.weight"
+    "on_device": true
   },
-  "arg375": {
-    "tensor_idx": 375,
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc1.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc1.bias"
+    "on_device": false
   },
-  "arg376": {
-    "tensor_idx": 376,
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.mlp.fc1.weight"
+    "on_device": true
   },
-  "arg377": {
-    "tensor_idx": 377,
+  "image_encoder.vision_model.encoder.layers.0.layer_norm2.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm2.bias"
+    "on_device": true
   },
-  "arg378": {
-    "tensor_idx": 378,
+  "image_encoder.vision_model.encoder.layers.0.layer_norm2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm2.weight"
+    "on_device": true
   },
-  "arg379": {
-    "tensor_idx": 379,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.bias"
+    "on_device": false
   },
-  "arg380": {
-    "tensor_idx": 380,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.weight"
+    "on_device": true
   },
-  "arg381": {
-    "tensor_idx": 381,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.bias"
+    "on_device": false
   },
-  "arg382": {
-    "tensor_idx": 382,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.weight"
+    "on_device": false
   },
-  "arg383": {
-    "tensor_idx": 383,
+  "image_encoder.vision_model.encoder.layers.0.layer_norm1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm1.bias"
+    "on_device": true
   },
-  "arg384": {
-    "tensor_idx": 384,
+  "image_encoder.vision_model.encoder.layers.0.layer_norm1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.layer_norm1.weight"
+    "on_device": true
   },
-  "arg385": {
-    "tensor_idx": 385,
+  "image_encoder.vision_model.pre_layrnorm.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.pre_layrnorm.bias"
+    "on_device": true
   },
-  "arg386": {
-    "tensor_idx": 386,
+  "image_encoder.vision_model.pre_layrnorm.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "image_encoder.vision_model.pre_layrnorm.weight"
+    "on_device": true
   },
-  "arg387": {
-    "tensor_idx": 387,
+  "__POSITION_IDS__": {
     "layout": "ROW_MAJOR",
     "dtype": "INT32",
-    "on_device": false,
-    "weight_name": "__POSITION_IDS__"
+    "on_device": false
   },
-  "arg388": {
-    "tensor_idx": 388,
+  "image_encoder.vision_model.embeddings.position_embedding.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.embeddings.position_embedding.weight"
+    "on_device": false
   },
-  "arg389": {
-    "tensor_idx": 389,
+  "image_encoder.vision_model.embeddings.patch_embedding.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.embeddings.patch_embedding.weight"
+    "on_device": false
   },
-  "arg390": {
-    "tensor_idx": 390,
+  "image_encoder.vision_model.embeddings.class_embedding": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "__INPUT__"
+    "on_device": false
   },
-  "arg391": {
-    "tensor_idx": 391,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.embeddings.class_embedding"
+    "on_device": false
   },
-  "arg392": {
-    "tensor_idx": 392,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg393": {
-    "tensor_idx": 393,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg394": {
-    "tensor_idx": 394,
+  "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg395": {
-    "tensor_idx": 395,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg396": {
-    "tensor_idx": 396,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg397": {
-    "tensor_idx": 397,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg398": {
-    "tensor_idx": 398,
+  "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg399": {
-    "tensor_idx": 399,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg400": {
-    "tensor_idx": 400,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg401": {
-    "tensor_idx": 401,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg402": {
-    "tensor_idx": 402,
+  "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg403": {
-    "tensor_idx": 403,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg404": {
-    "tensor_idx": 404,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg405": {
-    "tensor_idx": 405,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg406": {
-    "tensor_idx": 406,
+  "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg407": {
-    "tensor_idx": 407,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg408": {
-    "tensor_idx": 408,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg409": {
-    "tensor_idx": 409,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg410": {
-    "tensor_idx": 410,
+  "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg411": {
-    "tensor_idx": 411,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg412": {
-    "tensor_idx": 412,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg413": {
-    "tensor_idx": 413,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg414": {
-    "tensor_idx": 414,
+  "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg415": {
-    "tensor_idx": 415,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg416": {
-    "tensor_idx": 416,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg417": {
-    "tensor_idx": 417,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg418": {
-    "tensor_idx": 418,
+  "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg419": {
-    "tensor_idx": 419,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg420": {
-    "tensor_idx": 420,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg421": {
-    "tensor_idx": 421,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg422": {
-    "tensor_idx": 422,
+  "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg423": {
-    "tensor_idx": 423,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg424": {
-    "tensor_idx": 424,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg425": {
-    "tensor_idx": 425,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg426": {
-    "tensor_idx": 426,
+  "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg427": {
-    "tensor_idx": 427,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg428": {
-    "tensor_idx": 428,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg429": {
-    "tensor_idx": 429,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg430": {
-    "tensor_idx": 430,
+  "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg431": {
-    "tensor_idx": 431,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg432": {
-    "tensor_idx": 432,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg433": {
-    "tensor_idx": 433,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg434": {
-    "tensor_idx": 434,
+  "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg435": {
-    "tensor_idx": 435,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg436": {
-    "tensor_idx": 436,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg437": {
-    "tensor_idx": 437,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg438": {
-    "tensor_idx": 438,
+  "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg439": {
-    "tensor_idx": 439,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg440": {
-    "tensor_idx": 440,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg441": {
-    "tensor_idx": 441,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg442": {
-    "tensor_idx": 442,
+  "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg443": {
-    "tensor_idx": 443,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg444": {
-    "tensor_idx": 444,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg445": {
-    "tensor_idx": 445,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg446": {
-    "tensor_idx": 446,
+  "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg447": {
-    "tensor_idx": 447,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg448": {
-    "tensor_idx": 448,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg449": {
-    "tensor_idx": 449,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg450": {
-    "tensor_idx": 450,
+  "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg451": {
-    "tensor_idx": 451,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg452": {
-    "tensor_idx": 452,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg453": {
-    "tensor_idx": 453,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg454": {
-    "tensor_idx": 454,
+  "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg455": {
-    "tensor_idx": 455,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg456": {
-    "tensor_idx": 456,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg457": {
-    "tensor_idx": 457,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg458": {
-    "tensor_idx": 458,
+  "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg459": {
-    "tensor_idx": 459,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg460": {
-    "tensor_idx": 460,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg461": {
-    "tensor_idx": 461,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg462": {
-    "tensor_idx": 462,
+  "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg463": {
-    "tensor_idx": 463,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg464": {
-    "tensor_idx": 464,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg465": {
-    "tensor_idx": 465,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg466": {
-    "tensor_idx": 466,
+  "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg467": {
-    "tensor_idx": 467,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg468": {
-    "tensor_idx": 468,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg469": {
-    "tensor_idx": 469,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg470": {
-    "tensor_idx": 470,
+  "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg471": {
-    "tensor_idx": 471,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg472": {
-    "tensor_idx": 472,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg473": {
-    "tensor_idx": 473,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg474": {
-    "tensor_idx": 474,
+  "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg475": {
-    "tensor_idx": 475,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg476": {
-    "tensor_idx": 476,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg477": {
-    "tensor_idx": 477,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg478": {
-    "tensor_idx": 478,
+  "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg479": {
-    "tensor_idx": 479,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg480": {
-    "tensor_idx": 480,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg481": {
-    "tensor_idx": 481,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg482": {
-    "tensor_idx": 482,
+  "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg483": {
-    "tensor_idx": 483,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg484": {
-    "tensor_idx": 484,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg485": {
-    "tensor_idx": 485,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg486": {
-    "tensor_idx": 486,
+  "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg487": {
-    "tensor_idx": 487,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg488": {
-    "tensor_idx": 488,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg489": {
-    "tensor_idx": 489,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg490": {
-    "tensor_idx": 490,
+  "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg491": {
-    "tensor_idx": 491,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg492": {
-    "tensor_idx": 492,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg493": {
-    "tensor_idx": 493,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg494": {
-    "tensor_idx": 494,
+  "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg495": {
-    "tensor_idx": 495,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg496": {
-    "tensor_idx": 496,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg497": {
-    "tensor_idx": 497,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg498": {
-    "tensor_idx": 498,
+  "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg499": {
-    "tensor_idx": 499,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg500": {
-    "tensor_idx": 500,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg501": {
-    "tensor_idx": 501,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg502": {
-    "tensor_idx": 502,
+  "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg503": {
-    "tensor_idx": 503,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg504": {
-    "tensor_idx": 504,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg505": {
-    "tensor_idx": 505,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg506": {
-    "tensor_idx": 506,
+  "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg507": {
-    "tensor_idx": 507,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg508": {
-    "tensor_idx": 508,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg509": {
-    "tensor_idx": 509,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg510": {
-    "tensor_idx": 510,
+  "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg511": {
-    "tensor_idx": 511,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.weight"
+    "on_device": false
   },
-  "arg512": {
-    "tensor_idx": 512,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.bias"
+    "on_device": false
   },
-  "arg513": {
-    "tensor_idx": 513,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.bias": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.weight"
+    "on_device": false
   },
-  "arg514": {
-    "tensor_idx": 514,
+  "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.bias"
+    "on_device": false
   },
-  "arg515": {
-    "tensor_idx": 515,
-    "layout": "ROW_MAJOR",
-    "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.weight"
-  },
-  "arg516": {
-    "tensor_idx": 516,
+  "resampler.layers.0.attn.to_k.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.attn.to_k.weight"
+    "on_device": true
   },
-  "arg517": {
-    "tensor_idx": 517,
+  "resampler.layers.0.attn.to_q.weight": {
     "layout": "ROW_MAJOR",
     "dtype": "BFLOAT16",
-    "on_device": false,
-    "weight_name": "resampler.layers.0.attn.to_q.weight"
+    "on_device": false
   },
-  "arg518": {
-    "tensor_idx": 518,
+  "resampler.layers.0.ff.1.net.2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ff.1.net.2.weight"
+    "on_device": true
   },
-  "arg519": {
-    "tensor_idx": 519,
+  "resampler.layers.0.ff.1.net.0.proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ff.1.net.0.proj.weight"
+    "on_device": true
   },
-  "arg520": {
-    "tensor_idx": 520,
+  "resampler.layers.0.ff.0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ff.0.bias"
+    "on_device": true
   },
-  "arg521": {
-    "tensor_idx": 521,
+  "resampler.layers.0.ff.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.0.ff.0.weight"
+    "on_device": true
   },
-  "arg522": {
-    "tensor_idx": 522,
+  "resampler.layers.1.attn.to_out.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.attn.to_out.0.weight"
+    "on_device": true
   },
-  "arg523": {
-    "tensor_idx": 523,
+  "resampler.layers.1.attn.to_v.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.attn.to_v.weight"
+    "on_device": true
   },
-  "arg524": {
-    "tensor_idx": 524,
+  "resampler.layers.1.ln1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ln1.bias"
+    "on_device": true
   },
-  "arg525": {
-    "tensor_idx": 525,
+  "resampler.layers.1.ln1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ln1.weight"
+    "on_device": true
   },
-  "arg526": {
-    "tensor_idx": 526,
+  "resampler.layers.1.ln0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ln0.bias"
+    "on_device": true
   },
-  "arg527": {
-    "tensor_idx": 527,
+  "resampler.layers.1.ln0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ln0.weight"
+    "on_device": true
   },
-  "arg528": {
-    "tensor_idx": 528,
+  "resampler.layers.1.attn.to_k.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.attn.to_k.weight"
+    "on_device": true
   },
-  "arg529": {
-    "tensor_idx": 529,
+  "resampler.layers.1.attn.to_q.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.attn.to_q.weight"
+    "on_device": true
   },
-  "arg530": {
-    "tensor_idx": 530,
+  "resampler.layers.1.ff.1.net.2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ff.1.net.2.weight"
+    "on_device": true
   },
-  "arg531": {
-    "tensor_idx": 531,
+  "resampler.layers.1.ff.1.net.0.proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ff.1.net.0.proj.weight"
+    "on_device": true
   },
-  "arg532": {
-    "tensor_idx": 532,
+  "resampler.layers.1.ff.0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ff.0.bias"
+    "on_device": true
   },
-  "arg533": {
-    "tensor_idx": 533,
+  "resampler.layers.1.ff.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.1.ff.0.weight"
+    "on_device": true
   },
-  "arg534": {
-    "tensor_idx": 534,
+  "resampler.layers.2.attn.to_out.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.attn.to_out.0.weight"
+    "on_device": true
   },
-  "arg535": {
-    "tensor_idx": 535,
+  "resampler.layers.2.attn.to_v.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.attn.to_v.weight"
+    "on_device": true
   },
-  "arg536": {
-    "tensor_idx": 536,
+  "resampler.layers.2.ln1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ln1.bias"
+    "on_device": true
   },
-  "arg537": {
-    "tensor_idx": 537,
+  "resampler.layers.2.ln1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ln1.weight"
+    "on_device": true
   },
-  "arg538": {
-    "tensor_idx": 538,
+  "resampler.layers.2.ln0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ln0.bias"
+    "on_device": true
   },
-  "arg539": {
-    "tensor_idx": 539,
+  "resampler.layers.2.ln0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ln0.weight"
+    "on_device": true
   },
-  "arg540": {
-    "tensor_idx": 540,
+  "resampler.layers.2.attn.to_k.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.attn.to_k.weight"
+    "on_device": true
   },
-  "arg541": {
-    "tensor_idx": 541,
+  "resampler.layers.2.attn.to_q.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.attn.to_q.weight"
+    "on_device": true
   },
-  "arg542": {
-    "tensor_idx": 542,
+  "resampler.layers.2.ff.1.net.2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ff.1.net.2.weight"
+    "on_device": true
   },
-  "arg543": {
-    "tensor_idx": 543,
+  "resampler.layers.2.ff.1.net.0.proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ff.1.net.0.proj.weight"
+    "on_device": true
   },
-  "arg544": {
-    "tensor_idx": 544,
+  "resampler.layers.2.ff.0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ff.0.bias"
+    "on_device": true
   },
-  "arg545": {
-    "tensor_idx": 545,
+  "resampler.layers.2.ff.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.2.ff.0.weight"
+    "on_device": true
   },
-  "arg546": {
-    "tensor_idx": 546,
+  "resampler.layers.3.attn.to_out.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.attn.to_out.0.weight"
+    "on_device": true
   },
-  "arg547": {
-    "tensor_idx": 547,
+  "resampler.layers.3.attn.to_v.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.attn.to_v.weight"
+    "on_device": true
   },
-  "arg548": {
-    "tensor_idx": 548,
+  "resampler.layers.3.ln1.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ln1.bias"
+    "on_device": true
   },
-  "arg549": {
-    "tensor_idx": 549,
+  "resampler.layers.3.ln1.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ln1.weight"
+    "on_device": true
   },
-  "arg550": {
-    "tensor_idx": 550,
+  "resampler.layers.3.ln0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ln0.bias"
+    "on_device": true
   },
-  "arg551": {
-    "tensor_idx": 551,
+  "resampler.layers.3.ln0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ln0.weight"
+    "on_device": true
   },
-  "arg552": {
-    "tensor_idx": 552,
+  "resampler.layers.3.attn.to_k.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.attn.to_k.weight"
+    "on_device": true
   },
-  "arg553": {
-    "tensor_idx": 553,
+  "resampler.layers.3.attn.to_q.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.attn.to_q.weight"
+    "on_device": true
   },
-  "arg554": {
-    "tensor_idx": 554,
+  "resampler.layers.3.ff.1.net.2.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ff.1.net.2.weight"
+    "on_device": true
   },
-  "arg555": {
-    "tensor_idx": 555,
+  "resampler.layers.3.ff.1.net.0.proj.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ff.1.net.0.proj.weight"
+    "on_device": true
   },
-  "arg556": {
-    "tensor_idx": 556,
+  "resampler.layers.3.ff.0.bias": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ff.0.bias"
+    "on_device": true
   },
-  "arg557": {
-    "tensor_idx": 557,
+  "resampler.layers.3.ff.0.weight": {
     "layout": "TILE",
     "dtype": "BFLOAT16",
-    "on_device": true,
-    "weight_name": "resampler.layers.3.ff.0.weight"
+    "on_device": true
   }
 }
