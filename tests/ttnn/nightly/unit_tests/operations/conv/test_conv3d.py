@@ -49,6 +49,30 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
 
 
 @pytest.mark.parametrize(
+    "dilation", [(1, 1, 1), (2, 2, 2), (1, 2, 3)], ids=["dilation_111", "dilation_222", "dilation_123"]
+)
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+def test_conv3d_dilation(device, dilation, padding_mode):
+    input_shape = (1, 16, 5, 8, 9)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        grid_size=grid_size,
+        dilation=dilation,
+    )
+
+
+@pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
         [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
