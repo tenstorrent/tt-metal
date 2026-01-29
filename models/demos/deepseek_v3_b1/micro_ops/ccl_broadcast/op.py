@@ -159,7 +159,7 @@ class DeepseekMinimalBroadcast:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                # Reader named compile-time args (match unified broadcast.hpp ReaderCTArgs)
+                # Reader named compile-time args
                 reader_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
                     ("packet_size_in_pages", num_pages_per_packet),
@@ -171,7 +171,7 @@ class DeepseekMinimalBroadcast:
                     ("is_active_broadcaster", 1 if (is_sender or is_secondary_sender) else 0),
                 ]
 
-                # Writer named compile-time args (match unified broadcast.hpp WriterCTArgs)
+                # Writer named compile-time args
                 writer_named_compile_time_args = [
                     ("cb0_id", src0_cb_index),
                     ("packet_size_in_pages", num_pages_per_packet),
@@ -191,8 +191,6 @@ class DeepseekMinimalBroadcast:
                     ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
                 ]
 
-                # Merge reader and writer named compile-time args into a union so the unified
-                # kernel source can access any named compile-time arg it expects at compile time.
                 union_named_compile_time_args = []
                 _seen_ct = set()
                 for name, val in reader_named_compile_time_args + writer_named_compile_time_args:

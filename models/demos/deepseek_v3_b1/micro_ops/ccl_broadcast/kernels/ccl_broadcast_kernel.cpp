@@ -10,18 +10,11 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
 
-// Compile-time role flags
-struct Core {
-    static constexpr bool is_sender = get_named_compile_time_arg_val("is_sender") == 1;
-    static constexpr bool is_secondary_sender = get_named_compile_time_arg_val("is_secondary_sender") == 1;
-    static constexpr bool is_active_broadcaster = get_named_compile_time_arg_val("is_active_broadcaster") == 1;
-};
-
 void kernel_main() {
     using Broadcast = deepseek_b1_ops::Broadcast;
 
 #if defined(COMPILE_FOR_NCRISC)
-    // Reader CTArgs alias (instantiate template with named CT args)
+    // Reader CTArgs
     using ReaderCTArgs = Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -32,7 +25,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_secondary_sender"),
         get_named_compile_time_arg_val("is_active_broadcaster")>;
 
-    // Runtime args: [tensor_address0, tile_id_start, tile_id_end]
+    // Runtime args:
     Broadcast::ReaderArgs reader_args{
         get_arg_val<uint32_t>(0),  // tensor_address0
         get_arg_val<uint32_t>(1),  // tile_id_start
@@ -44,7 +37,7 @@ void kernel_main() {
     reader(reader_args);
 
 #elif defined(COMPILE_FOR_BRISC)
-    // Writer CTArgs alias (instantiate template with named CT args)
+    // Writer CTArgs
     using WriterCTArgs = Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -63,7 +56,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("range_hops_backward"),
         get_named_compile_time_arg_val("using_persistent_buffers")>;
 
-    // Writer runtime args correspond to WriterArgs struct in broadcast.hpp
+    // Writer runtime args
     Broadcast::WriterArgs writer_args{
         get_arg_val<uint32_t>(0),   // tensor_address0
         get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr

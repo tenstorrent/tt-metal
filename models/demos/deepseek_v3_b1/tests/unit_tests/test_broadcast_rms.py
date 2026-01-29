@@ -1,4 +1,3 @@
-# filepath: /localdev/nardo/generic/tt-metal/models/demos/deepseek_v3_b1/tests/unit_tests/test_broadcast_rms.py
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
 
 
@@ -98,13 +98,16 @@ def test_broadcast_rms_fused(
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere (one slice per row)
     device_tensors = []
+    intermediate_tensors = []
     for row in range(mesh_rows):
         if row == sender_row:
             device_tensors.append(sender_tensor)
         else:
             device_tensors.append(torch.zeros_like(sender_tensor))
+        intermediate_tensors.append(torch.zeros_like(sender_tensor))
 
     mesh_tensor_torch = torch.cat(device_tensors, dim=0)
+    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
     mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
     input_tensor_mesh = ttnn.from_torch(
         mesh_tensor_torch,
@@ -115,8 +118,17 @@ def test_broadcast_rms_fused(
         memory_config=input_mem_config,
         mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
     )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        intermediate_mesh_tensor_torch,
+        device=submesh,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+    )
 
-    # Create gamma tensor - replicate same gamma across the mesh for simplicity
+    # Create gamma tensor - replicate same gamma across the mesh
     torch_gamma = torch.randn(tuple(output_shape), dtype=torch.bfloat16)
     gamma_tensor = ttnn.from_torch(
         torch_gamma,
@@ -148,18 +160,13 @@ def test_broadcast_rms_fused(
     secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
     semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
-    # Compute expected output using RMSNorm reference (apply RMSNorm to sender_tensor)
-    def rmsnorm_reference(x, gamma, eps=1e-6):
-        var = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
-        normalized = x.to(torch.float32) * torch.rsqrt(var + eps)
-        return (normalized * gamma.to(torch.float32)).to(torch.bfloat16)
-
-    torch_expected = rmsnorm_reference(sender_tensor, torch_gamma)
+    torch_expected = BroadcastRMSNorm.golden(sender_tensor, torch_gamma)
 
     # Run fused operation
     logger.info(f"Running fused Broadcast+RMSNorm: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
     result = BroadcastRMSNorm.op(
         input_tensor_mesh,
+        intermediate_tensor_mesh,
         gamma_tensor,
         sender_coord,
         output_tensor,
@@ -175,7 +182,6 @@ def test_broadcast_rms_fused(
     output_tensor_torch = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     slice_size = output_shape[0]
-    all_passed = True
     for device_idx in range(mesh_rows * mesh_cols):
         start = device_idx * slice_size
         end = start + slice_size
@@ -183,13 +189,17 @@ def test_broadcast_rms_fused(
 
         assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
 
-        if not torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3):
-            logger.error(f"Output mismatch for device {device_idx}")
-            all_passed = False
-        else:
-            logger.info(f"Device {device_idx}: PASSED")
+        comp_pcc(received, torch_expected)
+        max_diff = torch.max(torch.abs(received - torch_expected)).item()
+        mean_diff = torch.mean(torch.abs(received - torch_expected)).item()
 
-    assert all_passed, "Not all devices received the correct broadcast+rmsnorm result"
+        logger.info(f"Max absolute difference: {max_diff}")
+        logger.info(f"Mean absolute difference: {mean_diff}")
+
+        passing, pcc_message = comp_pcc(torch_expected, received, 0.999)
+        logger.info(pcc_message)
+
+        assert passing, pcc_message
 
     # Cleanup
     submesh.reset_sub_device_stall_group()

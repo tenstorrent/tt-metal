@@ -3,19 +3,18 @@
 
 import math
 
+import torch
+
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
-    UnifiedCompileTimeCoreDescriptor,
-    UnifiedKernelDescriptor,
-)
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
 
 
 class BroadcastRMSNorm:
     """
     Fused Broadcast + RMSNorm operation using ttnn.generic_op.
-    NCRISC: ccl_broadcast reader kernel
-    BRISC: ccl_broadcast writer + RMSNorm reader
+    NCRISC: ccl_broadcast reader kernel + RMSNorm reader
+    BRISC: ccl_broadcast writer
     TRISC: RMSNorm compute
     """
 
@@ -39,6 +38,7 @@ class BroadcastRMSNorm:
     @staticmethod
     def op(
         input_tensor_mesh,
+        intermediate_tensor_mesh,
         gamma_tensor,
         sender_coord,
         output_tensor,
@@ -66,9 +66,9 @@ class BroadcastRMSNorm:
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
 
-        # Create global semaphores
         grid = mesh_device.compute_with_storage_grid_size()
 
         out_ready_semaphore = semaphores[0]
@@ -89,12 +89,12 @@ class BroadcastRMSNorm:
 
         dtype = input_tensor_sample.dtype
         element_size = 2
-        page_size_bytes = tile_height * tile_width * element_size
+        tile_id_start = 0
 
-        # Get shard shape to calculate number of pages
-        shard_spec = input_tensor_sample.memory_config().shard_spec
-        shard_width = shard_spec.shape[1]
-        input_num_pages = shard_width // tile_width
+        # bcast cb info
+        input_shape = input_tensor_sample.shape
+        page_size_bytes = 32 * 32 * element_size  # interpret it as 32x32 tile to use the same cb as rmsnorm
+        input_num_pages = input_shape[0] * input_shape[1] * element_size // page_size_bytes
         num_pages_per_packet = packet_size_bytes // page_size_bytes
 
         # CB indices for rms norm
@@ -104,13 +104,12 @@ class BroadcastRMSNorm:
         gamma_cb = 3
         output_cb = 4
         # CB index for broadcast
-        src0_cb_index = 5
+        # src0_cb_index = 5 #use interm_cb of rmsnorm instead
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
         # for rms norm: interpret tile sizes
-        input_shape = input_tensor_sample.shape
         data_format = dtype
         FULL_32x32_TILE = ttnn.Tile((32, 32))
         HALF_16x32_TILE = ttnn.Tile((16, 32))
@@ -127,8 +126,6 @@ class BroadcastRMSNorm:
 
         # Number of elements
         numel = input_tensor_mesh.logical_volume()
-
-        # Worker core for rms is same as broadcast per-shard mapping (we will compute per-device below)
 
         # Calculate runtime args
         epsilon_packed = float_to_uint32(epsilon)
@@ -151,6 +148,7 @@ class BroadcastRMSNorm:
                 # Get the device's input and output tensors
                 device_idx = row * mesh_cols + col
                 input_tensor_device = input_tensors_per_device[device_idx]
+                intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
 
                 # Worker core is the data core (from shard grid)
@@ -183,9 +181,9 @@ class BroadcastRMSNorm:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                # Named compile-time args for NCRISC (reader/broadcast)
+                # Named compile-time args for NCRISC (bcast reader + rmsnorm reader)
                 ncrisc_named_compile_time_args = [
-                    ("cb0_id", src0_cb_index),
+                    ("cb0_id", interm_cb),
                     ("packet_size_in_pages", num_pages_per_packet),
                     ("tensor0_page_size", page_size_bytes),
                     ("is_sender", int(is_sender)),
@@ -193,11 +191,14 @@ class BroadcastRMSNorm:
                     ("core_noc_y", core_noc_y),
                     ("is_secondary_sender", int(is_secondary_sender)),
                     ("is_active_broadcaster", int(is_sender or is_secondary_sender)),
+                    # RMSNorm reader specific CTArgs
+                    ("rmsnorm_num_faces", num_faces),
+                    ("rmsnorm_scalars_cb", scalars_cb),
                 ]
 
-                # Named compile-time args for BRISC (writer + rms reader)
+                # Named compile-time args for BRISC (bcast writer)
                 brisc_named_compile_time_args = [
-                    ("cb0_id", src0_cb_index),
+                    ("cb0_id", interm_cb),
                     ("packet_size_in_pages", num_pages_per_packet),
                     ("tensor0_page_size", page_size_bytes),
                     ("num_targets_forward_direction", num_targets_forward),
@@ -213,19 +214,12 @@ class BroadcastRMSNorm:
                     ("start_distance_in_hops_backward", start_distance_backward),
                     ("range_hops_backward", range_hops_backward),
                     ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
-                    # RMSNorm reader specific CTArgs
-                    ("rmsnorm_num_faces", num_faces),
-                    ("rmsnorm_scalars_cb", scalars_cb),
+                    ("intermediate_cb", input_cb),
+                    ("gamma_cb", gamma_cb),
+                    ("num_tiles", num_tiles),
                 ]
 
-                # Ensure BRISC named compile-time args include rmsnorm keys required by kernel
-                required_brisc_ctags = {"rmsnorm_num_faces", "rmsnorm_scalars_cb"}
-                provided_brisc_ctags = {name for name, _ in brisc_named_compile_time_args}
-                missing = required_brisc_ctags - provided_brisc_ctags
-                if missing:
-                    raise RuntimeError(f"Missing BRISC named compile-time args required by kernel: {missing}")
-
-                # Named compile-time args for TRISC (compute)
+                # Named compile-time args for TRISC (rmsnorm compute)
                 trisc_named_compile_time_args = [
                     ("rmsnorm_input_cb", input_cb),
                     ("rmsnorm_scalars_cb", scalars_cb),
@@ -239,11 +233,10 @@ class BroadcastRMSNorm:
 
                 # Reader runtime args
                 reader_rt_args = ttnn.RuntimeArgs()
-                # Insert placeholder at index 0 so kernel get_arg_val(1..3) map correctly
                 reader_rt_args[worker_core.x][worker_core.y] = [
-                    0,  # placeholder (kernel reads tensor at index 1)
-                    int(input_tensor_device.buffer_address()),  # tensor_address0 (32-bit)
-                    0,  # tile_id_start
+                    int(scalar_packed),
+                    int(input_tensor_device.buffer_address()),  # tensor_address0
+                    tile_id_start,  # tile_id_start
                     input_num_pages,  # tile_id_end
                 ]
 
@@ -254,27 +247,21 @@ class BroadcastRMSNorm:
 
                 writer_rt_args = ttnn.RuntimeArgs()
                 writer_rt_args[worker_core.x][worker_core.y] = [
-                    int(output_tensor_device.buffer_address()),  # tensor_address0 (32-bit)
-                    int(out_ready_sem_addr),  # out_ready_sem_bank_addr (32-bit)
-                    0,  # tile_id_start
+                    int(intermediate_tensor_device.buffer_address()),  # tensor_address0
+                    int(out_ready_sem_addr),  # out_ready_sem_bank_addr
+                    tile_id_start,  # tile_id_start
                     input_num_pages,  # tile_id_end
                     int(wait_output_semaphore),  # wait_output_semaphore
                     int(reset_global_semaphore),  # reset_global_semaphore
                     core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
                     core_noc_y,  # out_ready_sem_noc0_y
                     out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                    int(barrier_sem_addr),  # barrier_sem (32-bit)
+                    int(barrier_sem_addr),  # barrier_sem
                     core_noc_x,  # barrier_sem_noc0_x
                     core_noc_y,  # barrier_sem_noc0_y
                     ring_index,
-                    int(secondary_sync_sem_addr),  # secondary_sync_sem (32-bit)
+                    int(secondary_sync_sem_addr),  # secondary_sync_sem
                 ]
-
-                # Append writer-side fields that the BRISC kernel expects at indices 14 and 15:
-                # index 14: num_connections
-                # index 15: rmsnorm scalar (packed bfloat16)
-                # Make sure these are present before we assign runtime_args to program.kernels
-                # (Note: num_connections is computed after dst_nodes is populated below)
 
                 # Determine fabric connections
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
@@ -294,33 +281,21 @@ class BroadcastRMSNorm:
                     secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
                     dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
-                # Reverse secondary connection (for secondary sender back to sender)
-                if has_reverse_secondary_connection:
+                # Reverse secondary connection (for secondary sender back to sender when we need to sync)
+                if has_reverse_secondary_connection and not using_persistent_buffers:
                     sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
 
                 num_connections = len(dst_nodes)
 
-                # Append writer-side fields that the BRISC kernel expects at indices 14 and 15:
-                # index 14: num_connections
-                # index 15: rmsnorm scalar (packed bfloat16)
-                # Make sure these are present before we assign runtime_args to program.kernels
                 writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
-                writer_rt_args[worker_core.x][worker_core.y].append(int(scalar_packed))
-
-                # Validate that BRISC kernel will receive the expected RTArgs length (0..15)
-                per_core_writer_list = writer_rt_args[worker_core.x][worker_core.y]
-                if len(per_core_writer_list) < 16:
-                    raise RuntimeError(
-                        f"BRISC runtime_args too short for core {worker_core}: expected >=16 entries, got {len(per_core_writer_list)}"
-                    )
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
 
                 # Create circular buffer descriptors
                 # CB 0: Input (created from sharded tensor mesh)
-                in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor_mesh)
+                in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, intermediate_tensor_mesh)
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
@@ -360,18 +335,6 @@ class BroadcastRMSNorm:
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # Create CB config for broadcast
-                cb_config = ttnn.CBFormatDescriptor(
-                    buffer_index=src0_cb_index,
-                    data_format=dtype,
-                    page_size=page_size_bytes,
-                )
-                cb_desc = ttnn.CBDescriptor(
-                    total_size=num_pages_per_packet * page_size_bytes,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[cb_config],
-                )
-
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/broadcast_rms/kernels/broadcast_rms_kernel.cpp",
@@ -379,9 +342,6 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    # Provide a placeholder scalar slot at index 0 for NCRISC so
-                    # the kernel's get_arg_val(1..3) tensor indices align with
-                    # the host's reader_rt_args (tensor_address at index 1).
                     ncrisc_common_runtime_args=[0],
                     trisc_common_runtime_args=[epsilon_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
@@ -390,14 +350,6 @@ class BroadcastRMSNorm:
                         fp32_dest_acc_en=fp32_dest_acc_en,
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
-                    unified_compile_time_core_descriptors=[
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_active_core",
-                            core_range=worker_core_set,
-                            value=1,
-                            other_value=0,
-                        ),
-                    ],
                 )
 
                 # Program descriptor
@@ -409,7 +361,6 @@ class BroadcastRMSNorm:
                         interm_cb_descriptor,
                         gamma_cb_descriptor,
                         out_cb_descriptor,
-                        cb_desc,
                     ],
                     semaphores=[],
                 )
@@ -421,7 +372,6 @@ class BroadcastRMSNorm:
                 if len(program.kernels) >= 2:
                     program.kernels[1].runtime_args = writer_rt_args
 
-                # Explicitly set TRISC runtime args (epsilon at index 0) to match kernel get_arg_val(0)
                 if len(program.kernels) >= 3:
                     compute_rt_args = ttnn.RuntimeArgs()
                     compute_rt_args[worker_core.x][worker_core.y] = [int(epsilon_packed)]
@@ -439,6 +389,8 @@ class BroadcastRMSNorm:
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute generic_op
-        result = ttnn.generic_op([input_tensor_mesh, gamma_tensor, output_tensor], mesh_program_descriptor)
+        result = ttnn.generic_op(
+            [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, output_tensor], mesh_program_descriptor
+        )
 
         return result

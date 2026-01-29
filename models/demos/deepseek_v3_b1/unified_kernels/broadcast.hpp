@@ -36,6 +36,7 @@ using address_t = uint32_t;
 
 namespace deepseek_b1_ops {
 
+// Unified kernel for CCL Broadcast operation
 struct Broadcast {
     // ========================================================================
     // Runtime args structs - different layout per RISC
@@ -121,6 +122,7 @@ struct Broadcast {
 
     // TRISC args - not used for CCL broadcast op
     struct ComputeArgs {};
+    struct ComputeCTArgs {};
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
@@ -137,24 +139,24 @@ struct Broadcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NRISC - No-op (this is just for broadcst writer)
+            // NRISC - bcast reader
             // ================================================================
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
                     uint32_t num_pages_to_read =
                         std::min(args.tile_id_end - args.tile_id_start, CTArgs::packet_size_in_pages);
-                    cb_reserve_back(CTArgs::cb0_id, CTArgs::packet_size_in_pages);
+                    cb_reserve_back(CTArgs::cb0_id, num_pages_to_read);
                     const uint32_t l1_write_addr = get_write_ptr(CTArgs::cb0_id);
                     uint64_t base_src_addr = get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0);
                     uint64_t read_addr = base_src_addr + (args.tile_id_start * CTArgs::tensor0_page_size);
                     noc_async_read(read_addr, l1_write_addr, num_pages_to_read * CTArgs::tensor0_page_size);
                     noc_async_read_barrier();
-                    cb_push_back(CTArgs::cb0_id, CTArgs::packet_size_in_pages);
+                    cb_push_back(CTArgs::cb0_id, num_pages_to_read);
                 }
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // BRISC (Receiver) - DataMovementProcessor.RISCV_0
+            // BRISC - Bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
@@ -245,7 +247,7 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
                     uint32_t num_pages_to_read =
                         std::min(args.tile_id_end - args.tile_id_start, CTArgs::packet_size_in_pages);
-                    cb_wait_front(CTArgs::cb0_id, CTArgs::packet_size_in_pages);
+                    cb_wait_front(CTArgs::cb0_id, num_pages_to_read);
                     size_t l1_read_addr = get_read_ptr(CTArgs::cb0_id);
                     uint64_t dst_noc_addr =
                         get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
@@ -320,7 +322,7 @@ struct Broadcast {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
                     }
                     noc_async_writes_flushed();
-                    cb_pop_front(CTArgs::cb0_id, CTArgs::packet_size_in_pages);
+                    cb_pop_front(CTArgs::cb0_id, num_pages_to_read);
 
                 } else if constexpr (CTArgs::is_secondary_sender) {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
@@ -379,12 +381,12 @@ struct Broadcast {
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
-            // TRISC - No-op (gather is dataflow only)
+            // TRISC - No-op (CCL broadcast is dataflow only)
             // ================================================================
 #endif
         }
     };  // class Op
 
-};  // struct Gather
+};  // struct Broadcast
 
 }  // namespace deepseek_b1_ops
