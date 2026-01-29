@@ -9,8 +9,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
     constexpr uint32_t in_cb = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(2);
@@ -91,4 +90,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE
