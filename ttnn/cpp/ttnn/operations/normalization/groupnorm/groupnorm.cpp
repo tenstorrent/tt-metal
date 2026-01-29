@@ -43,22 +43,26 @@ ttnn::Tensor get_mask_tensor(
     return mask;
 }
 
-ttnn::Tensor ExecuteGroupNorm::invoke(
-    const ttnn::Tensor& input_tensor,
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn {
+
+Tensor group_norm(
+    const Tensor& input_tensor,
     const int num_groups,
     const float epsilon,
-    const std::optional<ttnn::Tensor>& input_mask,
-    const std::optional<ttnn::Tensor>& weight,
-    const std::optional<ttnn::Tensor>& bias,
-    const std::optional<ttnn::Tensor>& reciprocals,
+    const std::optional<Tensor>& input_mask,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& bias,
+    const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::DataType> /*dtype*/,
+    const std::optional<DataType> /*dtype*/,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
-    std::optional<ttnn::Layout> output_layout,
+    std::optional<Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& negative_mask,
+    const std::optional<Tensor>& negative_mask,
     bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
@@ -131,7 +135,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
     // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = get_mask_tensor(input_tensor, input_mask, negative_mask, core_grid, num_groups);
+    ttnn::Tensor mask =
+        operations::normalization::get_mask_tensor(input_tensor, input_mask, negative_mask, core_grid, num_groups);
 
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
@@ -176,4 +181,4 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         reciprocals);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

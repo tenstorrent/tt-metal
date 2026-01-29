@@ -10,7 +10,6 @@
 
 #include "topk_common_funcs.hpp"
 
-namespace NAMESPACE {
 
 /**
  * TopK Multicore Compute Kernel Implementation - Local Processing Phase
@@ -90,7 +89,7 @@ namespace NAMESPACE {
  * Final:  Receives 4×128 elements → Global TopK(128) → Output final result
  */
 
-void MAIN {
+void kernel_main() {
     // Compiletime args
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
@@ -217,4 +216,3 @@ void MAIN {
         // The writer kernel will send these to the final aggregation core.
     }  // ht loop
 }
-}  // namespace NAMESPACE

@@ -121,6 +121,7 @@ target_sources(
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
         core/tensor/to_string.cpp
+        core/tensor/py_to_tt_tensor.cpp
 )
 target_include_directories(
     ttnn_core
@@ -543,6 +544,7 @@ target_sources(
             api/ttnn/tensor/xtensor/partition.hpp
             api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
             api/ttnn/types.hpp
+            api/ttnn/tensor/py_to_tt_tensor.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp

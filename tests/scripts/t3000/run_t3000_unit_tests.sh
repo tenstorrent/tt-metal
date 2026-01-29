@@ -212,7 +212,7 @@ run_t3000_falcon40b_tests() {
 }
 
 run_t3000_gemma3-small_tests() {
-  pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
+  pytest models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {
