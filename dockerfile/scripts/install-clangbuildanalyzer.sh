@@ -29,6 +29,9 @@ echo "${CBA_SHA256}  ${TMPDIR}/cba.tar.gz" | sha256sum -c -
 # Extract
 tar -xzf "${TMPDIR}/cba.tar.gz" -C "${TMPDIR}" --strip-components=1
 
+# Create install prefix directory
+mkdir -p "${INSTALL_PREFIX}"
+
 # Build with CMake
 cmake -S "${TMPDIR}" -B "${TMPDIR}/build" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -40,5 +43,5 @@ cmake --install "${TMPDIR}/build"
 rm -rf "${TMPDIR}"
 
 # Verify installation
-ClangBuildAnalyzer --version || echo "ClangBuildAnalyzer installed (no --version flag)"
+"${INSTALL_PREFIX}/bin/ClangBuildAnalyzer" --version || echo "ClangBuildAnalyzer installed (no --version flag)"
 echo "ClangBuildAnalyzer ${CBA_VERSION} installed successfully"

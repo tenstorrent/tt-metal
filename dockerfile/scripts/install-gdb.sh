@@ -29,6 +29,9 @@ echo "${GDB_SHA256}  ${TMPDIR}/gdb.tar.xz" | sha256sum -c -
 # Extract
 tar -xf "${TMPDIR}/gdb.tar.xz" -C "${TMPDIR}" --strip-components=1
 
+# Create install prefix directory
+mkdir -p "${INSTALL_PREFIX}"
+
 # Configure and build
 cd "${TMPDIR}"
 ./configure --prefix="${INSTALL_PREFIX}"

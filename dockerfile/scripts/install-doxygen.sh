@@ -29,6 +29,9 @@ echo "${DOXYGEN_SHA256}  ${TMPDIR}/doxygen.tar.gz" | sha256sum -c -
 # Extract
 tar -xzf "${TMPDIR}/doxygen.tar.gz" -C "${TMPDIR}" --strip-components=1
 
+# Create install prefix directory
+mkdir -p "${INSTALL_PREFIX}"
+
 # Build and install (doxygen binary release still requires make install)
 make -C "${TMPDIR}" -j"$(nproc)"
 make -C "${TMPDIR}" install prefix="${INSTALL_PREFIX}"
@@ -37,5 +40,5 @@ make -C "${TMPDIR}" install prefix="${INSTALL_PREFIX}"
 rm -rf "${TMPDIR}"
 
 # Verify installation
-doxygen --version
+"${INSTALL_PREFIX}/bin/doxygen" --version
 echo "doxygen ${DOXYGEN_VERSION} installed successfully"
