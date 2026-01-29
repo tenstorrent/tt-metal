@@ -48,8 +48,8 @@ runs:
         fi
 
         if [ -z "$rc_tags" ]; then
-          echo "No semver tags found, using v0.0.0"
-          latest_rc="v0.0.0"
+          echo "No rc tags found, using v0.0.0"
+          latest_rc="v0.0.0-rc0"
         else
           latest_rc=$(echo "$rc_tags" | sort -V | tail -1)
         fi
