@@ -46,10 +46,7 @@ input_bcast_shape_pairs = [
 )
 @pytest.mark.parametrize(
     "memory_config_input",
-    [
-        ttnn.DRAM_MEMORY_CONFIG,
-        # ttnn.L1_MEMORY_CONFIG
-    ],
+    [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
 def test_broadcast_to(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
