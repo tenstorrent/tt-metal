@@ -28,26 +28,104 @@ on:
         required: false
         type: boolean
         default: false
+
 jobs:
-  galaxy-e2e-tests:
+  load-test-matrix-wh:
     if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "e2e"
+      - name: Load test matrix (wormhole)
+        id: load-test-matrix
+        run: |
+          set -e
+          # Install yq and jq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          apt-get update && apt-get install -y jq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
+          fi
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON and filter for wh_galaxy tests
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)' | jq '[.[] | select(.sku == "wh_galaxy")]')
+          # Print the JSON output
+          echo "Read contents of $TESTS_YAML_PATH and filtered for wh_galaxy tests:"
+          echo "${json_output}"
+          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+
+  load-test-matrix-bh:
+    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "e2e"
+      - name: Load test matrix (blackhole)
+        id: load-test-matrix
+        run: |
+          set -e
+          # Install yq and jq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          apt-get update && apt-get install -y jq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
+          fi
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON and filter for bh_galaxy tests
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)' | jq '[.[] | select(.sku == "bh_galaxy")]')
+          # Print the JSON output
+          echo "Read contents of $TESTS_YAML_PATH and filtered for bh_galaxy tests:"
+          echo "${json_output}"
+          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+
+  galaxy-e2e-tests:
+    needs: load-test-matrix-wh
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar
-          { name: "Galaxy Fabric unit tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 25, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 45, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          { name: "Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests", arch: wormhole_b0, cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml, timeout: 15, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          { name: "Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests", arch: wormhole_b0, cmd: python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_stability_short_running.yaml, timeout: 15, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          # {
-          #   name: "Llama Galaxy Accuracy Test",
-          #   arch: wormhole_b0,
-          #   cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
-          #   timeout: 15,
-          #   owner_id: U053W15B6JF
-          # } # Djordje Ivanovic
-        ]
+        test-group: ${{ fromJson(needs.load-test-matrix-wh.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -61,7 +139,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -77,15 +155,19 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -101,15 +183,11 @@ jobs:
         if: always()
 
   galaxy-bh-e2e-tests:
-    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
+    needs: load-test-matrix-bh
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar, Camilo Vega
-          { name: "BH Galaxy Fabric unit tests", arch: blackhole, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 30, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-          { name: "BH Galaxy Fabric Torus Stability Tests", arch: blackhole, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml, timeout: 20, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
-        ]
+        test-group: ${{ fromJson(needs.load-test-matrix-bh.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-blackhole
@@ -123,7 +201,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: blackhole
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -139,15 +217,19 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
