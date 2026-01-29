@@ -158,13 +158,23 @@ void kernel_main() {
 
     // Split forwarding for 4-device rings: each direction handles only its half of the split slice
     // This must match the writer's split-forwarding logic
+    //
+    // For a 4-device ring: num_targets_forward=2, num_targets_backward=1
+    // Without split-forwarding:
+    //   - Forward receives 2 slices: device at -1 hop, device at -2 hops (opposite)
+    //   - Backward receives 1 slice: device at +1 hop
+    // With split-forwarding:
+    //   - Forward receives 2 slices: device at -1 hop (full), device at -2 hops (FIRST HALF)
+    //   - Backward receives 2 slices: device at +1 hop (full), device at +2 hops (SECOND HALF)
+    //   Note: backward needs to receive an ADDITIONAL slice for the second half!
     bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Ring) {
         if (ring_size == 4) {
             split_forwarding_enabled = true;
             // Match writer's special case: backward worker forwards half slice when num_targets_backward_direction == 1
             if (direction == 1 && num_targets_backward_direction == 1) {
-                writes_expected = 1;
+                slices_expected = 2;  // Receive additional slice for second half of split data
+                writes_expected = 1;  // Forward the first slice (device at +1 hop)
             }
         }
     }
@@ -202,8 +212,27 @@ void kernel_main() {
         // Direction == forward: Should I forward what I got from the right to my left?
         // In the linear case, if I have any targets to my left, always forward
         // In the ring case, if I have received on the right less than my targets on the left, forward
-        if ((topology == Topology::Linear && writes_expected > 0) ||
-            (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
+        //
+        // Special case for backward split-forwarding:
+        // - The writer expects device 2's data (2 hops away), not device 1's data (1 hop away)
+        // - So we should ONLY forward the split slice (device 2's second half), not device 1's data
+        // - For backward: skip forwarding slice 0 (device 1), forward slice 1 (device 2's second half)
+        bool should_forward = false;
+        if constexpr (topology == Topology::Linear) {
+            should_forward = (writes_expected > 0);
+        } else if constexpr (topology == Topology::Ring) {
+            if (is_split_slice && direction == 1) {
+                // Backward split-forwarding: ONLY forward the split slice itself
+                should_forward = true;
+            } else if (split_forwarding_enabled && direction == 1 && num_targets_backward_direction == 1) {
+                // Backward with split-forwarding enabled: don't forward non-split slices
+                // (device 1's data doesn't need forwarding, it's the last hop)
+                should_forward = false;
+            } else {
+                should_forward = ((slices_received + 1) < (writes_expected + 1));
+            }
+        }
+        if (should_forward) {
             // read the next slice out of memory, and put it in CB for writer to forward
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
