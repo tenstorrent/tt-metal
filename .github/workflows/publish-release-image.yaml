@@ -126,6 +126,54 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: Check Python and wheel compatibility
+        run: |
+          echo "=== Compatibility Checks ==="
+
+          # Check OS version
+          OS_VERSION="${{ matrix.os }}"
+          echo "Matrix OS: $OS_VERSION"
+
+          # Check Ubuntu version in container
+          UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d= -f2 | tr -d '"')
+          echo "Container Ubuntu version: $UBUNTU_VERSION"
+
+          # Check Python version in container
+          PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
+          echo "Container Python version: $PYTHON_VERSION"
+
+          # Check wheel filename (passed via artifact)
+          WHEEL_INFO=$(ls -1 /work/*.whl 2>/dev/null || echo "No wheel found")
+          echo "Wheel info: $WHEEL_INFO"
+
+          # Extract Python tag from wheel if it exists
+          if [ -f /work/*.whl ]; then
+            WHEEL_FILE=$(ls -1 /work/*.whl | head -1)
+            if [[ $WHEEL_FILE == *"cp312"* ]]; then
+              echo "✓ Wheel built with Python 3.12"
+            elif [[ $WHEEL_FILE == *"cp310"* ]]; then
+              echo "✓ Wheel built with Python 3.10"
+            else
+              echo "? Could not determine wheel Python version from: $WHEEL_FILE"
+            fi
+          fi
+
+          # Verify compatibility
+          if [[ "$OS_VERSION" == "ubuntu-24.04" ]]; then
+            echo "✓ Running on Ubuntu 24.04"
+            if [[ $PYTHON_VERSION == 3.12* ]]; then
+              echo "✓ Python 3.12 available in container"
+            else
+              echo "✗ WARNING: Ubuntu 24.04 but Python version is $PYTHON_VERSION (expected 3.12)"
+            fi
+          elif [[ "$OS_VERSION" == "ubuntu-22.04" ]]; then
+            echo "✓ Running on Ubuntu 22.04"
+            if [[ $PYTHON_VERSION == 3.10* ]]; then
+              echo "✓ Python 3.10 available in container"
+            else
+              echo "✗ WARNING: Ubuntu 22.04 but Python version is $PYTHON_VERSION (expected 3.10)"
+            fi
+          fi
       - name: Test ttnn import
         timeout-minutes: 1
         run: |
