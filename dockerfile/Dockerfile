@@ -8,9 +8,11 @@
 # To build locally without GHCR (e.g., for testing), you can build tool images first:
 #   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
 #   docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
+#   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
 #   ... etc
 # Then build with:
-#   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local ...
+#   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
+#                --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local ...
 
 #############################################################
 # Tool image configuration (pre-built images from GHCR)
@@ -28,6 +30,7 @@ ARG TOOL_MOLD_IMAGE=scratch
 ARG TOOL_DOXYGEN_IMAGE=scratch
 ARG TOOL_CBA_IMAGE=scratch
 ARG TOOL_GDB_IMAGE=scratch
+ARG TOOL_CMAKE_IMAGE=scratch
 
 # uv - Python package manager
 # Pinned to specific SHA256 for reproducible builds per:
@@ -51,6 +54,9 @@ ARG CBA_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
 ARG GDB_VERSION=14.2
 ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
 
+ARG CMAKE_VERSION=4.2.3
+ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
+
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
 # These images contain binaries at /install/{bin,lib,...}
@@ -71,6 +77,9 @@ FROM ${TOOL_CBA_IMAGE} AS cba-layer
 # GDB layer - pre-built from GHCR
 FROM ${TOOL_GDB_IMAGE} AS gdb-layer
 
+# cmake layer - pre-built from GHCR
+FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
+
 #############################################################
 # uv layer - copy from official distroless image
 # Using SHA256 pinning for reproducible builds
@@ -86,6 +95,9 @@ FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Install cmake from pre-built tool image (avoids flaky kitware repo)
+COPY --from=cmake-layer /install/ /usr/local/
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
