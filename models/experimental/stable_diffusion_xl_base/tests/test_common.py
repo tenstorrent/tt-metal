@@ -757,6 +757,8 @@ def run_tt_iteration(
     ttnn_prompt_embeds,
     time_ids,
     text_embeds,
+    iteration=0,
+    slice_id=0,
 ):
     B, C, H, W = input_shape
 
@@ -768,6 +770,8 @@ def run_tt_iteration(
         encoder_hidden_states=ttnn_prompt_embeds,
         time_ids=time_ids,
         text_embeds=text_embeds,
+        iteration=iteration,
+        slice_id=slice_id,
     )
 
     return ttnn_noise_pred, output_shape
@@ -822,7 +826,8 @@ def run_tt_image_gen(
     batch_size,
     output_device=None,
     output_shape=None,
-    tid=None,
+    tid_unet_ref=None,
+    tid_unet_cache=None,
     tid_vae=None,
     capture_trace=False,
     use_cfg_parallel=False,
@@ -830,14 +835,21 @@ def run_tt_image_gen(
     one_minus_guidance_rescale=1.0,
     return_latents=False,  # If True, skip VAE decoding and return latents
 ):
-    assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
+    use_deepcache = tt_unet.deepcache_N > 1
+    assert not (
+        capture_trace and num_steps != 1 + int(use_deepcache)
+    ), "Trace should be captured only for 1 iteration without and 1 iteration with Deepcache"
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
     for i in range(num_steps):
         unet_outputs = []
-        if tid is None or capture_trace:
-            tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+        if capture_trace or (tid_unet_ref is None) or (use_deepcache and tid_unet_cache is None):
+            if (i == 0) and (tid_unet_ref is None) and capture_trace:
+                tid_unet_ref = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+            elif (i == 1) and (use_deepcache and tid_unet_cache is None) and capture_trace:
+                tid_unet_cache = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+
             for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
                 noise_pred, _ = run_tt_iteration(
@@ -848,6 +860,8 @@ def run_tt_image_gen(
                     tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
                     tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
                     ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
+                    iteration=i,
+                    slice_id=unet_slice,
                 )
 
                 unet_outputs.append(noise_pred)
@@ -911,9 +925,15 @@ def run_tt_image_gen(
             tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
             if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-        else:
-            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
+                if i == 0:
+                    ttnn.end_trace_capture(ttnn_device, tid_unet_ref, cq_id=0)
+                elif (i == 1) and (use_deepcache):
+                    ttnn.end_trace_capture(ttnn_device, tid_unet_cache, cq_id=0)
+            else:
+                if i % tt_unet.deepcache_N == 0:
+                    ttnn.execute_trace(ttnn_device, tid_unet_ref, cq_id=0, blocking=False)
+                else:
+                    ttnn.execute_trace(ttnn_device, tid_unet_cache, cq_id=0, blocking=False)
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
@@ -928,13 +948,13 @@ def run_tt_image_gen(
     # Skip VAE decoding if return_latents is True
     if return_latents:
         profiler.end("image_gen")
-        return tt_latents, tid, output_device, output_shape, tid_vae
+        return tt_latents, tid_unet_ref, tid_unet_cache, output_device, output_shape, tid_vae
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
     if vae_on_device:
         profiler.start("vae_decode")
-        if tid_vae is None or capture_trace:
+        if tid_vae is None or (capture_trace and num_steps == 1):
             tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
             tt_latents = ttnn.div(tt_latents, scaling_factor)
 
@@ -985,7 +1005,7 @@ def run_tt_image_gen(
         profiler.end("vae_decode")
     profiler.end("image_gen")
 
-    return imgs, tid, output_device, output_shape, tid_vae
+    return imgs, tid_unet_ref, tid_unet_cache, output_device, output_shape, tid_vae
 
 
 # Runs a single iteration of the tt image generation
