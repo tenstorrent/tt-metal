@@ -175,6 +175,14 @@ def run_all_to_all_dispatch_metadata_test(
     output_scores_goldens_list = []
     mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
 
+    # Compute dims tuple for ShardTensor2dMesh based on cluster_axis
+    # cluster_axis=1: shard along mesh axis 1 (columns) -> dims=(None, shard_dim)
+    # cluster_axis=0: shard along mesh axis 0 (rows) -> dims=(shard_dim, None)
+    if cluster_axis == 1:
+        shard_dims = (None, shard_dim)
+    else:  # cluster_axis == 0
+        shard_dims = (shard_dim, None)
+
     total_tokens = batch * seq_len
 
     for iter in range(num_iters):
@@ -260,13 +268,14 @@ def run_all_to_all_dispatch_metadata_test(
 
         # New format expert mapping: [devices, experts] - direct device ID lookup
         # Each entry expert_mapping_new[d, e] = device_id that owns expert e
+        # Replicate across all devices so each device has the full mapping table
         tt_expert_mapping_new = ttnn.from_torch(
             expert_mapping_new,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
         if iter == 0:
@@ -292,9 +301,9 @@ def run_all_to_all_dispatch_metadata_test(
     if use_persistent_mode:
         logger.info("Creating persistent output buffers for persistent mode (1 buffer set, 2 semaphores)")
 
-        # Compute output shapes
-        output_tokens_shape = [1, total_tokens, hidden_size]
-        metadata_shape = [1, total_tokens, select_experts_k]
+        # Compute output shapes - use global shapes [devices, ...] for sharding across mesh
+        output_tokens_shape = [devices, total_tokens, hidden_size]
+        metadata_shape = [devices, total_tokens, select_experts_k]
 
         # Create core range set for worker cores (needed for global semaphore creation)
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -321,7 +330,7 @@ def run_all_to_all_dispatch_metadata_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         logger.info(f"output_tokens_buffer shape: {output_tokens_buffer.shape}")
 
@@ -331,7 +340,7 @@ def run_all_to_all_dispatch_metadata_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=metadata_sharded_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         logger.info(f"metadata_buffer shape: {metadata_buffer.shape}")
         scores_buffer = ttnn.from_torch(
@@ -340,7 +349,7 @@ def run_all_to_all_dispatch_metadata_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=metadata_sharded_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         logger.info(f"scores_buffer shape: {scores_buffer.shape}")
         persistent_output_buffers = (output_tokens_buffer, metadata_buffer, scores_buffer)
@@ -621,13 +630,13 @@ def run_all_to_all_dispatch_metadata_test(
     ids=["double", "single"],
 )
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device",
+    "mesh_shape, mesh_device, cluster_axis",
     [
-        pytest.param((1, 16), (1, 16), id="1x16_grid"),
+        pytest.param((16, 1), (16, 1), 0, id="16x1"),
+        pytest.param((1, 16), (1, 16), 1, id="1x16"),
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [2 * 16])
 @pytest.mark.parametrize(
