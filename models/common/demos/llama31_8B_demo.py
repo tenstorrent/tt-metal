@@ -333,13 +333,12 @@ def get_device_name_from_mesh_shape(mesh_shape: tuple[int, int]) -> str:
 
 def _get_mesh_shape():
     """Get mesh shape from MESH_DEVICE environment variable."""
-    mesh_device_env = os.environ.get("MESH_DEVICE", "N150")
     shape_map = {
         "N150": (1, 1),
         "N300": (1, 2),
         "T3K": (1, 8),
     }
-    return shape_map.get(mesh_device_env, (1, 1))
+    return shape_map.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
 
 
 # Test configurations
