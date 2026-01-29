@@ -119,8 +119,8 @@ enables various approaches to distributing work. In this lab, we will use a simp
 similar to GPU programming to implement matrix multiplication on multiple cores. Each core will be responsible
 for producing approximately ``num_output_tiles/num_cores`` output tiles.
 
-We will use a simple strategy of dividing the work evenly among the cores. We will also make a simplifying assumption
-that the matrix dimensions are divisible by the tile size.
+We will use a simple strategy of dividing the work as evenly as possible among the cores. We will also make a
+simplifying assumption that the matrix dimensions are divisible by the tile size.
 For example, if the matrix dimensions are ``288x288`` and the tile size is ``32x32``, then the number of output
 tiles is ``9 * 9 = 81``. Let us assume we choose to implement the matrix multiplication on ``11`` cores
 because other cores are needed for other tasks. Since ``81 / 11 = 7.36``, and the number of output tiles must be
@@ -304,11 +304,36 @@ Creating a kernel on a core without setting runtime arguments can lead to undefi
 Exercise 1: Multi Core Matrix Multiplication
 ============================================
 
+In this exercise, you will implement matrix multiplication on multiple Tensix cores by
+modifying your Lab 1 solution.
+
 Perform the following steps:
 
-#. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
+#. Create a new program for multi core matrix multiplication by copying your Lab 1 solution for
+   single core matrix multiplication in TT-Metalium, then extend it to distribute work across
+   multiple cores, as described in the following steps.
+
+#. Make the core grid used for computation parameterizable and add assertions to ensure the
+   specified core grid size is valid (i.e., not outside the boundaries of the available compute grid).
+   Then use the ``split_work_to_cores`` function to determine
+   the number of output tiles each core should compute, as described in the previous sections.
+
+#. Create CBs on all cores participating in the computation, and create reader, compute, and writer
+   kernels on all participating cores, as described in the previous sections.
+
+#. Set core-specific runtime arguments for the reader, compute, and writer kernels so that kernels
+   on each core perform the operations appropriate for the subset of output tiles assigned to that core.
+
+#. Update the reader kernel to read the subset of input tiles required for the subset of output tiles
+   assigned to a given core, based on the parameters passed to the kernel as runtime arguments.
+   Similarly, update the writer kernel to write the subset of output tiles assigned to a given core,
+   based on the runtime arguments.
+   Finally, update the compute kernel to compute results for the appropriate number of output tiles, based
+   on the runtime arguments.
+
 #. Verify correctness by comparing the results against the reference matrix multiplication
    you created in Exercise 1 of Lab 1.
+
 #. Run the multi core implementation using:
 
    * Work distributed over a ``5x5`` core grid
@@ -317,6 +342,7 @@ Perform the following steps:
 
 #. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
    Ensure that you build with the Release option and that DPRINTs are disabled.
+
 #. Create a plot showing the relationship between speedup and the number of cores used.
    The speedup should be expressed relative to the performance of the single core implementation from Lab 1.
 
@@ -387,9 +413,12 @@ Also observe that this approach requires the number of tiles to be a multiple of
 dimension of the core grid to ensure that blocks of tiles are rectangular, thus maximizing data reuse.
 
 Comparing Figure 3 to Figure 2, we went from using ``11`` cores to using ``9`` cores.
-This may be beneficial if the program is memory-bound, because the performance benefit from data reuse
-may be far greater than any performance loss from having fewer compute cores.
-Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores in each dimension.
+As a result, the maximum number of tiles per core increased from ``8`` to ``9``. While this increases
+the amount of computation each core performs, it can still provide a net performance benefit
+when the program is memory-bound, because the performance gain from data reuse
+may outweigh the performance loss from having fewer compute cores.
+Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores
+in each dimension.
 
 If the program is compute-bound, we may choose to:
 
@@ -649,10 +678,9 @@ core grid sizes from Exercise 1.
 
 Follow these steps to complete the exercise:
 
-#. Create a new program for data reuse.
-   Make a copy of your multi core matrix multiplication program from Exercise 1,
-   then extend it to add blocking variables and an intermediate CB, as described
-   in the following steps.
+#. Create a new program for data reuse by copying your multi core matrix multiplication
+   program from Exercise 1, then extend it to add blocking variables and an intermediate CB,
+   as described in the following steps.
    Make sure matrix and tile sizes are parameterizable and set to the same values
    as in previous exercises: ``A``: ``640x320``, and ``B``: ``320x640``.
    Use predefined variables ``TILE_HEIGHT`` and ``TILE_WIDTH`` to compute the number of tiles.
@@ -677,10 +705,10 @@ Follow these steps to complete the exercise:
 
    Note: Should the tile size be different on the architecture you are working with,
    the value of ``K_block_tiles`` may need to be adjusted accordingly.
-   To be on the safe side, add an assert to check that ``K_block_tiles`` divides ``Kt`` evenly.
+   To be on the safe side, add an assertion to check that ``K_block_tiles`` divides ``Kt`` evenly.
 
-#. Make the core grid parameterizable, then determine appropriate values for the other
-   blocking variables, based on the core grid size and the matrix sizes.
+#. Make the core grid used for computation parameterizable, then determine appropriate values
+   for the other blocking variables, based on the core grid size and the matrix sizes.
    Also assume that the number of tiles divides evenly into the number of cores in the
    corresponding dimension.
 
