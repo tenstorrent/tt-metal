@@ -2660,10 +2660,10 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
-    volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
-        reinterpret_cast<volatile tt_reg_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
-    //volatile tt::tt_fabric::EDMStatus* edm_status_ptr =    
-    //    reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    //volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
+    //    reinterpret_cast<volatile tt_reg_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    volatile tt::tt_fabric::EDMStatus* edm_status_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 
     
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
