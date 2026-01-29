@@ -26,10 +26,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
     const std::array<uint32_t, 3>& stride,
-    const std::array<uint32_t, 3>& kernel_size) {
-    uint32_t T_out = ((T_in + 2 * padding[0] - kernel_size[0]) / stride[0]) + 1;
-    uint32_t H_out = ((H_in + 2 * padding[1] - kernel_size[1]) / stride[1]) + 1;
-    uint32_t W_out = ((W_in + 2 * padding[2] - kernel_size[2]) / stride[2]) + 1;
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& dilation) {
+    // PyTorch-compatible formula: output = floor((input + 2*padding - dilation*(kernel_size - 1) - 1) / stride) + 1
+    uint32_t T_out = ((T_in + 2 * padding[0] - dilation[0] * (kernel_size[0] - 1) - 1) / stride[0]) + 1;
+    uint32_t H_out = ((H_in + 2 * padding[1] - dilation[1] * (kernel_size[1] - 1) - 1) / stride[1]) + 1;
+    uint32_t W_out = ((W_in + 2 * padding[2] - dilation[2] * (kernel_size[2] - 1) - 1) / stride[2]) + 1;
     return {T_out, H_out, W_out};
 }
 }  // namespace detail
@@ -175,7 +177,7 @@ TensorSpec Conv3dDeviceOperation::compute_output_specs(
     uint32_t C_out = args.output_channels;
 
     auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size);
+        detail::compute_output_dims(T_in, H_in, W_in, args.padding, args.stride, args.kernel_size, args.dilation);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 
