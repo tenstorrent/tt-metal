@@ -1,4 +1,4 @@
-name: "(Galaxy) nightly tests"
+name: "(Galaxy) e2e tests"
 
 on:
   workflow_dispatch:
@@ -49,9 +49,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-  galaxy-nightly-tests:
+  galaxy-e2e-tests:
     needs: build-artifact
-    uses: ./.github/workflows/galaxy-nightly-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

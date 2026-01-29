@@ -1,4 +1,4 @@
-name: "[internal] Galaxy nightly tests impl"
+name: "[internal] Galaxy e2e tests impl"
 
 on:
   workflow_call:
@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
 jobs:
-  galaxy-nightly-tests:
+  galaxy-e2e-tests:
     if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
@@ -100,7 +100,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  galaxy-bh-nightly-tests:
+  galaxy-bh-e2e-tests:
     if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
