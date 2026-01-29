@@ -798,7 +798,6 @@ BatchedTransfers assemble_runtime_args_commands(
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            uint32_t total_rta_size = 0;
                             for (auto kernel_id : kg->kernel_ids) {
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
@@ -815,22 +814,19 @@ BatchedTransfers assemble_runtime_args_commands(
                                         kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[dispatch_class]);
-                                    total_rta_size += runtime_args_data.size() * sizeof(uint32_t);
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
-                            if (total_rta_size > 0) {
-                                log_trace(
-                                    tt::LogDispatch,
-                                    "Unique RTA (UNICAST): logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}, "
-                                    "rta_size={} bytes",
-                                    core_coord.x,
-                                    core_coord.y,
-                                    virtual_core.x,
-                                    virtual_core.y,
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
-                                    total_rta_size);
-                            }
+                            log_trace(
+                                tt::LogDispatch,
+                                "Unique RTA (UNICAST): logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}, "
+                                "rta_size={} bytes",
+                                core_coord.x,
+                                core_coord.y,
+                                virtual_core.x,
+                                virtual_core.y,
+                                device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
+                                kg->total_rta_size);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr = device->get_noc_unicast_encoding(constants.noc_index, virtual_core)});
                         }
