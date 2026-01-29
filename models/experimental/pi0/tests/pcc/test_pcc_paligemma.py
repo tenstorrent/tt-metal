@@ -235,9 +235,18 @@ def test_pcc_paligemma_embed_image(device, use_pretrained):
     model_torch = PaliGemmaBackboneTorch(config, weights)
     out_torch = model_torch.embed_image(pixel_values)
 
+    # Convert to TTNN tensor for TTNN model
+    pixel_values_ttnn = ttnn.from_torch(
+        pixel_values,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     # TTNN forward
     model_ttnn = PaliGemmaBackboneTTNN(config, weights, device)
-    out_ttnn = model_ttnn.embed_image(pixel_values)
+    out_ttnn = model_ttnn.embed_image(pixel_values_ttnn)
 
     if isinstance(out_ttnn, ttnn.Tensor):
         out_ttnn = ttnn.to_torch(out_ttnn)
