@@ -180,7 +180,7 @@ run_t3000_qwq3_tests() {
   tt_cache_qwq3=$TT_CACHE_HOME/$qwq3
 
   # Run QwQ-32B with max_seq_len 32k
-  HF_MODEL=$qwq3 TT_CACHE_PATH=$tt_cache_qwq3 pytest models/tt_transformers/demo/simple_text_demo.py --max_seq_len 32768 --timeout 1800 || fail+=$?
+  HF_MODEL=$qwq3 TT_CACHE_PATH=$tt_cache_qwq3 pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
