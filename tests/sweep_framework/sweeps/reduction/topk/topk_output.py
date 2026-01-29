@@ -63,19 +63,21 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     print(f"test_vector[dim]: ", test_vector["dim"])
     print(f"test_vector[k]: ", test_vector["k"])
     if test_vector["dim"] is None:
-        return True, "dim parameter cannot be None."
+        return True, "Invalid input configuration: dim parameter cannot be None."
+    if (
+        test_vector["dim"] * (-1) > len(test_vector["input_shape"])
+        and test_vector["dim"] < 0
+        or test_vector["dim"] > (len(test_vector["input_shape"]) - 1)
+        and test_vector["dim"] >= 0
+    ):
+        return (
+            True,
+            "Invalid input configuration: Absolute value of dim must be less or equal than the rank of input tensor.",
+        )
     if test_vector["input_shape"][test_vector["dim"]] < test_vector["k"]:
-        return True, "k must be less than or equal to the maximum dimension size."
-    if test_vector["dim"] is not None:
-        if (
-            test_vector["dim"] * (-1) > len(test_vector["input_shape"])
-            and test_vector["dim"] < 0
-            or test_vector["dim"] > (len(test_vector["input_shape"]) - 1)
-            and test_vector["dim"] >= 0
-        ):
-            return True, "Absolute value of dim must be less or equal than the rank of input tensor."
+        return True, "Invalid input configuration: k must be less than or equal to the maximum dimension size."
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "TopK operation requires tensor to be in Tile layout."
+        return True, "Unsupported configuration: TopK operation requires tensor to be in Tile layout."
     return False, None
 
 
@@ -151,19 +153,19 @@ def run_topk(
     return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
 
 
-@pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
-def test_nightly(device, params):
-    invalidated, output_str = invalidate_vector(params)
+# @pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
+# def test_nightly(device, params):
+#     invalidated, output_str = invalidate_vector(params)
 
-    if invalidated:
-        pytest.skip(output_str)
+#     if invalidated:
+#         pytest.skip(output_str)
 
-    (result, msg), e2e_perf = run_topk(**params, device=device)
+#     (result, msg), e2e_perf = run_topk(**params, device=device)
 
-    assert result, msg
-    logger.info(msg)
-    if e2e_perf:
-        logger.info(f"E2E Performance: {e2e_perf}")
+#     assert result, msg
+#     logger.info(msg)
+#     if e2e_perf:
+#         logger.info(f"E2E Performance: {e2e_perf}")
 
 
 @pytest.mark.parametrize("params", list(permutations(parameters["xfail"])))

@@ -72,7 +72,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel
     const uint32_t num_cb_unit = 2;                         // Base unit for double buffering
     const uint32_t cb_in_units = 2 * num_cb_unit;           // 4 units total for input double buffering
-    const uint32_t input_cb_tile_count = cb_in_units + 1;   // Input stream buffer size
+    const uint32_t input_cb_tile_count = cb_in_units;       // Input stream buffer size
     const uint32_t transposed_cb_tile_count = 4;            // Transposed data staging
     const uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // Intermediate TopK results (double-buffered)
     const uint32_t output_cb_tile_count = Ktiles;           // Final output buffer
