@@ -22,6 +22,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/arch.hpp>
@@ -82,12 +83,18 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
             .set_page_size(tt::CBIndex::c_16, TILE_BYTE_SIZE);
     tt_metal::CreateCircularBuffer(program, core, cb_out_config);
 
+    // Set up compile-time arguments for the reader kernel using TensorAccessor
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto dual_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_multiple_tiles.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,

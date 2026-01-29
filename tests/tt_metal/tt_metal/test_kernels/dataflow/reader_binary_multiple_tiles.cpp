@@ -17,11 +17,11 @@ void kernel_main() {
 
     constexpr uint32_t single_tile_size = 2 * 1024;
 
-    const InterleavedAddrGenFast<true> s0 = {
-        .bank_base_address = src0_addr, .page_size = single_tile_size, .data_format = DataFormat::Float16_b};
-
-    const InterleavedAddrGenFast<true> s1 = {
-        .bank_base_address = src1_addr, .page_size = single_tile_size, .data_format = DataFormat::Float16_b};
+    // Create TensorAccessors for the input buffers
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, src0_addr, single_tile_size);
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    const auto s1 = TensorAccessor(s1_args, src1_addr, single_tile_size);
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         cb_reserve_back(cb_id_in0, 1);
