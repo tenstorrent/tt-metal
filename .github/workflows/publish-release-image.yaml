@@ -177,7 +177,7 @@ jobs:
       - name: Test ttnn import
         timeout-minutes: 1
         run: |
-            python -c "import ttnn"
+            python3 -c "import ttnn"
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
