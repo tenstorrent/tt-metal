@@ -12,18 +12,9 @@ on:
       build-artifact-name:
         required: true
         type: string
-      extra-tag:
-        required: false
+      enabled-skus:
+        required: true
         type: string
-        default: "in-service"
-      wormhole:
-        required: false
-        type: boolean
-        default: true
-      blackhole:
-        required: false
-        type: boolean
-        default: false
       scheduled:
         required: false
         type: boolean
@@ -33,8 +24,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix-wh: ${{ steps.filter-wh.outputs.matrix }}
-      matrix-bh: ${{ steps.filter-bh.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
     steps:
@@ -43,7 +33,12 @@ jobs:
         with:
           submodules: recursive
       - name: Install dependencies
-        run: pip3 install PyYAML
+        run: |
+          pip3 install PyYAML
+          sudo apt-get update && sudo apt-get install -y jq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
       - name: Verify test timeouts against budget
         run: |
           set -e
@@ -52,57 +47,77 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "e2e"
-      - name: Load test matrix
-        id: load-test-matrix
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
         run: |
           set -e
-          # Install yq and jq
-          YQ_VERSION="v4.44.1"
-          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
-          apt-get update && apt-get install -y jq
-          # Check if the file exists
+
+          BASE_SKU_CONFIG='{
+            "wh_galaxy": {
+              "runs_on": ["arch-wormhole_b0", "pipeline-functional", "topology-6u", "in-service"]
+            },
+            "bh_galaxy": {
+              "runs_on": ["arch-blackhole", "pipeline-functional", "topology-6u", "in-service"]
+            }
+          }'
+
+          TESTS_YAML_PATH="${TESTS_YAML_PATH}"
+
           if [ ! -f "$TESTS_YAML_PATH" ]; then
             echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
             exit 1
           fi
-          # Sanitize line endings
-          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
-          # Convert to JSON
-          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
-          # Print the JSON output
-          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
-          echo "${json_output}"
-          echo "full-matrix=${json_output}" >> $GITHUB_OUTPUT
-      - name: Filter for wh_galaxy tests
-        id: filter-wh
-        run: |
-          full_matrix="${{ steps.load-test-matrix.outputs.full-matrix }}"
-          filtered=$(echo "$full_matrix" | jq '[.[] | select(.sku == "wh_galaxy")]')
-          echo "Filtered wh_galaxy tests:"
+
+          # Load tests YAML into JSON array
+          sanitized_yaml=$(sed 's/\r$//' "$TESTS_YAML_PATH")
+          full_tests=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          enabled_skus_str="${{ inputs.enabled-skus }}"
+          echo "SKUs to test: '$enabled_skus_str'"
+
+          # Turn comma-separated string into JSON array
+          # "" -> []
+          # "wh_galaxy" -> ["wh_galaxy"]
+          # "wh_galaxy,bh_galaxy" -> ["wh_galaxy","bh_galaxy"]
+          if [ -z "$enabled_skus_str" ]; then
+            enabled_skus_json='[]'
+          else
+            enabled_skus_json=$(printf '%s' "$enabled_skus_str" | \
+              awk -F',' '{
+                printf "[";
+                for (i=1; i<=NF; i++) {
+                  gsub(/^ +| +$/, "", $i);
+                  if (length($i) > 0) {
+                    printf "%s\"%s\"", (i>1?",":""), $i;
+                  }
+                }
+                print "]"
+              }')
+          fi
+
+          echo "Enabled SKUs JSON: $enabled_skus_json"
+
+          filtered=$(jq \
+            --argjson cfg "$BASE_SKU_CONFIG" \
+            --argjson enabled "$enabled_skus_json" '
+              [ .[]
+                | select(.sku != null and (.sku | tostring) as $s | $enabled | index($s) != null)
+                | . + { runs_on: ($cfg[.sku].runs_on // []) }
+              ]
+            ' <<< "$full_tests")
+
+          echo "Filtered test matrix:"
           echo "$filtered"
-          echo "matrix=${filtered}" >> $GITHUB_OUTPUT
-      - name: Filter for bh_galaxy tests
-        id: filter-bh
-        run: |
-          full_matrix="${{ steps.load-test-matrix.outputs.full-matrix }}"
-          filtered=$(echo "$full_matrix" | jq '[.[] | select(.sku == "bh_galaxy")]')
-          echo "Filtered bh_galaxy tests:"
-          echo "$filtered"
-          echo "matrix=${filtered}" >> $GITHUB_OUTPUT
+          echo "matrix=$filtered" >> "$GITHUB_OUTPUT"
 
   galaxy-e2e-tests:
-    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
     needs: load-test-matrix
+    # if enabled-skus is empty or no tests match, matrix is [], and job is skipped
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix-wh) }}
-    runs-on:
-      - arch-wormhole_b0
-      - pipeline-functional
-      - topology-6u
-      - ${{ inputs.extra-tag }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -110,16 +125,16 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: wormhole_b0
+        #ARCH_NAME: ${{ matrix.test-group.sku }} #TODO: get rid of ARCH_NAME from container
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -138,69 +153,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
-
-  galaxy-bh-e2e-tests:
-    if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
-    needs: load-test-matrix
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix-bh) }}
-    runs-on:
-      - arch-blackhole
-      - pipeline-functional
-      - topology-6u
-      - ${{ inputs.extra-tag }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-        ARCH_NAME: blackhole
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: Mark repository as safe directory
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          echo ${{ matrix.test-group.cmd }}
+          echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

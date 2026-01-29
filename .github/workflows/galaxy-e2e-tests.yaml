@@ -57,5 +57,16 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      blackhole: ${{ github.event.inputs.blackhole == 'true' || github.event_name == 'schedule' }}
-      wormhole: ${{ github.event.inputs.wormhole == 'true' || github.event_name == 'schedule' }}
+      # For scheduled runs: hardcode the full list of SKUs you want active.
+      # For workflow_dispatch: derive from checkboxes.
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_galaxy,bh_galaxy'
+            || (
+                 (inputs.wormhole && 'wh_galaxy' || '')
+                 +
+                 (inputs.blackhole && (inputs.wormhole && ',bh_galaxy' || 'bh_galaxy') || '')
+               )
+        }}
+      scheduled: ${{ github.event_name == 'schedule' }}
