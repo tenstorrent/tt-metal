@@ -32,9 +32,9 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices();
         init_max_cbs();
+        init_max_args();
     }
 
     void TearDown() override {
@@ -109,9 +109,9 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices();
         init_max_cbs();
+        init_max_args();
     }
 
     void TearDown() override {
@@ -179,9 +179,9 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->max_runtime_args_ = get_max_runtime_args();
         this->create_devices(90000000);
         init_max_cbs();
+        init_max_args();
     }
 };
 

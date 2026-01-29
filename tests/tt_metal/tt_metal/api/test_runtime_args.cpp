@@ -616,9 +616,8 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 
 // Test that active ethernet cores correctly validate max runtime args
 TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t active_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        tt::tt_metal::get_max_runtime_args_for_ethernet(HalProgrammableCoreType::ACTIVE_ETH);
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
@@ -697,9 +696,8 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 
 // Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
 TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t idle_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        tt::tt_metal::get_max_runtime_args_for_ethernet(HalProgrammableCoreType::IDLE_ETH);
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];

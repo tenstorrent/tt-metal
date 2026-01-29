@@ -22,6 +22,10 @@ namespace tt::tt_metal {
 // Accounts for watcher overhead when enabled.
 uint32_t get_max_runtime_args();
 
+// Returns max user runtime args for ethernet cores (unique + common combined).
+// Accounts for watcher overhead when enabled.
+uint32_t get_max_runtime_args_for_ethernet(HalProgrammableCoreType eth_core_type);
+
 using KernelHandle = std::uint32_t;
 
 // Option that controls build optimization level

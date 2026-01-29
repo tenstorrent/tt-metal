@@ -18,6 +18,7 @@
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -65,6 +66,7 @@ protected:
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
     uint32_t max_cbs_{};
     uint32_t max_runtime_args_{};
+    uint32_t max_runtime_args_eth_{};
 
     MeshDispatchFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
@@ -75,6 +77,7 @@ protected:
         // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
+        init_max_args();
 
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
@@ -124,6 +127,11 @@ protected:
     }
 
     void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+
+    void init_max_args() {
+        max_runtime_args_ = get_max_runtime_args();
+        max_runtime_args_eth_ = get_max_runtime_args_for_ethernet(HalProgrammableCoreType::ACTIVE_ETH);
+    }
 };
 
 }  // namespace tt::tt_metal
