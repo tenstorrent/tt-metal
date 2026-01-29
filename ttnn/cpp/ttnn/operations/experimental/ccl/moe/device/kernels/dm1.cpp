@@ -31,15 +31,15 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_2;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_2;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -100,13 +100,29 @@ void kernel_main() {
     // Set state for the writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
+    // TODO: (GR) read num experts per token
+
+    uint32_t metadata_ready_semaphore_id =       /* CT arg */
+        uint32_t per_expert_total_tokens_cb_id = /* CT arg */
+
+        uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
+    uint32_t experts_per_device = /* CT arg */
+        uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Wait for compute core to tell us that all mm01 data is ready
-        cb_wait_front(cb_c2w_rdy, 1);
+        for (chunks_per_exert) {  // TODO: (GR)
+
+            // Wait for compute core to tell us that all mm01 data is ready
+            cb_wait_front(cb_c2w_rdy, 1);
+        }
         cb_pop_front(cb_c2w_rdy, 1);
+
+        // TODO: (GR) signal that input is free
 
         // Take the data in cb_s2c_in2 and send it to the next core in the ring
         // Ring synchronization: all cores participate regardless of whether they had CB work

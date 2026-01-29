@@ -29,6 +29,7 @@ file(
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
+    moe/device/kernels/*
 )
 
 target_sources(
@@ -122,6 +123,9 @@ target_sources(
         deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
+        moe/moe.cpp
+        moe/device/moe_device_operation.cpp
+        moe/device/moe_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
