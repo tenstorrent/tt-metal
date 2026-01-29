@@ -402,7 +402,7 @@ def test_gen_tensors(
 FABRIC_PACKET_SIZE_BYTES = 4096
 
 
-def _get_tt_sharded_dense_input(
+def get_sharded_dense_input(
     dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
 ):
     hidden0 = dense_contribs_tensor.shape[-1]
@@ -447,6 +447,15 @@ def _get_tt_sharded_dense_input(
     shard_spec = ttnn.ShardSpec(core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
+    return tt_dense_contribs, mem_config
+
+
+def _get_tt_sharded_dense_input(
+    dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
+):
+    tt_dense_contribs, mem_config = get_sharded_dense_input(
+        dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
+    )
     return ttnn.interleaved_to_sharded(tt_dense_contribs, mem_config)
 
 
@@ -509,7 +518,7 @@ def _run_op_with_trace(num_iters, op_func, mesh_device, profiler):
 
     logger.info(f"Capturing Warmup iterations")
     trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_out = op_func(num_iters // 4)
+    tt_out = op_func(max(1, num_iters // 4))
     ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     logger.info("Warmup done")
@@ -615,6 +624,8 @@ def _run_test(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
+    barrier_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+
     def _run_op(num_iters):
         for _ in range(num_iters):
             tt_out = ttnn.selective_reduce_combine(
@@ -635,6 +646,7 @@ def _run_test(
                 worker_core_range_set=worker_cores,
                 mux_core_range_set=mux_cores,
                 output_tensor=tt_output_tensor,
+                optional_cross_device_semaphore=barrier_semaphore,
             )
         return tt_out
 
@@ -793,7 +805,7 @@ def test_decode_trace(
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
 @pytest.mark.parametrize("num_outer_test_iters", [1])
-@pytest.mark.parametrize("num_test_iters", [40])
+@pytest.mark.parametrize("num_test_iters", [10])
 def test_deepseek_perf(
     mesh_device,
     batch,
@@ -833,7 +845,7 @@ def test_deepseek_perf(
             mux_cores,
             mesh_device,
             num_test_iters,
-            trace_mode=False,
+            trace_mode=True,
             profiler=profiler,
             scheme="sequential",
         )
