@@ -25,6 +25,7 @@ echo "${MOLD_SHA256}  ${TMPFILE}" | sha256sum -c -
 
 # Extract to install directory
 # The tarball contains mold-X.Y.Z-x86_64-linux/{bin/mold, lib/mold/...}
+mkdir -p "${INSTALL_DIR}"
 tar -xzf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
 
 # Cleanup

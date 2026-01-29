@@ -26,7 +26,7 @@ echo "${CCACHE_SHA256}  ${TMPFILE}" | sha256sum -c -
 
 # Extract to install directory
 # The tarball contains ccache-X.Y.Z-linux-x86_64/{bin/ccache, ...}
-mkdir -p "${INSTALL_DIR}/bin"
+mkdir -p "${INSTALL_DIR}"
 tar -xf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
 
 # Cleanup
