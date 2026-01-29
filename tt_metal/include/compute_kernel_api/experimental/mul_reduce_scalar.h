@@ -34,8 +34,7 @@ namespace ckernel {
 // clang-format on
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
-    MATH((llk_math_eltwise_mul_reduce_scalar_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY>(
-        icb0, false /*acc_to_dest*/)));
+    MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 }
 
 // clang-format off
@@ -66,12 +65,7 @@ ALWI void mul_reduce_scalar_tile(
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
-        MATH((llk_math_eltwise_mul_reduce_scalar<
-              EltwiseBinaryType::ELWMUL,
-              BroadcastType::NONE,
-              DST_ACCUM_MODE,
-              MATH_FIDELITY,
-              EltwiseBinaryReuseDestType::NONE>(i)));
+        MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(i)));
     }
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)

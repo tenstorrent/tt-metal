@@ -5,8 +5,6 @@
 #include <cstdint>
 
 #include "compute_kernel_api/experimental/mul_reduce_scalar.h"
-#include "api/debug/dprint_tensix.h"
-#include "api/debug/dprint_pages.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

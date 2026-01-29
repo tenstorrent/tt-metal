@@ -11,23 +11,20 @@
  * LLK MUL REDUCE SCALAR - Fused multiply and scalar reduction
  *************************************************************************/
 
-template <
-    EltwiseBinaryType eltwise_binary_type,
-    BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <int NUM_FIDELITY_PHASES = 0, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_mul_reduce_scalar_init(
     const std::uint32_t operand_A, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(
-        num_faces, acc_to_dest);
+    _llk_math_eltwise_binary_init_<
+        EltwiseBinaryType::ELWMUL,
+        BroadcastType::NONE,
+        NUM_FIDELITY_PHASES,
+        binary_reuse_dest>(num_faces, acc_to_dest);
 }
 
 template <
-    EltwiseBinaryType eltwise_binary_type,
-    BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
@@ -35,8 +32,8 @@ inline void llk_math_eltwise_mul_reduce_scalar(uint dst_index, const bool clear_
     const std::uint32_t num_faces = 4;
 
     _llk_math_eltwise_binary_<
-        eltwise_binary_type,
-        src_b_bcast_type,
+        EltwiseBinaryType::ELWMUL,
+        BroadcastType::NONE,
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         NUM_FIDELITY_PHASES,
