@@ -276,8 +276,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def decode_forward(self, *args, **kwargs):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
-        page_table = kwargs.get("page_table", None)
+        page_tables = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        enable_trace = kwargs.get("enable_trace", False)
         global_stride = kwargs.get("global_stride", None)
         if global_stride is not None:
             self._vllm_global_stride = int(global_stride)
@@ -303,10 +304,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 tuple(kwargs["tokens"].shape),
                 pos_min,
                 pos_max,
-                None if page_table is None else tuple(page_table.shape),
+                None if page_tables is None else tuple(page_tables.shape),
             )
-        if page_table is not None and not hasattr(self, "_validated_vllm_decode"):
-            self._validate_vllm_decode_inputs(kwargs["tokens"], kwargs["start_pos"], page_table)
+        if page_tables is not None and not hasattr(self, "_validated_vllm_decode"):
+            self._validate_vllm_decode_inputs(kwargs["tokens"], kwargs["start_pos"], page_tables)
             self._validated_vllm_decode = True
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
@@ -316,29 +317,29 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         positions = kwargs["start_pos"]
         if not isinstance(positions, torch.Tensor):
             positions = torch.as_tensor(positions)
-        if page_table is not None and getattr(self, "dp_factor", 1) > 1 and global_stride is not None:
-            perm, inv = self._get_vllm_decode_perm(page_table.shape[0], int(global_stride))
+        if page_tables is not None and getattr(self, "dp_factor", 1) > 1 and global_stride is not None:
+            perm, inv = self._get_vllm_decode_perm(page_tables.shape[0], int(global_stride))
             if perm is not None:
                 perm = perm.to(device=tokens_step.device)
                 inv = inv.to(device=tokens_step.device)
                 tokens_step = tokens_step.index_select(0, perm)
                 positions = positions.index_select(0, perm)
-                page_table = page_table.index_select(0, perm)
+                page_tables = page_tables.index_select(0, perm)
             else:
                 inv = None
         else:
             inv = None
         return_value = (
-            self._decode_step(
-                tokens_step=tokens_step,
+            super()
+            .decode_forward(
+                tokens=tokens_step,
                 positions=positions,
                 batch_size_per_row=USERS_PER_ROW,
-                page_table=page_table,
+                enable_trace=enable_trace,
+                page_tables=page_tables,
             )
-            .squeeze(0)
-            .squeeze(0)
             .unsqueeze(1)
-        )  # [1,1,B,V] -> [B, 1, V]
+        )  # [B, V] -> [B, 1, V]
         if inv is not None:
             return_value = return_value.index_select(0, inv)
         return return_value
