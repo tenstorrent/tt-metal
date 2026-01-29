@@ -17,7 +17,6 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -327,6 +326,7 @@ Tensor matmul_full_grid_precise(
     const auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
+    // like in ttml::core::ComputeKernelConfig::matmul()
     const ttnn::WormholeComputeKernelConfig matmul_config{
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
