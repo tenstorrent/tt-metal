@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
     const auto num_reduced_tiles_along_dim = get_arg_val<uint32_t>(i++);
@@ -130,6 +129,4 @@ void MAIN {
         cb_push_back(cb_y, onetile);
     }
     cb_pop_front(cb_one, onetile);
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

@@ -8,8 +8,6 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
 
-namespace NAMESPACE {
-
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {
     const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
@@ -23,7 +21,7 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
     constexpr uint32_t in_cb = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache_cb = get_compile_time_arg_val(2);
@@ -84,4 +82,3 @@ void MAIN {
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }
-}  // namespace NAMESPACE
