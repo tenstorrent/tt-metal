@@ -100,7 +100,8 @@ def test_cross_attention_transformer_text_inference(
         # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
         n_iter = 3
         if is_ci_env:
-            # In CI, test only 2 layers with 1 cross-attention layer to reduce runtime
+            # Special case for 90B model in CI only 2 layers will be used for comparision regardless of the actual number of layers in the model.
+            # In CI, test only 2 layers with 1 being cross-attention layer to reduce runtime
             config.text_config.num_hidden_layers = 2
             config.text_config.cross_attention_layers = [0]
             model_args.n_layers = 1
