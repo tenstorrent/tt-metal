@@ -25,10 +25,10 @@ struct Pool2D {
         Pool2DType pool_type_{};
         DataType output_dtype_{};
         Layout output_layout_{};
-        MemoryConfig memory_config_{};
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config_{};
+        MemoryConfig memory_config_;
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config_;
         bool count_include_pad_{};
-        std::optional<int32_t> divisor_override_{};
+        std::optional<int32_t> divisor_override_;
         bool return_indices_{};
         uint32_t memory_used{};
         bool config_tensor_in_dram{};
@@ -67,8 +67,8 @@ struct Pool2D {
             tt::tt_metal::CBHandle intra_kernel_down_left_wrap_inc_cb{};
             tt::tt_metal::CBHandle compute_tmp_idx_cb{};
             uint32_t ncores{};
-            tt::tt_metal::DeviceStorage reader_indices_storage{};
-            tt::tt_metal::DeviceStorage scalar_config_storage{};
+            tt::tt_metal::DeviceStorage reader_indices_storage;
+            tt::tt_metal::DeviceStorage scalar_config_storage;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
