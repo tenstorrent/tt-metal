@@ -17,6 +17,11 @@ from pydantic import AliasChoices, BaseModel, Field
 import ttnn
 
 
+class Mode(Enum):
+    DECODE = "decode"
+    PREFILL = "prefill"
+
+
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
         super().__init__()

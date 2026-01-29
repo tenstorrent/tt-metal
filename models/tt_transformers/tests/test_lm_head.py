@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
@@ -19,7 +20,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([True, False]),
 )
 @pytest.mark.parametrize(
     "seq_len",
@@ -45,15 +46,12 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
     prefetcher = Prefetcher(mesh_device, num_tensors=0, num_layers=1) if use_prefetcher else None
 
     if use_prefetcher:
-        prefetcher.init("decode")
+        prefetcher.init(mode=Mode.DECODE)
 
     model_args = ModelArgs(
         mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True, prefetcher=prefetcher
     )
     model_args.n_layers = 1
-
-    if use_prefetcher:
-        model_args.build_prefetcher_configs("decode")
 
     state_dict = model_args.load_state_dict()
 

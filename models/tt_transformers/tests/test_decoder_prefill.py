@@ -12,7 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
@@ -53,7 +53,7 @@ from models.tt_transformers.tt.rope import get_rot_mats
 )
 @pytest.mark.parametrize(
     "use_prefetcher",
-    (True, False),
+    ([True, False]),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
@@ -77,7 +77,7 @@ def test_decoder_inference(
     num_tensors = 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
     if use_prefetcher:
-        prefetcher.init(mode="prefill")
+        prefetcher.init(mode=Mode.PREFILL)
 
     model_args = ModelArgs(
         mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
@@ -216,7 +216,7 @@ def test_decoder_inference(
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
             user_id=0,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(

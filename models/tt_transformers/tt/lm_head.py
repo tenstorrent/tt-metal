@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.common import Mode
 
 
 class LMHead(LightweightModule):
@@ -134,7 +135,7 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
-        use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == "decode"
+        use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
         split_sizes = self.split_sizes_decode if use_prefetcher else self.split_sizes_prefill
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
@@ -144,7 +145,7 @@ class LMHead(LightweightModule):
         output_weights = self.output_weights_decode if use_prefetcher else self.output_weights_prefill
 
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
-            "decode" if use_prefetcher else "prefill", self.prefetcher if use_prefetcher else None
+            Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
 
         for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):

@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
@@ -42,10 +43,10 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher):
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
+    mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
     # Setup prefetcher
-    num_tensors = 3 if mode == "decode" else 0
+    num_tensors = 3 if mode == Mode.DECODE else 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
     if use_prefetcher:
@@ -88,7 +89,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     )
 
     # Run prefetcher if it is used
-    if prefetcher is not None and mode == "decode":
+    if prefetcher is not None and mode == Mode.DECODE:
         prefetcher.prefetch()
         prefetcher.run()
 

@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import Mode
 
 
 @dataclass
@@ -247,7 +248,8 @@ class Prefetcher(LightweightModule):
         ### Core Ranges
         self.sender_cores = None
         self.receiver_cores = None
-        self.mode = "prefill"
+        self.mode = Mode.PREFILL
+        self.init_done = False
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -282,17 +284,13 @@ class Prefetcher(LightweightModule):
         else:
             raise ValueError(f"Provided cores {cores} is not a list of CoreCoords or CoreRanges")
 
-    def init(self, mode: str = "decode") -> None:
+    def init(self, mode: Mode = Mode.DECODE) -> None:
         """
         Initializes the prefetcher sub devices
         Args:
             mode: The mode to run the prefetcher in, either "decode" or "prefill"
         """
-        self.mode = "decode" if mode is None else mode
-        assert self.mode in [
-            "decode",
-            "prefill",
-        ], f"Provided mode {mode} is not supported, only `decode` and `prefill` are supported"
+        self.mode = Mode.DECODE if mode is None else mode
 
         # Get the sender and receiver cores
         # Create a single config instance to ensure consistent state
@@ -306,12 +304,12 @@ class Prefetcher(LightweightModule):
             )
         )
         match mode:
-            case "decode":
+            case Mode.DECODE:
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
-            case "prefill":
+            case Mode.PREFILL:
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
@@ -326,6 +324,7 @@ class Prefetcher(LightweightModule):
         logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
         logger.info(f"  Number of layers: {self.num_layers}")
         logger.info("=" * 50)
+        self.init_done = True
 
     def create_address_tensor(self):
         """
@@ -360,6 +359,7 @@ class Prefetcher(LightweightModule):
         """
         Populates the tensor addresses that need to be prefetched
         """
+        assert self.init_done, "Prefetcher has not been initialized. Cannot insert tensors"
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
@@ -387,16 +387,21 @@ class Prefetcher(LightweightModule):
         The tensors are prefetched in the order of the registration of the callbacks
         NOTE: This only needs to be called if a callback is registered for inserting tensors
         """
+        assert self.init_done, "Prefetcher has not been initialized. Cannot prefetch tensors"
         assert (
             len(self.callbacks) > 0
         ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
-        for callback in self.callbacks:
-            callback()
+        if self.mode == Mode.DECODE:
+            for callback in self.callbacks:
+                callback()
+        # NO-OP for prefill mode
+        return
 
     def run(self):
         """
         Start prefetching weights into global CB with dram_prefetcher op
         """
+        assert self.init_done, "Prefetcher has not been initialized. Cannot run prefetcher"
         # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
             self.global_cb_size = self.max_tensor_block_size
@@ -423,5 +428,8 @@ class Prefetcher(LightweightModule):
         return
 
     def stop(self):
+        assert self.init_done, "Prefetcher has not been initialized. Cannot stop prefetcher"
+        assert self.garbage is not None, "Prefetcher has not been run. Cannot stop prefetcher"
         ttnn.deallocate(self.garbage)
+        self.garbage = None
         return

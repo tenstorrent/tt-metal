@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
@@ -18,7 +18,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", ([False]))
+@pytest.mark.parametrize("use_prefetcher", ([True, False]))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -121,7 +121,7 @@ def test_model_inference(
     num_tensors = 5 if use_prefetcher else 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
     if use_prefetcher:
-        prefetcher.init(mode="decode")
+        prefetcher.init(mode=Mode.DECODE)
 
     model_args = ModelArgs(
         mesh_device,
@@ -338,7 +338,7 @@ def test_model_inference(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table_tt,
         )
 

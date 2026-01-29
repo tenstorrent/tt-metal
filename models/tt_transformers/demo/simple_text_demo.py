@@ -740,7 +740,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "use_prefetcher",
-    [True, False],
+    ([True, False]),
 )
 @pytest.mark.parametrize(
     "optimizations",
