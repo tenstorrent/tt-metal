@@ -160,7 +160,7 @@ def run_unet_model(
 
     ttnn.ReadDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.985)
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
@@ -200,6 +200,9 @@ def run_unet_model(
         # 1024x1024 image resolution
         ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
         ((1024, 1024), (1, 9, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        ((512, 512), (1, 9, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

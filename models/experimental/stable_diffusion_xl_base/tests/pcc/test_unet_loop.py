@@ -309,6 +309,8 @@ def run_unet_inference(ttnn_device, image_resolution, is_ci_env, prompts, num_in
     [
         # 1024x1024 image resolution
         (1024, 1024),
+        # 512x512 image resolution
+        (512, 512),
     ],
 )
 @pytest.mark.parametrize(

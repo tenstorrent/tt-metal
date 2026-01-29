@@ -3168,6 +3168,7 @@ def test_conv2d_model_fruit(
         ################################################################### START: 512x512 resolution ###################################################################
         # conv_in
         (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
+        (1, 9, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
 
         # regular 3x3 kernel
         (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
