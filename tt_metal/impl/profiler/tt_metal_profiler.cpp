@@ -1146,6 +1146,10 @@ void ReadMeshDeviceProfilerResults(
         if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
             profiler_state_manager->signal_debug_dump_read();
         }
+        if (auto& noc_debug_state = MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->finish_cores();
+            noc_debug_state->print_aggregated_errors();
+        }
         return;
     }
 
