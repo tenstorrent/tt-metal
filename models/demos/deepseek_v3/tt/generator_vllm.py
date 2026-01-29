@@ -10,7 +10,7 @@ from loguru import logger
 
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
@@ -138,11 +138,70 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 stride_guess,
                 None if page_table is None else tuple(page_table.shape),
             )
+        stride = None
+        if empty_slots is not None and len(empty_slots) > 0 and getattr(self, "dp_factor", 1) > 1:
+            if page_table is not None:
+                stride = int(page_table.shape[0] // self.dp_factor)
+            else:
+                # Derive stride from first discontinuity in empty_slots
+                for j in range(1, len(empty_slots)):
+                    if empty_slots[j] != empty_slots[j - 1] + 1:
+                        stride = int(empty_slots[j])
+                        break
+                if stride is None:
+                    stride = int(len(empty_slots))
+
+        batch_per_shard = (
+            even_int_div(USERS_PER_ROW, self.dp_factor) if getattr(self, "dp_factor", 1) > 1 else USERS_PER_ROW
+        )
+
+        def _map_vllm_user_id(global_user_id: int) -> int:
+            if stride is None or self.dp_factor <= 1:
+                return global_user_id
+            dp_rank = global_user_id // stride
+            local = global_user_id % stride
+            row_idx = local // batch_per_shard
+            local_batch = local % batch_per_shard
+            if row_idx >= self.mesh_device.shape[0] or dp_rank >= self.dp_factor:
+                logger.warning(
+                    "[INV] vLLM user_id mapping out of range: user_id={} stride={} dp_rank={} local={} row_idx={} batch_per_shard={} mesh_shape={}",
+                    global_user_id,
+                    stride,
+                    dp_rank,
+                    local,
+                    row_idx,
+                    batch_per_shard,
+                    self.mesh_device.shape,
+                )
+                return global_user_id
+            return row_idx * USERS_PER_ROW + dp_rank * batch_per_shard + local_batch
+
         last_logits = []
         for i in range(num_of_users):
             user_id = empty_slots[i] if empty_slots is not None else i
+            mapped_user_id = _map_vllm_user_id(int(user_id))
             if getattr(self, "debug_investigation", False) and i < 8:
-                logger.info("[INV] prefill map: local_user_id={} user_id={}", i, int(user_id))
+                if stride is not None:
+                    dp_rank = int(user_id) // stride
+                    local = int(user_id) % stride
+                    row_idx = local // batch_per_shard
+                    col_idx = dp_rank
+                else:
+                    dp_rank = None
+                    local = None
+                    row_idx = None
+                    col_idx = None
+                logger.info(
+                    "[INV] prefill map: local_user_id={} user_id={} mapped_user_id={} stride={} dp_rank={} local={} row_idx={} col_idx={}",
+                    i,
+                    int(user_id),
+                    int(mapped_user_id),
+                    stride,
+                    dp_rank,
+                    local,
+                    row_idx,
+                    col_idx,
+                )
             prompt_len = int(lengths[i])
             if prompt_len == 0:
                 last_logits.append(
@@ -151,7 +210,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 continue
             user_tokens = tokens[i, :prompt_len].unsqueeze(0)
             user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
-            user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i)
+            user_out = self._prefill(user_tokens, mapped_user_id, page_table, local_user_id=i)
             user_logits = user_out.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
             if user_logits.shape[0] > prompt_len:
                 user_logits = user_logits[:prompt_len]
