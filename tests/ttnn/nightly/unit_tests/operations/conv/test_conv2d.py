@@ -3167,8 +3167,8 @@ def test_conv2d_model_fruit(
 
         ################################################################### START: 512x512 resolution ###################################################################
         # conv_in
-        (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
-        (1, 9, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
+        (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False, True),
+        (1, 9, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False, True),
 
         # regular 3x3 kernel
         (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
@@ -3192,7 +3192,7 @@ def test_conv2d_model_fruit(
         (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 32, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
 
         # conv_out
-        (1, 320, 4, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False, True),
+        (1, 320, 4, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, True, False, True),
         #################################################################### END: 512x512 resolution ####################################################################
     ),
 )

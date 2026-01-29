@@ -43,7 +43,7 @@ class ModelOptimisations512x512:
             act_block_w_div=1,
             act_block_h_override=1024,
         )
-        self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
+        self.conv_configs["ABH_256_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
