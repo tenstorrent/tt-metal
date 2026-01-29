@@ -1483,7 +1483,6 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
         # Trim padding on output channels
-        out_channels = torch_output.shape[1]
         logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
         tt_output_torch = tt_output_torch[:, :out_channels]
 
