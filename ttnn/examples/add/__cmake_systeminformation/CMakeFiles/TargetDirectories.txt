@@ -1,2 +1,0 @@
-/home/runner/work/tt-metal/tt-metal/ttnn/examples/add/__cmake_systeminformation/CMakeFiles/edit_cache.dir
-/home/runner/work/tt-metal/tt-metal/ttnn/examples/add/__cmake_systeminformation/CMakeFiles/rebuild_cache.dir
