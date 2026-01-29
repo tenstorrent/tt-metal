@@ -27,6 +27,7 @@ on:
           - whisper
           - qwen3
           - qwen25
+          - qwq3
           - qwen25_vl
           - qwen3_vl
           - gemma3
