@@ -1864,8 +1864,9 @@ public:
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+                    &(reinterpret_cast<CQDispatchCmd*>(
+                          reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                          ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -1897,8 +1898,9 @@ public:
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+                    &(reinterpret_cast<CQDispatchCmd*>(
+                          reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                          ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -2015,8 +2017,9 @@ public:
                 .get_dispatch_stream_index(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
-            &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                               ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
+            &(reinterpret_cast<CQDispatchCmd*>(
+                  reinterpret_cast<uint32_t*>(device_command_sequence.data()) +
+                  ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                  ->mcast;
     }
 };
@@ -2671,8 +2674,7 @@ void write_program_command_sequence(
     }
 
     // TODO: We can pack multiple RT args into one fetch q entry
-    for (size_t i = 0; i < program_command_sequence.runtime_args_command_sequences.size(); ++i) {
-        const auto& cmds = program_command_sequence.runtime_args_command_sequences[i];
+    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
         write_data_to_cq(cmds.data(), cmds.size_bytes());
     }
 
