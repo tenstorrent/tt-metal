@@ -91,7 +91,7 @@ jobs:
         if: ${{ !cancelled() && github.ref_name == 'main' }}
         shell: bash
         run: |
-          if [ -f "generated/fabric/bandwidth_summary_results_blackhole_upload.csv" ]; then
+          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
             echo "Benchmark files found, will upload to database"
           else
@@ -113,7 +113,7 @@ jobs:
         if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' }}
         shell: bash
         run: |
-          if [ -f "generated/fabric/latency_results_blackhole.csv" ]; then
+          if [ -f "generated/fabric/latency_results_wormhole_b0.csv" ]; then
             echo "has_latency_data=true" >> $GITHUB_OUTPUT
             echo "Latency files found, will upload to database"
           else
