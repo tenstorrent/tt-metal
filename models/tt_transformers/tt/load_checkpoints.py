@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
 
 
@@ -38,6 +39,78 @@ def load_hf_state_dict(ckpt_dir):
         if not os.path.exists(safetensor_path):
             raise FileNotFoundError(f"Neither model.safetensors.index.json nor model.safetensors found in {ckpt_dir}")
         loaded_weights = safetensors_load_file(safetensor_path)
+
+    return loaded_weights
+
+
+def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
+    """
+    Load only the subset of HF checkpoint weights that match the given key prefixes.
+    Uses safetensors safe_open to avoid loading unrelated tensors into memory.
+    Supports local checkpoint directories or HF repo IDs.
+    """
+    prefixes = tuple(key_prefixes)
+    if not prefixes:
+        return {}
+
+    if local_files_only is None:
+        local_files_only = os.getenv("CI") == "true"
+
+    ckpt_dir = str(ckpt_dir)
+    is_local_dir = os.path.isdir(ckpt_dir)
+
+    hf_hub_download = None
+    EntryNotFoundError = None
+    LocalEntryNotFoundError = None
+    if not is_local_dir:
+        try:
+            from huggingface_hub import hf_hub_download
+            from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
+        except ImportError as exc:
+            raise ImportError("huggingface_hub is required to resolve HF repo IDs for safetensors loading.") from exc
+
+    def resolve_file(filename, allow_missing=False):
+        if is_local_dir:
+            path = os.path.join(ckpt_dir, filename)
+            if os.path.exists(path):
+                return path
+            if allow_missing:
+                return None
+            raise FileNotFoundError(f"Missing safetensors file {path}")
+
+        try:
+            return hf_hub_download(ckpt_dir, filename=filename, local_files_only=local_files_only)
+        except (EntryNotFoundError, LocalEntryNotFoundError) as exc:
+            if allow_missing:
+                return None
+            raise FileNotFoundError(
+                f"Missing safetensors file {filename} for repo {ckpt_dir} (local_files_only={local_files_only})"
+            ) from exc
+
+    loaded_weights = {}
+
+    index_path = resolve_file("model.safetensors.index.json", allow_missing=True)
+    if index_path is not None:
+        with open(index_path, "r") as f:
+            index_data = json.load(f)
+
+        weight_map = index_data["weight_map"]
+        file_to_keys = {}
+        for key, file in weight_map.items():
+            if key.startswith(prefixes):
+                file_to_keys.setdefault(file, []).append(key)
+
+        for file, keys in file_to_keys.items():
+            safetensor_path = resolve_file(file)
+            with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                for key in keys:
+                    loaded_weights[key] = f.get_tensor(key)
+    else:
+        safetensor_path = resolve_file("model.safetensors")
+        with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                if key.startswith(prefixes):
+                    loaded_weights[key] = f.get_tensor(key)
 
     return loaded_weights
 
