@@ -28,6 +28,7 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -54,6 +55,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_slice_reshard_async(mod);
     ccl::bind_deepseek_minimal_broadcast(mod);
     ccl::bind_deepseek_minimal_all_reduce(mod);
+    ccl::bind_deepseek_moe_reduce_scatter(mod);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
