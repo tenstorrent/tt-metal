@@ -32,11 +32,16 @@ void kernel_main() {
     constexpr uint32_t scratch_cb = get_compile_time_arg_val(6);
     constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(7);
 
+    if constexpr (device_role == MESH_LEAF) {
+        return;
+    }
+
     // Runtime args - all 3 semaphore addresses always passed
     size_t arg_idx = 0;
     const uint32_t recv_sem_round1 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recv_sem_round2 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recv_sem_round3 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_slot_idx = get_arg_val<uint32_t>(arg_idx++);
 
     // Push local data to compute (local_cb is in-place on input shard)
     cb_reserve_back(local_cb, num_tiles);
