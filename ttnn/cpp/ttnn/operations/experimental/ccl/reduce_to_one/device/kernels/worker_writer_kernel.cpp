@@ -44,32 +44,30 @@ void kernel_main() {
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
     constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: scratch_cb2
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);  // Total payload size
-    constexpr uint32_t packet_cb = get_compile_time_arg_val(4);           // CB index for worker packets
-    constexpr uint32_t output_cb = get_compile_time_arg_val(5);           // For ROOT1 to wait on compute
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t packet_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t num_hops = get_compile_time_arg_val(5);
+    constexpr uint16_t dst_dev_id = get_compile_time_arg_val(6);
+    constexpr uint16_t dst_mesh_id = get_compile_time_arg_val(7);
+    constexpr uint32_t output_core_noc_x = get_compile_time_arg_val(8);
+    constexpr uint32_t output_core_noc_y = get_compile_time_arg_val(9);
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    constexpr uint32_t slot_size_bytes = packet_header_size_bytes + payload_size_bytes;
 
-    // Runtime args
+    // Runtime args (per-core or updated in trace mode)
     uint32_t arg_idx = 0;
-    const uint32_t bottom_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t bottom_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t my_slot_idx = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t arrival_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t slot_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-    // Routing info for packet header
-    const uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);
-    // My own NOC coords (same logical position = same physical coords on dest device)
-    const uint32_t my_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t my_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // Destination semaphore for fused atomic inc
-    const uint16_t dst_dev_id = get_arg_val<uint32_t>(arg_idx++);    // Destination device ID
-    const uint16_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);   // Destination mesh ID
-    // ROOT1 output gather args
-    const uint32_t output_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t shard_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t bottom_core_noc_x = get_arg_val<uint32_t>(arg_idx++);                // [0] per-column
+    const uint32_t bottom_core_noc_y = get_arg_val<uint32_t>(arg_idx++);                // [1] per-column
+    const uint32_t my_slot_idx = get_arg_val<uint32_t>(arg_idx++);                      // [2] per-core
+    const uint32_t arrival_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));  // [3] per-core
+    const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);                      // [4] updated in trace
+    const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);                     // [5] updated in trace
+    const uint32_t output_base_addr = get_arg_val<uint32_t>(arg_idx++);                 // [6] updated in trace
+    const uint32_t shard_idx = get_arg_val<uint32_t>(arg_idx++);                        // [7] per-core
+
+    // Get this core's NOC coordinates (same position on dest device)
+    const uint32_t my_noc_x = my_x[0];
+    const uint32_t my_noc_y = my_y[0];
 
     // ROOT1: gather final results to output core
     // Each worker writes its shard to output_core at offset shard_idx * payload_size_bytes

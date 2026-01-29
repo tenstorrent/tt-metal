@@ -29,8 +29,6 @@ void kernel_main() {
     constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(3);  // Round 2: ROOT3 → ROOT2/ROOT1
     constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(4);  // Round 3: ROOT2 → ROOT1
     constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t scratch_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(7);
 
     if constexpr (device_role == MESH_LEAF) {
         return;
@@ -41,7 +39,6 @@ void kernel_main() {
     const uint32_t recv_sem_round1 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recv_sem_round2 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recv_sem_round3 = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t my_slot_idx = get_arg_val<uint32_t>(arg_idx++);
 
     // Push local data to compute (local_cb is in-place on input shard)
     cb_reserve_back(local_cb, num_tiles);

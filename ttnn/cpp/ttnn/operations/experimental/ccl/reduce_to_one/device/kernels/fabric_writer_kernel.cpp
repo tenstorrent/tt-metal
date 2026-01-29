@@ -31,14 +31,11 @@ enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_R
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // Not used by dedicated fabric cores
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_workers = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(2);
+    constexpr uint32_t packet_cb = get_compile_time_arg_val(3);
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    constexpr uint32_t slot_size_bytes = packet_header_size_bytes + payload_size_bytes;
 
     // ROOT1: dedicated fabric core has nothing to do (workers handle output)
     if constexpr (device_role == MESH_ROOT1) {
@@ -47,12 +44,6 @@ void kernel_main() {
 
     // Runtime args
     size_t arg_idx = 0;
-    const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t dst_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slot_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);
     // Read worker semaphore IDs and convert to L1 addresses
     uint32_t worker_sem_addr[num_workers];
     for (uint32_t i = 0; i < num_workers; i++) {
