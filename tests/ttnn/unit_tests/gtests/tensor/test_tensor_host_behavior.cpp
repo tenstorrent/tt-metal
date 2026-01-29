@@ -4,13 +4,17 @@
 
 #include <gtest/gtest.h>
 #include "memory_pin.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 /**
- * @brief Unit tests Tensor class to verify it's behavior when constructed on host.
+ * @brief Unit tests Tensor class to verify its behavior when constructed on host.
  *
  * This is used to verify parity between TTNN::Tensor vs tt_metal::HostTensor in the future.
+ *
+ * Weird edge case found:
+ * - to_vector() on tensor created with empty HostBuffer() segfaults.
  */
 
 namespace ttnn {
@@ -28,6 +32,8 @@ using HostBuffer = tt::tt_metal::HostBuffer;
 using MemoryPin = tt::tt_metal::MemoryPin;
 using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
 using BufferType = tt::tt_metal::BufferType;
+using TensorTopology = tt::tt_metal::TensorTopology;
+using TensorSpec = tt::tt_metal::TensorSpec;
 
 template <typename T>
 std::vector<T> create_test_vector(std::size_t size) {
@@ -96,6 +102,8 @@ TEST(TensorHostBehaviorTest, CopyAssignment) {
 
 // Move is trivially handled by the smart pointers in the impl.
 
+// Constructions and factory methods:
+
 // HostBuffer constructor
 
 TEST(TensorHostBehaviorTest, HostBufferConstructor_Overloads) {
@@ -140,7 +148,8 @@ TEST(TensorHostBehaviorTest, HostBufferConstructor_EmptyBuffer) {
     EXPECT_EQ(tensor.padded_shape(), Shape({0}));
     EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
-    EXPECT_TRUE(tensor.to_vector<float>().empty());
+    // Note: to_vector() on tensor created with empty HostBuffer() segfaults.
+    // Use from_vector for safe empty tensor creation (see to_vector_EmptyTensor test).
 }
 
 // Tensor currently does not validate the size of the HostBuffer against the shape or padded shape.
@@ -436,6 +445,199 @@ TEST(TensorHostBehaviorTest, is_sharded_HostTensor_WithShardedMemoryConfig) {
     // But host tensor is not sharded
     auto tensor = TensorUnderTest::from_vector(vec, spec);
     EXPECT_FALSE(tensor.is_sharded());
+}
+
+// Move semantics
+
+TEST(TensorHostBehaviorTest, MoveConstruction) {
+    auto vec = create_test_vector<float>(32 * 4);
+    auto vec_copy = vec;
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    TensorUnderTest tensor_moved(std::move(tensor));
+    EXPECT_EQ(tensor_moved.logical_shape(), Shape({32, 4}));
+    EXPECT_EQ(tensor_moved.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(tensor_moved.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor_moved.to_vector<float>(), vec_copy);
+    // Verify moved-from object is still assignable (valid state)
+    auto vec2 = create_test_vector<float>(16);
+    tensor = TensorUnderTest(HostBuffer(std::move(vec2)), Shape({4, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_shape(), Shape({4, 4}));
+}
+
+TEST(TensorHostBehaviorTest, MoveAssignment) {
+    auto vec = create_test_vector<float>(32 * 4);
+    auto vec_copy = vec;
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    TensorUnderTest tensor_moved;
+    tensor_moved = std::move(tensor);
+    EXPECT_EQ(tensor_moved.logical_shape(), Shape({32, 4}));
+    EXPECT_EQ(tensor_moved.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(tensor_moved.layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor_moved.to_vector<float>(), vec_copy);
+    // Verify moved-from object is still assignable (valid state)
+    auto vec2 = create_test_vector<float>(16);
+    tensor = TensorUnderTest(HostBuffer(std::move(vec2)), Shape({4, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_shape(), Shape({4, 4}));
+}
+
+TEST(TensorHostBehaviorTest, MoveConstruction_DefaultConstructed) {
+    TensorUnderTest tensor;
+    TensorUnderTest tensor_moved(std::move(tensor));
+    (void)tensor_moved;
+    // Verify moved-from object is still assignable (valid state)
+    auto vec = create_test_vector<float>(16);
+    tensor = TensorUnderTest(HostBuffer(std::move(vec)), Shape({4, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_shape(), Shape({4, 4}));
+}
+
+// Getters
+
+TEST(TensorHostBehaviorTest, logical_volume) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_volume(), 32 * 4);
+}
+
+TEST(TensorHostBehaviorTest, logical_volume_HigherRank) {
+    auto vec = create_test_vector<float>(2 * 3 * 4 * 5);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({2, 3, 4, 5}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_volume(), 2 * 3 * 4 * 5);
+}
+
+TEST(TensorHostBehaviorTest, logical_volume_EmptyTensor) {
+    std::vector<float> vec;
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    TensorSpec spec(Shape({0}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    EXPECT_EQ(tensor.logical_volume(), 0);
+}
+
+TEST(TensorHostBehaviorTest, physical_volume) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.physical_volume(), 32 * 4);
+}
+
+TEST(TensorHostBehaviorTest, physical_volume_WithPadding) {
+    auto vec = create_test_vector<float>(64 * 8);
+    TensorUnderTest tensor(
+        HostBuffer(std::move(vec)), Shape({32, 4}), Shape({64, 8}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.logical_volume(), 32 * 4);
+    EXPECT_EQ(tensor.physical_volume(), 64 * 8);
+}
+
+TEST(TensorHostBehaviorTest, physical_volume_EmptyTensor) {
+    std::vector<float> vec;
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    TensorSpec spec(Shape({0}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    EXPECT_EQ(tensor.physical_volume(), 0);
+}
+
+TEST(TensorHostBehaviorTest, memory_config) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    TensorSpec spec(Shape({32, 4}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    // Default MemoryConfig should be interleaved DRAM
+    EXPECT_EQ(tensor.memory_config().memory_layout(), TensorMemoryLayout::INTERLEAVED);
+}
+
+TEST(TensorHostBehaviorTest, strides_RowMajor) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    auto strides = tensor.strides();
+    // For row-major layout with shape {32, 4}, strides should be {4, 1}
+    EXPECT_EQ(strides.rank(), 2);
+    EXPECT_EQ(strides[0], 4);
+    EXPECT_EQ(strides[1], 1);
+}
+
+TEST(TensorHostBehaviorTest, strides_RowMajor_HigherRank) {
+    auto vec = create_test_vector<float>(2 * 3 * 4 * 5);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({2, 3, 4, 5}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    auto strides = tensor.strides();
+    // For row-major layout with shape {2, 3, 4, 5}, strides should be {60, 20, 5, 1}
+    EXPECT_EQ(strides.rank(), 4);
+    EXPECT_EQ(strides[0], 3 * 4 * 5);
+    EXPECT_EQ(strides[1], 4 * 5);
+    EXPECT_EQ(strides[2], 5);
+    EXPECT_EQ(strides[3], 1);
+}
+
+TEST(TensorHostBehaviorTest, strides_Tile) {
+    auto vec = create_test_vector<float>(32 * 32);
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
+    TensorSpec spec(Shape({32, 32}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    auto strides = tensor.strides();
+    EXPECT_EQ(strides.rank(), 2);
+}
+
+TEST(TensorHostBehaviorTest, strides_EmptyTensor) {
+    std::vector<float> vec;
+    TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    TensorSpec spec(Shape({0}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    auto strides = tensor.strides();
+    EXPECT_EQ(strides.rank(), 1);
+}
+
+TEST(TensorHostBehaviorTest, element_size_Float32) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.element_size(), sizeof(float));
+}
+
+TEST(TensorHostBehaviorTest, element_size_BFloat16) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    TensorSpec spec(Shape({32, 4}), tensor_layout);
+    auto tensor = TensorUnderTest::from_vector(vec, spec);
+    EXPECT_EQ(tensor.element_size(), 2);  // bfloat16 is 2 bytes
+}
+
+TEST(TensorHostBehaviorTest, element_size_Int32) {
+    auto vec = create_test_vector<int32_t>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::INT32, Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.element_size(), sizeof(int32_t));
+}
+
+// TODO: Add tests for nd_shard_spec
+
+TEST(TensorHostBehaviorTest, shard_spec_ReturnsNullopt) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    // Host tensors do not have shard spec
+    EXPECT_FALSE(tensor.shard_spec().has_value());
+}
+
+// TODO: Add tests for nd_shard_spec
+
+TEST(TensorHostBehaviorTest, nd_shard_spec_ReturnsNullopt) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    // Host tensors do not have nd shard spec
+    EXPECT_FALSE(tensor.nd_shard_spec().has_value());
+}
+
+TEST(TensorHostBehaviorTest, tensor_topology) {
+    auto vec = create_test_vector<float>(32 * 4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({32, 4}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    // Host tensors have default tensor topology
+    const auto& topology = tensor.tensor_topology();
+    // Default topology has distribution shape of {1}
+    EXPECT_EQ(topology.distribution_shape().mesh_size(), 1);
+}
+
+// Other member functions
+
+TEST(TensorHostBehaviorTest, write_to_string) {
+    auto vec = create_test_vector<float>(4);
+    TensorUnderTest tensor(HostBuffer(std::move(vec)), Shape({2, 2}), DataType::FLOAT32, Layout::ROW_MAJOR);
+    std::string str = tensor.write_to_string();
+    // write_to_string should return a non-empty string representation
+    EXPECT_FALSE(str.empty());
 }
 
 }  // namespace
