@@ -57,7 +57,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             ack_counters_base_l1_ptr[i] = 0;  // Initialize L1 memory!
         }
     }
-    
+
         FORCE_INLINE void send_completion_credit() {
             // Increment completion counter for this receiver channel (shared by all senders in this VC)
             // This represents free buffer space on the receiver side
@@ -70,16 +70,16 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             *completion_counter_l1_ptr = completion_counter;
             update_sender_side_credits();
         }
-    
+
         // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
         FORCE_INLINE void send_ack_credit(uint8_t src_id, int packed_count = 1) {
             if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
                 static_assert(NUM_SENDER_CHANNELS <= 8, "NUM_SENDER_CHANNELS must be less than or equal to 8");
-    
+
                 // Ack counters use 8-bit credits (4 per word), always byte-aligned
                 // Increment the specific channel using byte accessors
                 constexpr size_t CREDITS_PER_WORD = 4;
-    
+
                 if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word, direct byte access
                     uint8_t* bytes = reinterpret_cast<uint8_t*>(&ack_counters[0]);
@@ -119,7 +119,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                         ack_counters_base_l1_ptr[1] = ack_counters[1];
                     }
                 }
-    
+
                 update_sender_side_credits();
             } else {
                 ack_counters[src_id] += packed_count;
@@ -127,7 +127,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 update_sender_side_credits();
             }
         }
-    
+
         // Send packed ACK credits - add packed value directly (formats must match!)
         // Used for batch ACK sending when first-level ACK is enabled
         // ASSUMES: Sender->receiver and receiver->sender use SAME packing format (8-bit on BH)
@@ -136,7 +136,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
                 // Both formats use 8-bit byte-aligned packing on BH, so we can add directly
                 constexpr size_t CREDITS_PER_WORD = 4;
-    
+
                 if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word
                     uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
@@ -154,7 +154,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     uint32_t old_lower = ack_counters[0];
                     ack_counters[0] += lower_word;
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
-    
+
                     uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
                     uint32_t old_upper = ack_counters[1];
                     ack_counters[1] += upper_word;
@@ -164,28 +164,28 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                     //        << " upper: old=" << old_upper << " new=" << ack_counters[1]
                     //        << " L1_addr=" << (uint32_t)ack_counters_base_l1_ptr << ENDL();
                 }
-    
+
                 // Wait for eth queue if requested (safer but slower)
-                
+
                 if constexpr (wait_for_txq) {
                     while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
                 }
                 update_sender_side_credits();
             }
         }
-    
+
         volatile uint32_t* tt_l1_ptr completion_counter_l1_ptr;
         volatile uint32_t* tt_l1_ptr ack_counters_base_l1_ptr;
-    
+
         // Ack counters: packed storage (4 credits per word, matching original behavior)
         // 1 word for ≤4 channels, 2 words for 5-8 channels
         static constexpr size_t ACK_PACKED_WORDS = (NUM_SENDER_CHANNELS + 3) / 4;
         std::array<uint32_t, ACK_PACKED_WORDS> ack_counters;
-        
+
         // Completion counters: unpacked, one per receiver channel (fast local memory)
         // With first-level acks enabled, completions are tied to receiver channels not sender channels
         uint32_t completion_counter;
-    
+
 private:
     FORCE_INLINE void update_sender_side_credits() const {
         internal_::eth_send_packet_bytes_unsafe(
@@ -379,15 +379,15 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
         to_sender_packets_acked_stream(
             // enable_first_level_ack
-                // ? 
-                to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
-                // : to_sender_packets_acked_streams[sender_channel_index]
+            // ?
+            to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
+            // : to_sender_packets_acked_streams[sender_channel_index]
             ),
         to_sender_packets_completed_stream(
-            // enable_first_level_ack ? 
+            // enable_first_level_ack ?
             to_receiver_packets_sent_streams[0]
-                                //    : to_sender_packets_completed_streams[sender_channel_index]
-            ) {}
+            //    : to_sender_packets_completed_streams[sender_channel_index]
+        ) {}
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
@@ -607,6 +607,22 @@ constexpr uint32_t get_sender_target_stream_id() {
     } else {
         // Single register: all channels use base stream ID
         return base_stream_id;
+    }
+}
+
+/**
+ * Map from to_receiver_pkts_sent stream ID to the corresponding new_msg_credit stream ID.
+ * This is used to send the flat "new message" credit signal.
+ * Note: In the new organization, packed credits are on streams 2-3, flat credits are on streams 0-1
+ */
+template <uint32_t to_receiver_pkts_sent_id>
+constexpr uint32_t get_new_msg_credit_stream_id() {
+    // to_receiver_pkts_sent_id is now stream 2 or 3 (packed credits)
+    // We map to stream 0 or 1 (flat credits) for the same receiver channel
+    if constexpr (to_receiver_pkts_sent_id == to_receiver_packets_sent_streams[0]) {
+        return to_receiver_new_msg_credit_streams[0];  // Stream 2 -> Stream 0
+    } else {
+        return to_receiver_new_msg_credit_streams[1];  // Stream 3 -> Stream 1
     }
 }
 

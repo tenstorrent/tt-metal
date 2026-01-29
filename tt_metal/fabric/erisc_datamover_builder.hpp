@@ -106,13 +106,26 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                                    South Router
 */
 struct StreamRegAssignments {
-    // Packet send/ack/complete stream IDs
-    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;      // VC0 Ethernet Rx
-    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;      // VC1 Ethernet Rx
-    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;       // VC0 Ethernet Sender Channel 0
-    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;       // VC0 Ethernet Sender Channel 1
-    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;       // VC0 Ethernet Sender Channel 2
-    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;       // VC0 Ethernet Sender Channel 3
+    // New flat credit stream IDs for "new message" signaling (REPURPOSED from old to_receiver_pkts_sent)
+    // These are shared by all senders to a receiver and simply increment by 1 per packet
+    // Used to decouple packet arrival detection from packed credit acknowledgments
+    // In packed credit mode (only mode supported going forward), these replace the old simple increment usage
+    static constexpr uint32_t to_receiver_0_new_msg_credit_id =
+        0;  // VC0 new message flat credit (was to_receiver_0_pkts_sent_id)
+    static constexpr uint32_t to_receiver_1_new_msg_credit_id =
+        1;  // VC1 new message flat credit (was to_receiver_1_pkts_sent_id)
+
+    // Packed credit stream IDs (REPURPOSED from old ack streams)
+    // These store packed credits that are echoed back to senders
+    // In old system, these were per-channel ack streams; now used for packed credit storage in all-packed mode
+    static constexpr uint32_t to_receiver_0_pkts_sent_id = 2;  // VC0 Packed credits (was to_sender_0_pkts_acked_id)
+    static constexpr uint32_t to_receiver_1_pkts_sent_id = 3;  // VC1 Packed credits (was to_sender_1_pkts_acked_id)
+
+    // First-level ack stream IDs (consolidated to single stream in packed ack mode)
+    static constexpr uint32_t to_sender_0_pkts_acked_id = 4;       // VC0 Ethernet Sender (consolidated packed acks)
+    static constexpr uint32_t to_sender_1_pkts_acked_id = 4;       // VC0 Ethernet Sender (same as channel 0 - packed)
+    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;       // VC0 Ethernet Sender (same as channel 0 - packed)
+    static constexpr uint32_t to_sender_3_pkts_acked_id = 4;       // VC0 Ethernet Sender (same as channel 0 - packed)
     static constexpr uint32_t to_sender_0_pkts_completed_id = 6;   // VC0 Tensix Worker on upstream device
     static constexpr uint32_t to_sender_1_pkts_completed_id = 7;   // VC0 Passthrough from upstream device X/Y edge
     static constexpr uint32_t to_sender_2_pkts_completed_id = 8;   // VC0 Passthrough from upstream device X/Y edge
@@ -155,6 +168,8 @@ struct StreamRegAssignments {
         28;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
     static constexpr uint32_t sender_channel_7_free_slots_stream_id = 29;  // for upstream Z edge on: 2D+Z->VC1
 
+    // Stream ID 5: Now available (was to_sender_3_pkts_acked_id before consolidation)
+
     // Local tensix relay free slots stream ID (UDM mode only)
     static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 30;
     // Multi-RISC teardown synchronization stream ID
@@ -166,12 +181,12 @@ struct StreamRegAssignments {
 
     static const auto& get_all_stream_ids() {
         static constexpr std::array stream_ids = {
-            to_receiver_0_pkts_sent_id,
-            to_receiver_1_pkts_sent_id,
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
+            to_receiver_0_new_msg_credit_id,  // Stream 0 (repurposed for flat credits)
+            to_receiver_1_new_msg_credit_id,  // Stream 1 (repurposed for flat credits)
+            to_receiver_0_pkts_sent_id,       // Stream 2 (moved for packed credits)
+            to_receiver_1_pkts_sent_id,       // Stream 3 (moved for packed credits)
+            to_sender_0_pkts_acked_id,        // Stream 4 (all acks consolidated - only one entry needed)
+            // Note: to_sender_1/2/3_pkts_acked_id all map to stream 4, so don't include duplicates
             to_sender_0_pkts_completed_id,
             to_sender_1_pkts_completed_id,
             to_sender_2_pkts_completed_id,

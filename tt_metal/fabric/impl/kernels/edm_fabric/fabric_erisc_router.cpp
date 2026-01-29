@@ -662,16 +662,27 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    // update the remote reg
+    // Send two control packets to receiver:
+    // 1. Flat credit (new message indicator) - shared by all senders
+    // 2. Packed credit (for echo-back acknowledgment)
+
+    // First control packet: Send flat credit to signal "new message"
+    // This is a simple increment by 1, shared across all senders to this receiver
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
+    constexpr uint32_t new_msg_credit_stream_id = get_new_msg_credit_stream_id<to_receiver_pkts_sent_id>();
+    remote_update_ptr_val<new_msg_credit_stream_id, sender_txq_id>(static_cast<int32_t>(1));
 
-    // Determine target stream ID based on sender channel (handles multi-register case)
+    // Second control packet: Send packed credit (for echo-back to sender)
+    // This tells sender "I got your packet" when echoed back
+    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    };
     constexpr uint32_t target_stream_id = get_sender_target_stream_id<sender_channel_index, to_receiver_pkts_sent_id>();
     const uint32_t packets_to_forward = build_packet_forward_value<sender_channel_index, to_receiver_pkts_sent_id>();
 
     // DPRINT << "SEND_PKT: ch=" << (uint32_t)sender_channel_index
     //        << " payload_sz=" << payload_size_bytes
+    //        << " new_msg_stream=" << new_msg_credit_stream_id
     //        << " target_stream=" << target_stream_id
     //        << " packed_credit=" << HEX() << packets_to_forward
     //        << " remote_free_slots=" << remote_receiver_num_free_slots << ENDL();
@@ -1756,7 +1767,7 @@ FORCE_INLINE
                 }
                 // if overlay reg based, this will materialize as decrement; but for multi_txq based,
                 // we're using unbounded L1 based counters, so we must increment instead
-                
+
                 uint32_t acks_to_change_by = build_ack_decrement_value<sender_channel_index>(acks_since_last_check);
                 if constexpr (!multi_txq_enabled) {
                     // if not multi-txq, we're using overlay regs so we need
@@ -1904,49 +1915,34 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
     uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
-    auto packed_num_packets = credits_view.get_packed();  // Returns PackedCreditContainer - READ ONCE
     uint32_t new_credits = 0;
-    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH with enable_first_level_ack: Packed credits - read from shared stream register(s)
-        // Type resolved at compile-time from template parameter (single vs multi-register)
-        // pkts_received_since_last_check = packed_num_packets;
+    // if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
+    // WH with enable_first_level_ack: Use NEW flat credit stream for packet detection
+    // Read the flat "new message" credit that signals arrival of new packets
+    // This is shared by all senders and simply increments by 1 per packet
+    // constexpr uint32_t new_msg_credit_stream_id = ;
+    new_credits = get_ptr_val<get_new_msg_credit_stream_id<to_receiver_pkts_sent_id>()>();
 
-        // Track newly received packets that need first-level acks
-        if (packed_num_packets != 0) {
-            // Get raw value for accumulation (still packed, but as scalar)
-            // auto packed_num_packets_raw = packed_num_packets.get();
-
-            if constexpr (enable_first_level_ack) {
-                // Don't accumulate here - ACKs will be sent per-packet during consumption
-            }
-            // Compute sum from cached packed value to avoid race condition
-            // (get_total() would re-read register, potentially seeing new credits that arrive between reads)
-            constexpr uint8_t num_channels = std::remove_reference_t<decltype(credits_view)>::NUM_CHANNELS_VALUE;
-            constexpr uint8_t credit_width = std::remove_reference_t<decltype(credits_view)>::CREDIT_WIDTH;
-            new_credits = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
-            // uint32_t old_unsent = receiver_channel_pointers.m.unsent_messages;
-            receiver_channel_pointers.m.unsent_messages += new_credits;
-            if constexpr (enable_debug) {
-                receiver_packets_received += new_credits;
-            }
-
-            // DPRINT << "RECV_READ_PKT_CREDITS: channel_id=" << (uint32_t)receiver_channel
-            //        << " new_credits=" << new_credits
-            //     //    << " old_unsent=" << (uint32_t)old_unsent
-            //        << " new_unsent=" << (uint32_t)receiver_channel_pointers.m.unsent_messages
-            //        << " packed_to_clear=" << HEX() << packed_num_packets.get() << DEC() << ENDL();
-
-            // Clear the register(s) by decrementing with the packed value
-            // The updater handles single vs multi-register splitting automatically
-            // credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
+    // Update unsent messages count based on flat credit
+    if (new_credits) {
+        // receiver_channel_pointers.m.unsent_messages += new_credits;
+        // increment_local_update_ptr_val<new_msg_credit_stream_id>(-new_credits);
+        if constexpr (enable_debug) {
+            receiver_packets_received += new_credits;
         }
-        unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
-    } else {
-        // BH (multi_txq_enabled) or !enable_first_level_ack: Use stream register
-        pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
-        unwritten_packets = pkts_received_since_last_check != 0;
     }
 
+    // Note: packed_num_packets is read but NOT interpreted or summed
+    // It will be echoed back to senders for flow control (see batch ACK sending below)
+    // This decouples "new packet arrived" (flat credit) from "I got your packet" (packed credit echo)
+
+    // unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
+    unwritten_packets = new_credits != 0;  // receiver_channel_pointers.m.unsent_messages != 0;
+    // } else {
+    //     // BH (multi_txq_enabled) or !enable_first_level_ack: Use stream register
+    //     pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    //     unwritten_packets = pkts_received_since_last_check != 0;
+    // }
 
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
@@ -2033,8 +2029,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-                receiver_channel_pointers.m.unsent_messages--;
-                // DPRINT << "RECV_CONSUME_PKT: unsent_msgs=" << (uint32_t)before << "->" << (uint32_t)receiver_channel_pointers.m.unsent_messages << ENDL();
+                increment_local_update_ptr_val<get_new_msg_credit_stream_id<to_receiver_pkts_sent_id>()>(-1);
+                // receiver_channel_pointers.m.unsent_messages--;
+                // DPRINT << "RECV_CONSUME_PKT: unsent_msgs=" << (uint32_t)before << "->" <<
+                // (uint32_t)receiver_channel_pointers.m.unsent_messages << ENDL();
 
             } else {
                 // DPRINT << "RECV_CONSUME_PKT: decrement stream register" << ENDL();
@@ -2054,18 +2052,32 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
         }
     }
-    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        if (packed_num_packets != 0) {
-            credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
-        }
-    }
 
-    // Send batch first-level ACK after packet processing (for packed credits mode)
+    // Echo back packed credits to senders (for packed credits mode)
+    // NOTE: We no longer interpret or sum packed credits for packet detection.
+    // Instead, we simply echo them back to tell senders "I got your packet".
+    // Packet arrival detection now uses the flat credit stream (new_msg_credit).
+    // AMORTIZATION: Send acks every other call to reduce overhead
     if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         if constexpr (enable_first_level_ack) {
-            if (packed_num_packets != 0) {
-                receiver_channel_response_credit_sender.template send_packed_ack_credits<
-                    ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(packed_num_packets);
+            // Static counter for amortization (one per receiver channel via template instantiation)
+            static uint32_t ack_amortization_counter = 0;
+            auto packed_num_packets =
+                credits_view.get_packed();  // Returns PackedCreditContainer - READ ONCE (for echo-back)
+            ack_amortization_counter += packed_num_packets != 0;
+
+            // Only send acks every other call (amortization factor = 2)
+            bool should_send_acks = (ack_amortization_counter & 1) == 0;
+            if (should_send_acks) {
+                // // Read packed credits for echo-back (moved after forwarding for latency optimization)
+                // if (packed_num_packets != 0) {
+                // Echo back the packed credits without interpreting them
+                receiver_channel_response_credit_sender
+                    .template send_packed_ack_credits<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                        packed_num_packets);
+                // Clear the packed credit register after echoing back
+                credits_updater.decrement_packed(packed_num_packets);
+                // }
             }
         }
     }
@@ -2075,30 +2087,54 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
     // ACKs are now sent immediately per packet above for both packed and non-packed modes
 
-    // flush and completion are fused, so we only need to update one of the counters
-    // update completion since other parts of the code check against completion
+    // Flush and completion processing with batching optimization
+    // Loop through all completed packets until we hit an unfinished one or run out
     auto& completion_counter = receiver_channel_pointers.completion_counter();
-    // Currently unclear if it's better to loop here or not...
-    bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-    auto receiver_buffer_index = completion_counter.get_buffer_index();
-    bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-    bool can_send_completion = unflushed_writes && next_trid_flushed;
-    if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-        can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
-    }
-    if (can_send_completion) {
-        // With first-level acks enabled, completions are tied to receiver channel index
-        // DPRINT << "RECV_PKT_COMPL: rx_buf=" << (uint32_t)receiver_buffer_index
-        //        << " rx_ch=" << (uint32_t)receiver_channel
-        //        << " compl_counter=" << (uint32_t)completion_counter.get_buffer_index() << ENDL();
-        WATCHER_RING_BUFFER_PUSH(0xFC000000 | receiver_channel);
-        // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
-        receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-            receiver_channel_response_credit_sender);
-        receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-        completion_counter.increment();
-        if constexpr (enable_debug) {
-            receiver_completion_credits_sent++;
+
+    // Static counter for amortization (one per receiver channel via template instantiation)
+    static uint32_t completion_amortization_counter = 0;
+    completion_amortization_counter += !completion_counter.is_caught_up_to(wr_sent_counter);
+
+    // Only process completions every other call (amortization factor = 2)
+    bool should_process_completions = (completion_amortization_counter & 0x3) == 0;
+
+    // Also check TXQ availability if not spinning
+    bool can_process = should_process_completions;
+    // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+    //     can_process = can_process && !internal_::eth_txq_is_busy(receiver_txq_id);
+    // }
+
+    if (can_process) {
+        // Loop: process all flushed packets until we hit an unfinished one
+        // uint32_t completions_sent = 0;
+        while (!completion_counter.is_caught_up_to(wr_sent_counter)) {
+            auto receiver_buffer_index = completion_counter.get_buffer_index();
+            bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+
+            if (!trid_flushed) {
+                // Hit an unfinished packet - stop here
+                break;
+            }
+
+            // This packet is complete - send completion credit and advance
+            // DPRINT << "RECV_PKT_COMPL: rx_buf=" << (uint32_t)receiver_buffer_index
+            //        << " rx_ch=" << (uint32_t)receiver_channel << ENDL();
+
+            // if (completions_sent == 0) {
+            //     WATCHER_RING_BUFFER_PUSH(0xFC000000 | receiver_channel);
+            // }
+
+            // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
+            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                receiver_channel_response_credit_sender);
+
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            completion_counter.increment();
+            // completions_sent++;
+
+            if constexpr (enable_debug) {
+                receiver_completion_credits_sent++;
+            }
         }
     }
 
@@ -2303,7 +2339,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         set_state_for_batched_credit_transfer_to_sender_over_ethernet();
     }
 
-    
     int count = 0;
     while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         loop_iteration_count++;
@@ -2888,9 +2923,20 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
+
+    // Initialize new flat credit streams for "new message" signaling (streams 0-1)
+    init_ptr_val<to_receiver_new_msg_credit_streams[0]>(0);
+    init_ptr_val<to_receiver_new_msg_credit_streams[1]>(0);
+
+    // Initialize packed credit streams for echo-back (streams 2-3, moved from 0-1)
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+    init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+
+    // Initialize consolidated ack stream (stream 4, consolidates old streams 2-5)
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
+
+    // Initialize completion streams (streams 6-13, shifted from old 6-13)
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     // The first sender channel in the array is always for the transient/worker connection

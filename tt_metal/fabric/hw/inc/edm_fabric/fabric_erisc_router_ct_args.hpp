@@ -25,52 +25,62 @@ constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
 constexpr bool SPECIAL_MARKER_CHECK_ENABLED = true;
 
-// Stream IDs from compile time arguments (first 28 arguments)
+// Stream IDs from compile time arguments
+// NOTE: Stream ID allocation has been reorganized for packed credit mode:
+// - Streams 0-1: New flat "message arrived" credits (was simple packet increment in old non-packed mode)
+// - Streams 2-3: Packed credits for echo-back (was streams 0-1 in old organization)
+// - Stream 4: Consolidated ack stream for all sender channels in packed mode (was streams 2-5)
 constexpr size_t STREAM_ID_ARGS_START_IDX = 0;
-constexpr uint32_t to_receiver_0_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 0);
-constexpr uint32_t to_receiver_1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 1);
-constexpr uint32_t to_sender_0_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 2);
-constexpr uint32_t to_sender_1_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 3);
+// New flat credit streams for "new message" signaling (indices 0-1)
+constexpr uint32_t to_receiver_0_new_msg_credit_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 0);
+constexpr uint32_t to_receiver_1_new_msg_credit_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 1);
+// Packed credit streams (moved to indices 2-3)
+constexpr uint32_t to_receiver_0_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 2);
+constexpr uint32_t to_receiver_1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 3);
+// Consolidated ack stream (all sender channels read from same index 4 since they map to stream ID 4)
+constexpr uint32_t to_sender_0_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
+constexpr uint32_t to_sender_1_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
 constexpr uint32_t to_sender_2_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
-constexpr uint32_t to_sender_3_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 5);
-constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 6);
-constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
-constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
-constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
-constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
-constexpr uint32_t to_sender_5_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
-constexpr uint32_t to_sender_6_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
-constexpr uint32_t to_sender_7_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
+constexpr uint32_t to_sender_3_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
+// Completion streams start at index 5 (shifted down by 3 due to ack consolidation)
+constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 5);
+constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 6);
+constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
+constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
+constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
+constexpr uint32_t to_sender_5_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
+constexpr uint32_t to_sender_6_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+constexpr uint32_t to_sender_7_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_1_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_3_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
 constexpr uint32_t vc_0_free_slots_from_downstream_edge_4_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_1_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_2_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
-constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
-constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
-constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);
-constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);
-constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
-constexpr uint32_t sender_channel_5_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
-constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
-constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
-constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 31);
-constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 32);
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
+constexpr uint32_t sender_channel_0_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 24);
+constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 25);
+constexpr uint32_t sender_channel_5_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 26);
+constexpr uint32_t sender_channel_6_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 27);
+constexpr uint32_t sender_channel_7_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 28);
+constexpr uint32_t tensix_relay_local_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 29);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 30);
+constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 31);
 
-// Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 33;
+// Special marker after stream IDs (now at index 32: exactly 32 stream entries)
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 32;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -120,15 +130,15 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 42,
-    "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
-    "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
-    "num_downstream_senders_vc1, wait_for_host_signal)");
+    wait_for_host_signal_IDX == 41,
+    "wait_for_host_signal_IDX must be 41 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 5 "
+    "config args before it: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
+    "num_downstream_senders_vc1)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 43,
+    MAIN_CT_ARGS_START_IDX == 42,
     "MAIN_CT_ARGS_START_IDX must be 42 (32 stream IDs + 1 marker + 2 max channel counts + 1 tensix connections + 6 "
     "config args: num_sender_channels, num_receiver_channels, num_fwd_paths, num_downstream_senders_vc0, "
     "num_downstream_senders_vc1, wait_for_host_signal)");
@@ -550,9 +560,18 @@ constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
 
+// Packed credit streams for echo-back (moved to streams 2-3)
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
+
+// New flat credit streams for "new message" signaling (streams 0-1)
+// Shared by all senders to a receiver - simple increment by 1 per packet
+// Replaces the use of packed credits for detecting new packet arrival
+constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_new_msg_credit_streams =
+    take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{
+            to_receiver_0_new_msg_credit_id, to_receiver_1_new_msg_credit_id});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
