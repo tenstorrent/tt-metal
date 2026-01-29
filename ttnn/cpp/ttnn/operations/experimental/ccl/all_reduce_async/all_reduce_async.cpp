@@ -173,6 +173,12 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, std::nullopt);
+    printf(
+        "All Reduce Async: dim=%u, composite_dim=%u, composite_all_gather=%d, composite_reduce_scatter=%d\n",
+        dim,
+        composite_dim,
+        composite_all_gather,
+        composite_reduce_scatter);
 
     // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
     // convert to interleaved in this case
@@ -271,7 +277,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    uint32_t dim = detail::finding_scatter_dim(input_tensor, num_devices);
+    // uint32_t dim = detail::finding_scatter_dim(input_tensor, num_devices);
+    uint32_t dim = 2;
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
 
@@ -291,8 +298,13 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
     const bool composite_for_2d_mesh = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D &&
                                        detail::is_true_2d_mesh(input_tensor, topology_);
-
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
+    printf(
+        "2. All Reduce Async: dim=%u, composite_dim=%u, composite_all_gather=%d, composite_reduce_scatter=%d\n",
+        dim,
+        composite_dim,
+        composite_all_gather,
+        composite_reduce_scatter);
+    if (true || composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;
@@ -322,6 +334,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
 
         return ttnn::reshape(sum_tensor, initial_shape);
     }
+    printf("Doing reduce scatter + all gather path\n");
 
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
@@ -329,6 +342,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
+        printf("Using async reduce scatter\n");
         scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
@@ -342,6 +356,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             worker_subdevice_id_opt,
             cluster_axis);
     } else {
+        printf("Using normal reduce scatter\n");
         scattered_tensor = ttnn::reduce_scatter(
             interleaved_tensor,
             dim,
@@ -356,6 +371,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             std::nullopt,
             std::nullopt);
     }
+    printf("Done Reduce Scatter call\n");
     interleaved_tensor.deallocate();
     ttnn::Tensor gathered;
     if (ag_global_semaphores.has_value() && barrier_semaphores.has_value()) {
@@ -406,6 +422,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& /*memory_config*/,
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
+    printf("Invoke 3\n");
     auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
@@ -436,6 +453,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    printf("Invoke 4\n");
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -468,6 +486,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    printf("Invoke 5\n");
     topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 

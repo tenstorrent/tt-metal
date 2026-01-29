@@ -645,7 +645,6 @@ def test_tg_trace_rms_fuse_qwen(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
-@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [

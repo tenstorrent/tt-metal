@@ -80,7 +80,7 @@ def test_deepseek_v3_mla_wq_kv_a_fast_reduce_nc_trace_mode(
     # After all-gather, each device has the full [1, 8, 32, 2112] tensor
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,

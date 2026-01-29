@@ -29,12 +29,16 @@ std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_
 }
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<ttnn::Shape> override_shape) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
+    auto input_shape = override_shape.value_or(input_tensor.logical_shape());
 
-    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t rank = input_shape.rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
     const auto normalized_scatter_dim = std::get<0>(normalize_dim_4d(scatter_dim, rank));
@@ -42,7 +46,6 @@ bool use_composite_reduce_scatter(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     // Must scatter evenly
-    auto input_shape = input_tensor.logical_shape();
     if (input_shape[scatter_dim] % num_devices != 0) {
         return false;
     }
