@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -264,14 +265,7 @@ void NOCDebugState::print_aggregated_errors() const {
     }
     for (const auto& [core_key, core_issues] : issues_by_core) {
         if (!core_issues.write_barrier_issues.empty()) {
-            std::string issues_str;
-            for (size_t i = 0; i < core_issues.write_barrier_issues.size(); ++i) {
-                if (i > 0) {
-                    issues_str += ", ";
-                }
-                issues_str += core_issues.write_barrier_issues[i];
-            }
-            log_error(tt::LogMetal, "  {} [{}]", core_key, issues_str);
+            log_error(tt::LogMetal, "  {} [{}]", core_key, fmt::join(core_issues.write_barrier_issues, ", "));
         }
     }
 

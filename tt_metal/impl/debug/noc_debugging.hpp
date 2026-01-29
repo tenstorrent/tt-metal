@@ -94,21 +94,7 @@ struct NOCDebugIssueType {
     NOCDebugIssueType(NOCDebugIssueBaseType type, bool mcast = false, bool semaphore = false) :
         base_type(type), is_mcast(mcast), is_semaphore(semaphore) {}
 
-    bool operator==(const NOCDebugIssueType& other) const {
-        return base_type == other.base_type && is_mcast == other.is_mcast && is_semaphore == other.is_semaphore;
-    }
-
-    bool operator!=(const NOCDebugIssueType& other) const { return !(*this == other); }
-
-    bool operator<(const NOCDebugIssueType& other) const {
-        if (base_type != other.base_type) {
-            return base_type < other.base_type;
-        }
-        if (is_mcast != other.is_mcast) {
-            return is_mcast < other.is_mcast;
-        }
-        return is_semaphore < other.is_semaphore;
-    }
+    auto operator<=>(const NOCDebugIssueType& other) const = default;
 };
 
 struct NOCDebugIssue {
