@@ -207,7 +207,7 @@ may distribute the work as follows:
 * ``core_group_1`` = A subset of four cores (each processing ``8`` tiles)
 * ``core_group_2`` = A subset of seven cores (each processing ``7`` tiles)
 * ``work_per_core_1`` = ``8`` (tiles per core in the primary group)
-* ``work_per_core_2`` = ``7`` (tiles for the secondary group core)
+* ``work_per_core_2`` = ``7`` (tiles per core in the secondary group)
 
 
 A ``CoreRangeSet`` is a compact representation of an arbitrary set of logical cores, implemented as a collection
@@ -380,7 +380,7 @@ Also observe that this approach requires the number of tiles to be a multiple of
 dimension of the core grid to ensure that blocks of tiles are rectangular, thus maximizing data reuse.
 
 Comparing Figure 3 to Figure 2, we went from using ``11`` cores to using ``9`` cores.
-This may be beneficial if the program is memory-bound, because performance benefit from data reuse
+This may be beneficial if the program is memory-bound, because the performance benefit from data reuse
 may be far greater than any performance loss from having fewer compute cores.
 Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores in each dimension.
 
@@ -457,15 +457,15 @@ An example is shown in Figure 4, where each rectangle represents a tile.
 In this example, ``Mt`` = 9, ``Nt`` = 9, ``Kt`` = 6, with the core grid size being ``3x3``.
 As a result, ``M_block_tiles = 3`` and ``N_block_tiles = 3``, which means ``C_block`` has shape ``3x3``.
 One of the ``C_block`` tiles is highlighted in purple in the output matrix ``C``.
-The corresponding ``A_block`` and ``B_block`` tiles are highlighted in shades of purple in the
-input matrices ``A`` and ``B``. If we assume that ``A_block`` and ``B_block`` are too large
+The corresponding ``A_block`` and ``B_block`` tiles are highlighted in shades of red and blue in the
+input matrices ``A`` and ``B``, respectively. If we assume that ``A_block`` and ``B_block`` are too large
 to fit in on-chip SRAM, we split the ``Kt`` dimension into ``K_block_tiles`` = ``2``, which means
 there are ``num_k_blocks`` = ``3`` K-blocks. Therefore:
 
 * ``A_slab(b)`` has shape ``3x2`` tiles, and
 * ``B_slab(b)`` has shape ``2x3`` tiles.
 
-Each "slab" is indicated by a different shade of purple in Figure 4.
+Each "slab" is indicated by a different shade of its respective color in Figure 4.
 
 To see what computation needs to be performed such that each slab is read
 only once, consider the computation for a single output tile ``C[i][j]`` within ``C_block``:
@@ -495,9 +495,10 @@ Define the partial result for block ``b`` as:
 
 A key observation is that the partial result equation needs only tiles from the current K-block ``b``
 to compute the partial result for ``C[i][j](b)``, which is exactly what ``A_slab(b)`` and ``B_slab(b)``
-contain. Considering the example in Figure 4, this means that only the slabs with the same shade of
-purple need to be in on-chip SRAM at the same time. This makes intuitive sense, since matrix multiplication
-involves multiplying elements with matching ``K`` indices.
+contain. Considering the example in Figure 4, this means that only the slabs with the same shading of
+their respective color (e.g. lightest blue and lightest red) need to be in on-chip SRAM at the same
+time. This makes intuitive sense, since matrix multiplication involves multiplying elements with
+matching ``K`` indices.
 
 To get the final result, we need to add partial results for all K-blocks:
 
@@ -684,7 +685,7 @@ Follow these steps to complete the exercise:
    - Intermediate CB needs to store the partial results, whose size is the same as a full ``C_block``.
      Since the same kernel will both produce and consume the partial results, double buffering
      would not provide any benefit.
-   - Create CBs on all cores participating in computation. Since in this exercise it is not
+   - Create CBs on all cores participating in the computation. Since in this exercise it is not
      necessary to use the ``split_work_to_cores`` function, you can construct the set of all
      cores from the core grid dimensions, as follows:
 
@@ -708,7 +709,7 @@ Follow these steps to complete the exercise:
      format related parameters, which are the same for both the output and intermediate CBs.
    * An efficient way to accumulate partial results is to use the destination register array.
      Recall that the ``matmul_tiles`` function adds to the existing values in the destination register
-     rather than overwriting existing content. Therefore, if partial sum is first loaded into
+     rather than overwriting existing content. Therefore, if a partial sum is first loaded into
      the destination register, ``matmul_tiles`` will also accumulate the result into the destination
      register in one operation.
    * Storing partial results into the intermediate CB is done in the same manner as storing
@@ -726,7 +727,7 @@ Follow these steps to complete the exercise:
        Observe that we are calling ``_short`` versions of the initialization functions
        (both ``mm_init_short`` and ``copy_tile_to_dst_init_short``), which are faster
        than the "full" versions. The first call to ``mm_init`` performs more initialization
-       steps that are no longer needed in subsequent calls, and these operations are in common to
+       steps that are no longer needed in subsequent calls, and these operations are common to
        both the copy and multiplication operations, which is why the ``_short`` versions are
        sufficient for later calls.
      - For optimal performance, **make sure to call these initialization functions only when required**.
