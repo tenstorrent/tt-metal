@@ -202,55 +202,75 @@ class TtPatchTSMixerMLP:
 
         if not self.use_height_sharding:
             # Non-sharded path: use simple linear with activation fusion
-            x = ttnn.linear(
+            x1 = ttnn.linear(
                 x,
                 self.w1,
                 bias=self.b1,
                 activation="gelu",
                 compute_kernel_config=self.compute_config,
             )
-            x_out = ttnn.linear(
-                x,
+            x2 = ttnn.linear(
+                x1,
                 self.w2,
                 bias=self.b2,
                 compute_kernel_config=self.compute_config,
             )
-            ttnn.deallocate(x)
-            return x_out
+            ttnn.deallocate(x1)
+            return x2
 
-        # HEIGHT-sharded path: manually split FC1 and GELU for sharding
-        # (activation fusion not compatible with sharding)
+        def _infer_out_features(weight, in_features: int) -> int:
+            shape = [int(x) for x in weight.shape]
+            if len(shape) == 2:
+                out_f, in_f = shape
+            elif len(shape) == 4:
+                _, _, in_f, out_f = shape
+            else:
+                raise RuntimeError(f"Unsupported weight rank: weight={weight.shape}")
 
-        # FC1: (M, K) @ (K, expansion*K) → (M, expansion*K)
-        expansion_K = int(self.w1.shape[0])  # Output features of FC1
+            if in_f == in_features:
+                return out_f
+            if out_f == in_features:
+                return in_f
+            raise RuntimeError(f"Can't infer out_features: weight={weight.shape}, in_features={in_features}")
+
+        # HEIGHT-sharded path: shard once, keep sharded through MLP
+        expansion_K = _infer_out_features(self.w1, K)
+        out_K = _infer_out_features(self.w2, expansion_K)
+
+        # FC1 sharded (keep sharded)
         y = apply_linear_height_sharded(
             x,
             self.w1,
             self.b1,
             M=M,
             K=K,
-            out_shape=(B, C, dim3, expansion_K),
+            out_shape=(1, 1, M, expansion_K),  # Keep in 2D for sharded ops
             use_sharding=True,
             compute_config=self.compute_config,
+            min_K_tiles=1,  # Good default for patch/feature mixing
+            return_sharded=True,  # Keep sharded for GELU
         )
 
-        # GELU activation (on interleaved tensor from apply_linear_height_sharded)
-        y = ttnn.gelu(y)
+        y_gelu = ttnn.gelu(y)
+        ttnn.deallocate(y)
+        y = y_gelu
 
-        # FC2: (M, expansion*K) @ (expansion*K, K) → (M, K)
-        out_K = int(self.w2.shape[0])  # Output features of FC2
-        x_out = apply_linear_height_sharded(
+        y2 = apply_linear_height_sharded(
             y,
             self.w2,
             self.b2,
             M=M,
             K=expansion_K,
-            out_shape=(B, C, dim3, out_K),
+            out_shape=(1, 1, M, out_K),
             use_sharding=True,
             compute_config=self.compute_config,
+            allow_k_padding=True,
+            min_K_tiles=2,
+            return_sharded=False,
         )
         ttnn.deallocate(y)
 
+        x_out = ttnn.reshape(y2, (B, C, dim3, out_K))
         return x_out
 
 
