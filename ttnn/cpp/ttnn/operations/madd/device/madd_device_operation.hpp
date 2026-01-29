@@ -5,11 +5,12 @@
 #pragma once
 
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"                                       // Tensor
-#include "ttnn/tensor/tensor_spec.hpp"                                  // TensorSpec
-#include "ttnn/operations/core/core.hpp"                                // MemoryConfig, DeviceComputeKernelConfig
-#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"  // MAddParams, MAddArgs
-#include "ttnn/operations/madd/device/madd_program_factory.hpp"         // MAddProgramFactory
+#include "ttnn/tensor/tensor.hpp"                                        // Tensor
+#include "ttnn/tensor/tensor_spec.hpp"                                   // TensorSpec
+#include "ttnn/operations/core/core.hpp"                                 // MemoryConfig, DeviceComputeKernelConfig
+#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"   // MAddParams, MAddArgs
+#include "ttnn/operations/madd/device/madd_program_factory.hpp"          // MAddProgramFactory
+#include "ttnn/operations/madd/device/madd_program_factory_sharded.hpp"  // MAddProgramFactorySharded
 
 namespace ttnn::prim {
 
@@ -19,7 +20,7 @@ struct MAddOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<MAddProgramFactory>;
+    using program_factory_t = std::variant<MAddProgramFactory, MAddProgramFactorySharded>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);

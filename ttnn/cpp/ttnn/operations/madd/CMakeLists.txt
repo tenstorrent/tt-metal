@@ -28,6 +28,7 @@ target_sources(
     PRIVATE
         device/madd_device_operation.cpp
         device/madd_program_factory.cpp
+        device/madd_program_factory_sharded.cpp
         madd.cpp
 )
 
