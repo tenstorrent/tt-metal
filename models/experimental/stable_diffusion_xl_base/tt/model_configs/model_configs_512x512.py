@@ -259,6 +259,20 @@ class ModelOptimisations512x512:
             act_block_h_override=512,
         )
 
+        self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+
         self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -1139,7 +1153,7 @@ class ModelOptimisations512x512:
         elif "down_blocks.0.resnets.1" in conv_path:
             return self.conv_configs["DEFAULT"]
         elif "down_blocks.0.downsamplers.0" == conv_path:
-            return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
+            return self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"]
 
         # DOWN BLOCK 1
         elif "down_blocks.1.resnets.0.conv1" == conv_path:
