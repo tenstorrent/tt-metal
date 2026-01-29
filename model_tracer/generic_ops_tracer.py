@@ -204,9 +204,8 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # Convert args format from new tracer to master format
         arguments = {}
 
-        # Track mesh_device info and tensor placements (extracted from args)
+        # Track mesh_device info (extracted from args)
         mesh_device_info = None
-        tensor_placements_set = set()  # Use set to avoid duplicates
 
         # Add positional args with arg0, arg1, arg2, etc. labels
         for arg in data.get("args", []):
@@ -226,18 +225,21 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                         "mesh_device_shape": mesh_data.get("shape", []),
                     }
 
-                # Extract tensor placement info
+                # Extract tensor placement info and store it per-tensor
                 placements = mesh_data.get("placements", [])
                 distribution_shape = mesh_data.get("distribution_shape", [])
                 mesh_shape = mesh_data.get("shape", [])
 
-                if placements:
-                    # Create a hashable representation for deduplication
-                    placement_tuple = (str(placements), str(distribution_shape), str(mesh_shape))
-                    tensor_placements_set.add(placement_tuple)
-
                 # Remove mesh_device from the argument value
                 arg_value_clean = {k: v for k, v in arg_value.items() if k != "mesh_device"}
+
+                # Add per-tensor placement info if it exists
+                if placements:
+                    arg_value_clean["tensor_placement"] = {
+                        "placement": str(placements),
+                        "distribution_shape": str(distribution_shape),
+                        "mesh_device_shape": str(mesh_shape),
+                    }
 
                 # Remove redundant shape if it matches original_shape
                 if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
@@ -287,11 +289,15 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                 distribution_shape = mesh_data.get("distribution_shape", [])
                 mesh_shape = mesh_data.get("shape", [])
 
-                if placements:
-                    placement_tuple = (str(placements), str(distribution_shape), str(mesh_shape))
-                    tensor_placements_set.add(placement_tuple)
-
                 value_clean = {k: v for k, v in value.items() if k != "mesh_device"}
+
+                # Add per-tensor placement info if it exists
+                if placements:
+                    value_clean["tensor_placement"] = {
+                        "placement": str(placements),
+                        "distribution_shape": str(distribution_shape),
+                        "mesh_device_shape": str(mesh_shape),
+                    }
 
                 # Remove redundant shape if it matches original_shape
                 if "shape" in value_clean and "original_shape" in value_clean:
@@ -329,18 +335,8 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         if mesh_device_info:
             enhanced_machine_info.update(mesh_device_info)
 
-        # Add tensor placements
-        if tensor_placements_set:
-            tensor_placements = []
-            for placement_str, dist_shape_str, mesh_shape_str in tensor_placements_set:
-                tensor_placements.append(
-                    {
-                        "placement": placement_str,
-                        "distribution_shape": dist_shape_str,
-                        "mesh_device_shape": mesh_shape_str,
-                    }
-                )
-            enhanced_machine_info["tensor_placements"] = tensor_placements
+        # Note: tensor_placements are now stored per-tensor in the arguments
+        # instead of globally in machine_info, to avoid ambiguity
 
         return {
             "operation": operation_name,
