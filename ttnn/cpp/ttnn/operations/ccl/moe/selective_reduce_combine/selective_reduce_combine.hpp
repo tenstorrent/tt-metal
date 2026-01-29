@@ -31,7 +31,8 @@ struct ExecuteSelectiveReduceCombine {
         const CoreRangeSet worker_core_range_set,
         const CoreRangeSet mux_core_range_set,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<GlobalSemaphore>& optional_cross_device_semaphore = std::nullopt);
 };
 
 }  // namespace operations::ccl::moe

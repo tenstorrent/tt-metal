@@ -43,7 +43,8 @@ void bind_selective_reduce_combine(nb::module_& mod) {
                const CoreRangeSet worker_core_range_set,
                const CoreRangeSet mux_core_range_set,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
                 return self(
                     dense_input_tensor,
                     dense_metadata_tensor,
@@ -62,7 +63,8 @@ void bind_selective_reduce_combine(nb::module_& mod) {
                     worker_core_range_set,
                     mux_core_range_set,
                     memory_config,
-                    optional_output_tensor);
+                    optional_output_tensor,
+                    optional_cross_device_semaphore);
             },
             nb::arg("dense_input_tensor").noconvert(),
             nb::arg("dense_metadata_tensor").noconvert(),
@@ -82,7 +84,8 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             nb::arg("mux_core_range_set").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("optional_cross_device_semaphore") = nb::none()});
 }
 
 }  // namespace ttnn::operations::ccl::moe
