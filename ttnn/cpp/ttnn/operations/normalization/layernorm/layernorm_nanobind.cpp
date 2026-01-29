@@ -326,40 +326,6 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                 RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
                     entirely contained within it.
             )doc");
-
-    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt,
-            R"doc(
-            Creates a program descriptor for sharded layer norm operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
-                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set. If provided, validates that the
-                    sharded tensor's shard spec cores lie entirely within this core range set. Raises an error if any
-                    shard spec core is outside the provided range.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
-
-            Raises:
-                RuntimeError: If core_range_set is provided and the sharded tensor's shard spec cores are not
-                    entirely contained within it.
-            )doc");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {
