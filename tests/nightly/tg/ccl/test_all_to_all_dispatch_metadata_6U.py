@@ -608,9 +608,17 @@ def run_all_to_all_dispatch_metadata_test(
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "fabric_router_config": create_fabric_router_config(max_payload_size=7168),
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
+    ids=["double", "single"],
 )
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
