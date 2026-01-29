@@ -30,10 +30,9 @@ struct fmt::formatter<ttnn::operations::unary::UnaryWithParam> {
     auto format(const ttnn::operations::unary::UnaryWithParam& param, FormatContext& ctx) const {
         if (param.params.empty()) {
             return fmt::format_to(ctx.out(), "UnaryWithParam(op_type={})", param.op_type);
-        } else {
-            return fmt::format_to(
+        }             return fmt::format_to(
                 ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
-        }
+       
     }
 };
 
