@@ -221,7 +221,7 @@ class TTSampling(LightweightModule):
             indices_tensor_torch[:, :, :, i] = i
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
-            dtype=ttnn.uint16,
+            dtype=ttnn.uint32,
             layout=ttnn.Layout.TILE,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
