@@ -27,16 +27,56 @@ enum class WeightTyingType {
     Enabled,
 };
 
+class KvCache;
+
+autograd::TensorPtr memory_efficient_runner(
+    auto&& forward_impl,
+    const autograd::TensorPtr& input,
+    const autograd::TensorPtr& mask,
+    std::shared_ptr<KvCache> kv_cache,
+    const uint32_t layer_idx,
+    const uint32_t new_tokens) {
+    if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
+        return forward_impl(input, mask, kv_cache, layer_idx, new_tokens);
+    }
+
+    auto generator = autograd::ctx().get_generator();
+
+    autograd::TensorPtr out;
+    {
+        auto scoped = ttml::core::Scoped(
+            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
+            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
+        out = forward_impl(input, mask, kv_cache, layer_idx, new_tokens);
+    }
+
+    autograd::GradFunction grad = [input, mask, kv_cache, layer_idx, new_tokens, out, &forward_impl, generator]() {
+        auto input_detached = autograd::create_tensor(input->get_value());
+        autograd::TensorPtr output;
+        {
+            auto scoped = ttml::core::Scoped(
+                [&generator]() { autograd::ctx().set_generator(generator); },
+                [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
+            output = forward_impl(input_detached, mask, kv_cache, layer_idx, new_tokens);
+        }
+        output->set_grad(out->get_grad());
+        output->backward();
+        input->add_grad(input_detached->get_grad());
+    };
+
+    auto links = autograd::get_links(input);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 autograd::TensorPtr memory_efficient_runner(
     auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
         return forward_impl(input, mask);
     }
 
-    // make a copy of a generator before running forward pass
     auto generator = autograd::ctx().get_generator();
 
-    // running forward pass
     autograd::TensorPtr out;
     {
         auto scoped = ttml::core::Scoped(
@@ -45,24 +85,17 @@ autograd::TensorPtr memory_efficient_runner(
         out = forward_impl(input, mask);
     }
 
-    // define grad function and copy generator (in the state before forward pass)
     autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
-        // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
-        // run forward pass again
         autograd::TensorPtr output;
         {
-            // set generator to the state before forward pass during construction
-            // restore generator state after grad function is executed
             auto scoped = ttml::core::Scoped(
                 [&generator]() { autograd::ctx().set_generator(generator); },
                 [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
             output = forward_impl(input_detached, mask);
         }
-        // use gradients from new output
         output->set_grad(out->get_grad());
         output->backward();
-        // reuse gradients from detached input
         input->add_grad(input_detached->get_grad());
     };
 
@@ -218,5 +251,29 @@ private:
         const uint32_t cache_position,
         const uint32_t new_tokens = 1);
 };
+
+inline std::pair<autograd::TensorPtr, autograd::TensorPtr> update_kv_cache_and_get_slices(
+    std::shared_ptr<KvCache>& kv_cache,
+    const uint32_t layer_idx,
+    const autograd::TensorPtr& key_with_heads,
+    const autograd::TensorPtr& value_with_heads,
+    const autograd::TensorPtr& mask,
+    const uint32_t new_tokens) {
+    kv_cache->update(layer_idx, key_with_heads->get_value(), value_with_heads->get_value(), new_tokens);
+
+    const auto& k_cache = kv_cache->get_k_cache(layer_idx);
+    const auto& v_cache = kv_cache->get_v_cache(layer_idx);
+
+    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
+    const auto cache_shape = k_cache.logical_shape();
+    const ttnn::SmallVector<uint32_t> token_end = {
+        cache_shape[0], cache_shape[1], mask->get_value().logical_shape()[-1], cache_shape[3]};
+
+    const auto& k_cache_slice = ttnn::slice(k_cache, token_start, token_end, step);
+    const auto& v_cache_slice = ttnn::slice(v_cache, token_start, token_end, step);
+
+    return {autograd::create_tensor(k_cache_slice), autograd::create_tensor(v_cache_slice)};
+}
 
 }  // namespace ttml::models::common::transformer
