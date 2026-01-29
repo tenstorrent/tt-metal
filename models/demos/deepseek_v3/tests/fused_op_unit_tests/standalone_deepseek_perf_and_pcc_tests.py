@@ -1193,7 +1193,6 @@ def test_wkv_b2_sequence_deepseek_perf(
     measured_std = 0
     for op in results.keys():
         if op == "TransposeDeviceOperation":
-            print(op)
             # There are 2 transpose operations (permutes)
             measured_min += 2 * results[op][cols[0]]["MIN"]
             measured_max += 2 * results[op][cols[0]]["MAX"]
