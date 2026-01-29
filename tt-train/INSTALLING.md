@@ -64,7 +64,7 @@ cd /path/to/tt-metal
 git submodule update --init --recursive
 
 # Build tt-metal
-./build_metal.sh
+./build_metal.sh --build-tt-train
 ```
 
 For additional build options, see the tt-metal documentation.
@@ -88,56 +88,7 @@ source python_env/bin/activate
 
 ## Step 2: Install tt-train
 
-Once tt-metal is installed and your virtual environment is activated, choose one of the following installation methods:
-
-### Method A: Using pre-built ttml (recommended for development)
-
-If you built tt-metal with tt-train support using `build_metal.sh --build-tt-train` or `--build-all`, ttml is already compiled, skip to step 3.
-
-**Automatic setup (recommended):** The `create_venv.sh` script automatically creates the necessary `.pth` files when the tt-train directory exists. Just run:
-
-```bash
-cd /path/to/tt-metal
-./create_venv.sh
-./build_metal.sh --build-tt-train
-```
-
-**Manual setup:** If you need to create the `.pth` files manually:
-
-```bash
-cd /path/to/tt-metal
-echo "/path/to/tt-metal/tt-train/sources/ttml" > python_env/lib/python3.10/site-packages/ttml.pth
-echo "/path/to/tt-metal/build/tt-train/sources/ttml" > python_env/lib/python3.10/site-packages/_ttml.pth
-```
-
-This approach:
-- Avoids rebuilding when ttml is already built
-- Reflects Python source changes immediately
-- Works alongside the existing tt-metal editable install
-
----
-
-### Method B: pip install (standalone build)
-
-**Regular installation:**
-
-> **Note:** This method runs its own CMake build. If you've already built tt-train via `build_metal.sh --build-tt-train`, use Method A instead to avoid rebuilding.
-
-```bash
-pip install /path/to/tt-train/
-```
-
-**Editable installation (for development):**
-
-> **Note:** `--no-build-isolation` Disables isolation when building a modern source distribution, saves time when re-building often
-
-```bash
-pip install --no-build-isolation -e /path/to/tt-train/
-```
-
-Use the editable installation (`-e`) if you plan to modify the tt-train source code and want changes to be reflected immediately without reinstalling.
-
----
+- See [INSTALLING_TTML.md](./docs/INSTALLING_TTML.md) for TT-Train/TTML installation instructions.
 
 ## Step 3: Set Environment Variables
 
