@@ -15,8 +15,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
-from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearLLama
+from models.experimental.tt_symbiote.modules.attention import LlamaAttention, TTNNSDPAAttention
+from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearLLama, TTNNLinearSilu
 from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -24,6 +25,93 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 import transformers
 
 assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
+
+from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeRMSNorm
+
+
+def get_full_attention_mappings():
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention as OriginalGlm4MoeAttention
+
+    class GLMLlamaAttention(LlamaAttention):
+        """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+        def forward(
+            self,
+            hidden_states,
+            attention_mask=None,
+            position_ids=None,
+            past_key_values=None,
+            output_attentions=False,
+            use_cache=False,
+            cache_position=None,
+            position_embeddings=None,  # will become mandatory in v4.46
+            **kwargs,
+        ):
+            if attention_mask is not None:
+                print(
+                    "Warning: attention_mask is not None, but TTNN LlamaAttention does not support it yet."
+                )  # --- IGNORE ---
+            past_key_values = (
+                kwargs.get("past_key_value", past_key_values) if past_key_values is None else past_key_values
+            )
+            if self.qkv_same_shape:
+                query_states, key_states, value_states = self.qkv_proj(hidden_states)
+            else:
+                input_shape = list(hidden_states.shape)[:-1]
+                hidden_shape = (*input_shape, -1, self.torch_layer.head_dim)
+                query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+                key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+                value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+            cos, sin = position_embeddings
+
+            query_states, key_states = self.rope(query_states, key_states, cos, sin)
+
+            if past_key_values is not None:
+                # sin and cos are specific to RoPE models; cache_position needed for the static cache
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
+                )
+
+            original_q_len = query_states.shape[2]
+            kv_len = key_states.shape[2]
+
+            if self.torch_layer.is_causal and original_q_len < kv_len:
+                # Pad query: [B, H, q_len, D] -> [B, H, kv_len, D]
+                pad_len = kv_len - original_q_len
+                # Create zero padding on device
+                pad_shape = (query_states.shape[0], query_states.shape[1], pad_len, query_states.shape[3])
+                zero_pad = ttnn.zeros(
+                    pad_shape,
+                    device=hidden_states.device(),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=hidden_states.dtype,
+                )
+                query_states = ttnn.concat([zero_pad, query_states.to_ttnn], dim=2)
+
+            attn_out = self.sdpa(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                None,
+                dropout=0.0,
+                scaling=self.torch_layer.scaling,
+                is_causal=self.torch_layer.is_causal,
+                transpose_output=False,
+            )
+            attn_out = ttnn.transpose(attn_out.to_ttnn, 1, 2)
+            attn_out = ttnn.reshape(attn_out, [-1, attn_out.shape[1], attn_out.shape[2] * attn_out.shape[3]])
+            # Slice output if query was padded
+            if self.torch_layer.is_causal and original_q_len < kv_len:
+                # Slice: [B, kv_len, D] -> [B, q_len, D]
+                attn_out = attn_out[:, -original_q_len:, :]
+
+            return self.o_proj(attn_out), None
+
+    return {OriginalGlm4MoeAttention: GLMLlamaAttention}
 
 
 def get_attention_mappings():
@@ -111,6 +199,34 @@ def get_attention_mappings():
     return {OriginalGlm4MoeAttention: Glm4MoeAttention}
 
 
+def get_rewritten_glm_moe_mlp():
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeMLP as OriginalGlm4MoeMLP
+
+    class Glm4MoeMLP(nn.Module):
+        def __init__(self, old_layer):
+            super().__init__()
+            self.config = old_layer.config
+            self.hidden_size = old_layer.hidden_size
+            self.intermediate_size = old_layer.intermediate_size
+            self.gate_proj = old_layer.gate_proj
+            self.up_proj = old_layer.up_proj
+            self.down_proj = old_layer.down_proj
+            assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in rewritten MLP."
+            self.act_fn = nn.SiLU()
+
+        @classmethod
+        def from_torch(cls, mlp_module: OriginalGlm4MoeMLP) -> "TTNNGlm4MoeMLP":
+            """Create TTNNGlm4MoeMLP from PyTorch Glm4MoeMLP layer."""
+            new_mlp = cls(mlp_module)
+            return new_mlp
+
+        def forward(self, x):
+            down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+            return down_proj
+
+    return {OriginalGlm4MoeMLP: Glm4MoeMLP}
+
+
 def get_router_mapping():
     from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeTopkRouter
     from ttnn.model_preprocessing import preprocess_linear_weight
@@ -153,6 +269,68 @@ def get_router_mapping():
 
 def get_naive_moe_mapping():
     return {}
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeNaiveMoe as OriginalGlm4MoeNaiveMoe
+
+    class Glm4MoeNaiveMoe(nn.Module):
+        """Collection of expert weights stored as 3D tensors."""
+
+        def __init__(self, old_layer):
+            super().__init__()
+            self.num_experts = old_layer.num_experts
+            self.hidden_dim = old_layer.hidden_dim
+            self.intermediate_dim = old_layer.intermediate_dim
+            self.gate_layers = {
+                i: TTNNLinearSilu.from_parameters(
+                    old_layer.gate_up_proj[i, : self.intermediate_dim, :], linear_class=TTNNLinearLLama
+                )
+                for i in range(self.num_experts)
+            }
+            self.up_layers = {
+                i: TTNNLinearLLama.from_parameters(old_layer.gate_up_proj[i, self.intermediate_dim :, :])
+                for i in range(self.num_experts)
+            }
+            del old_layer.gate_up_proj
+            self.down_layers = {
+                i: TTNNLinearLLama.from_parameters(old_layer.down_proj[i, :, :]) for i in range(self.num_experts)
+            }
+            del old_layer.down_proj
+            assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in naive MoE."
+
+        @classmethod
+        def from_torch(cls, moe_module: OriginalGlm4MoeNaiveMoe) -> "TTNNGlm4MoeNaiveMoe":
+            """Create TTNNGlm4MoeNaiveMoe from PyTorch Glm4MoeNaiveMoe layer."""
+            new_moe = cls(moe_module)
+            return new_moe
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            top_k_index: torch.Tensor,
+            top_k_weights: torch.Tensor,
+        ) -> torch.Tensor:
+            final_hidden_states = torch.zeros_like(hidden_states)
+            with torch.no_grad():
+                expert_mask = torch.nn.functional.one_hot(top_k_index, num_classes=self.num_experts)
+                expert_mask = expert_mask.permute(2, 1, 0)
+                expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+
+            for expert_idx in expert_hit:
+                expert_idx = expert_idx[0]
+                if expert_idx == self.num_experts:
+                    continue
+                top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
+                current_state = hidden_states[token_idx]
+                int_expert = expert_idx.item()
+                gate = self.gate_layers[int_expert](current_state)
+                up = self.up_layers[int_expert](current_state)
+                current_hidden_states = gate * up
+                current_hidden_states = self.down_layers[int_expert](current_hidden_states)
+                current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+                final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+            return final_hidden_states
+
+    return {OriginalGlm4MoeNaiveMoe: Glm4MoeNaiveMoe}
 
 
 @pytest.mark.parametrize(
@@ -183,6 +361,7 @@ def test_glm(mesh_device):
     nn_to_ttnn = {
         nn.Linear: TTNNLinearLLama,
         nn.SiLU: TTNNSilu,
+        Glm4MoeRMSNorm: TTNNRMSNorm,
     }
     nn_to_ttnn_2 = {
         nn.Linear: TTNNLinear,
@@ -190,6 +369,7 @@ def test_glm(mesh_device):
     nn_to_ttnn_attention = get_attention_mappings()
     nn_to_ttnn_router = get_router_mapping()
     nn_to_ttnn_naive_moe = get_naive_moe_mapping()
+    nn_to_ttnn_glm_moe_mlp = get_rewritten_glm_moe_mlp()
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.5-Air")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.5-Air")
@@ -206,7 +386,8 @@ def test_glm(mesh_device):
         return_dict=True,
         return_tensors="pt",
     ).to(model.device)
-    exclude_list = set(
+    modules0 = register_module_replacement_dict(model, nn_to_ttnn_glm_moe_mlp, model_config=None)
+    persistent_weights = set(
         [
             "lm_head",
             "model.layers.23.self_attn.q_proj",
@@ -398,7 +579,9 @@ def test_glm(mesh_device):
             "model.layers.3.self_attn.v_proj",
         ]
     )
-    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None, exclude_replacement=exclude_list)
+    modules1 = register_module_replacement_dict(
+        model, nn_to_ttnn, model_config=None, exclude_replacement=persistent_weights
+    )
     modules2 = register_module_replacement_dict(model, nn_to_ttnn_2, model_config=None)
     modules3 = {}
     if nn_to_ttnn_attention:
@@ -411,15 +594,16 @@ def test_glm(mesh_device):
     if nn_to_ttnn_naive_moe:
         modules5 = register_module_replacement_dict(model, nn_to_ttnn_naive_moe, model_config=None)
     set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2, **modules3, **modules4, **modules5}
+    all_modules = {**modules0, **modules1, **modules3, **modules4, **modules5}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
-        if k in exclude_list:
+        if not isinstance(v, TTNNLinearLLama):
             v.move_weights_to_device()
     print("Running inference...")
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
+    outputs = model.generate(**inputs, max_new_tokens=1, use_cache=True)
     DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
     print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
