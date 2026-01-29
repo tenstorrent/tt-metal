@@ -152,7 +152,7 @@ jobs:
           path: /work
       - name: Check for latency data
         id: check-latency-data
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' }}
         shell: bash
         run: |
           if [ -f "generated/fabric/latency_results_wormhole_b0.csv" ]; then
@@ -164,7 +164,7 @@ jobs:
           fi
       - name: Upload latency data
         ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-latency-data.outputs.has_latency_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && steps.check-latency-data.outputs.has_latency_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
