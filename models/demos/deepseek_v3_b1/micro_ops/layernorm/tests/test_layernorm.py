@@ -516,3 +516,84 @@ def test_kernel_descriptors(device):
     assert reader_desc.config is not None, "Reader config should be set"
     assert compute_desc.config is not None, "Compute config should be set"
     assert writer_desc.config is not None, "Writer config should be set"
+
+
+# =============================================================================
+# Step 1.5.2: Program Execution Test (placeholder kernels)
+# =============================================================================
+
+
+def test_program_executes(device):
+    """
+    Test that the program descriptor executes without errors using placeholder kernels.
+
+    This test verifies the complete pipeline:
+    - Input, gamma, beta tensors are created on device (row-major, DRAM)
+    - Output tensor is allocated on device
+    - LayerNormSingleCore.op() executes without exceptions
+    - No kernel compilation errors occur
+
+    Pass criteria: No exceptions, no kernel compilation errors.
+
+    Note: With placeholder kernels, the output will not contain correct LayerNorm
+    results. This test only verifies the infrastructure is correctly assembled.
+    """
+    torch.manual_seed(42)
+
+    # Test shape - using a simple shape for the first execution test
+    shape = [1, 32]  # Single row, single tile width
+    W = shape[-1]
+    dtype = ttnn.bfloat16
+
+    # Create torch tensors
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    gamma_torch = torch.randn(W, dtype=torch.bfloat16)
+    beta_torch = torch.randn(W, dtype=torch.bfloat16)
+    output_torch = torch.zeros(shape, dtype=torch.bfloat16)
+
+    # Create device tensors (row-major, DRAM interleaved)
+    input_tensor = ttnn.from_torch(
+        input_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma_tensor = ttnn.from_torch(
+        gamma_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_tensor = ttnn.from_torch(
+        beta_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        output_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    epsilon = 1e-6
+
+    # Execute the LayerNorm op - this should compile and run without errors
+    # With placeholder kernels, the output won't be correct, but the infrastructure
+    # should work
+    result = LayerNormSingleCore.op(input_tensor, gamma_tensor, beta_tensor, output_tensor, epsilon)
+
+    # Verify we got a result tensor back
+    assert result is not None, "LayerNormSingleCore.op() should return a tensor"
+
+    # Verify result shape matches input shape
+    result_shape = list(result.shape)
+    assert result_shape == shape, f"Result shape {result_shape} should match input shape {shape}"
+
+    # Note: We do NOT verify numerical correctness here - that's for Stage 2 tests
+    # This test only verifies the program infrastructure works

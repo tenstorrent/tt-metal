@@ -179,7 +179,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Call `ttnn.generic_op([input_tensor, gamma_tensor, beta_tensor, output_tensor], program_descriptor)`
     - Return output tensor
 
-- [ ] **1.5.2** Add program execution test (placeholder kernels)
+- [x] **1.5.2** Add program execution test (placeholder kernels)
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/tests/test_layernorm.py`
   - Requirements:
     - Test function: `test_program_executes(device)`
@@ -189,7 +189,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Pass criteria: No exceptions, no kernel compilation errors
   - Verification: `pytest tests/test_layernorm.py::test_program_executes -v` passes
 
-**Step 1.5 Complete:** [ ]
+**Step 1.5 Complete:** [x]
 
 ---
 
