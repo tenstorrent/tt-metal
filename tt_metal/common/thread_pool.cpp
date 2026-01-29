@@ -12,6 +12,7 @@
 #include <sys/resource.h>  // Needed for setting process priorities
 #include <numa.h>
 #include <tt-metalium/device.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -123,9 +124,7 @@ public:
         // has progressed (data has been read).
         // A stall is only required when the ring_buffer_ backing the queue
         // is full. Realistically, this should never happen, given the size
-        while (tail_.load()->next == head_.load()) {
-            ;
-        }
+        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail_.load()->next != head_.load(); });
         tail_.load()->data = std::move(task);
         tail_.store(tail_.load()->next);
     }
