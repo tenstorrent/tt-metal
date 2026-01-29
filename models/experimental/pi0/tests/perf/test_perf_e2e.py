@@ -14,13 +14,8 @@ from loguru import logger
 # Add parent paths
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-# PyTorch reference implementation
 from models.experimental.pi0.reference.torch_pi0_model import PI0Model as PI0ModelTorch
-
-# TTNN implementation
 from models.experimental.pi0.tt.ttnn_pi0_model import PI0ModelTTNN
-
-# Shared configs and weight loader
 from models.experimental.pi0.common.configs import PI0ModelConfig, SigLIPConfig
 from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 from models.perf.perf_utils import prep_perf_report
@@ -38,7 +33,7 @@ if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
 CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
 SEED = 42
-PCC_THRESHOLD = 0.93  # Account for BFloat16 precision and hardware non-determinism
+PCC_THRESHOLD = 0.93
 
 
 def create_pi0_pipeline_model(ttnn_model, device, inputs):
@@ -120,8 +115,6 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 # =============================================================================
 # PYTEST TEST FUNCTION
 # =============================================================================
-
-
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -163,14 +156,14 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
     )
 
     inputs["img_masks"][0] = ttnn.from_torch(
-        inputs["img_masks"][0].float(),  # (batch_size,)
+        inputs["img_masks"][0].float(),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     inputs["img_masks"][1] = ttnn.from_torch(
-        inputs["img_masks"][1].float(),  # (batch_size,)
+        inputs["img_masks"][1].float(),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
