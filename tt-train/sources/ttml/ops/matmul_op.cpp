@@ -12,7 +12,8 @@ namespace ttml::ops {
 autograd::TensorPtr matmul_op(
     const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
     auto out = autograd::create_tensor();
-    auto res = ttnn_fixed::matmul(a->get_value(), b->get_value(), transpose_a, transpose_b);
+    auto res =
+        ttnn::operations::matmul::matmul_full_grid_precise(a->get_value(), b->get_value(), transpose_a, transpose_b);
     out->set_value(res);
 
     autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b]() {

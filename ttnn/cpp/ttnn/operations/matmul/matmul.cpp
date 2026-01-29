@@ -17,6 +17,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -319,6 +320,32 @@ Tensor matmul(
         /*bias=*/std::nullopt,
         matmul_params,
         optional_output_tensor);
+}
+
+Tensor matmul_full_grid_precise(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b) {
+    const auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
+
+    const ttnn::WormholeComputeKernelConfig matmul_config{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = true,
+        .packer_l1_acc = true};
+
+    return matmul(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */
+        // like in ttml::core::ComputeKernelConfig::matmul(),
+        std::make_optional<DeviceComputeKernelConfig>(matmul_config),
+        /* core_grid */ core_grid);
 }
 
 Tensor linear(
