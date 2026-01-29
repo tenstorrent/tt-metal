@@ -10,7 +10,7 @@ import ttnn
 from models.common.utility_functions import (
     comp_pcc,
 )
-from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.nlp.encoder.metal_BERT_large_11.tt import custom_matmuls
 import torch
 import pytest
 

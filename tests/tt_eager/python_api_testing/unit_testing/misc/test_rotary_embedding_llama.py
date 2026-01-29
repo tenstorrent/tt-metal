@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import ttnn
 
-from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -17,7 +17,7 @@ from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
 )
 from models.tt_transformers.tt.rope import RotarySetup
-from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
 

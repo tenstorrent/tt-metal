@@ -32,8 +32,8 @@ The following models have been traced and their configurations are available in 
 | stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 | gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/multimodal/gemma3/demo/text_demo.py` |
-| falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
-| sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
+| falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py` |
+| sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py` |
 | segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py` |
 
 **T3K Machine:**
@@ -54,7 +54,7 @@ The following models have been traced and their configurations are available in 
 
 | Model | Purpose | Pytest command used for tracing |
 |-------|---------|---------------------------------|
-| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
+| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/nlp/llms/deepseek_v3/demo/demo.py --prompts-file models/demos/nlp/llms/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
 
 
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
@@ -125,7 +125,7 @@ The new format supports multiple execution contexts per configuration, enabling 
           "arguments": [...],
           "contexts": [
             {
-              "source": ["models/demos/deepseek_v3/demo/demo.py"],
+              "source": ["models/demos/nlp/llms/deepseek_v3/demo/demo.py"],
               "machine_info": [
                 {
                   "board_type": "Wormhole",
