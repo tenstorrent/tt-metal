@@ -45,7 +45,7 @@ def run_yolov8s_world_inference(
         weights_mesh_mapper=weights_mesh_mapper,
         outputs_mesh_composer=outputs_mesh_composer,
     )
-    performant_runner._capture_yolov8s_world_trace_2cqs()
+    # Trace capture is already done in __init__, no need to call again
 
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)

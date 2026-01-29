@@ -59,6 +59,8 @@ class YOLOv8sWorldPerformantRunner:
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
+        if hasattr(self.runner_infra, "input_tensor") and self.runner_infra.input_tensor is not None:
+            ttnn.deallocate(self.runner_infra.input_tensor)
         self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         spec = self.runner_infra.input_tensor.spec
         self.op_event = ttnn.record_event(self.device, 0)
@@ -71,6 +73,8 @@ class YOLOv8sWorldPerformantRunner:
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
+        if hasattr(self.runner_infra, "input_tensor") and self.runner_infra.input_tensor is not None:
+            ttnn.deallocate(self.runner_infra.input_tensor)
         self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.op_event = ttnn.record_event(self.device, 0)
         self.runner_infra.run()
@@ -81,6 +85,8 @@ class YOLOv8sWorldPerformantRunner:
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
+        if hasattr(self.runner_infra, "input_tensor") and self.runner_infra.input_tensor is not None:
+            ttnn.deallocate(self.runner_infra.input_tensor)
         self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.op_event = ttnn.record_event(self.device, 0)
         self.runner_infra.dealloc_output()

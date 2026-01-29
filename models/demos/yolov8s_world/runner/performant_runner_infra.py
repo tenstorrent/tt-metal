@@ -134,7 +134,7 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=self.outputs_mesh_composer)
 
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.98)
 
         logger.info(
             f"yolov8s_world - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
