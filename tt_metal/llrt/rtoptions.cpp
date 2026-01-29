@@ -81,24 +81,24 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,   // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,   // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,               // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,            // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,               // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,             // Enable fabric RX channel forwarding profiling
-    TT_METAL_FORCE_REINIT,                   // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,       // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,   // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,             // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,    // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,      // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,              // Enable ERISC IRAM (inverted logic)
-    RELIABILITY_MODE,                        // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,           // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                    // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,              // Force JIT compilation
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
+    TT_METAL_FORCE_REINIT,                  // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
+    TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
+    RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
 
     // ========================================
     // PROFILING & PERFORMANCE

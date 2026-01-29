@@ -1976,8 +1976,7 @@ void assemble_device_commands(
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
     log_trace(tt::LogDispatch, "");
-    log_trace(
-        tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
+    log_trace(tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
     log_trace(
         tt::LogDispatch,
         "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
