@@ -11,7 +11,7 @@ using ttml's C++ operations for computation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict
+from typing import Optional, Dict, Literal
 
 import numpy as np
 import ml_dtypes
@@ -83,7 +83,10 @@ class NanoGPTConfig:
     weight_tying: WeightTyingType = (
         WeightTyingType.Disabled
     )  # Ties tok_emb and fc weights
-    positional_embedding_type: str = "trainable"
+    # Selects positional embedding type:
+    # - trainable positional embedding (trainable)
+    # - sinusoidal positional embedding (fixed)
+    positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
     experimental: NanoGPTExperimentalConfig = field(
         default_factory=NanoGPTExperimentalConfig
     )

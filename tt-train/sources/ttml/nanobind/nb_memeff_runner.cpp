@@ -17,7 +17,7 @@
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
 
-namespace ttml::nanobind {
+namespace ttml::nanobind::detail {
 
 namespace {
 
@@ -75,4 +75,4 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
-}  // namespace ttml::nanobind
+}  // namespace ttml::nanobind::detail

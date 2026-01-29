@@ -21,7 +21,7 @@ import argparse
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 import time
 import pickle
 
@@ -108,7 +108,7 @@ class ModelConfig:
     max_sequence_length: int = 128  # Reduced from 1024 to avoid memory issues
     runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
     weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
-    positional_embedding_type: str = "trainable"
+    positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
     experimental: ModelExperimentalConfig = field(
         default_factory=ModelExperimentalConfig
     )

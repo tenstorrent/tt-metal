@@ -155,7 +155,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     m.def(
         "memory_efficient_runner",
-        &ttml::nanobind::memory_efficient_runner,
+        &ttml::nanobind::detail::memory_efficient_runner,
         nb::arg("forward_impl"),
         nb::arg("input"),
         nb::arg("mask") = nb::none(),

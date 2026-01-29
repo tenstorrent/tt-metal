@@ -7,7 +7,6 @@ transformer_config:
   vocab_size: 50257
   max_sequence_length: 256
   runner_type: memory_efficient
-  weight_tying: enabled
   positional_embedding_type: trainable
   experimental:
     use_composite_layernorm: false
