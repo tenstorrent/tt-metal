@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include "internal/circular_buffer_interface.h"
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_template.h"
+#include "cunpack_common.h"
+#include "api/debug/waypoint.h"
+#include "llk_defs.h"
+#include "llk_io.h"
+#include "llk_operands.h"
+#include "llk_unpack_common.h"
+
+/*************************************************************************
+ * LLK UNPACK COMMON
+ *************************************************************************/
+
+/**
+ * @brief Programs l1 info & source register format for both UNP_A and UNP_B
+ *
+ * @param operandA: The input0 operand circular buffer
+ * @param operandB: The input1 operand circular buffer
+ */
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
+    const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
+
+    tdma_descriptor_t td_val_A, td_val_B;
+    td_val_A.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpA_operand_id]);
+    td_val_B.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpB_operand_id]);
+
+    // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
+}
+
+/**
+ * @brief Programs l1 info & source register format for UNP_A
+ *
+ * @param operandA: The input operand circular buffer
+ */
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
+    llk_unpack_hw_configure(unpA_operand, unpA_operand);
+}
