@@ -43,6 +43,32 @@ namespace tt::tt_metal {
 namespace {
 std::atomic<std::uint64_t> tensor_id_counter{0};
 
+template <typename T>
+Tensor from_buffer(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    ZoneScopedN("ttnn::Tensor::from_span");
+    // Create host tensor with DataType matching buffer
+    auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+
+    size_t volume = spec.logical_shape().volume();
+
+    TT_FATAL(
+        !logical_matches_physical(spec),
+        "Logical matches physical, don't support that case, use Tensor::from_span instead!");
+
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+
+    auto res = Tensor(std::move(host_buffer), buffer_spec);
+    return to_dtype(res, spec.data_type());
+}
+
 }  // namespace
 
 Tensor::Tensor(
@@ -158,6 +184,14 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
+    ZoneScopedN("ttnn::Tensor::from_span");
+    // from_span do first copy of the data to pass to from_vector
+    // than from_vector allocate another vector to change layout, in that use case we don't need first
+    // allocation.
+    if (!logical_matches_physical(spec)) {
+        auto res = from_buffer(buffer, spec, static_cast<T>(pad_value));
+        return to_dtype(res, spec.data_type());
+    }
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
 
@@ -167,6 +201,7 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
+    ZoneScopedN("ttnn::Tensor::from_borrowed_data");
     size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -180,6 +215,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
+    ZoneScopedN("ttnn::Tensor::from_vector");
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -370,6 +406,7 @@ Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<tt::tt_metal::QueueId> cq_id) const {
+    ZoneScopedN("ttnn::Tensor::to_device");
     return tt::tt_metal::to_device(*this, mesh_device, mem_config, cq_id);
 }
 

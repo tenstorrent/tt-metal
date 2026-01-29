@@ -10,6 +10,8 @@
 
 #include <tt-metalium/graph_tracking.hpp>
 
+#include <tt_stl/unreachable.hpp>
+
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
@@ -21,8 +23,8 @@ auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_d
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
     switch (type) {
-        case DataType::BFLOAT16:
-            // https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
+        // case DataType::BFLOAT16:
+        //  https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
             // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
@@ -50,7 +52,7 @@ bool can_construct_on_device(
     const ttnn::Shape& tensor_shape,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config) {
-    return (
+    bool res =
         // Device is required
         device != nullptr &&
         // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
@@ -60,11 +62,14 @@ bool can_construct_on_device(
         // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
         tensor_shape.rank() <= 4 &&
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-        !memory_config.is_sharded() &&
+        !memory_config.is_sharded();
+    if (optional_tile.has_value()) {
         // on-device tiling operation expects 32x32. In some cases (`test_tiny_tiles_bfloat` test for example)
         // the tile size is provided explicitly and does not match x32 pattern.
-        (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
-         ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
+        res &= ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
+               ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0);
+    }
+    return res;
 }
 
 Tensor create_tt_tensor_from_host_data(
@@ -78,7 +83,8 @@ Tensor create_tt_tensor_from_host_data(
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<ttnn::QueueId> cq_id,
-    ttnn::distributed::MeshDevice* device) {
+    ttnn::distributed::MeshDevice* device,
+    bool preserve_nan_values) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
@@ -96,8 +102,8 @@ Tensor create_tt_tensor_from_host_data(
             // spec is constructed directly.
 
             const bool must_construct_on_host =
-                // Sharded typecast does not support conversion between types with different tile sizes, like FLOAT32 ->
-                // BFLOAT4/8. In this case the type conversion should be done on host.
+                // Sharded typecast does not support conversion between types with different tile sizes, like
+                // FLOAT32 -> BFLOAT4/8. In this case the type conversion should be done on host.
                 (memory_config.is_sharded() &&
                  get_datatype_tile_size(src_dtype) != get_datatype_tile_size(dst_dtype)) ||
                 !exec_on_device;
@@ -113,6 +119,16 @@ Tensor create_tt_tensor_from_host_data(
                 static_cast<T>(pad_value));
         }
 
+        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+        if (preserve_nan_values) {
+            return Tensor::from_span(
+                tt::stl::make_const_span(host_buffer.view_as<T>()),
+                tensor_spec,
+                nullptr,
+                std::nullopt,
+                static_cast<T>(pad_value));
+        }
+
         if (exec_on_device && construct_on_device && pydata_type_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
@@ -124,7 +140,6 @@ Tensor create_tt_tensor_from_host_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
-        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
             tensor_spec,
@@ -147,18 +162,6 @@ Tensor create_tt_tensor_from_host_data(
 }
 
 DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, bool is_sharded) {
-    auto is_torch_dtype_matches_ttnn = [](ttnn::PyDType type) {
-        switch (type) {
-            case ttnn::PyDType::UINT64:
-            case ttnn::PyDType::FLOAT64:
-            case ttnn::PyDType::FLOAT16:
-            case ttnn::PyDType::INT64:
-            case ttnn::PyDType::INT16:
-            case ttnn::PyDType::INT8: return false;
-            default: return true;
-        }
-    };
-
     auto to_ttnn_dtype = [](ttnn::PyDType type) {
         switch (type) {
             case ttnn::PyDType::FLOAT32: return DataType::FLOAT32;
@@ -168,14 +171,21 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
             case ttnn::PyDType::BOOL: return DataType::UINT8;
-            default: TT_THROW("Unsupported PyDType {}", type);
+            case ttnn::PyDType::UINT64:
+            case ttnn::PyDType::FLOAT64:
+            case ttnn::PyDType::FLOAT16:
+            case ttnn::PyDType::INT64:
+            case ttnn::PyDType::INT16:
+            case ttnn::PyDType::INT8:
+            default: return DataType::INVALID;
         }
+        ttsl::unreachable();
     };
 
     const DataType mapped_dst_type =
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
 
-    if (!is_torch_dtype_matches_ttnn(src_dtype)) {
+    if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
     }
 
@@ -206,7 +216,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::optional<float> pad_value) {
+    std::optional<float> pad_value,
+    bool preserve_nan_values) {
     ZoneScoped;
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
@@ -237,7 +248,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value.value_or(0.0f),
         mesh_mapper,
         cq_id,
-        device.value_or(nullptr));
+        device.value_or(nullptr),
+        preserve_nan_values);
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

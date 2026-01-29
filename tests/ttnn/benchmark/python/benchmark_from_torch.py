@@ -54,7 +54,6 @@ TTNN_BENCH_TYPES = [
     ttnn.bfloat16,
     ttnn.bfloat8_b,
     ttnn.bfloat4_b,
-    ttnn.bfloat16,
     ttnn.uint8,
     ttnn.int32,
 ]

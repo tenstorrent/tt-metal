@@ -375,51 +375,51 @@ def run_flash_mla_decode_impl(
 
         return tt_out
 
-    tt_outs = []
-    for i in range(num_iters):  # Check for program cache
-        logger.debug(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
-        tt_out = run_op()
-        tt_outs.append(tt_out)
+    with device.cache_entries_counter.measure():
+        tt_outs = []
+        for i in range(num_iters):  # Check for program cache
+            logger.debug(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
+            tt_out = run_op()
+            tt_outs.append(tt_out)
 
-        # Increment start indices for the next iteration
-        ttnn.plus_one(tt_start_indices)
+            # Increment start indices for the next iteration
+            ttnn.plus_one(tt_start_indices)
 
-    ########################
-    ### Validation
-    ########################
-    outs = []
-    for _ in range(num_iters):
-        out_t = scaled_dot_product_attention_reference(
-            q,
-            k,
-            v,
-            start_indices,
-            padded_layer_len,
-            scale,
-        )
-        outs.append(out_t)
+        ########################
+        ### Validation
+        ########################
+        outs = []
+        for _ in range(num_iters):
+            out_t = scaled_dot_product_attention_reference(
+                q,
+                k,
+                v,
+                start_indices,
+                padded_layer_len,
+                scale,
+            )
+            outs.append(out_t)
 
-        start_indices = [x + 1 for x in start_indices]
+            start_indices = [x + 1 for x in start_indices]
 
-    pcc_threshold = 0.999
-    if dtype == ttnn.bfloat4_b:
-        pcc_threshold = 0.91
-    if dtype == ttnn.bfloat8_b:
-        pcc_threshold = 0.98
+        pcc_threshold = 0.999
+        if dtype == ttnn.bfloat4_b:
+            pcc_threshold = 0.91
+        if dtype == ttnn.bfloat8_b:
+            pcc_threshold = 0.98
 
-    for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
-        tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
+        for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
+            tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
 
-        out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-        logger.debug(f"Output PCC: {out_pcc}")
+            out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
+            logger.debug(f"Output PCC: {out_pcc}")
 
-    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
-
-    # Check program cache entries
-    num_program_cache_entries = device.num_program_cache_entries()
+        assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
     # FlashMLA + PlusOne
-    assert num_program_cache_entries == 2, f"Expected 2 program cache entries, got {num_program_cache_entries}."
+    assert (
+        device.cache_entries_counter.total == 2
+    ), f"Expected 2 program cache entries, got {device.cache_entries_counter.total}."
 
 
 @pytest.mark.parametrize(
