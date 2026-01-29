@@ -272,7 +272,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
     // client interface
-    constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
+    constexpr auto num_headers = 3;  // data unicast headers and atomic inc "multicast" headers
     constexpr auto client_interface_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})

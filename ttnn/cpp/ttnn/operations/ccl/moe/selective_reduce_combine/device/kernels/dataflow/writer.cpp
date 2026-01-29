@@ -146,8 +146,8 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, token_size_bytes);
 
-    volatile PACKET_HEADER_TYPE * packet_headers[2];
-    for(uint8_t i =0;i<2;++i){
+    volatile PACKET_HEADER_TYPE* packet_headers[3];
+    for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id,1);
         const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
@@ -292,36 +292,14 @@ void kernel_main() {
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         DPRINT << "TERMINATION MASTER WAITING FOR SENDING DEVICE SEMAPHORES \n";
-
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
-        // "multicast" semaphore increment to let other devices know we are done
-        for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
-            const auto & dest_chip_id = dest_chip_ids[device_idx];
 
-            if (device_idx == linearized_mesh_coord) {
-                noc_semaphore_inc(global_noc_semaphore_addr, 1);
-                noc_async_atomic_barrier();
-            } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-                if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
-                } else {
-                    const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                    const auto& dest_chip_id = dest_chip_ids[device_idx];
-                    fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
-                        fabric_connections,
-                        packet_headers[1],
-                        dest_chip_id,
-                        dest_mesh_id,
-                        global_noc_semaphore_addr,
-                        1,
-                        true);
-                }
-            }
-        }
+        fabric_multicast_bidirectional_atomic_inc_ring_1d<
+            linearized_mesh_coord,
+            mesh_rows,
+            mesh_cols,
+            replicate_axis,
+            true>(fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
         DPRINT << "TERMINATION MASTER CLOSING MUX \n";
