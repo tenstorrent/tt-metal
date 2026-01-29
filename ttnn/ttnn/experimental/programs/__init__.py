@@ -132,8 +132,8 @@ def rms_norm(
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             arch,
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
         )
 
     # Use input's memory config if not provided
