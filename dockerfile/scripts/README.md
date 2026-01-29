@@ -4,35 +4,56 @@ This directory contains installation scripts for external tools used in the TT-M
 
 ## Architecture
 
-The Dockerfile uses **multi-stage builds** to optimize layer caching and reduce rebuild times:
+The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Container Registry) to avoid hitting third-party endpoints repeatedly. This significantly speeds up builds and reduces external dependencies.
+
+### How It Works
+
+1. **Tool images are built once** and pushed to GHCR by `build-docker-artifact.yaml`
+2. **The main Dockerfile pulls** these pre-built tool images instead of building from scratch
+3. **Tool images are versioned** by `<version>-<script_hash>` to ensure cache invalidation when needed
 
 ### Layer Types
 
-1. **Official Image Layers** (`uv-layer`)
+1. **Pre-built Tool Images** (`ccache-layer`, `mold-layer`, `doxygen-layer`, `cba-layer`, `gdb-layer`)
+   - Built by `Dockerfile.tools` and pushed to GHCR
+   - Pulled via `FROM ${TOOL_*_IMAGE}` ARG pattern
+   - Tagged as `ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>`
+   - Third-party endpoints only hit once per tool version
+
+2. **Official Image Layers** (`uv-layer`)
    - Uses `COPY --from=` with SHA256-pinned official images
    - Zero build overhead - just copies pre-built binaries
-   - Most reliable and fastest method
    - See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-
-2. **Simple Binary Layers** (`ccache-layer`, `mold-layer`)
-   - Built from `alpine:3.19` (minimal image)
-   - Downloads pre-built binaries, verifies SHA256 hash, extracts
-   - Zero dependencies on the base Ubuntu image
-   - Can be cached independently - changing base image doesn't invalidate these layers
-
-3. **Builder Stages** (`doxygen-builder`, `cba-builder`, `gdb-builder`)
-   - Built from `base` Ubuntu image (needs build tools)
-   - Downloads source/binary, verifies hash, builds, installs to `/staging`
-   - Only the final build artifacts are copied to target images
-   - Changes to base image may invalidate these, but build results are still cached
 
 ### Benefits
 
-- **Faster rebuilds**: Tool layers don't rebuild when unrelated files change
-- **Smaller images**: Only final binaries copied, not build dependencies
-- **Parallel builds**: Docker can build independent stages concurrently
-- **Hash validation**: All downloads verified before use
-- **Reproducible builds**: SHA256 pinning ensures exact same binaries
+- **No repeated downloads**: Third-party tools downloaded once, then pulled from GHCR
+- **Faster CI builds**: Tool images cached in GHCR, not rebuilt every time
+- **Reduced external dependencies**: Less reliance on GitHub releases, doxygen.nl, GNU mirrors
+- **Hash validation**: All downloads verified with SHA256 before use
+- **Reproducible builds**: Version + script hash ensures exact same binaries
+
+### Building Tool Images
+
+Tool images are automatically built and pushed by `build-docker-artifact.yaml` when they don't exist in GHCR. To manually build tool images:
+
+```bash
+# Build individual tool images
+docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
+docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
+docker build -f dockerfile/Dockerfile.tools --target doxygen -t tool-doxygen:local .
+docker build -f dockerfile/Dockerfile.tools --target cba -t tool-cba:local .
+docker build -f dockerfile/Dockerfile.tools --target gdb -t tool-gdb:local .
+
+# Build main image with local tool images
+docker build \
+  --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
+  --build-arg TOOL_MOLD_IMAGE=tool-mold:local \
+  --build-arg TOOL_DOXYGEN_IMAGE=tool-doxygen:local \
+  --build-arg TOOL_CBA_IMAGE=tool-cba:local \
+  --build-arg TOOL_GDB_IMAGE=tool-gdb:local \
+  -f dockerfile/Dockerfile --target dev .
+```
 
 ## Scripts
 
