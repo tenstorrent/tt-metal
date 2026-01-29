@@ -6,6 +6,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/compute_kernel_lib_common.hpp"
 
 /**
  * @file tilize_helpers.hpp
@@ -43,35 +44,7 @@
 
 namespace compute_kernel_lib {
 
-// =============================================================================
-// Constants
-// =============================================================================
-
-/// Invalid CB sentinel value (matches NUM_CIRCULAR_BUFFERS)
-/// Used to indicate no DT reconfiguration when passed as previous_dt_cb
-constexpr uint32_t INVALID_CB = 32;
-
-// =============================================================================
-// Enums
-// =============================================================================
-
-/**
- * @brief Controls init/uninit behavior at function boundaries
- *
- * InitAndUninit: Default - standalone operation, calls both init and uninit
- * InitOnly: First in a sequence of tilize operations, calls only init
- * UninitOnly: Last in a sequence, calls only uninit
- * Neither: Middle of a sequence, skips both init and uninit
- */
-enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
-
-/**
- * @brief Controls whether the function waits for input data
- *
- * Wait: Default - calls cb_wait_front before each block iteration
- * NoWait: No waiting - caller manages synchronization (cb_wait_front called externally)
- */
-enum class WaitMode : uint8_t { Wait, NoWait };
+// INVALID_CB, InitUninitMode, and WaitMode are provided by compute_kernel_lib_common.hpp
 
 // =============================================================================
 // Internal Helpers (declarations)

@@ -7,6 +7,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/compute_kernel_lib_common.hpp"
 
 /**
  * @file untilize_helpers.hpp
@@ -45,38 +46,8 @@
 
 namespace compute_kernel_lib {
 
-// =============================================================================
-// Constants
-// =============================================================================
-
-/// Invalid CB sentinel value (matches NUM_CIRCULAR_BUFFERS)
-/// Used to indicate no DT reconfiguration when passed as reconfig_from_cb
-constexpr uint32_t INVALID_CB = 32;
-
+// INVALID_CB, InitUninitMode, and WaitMode are provided by compute_kernel_lib_common.hpp
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
-
-// =============================================================================
-// Enums (matching tilize pattern)
-// =============================================================================
-
-/**
- * @brief Controls init/uninit behavior at function boundaries
- *
- * InitAndUninit: Default - standalone operation, calls both init and uninit
- * InitOnly: First in a sequence of untilize operations, calls only init
- * UninitOnly: Last in a sequence, calls only uninit
- * Neither: Middle of a sequence, skips both init and uninit
- */
-enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
-
-/**
- * @brief Controls whether and when the function waits for input data
- *
- * Wait: Default - calls cb_wait_front for block_width_tiles per iteration
- * WaitUpfront: Wait for all tiles before processing starts (GroupNorm pattern)
- * NoWait: No waiting - caller manages synchronization
- */
-enum class WaitMode : uint8_t { Wait, WaitUpfront, NoWait };
 
 // =============================================================================
 // Internal Helpers (declarations)

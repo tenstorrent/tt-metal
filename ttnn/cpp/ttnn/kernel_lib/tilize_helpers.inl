@@ -12,14 +12,14 @@ namespace compute_kernel_lib {
 
 template <uint32_t cb_id>
 constexpr bool has_32x32_tiles() {
-// Check if tile dimension arrays are available (from JIT-generated chlkc_list.h)
-// This header is included via chlkc_list.h in the firmware build
-#if __has_include("chlkc_list.h")
-#include "chlkc_list.h"
+// Check if tile dimension arrays are available (from JIT-generated chlkc_pack_tile_dims.h)
+// Tilize is a pack operation, so we use pack_tile_*_dim arrays for the output CB
+#if __has_include("chlkc_pack_tile_dims.h")
+#include "chlkc_pack_tile_dims.h"
 
-    // Access tile dimensions at compile time
-    constexpr uint32_t tile_r_dim = unpack_tile_r_dim[cb_id];
-    constexpr uint32_t tile_c_dim = unpack_tile_c_dim[cb_id];
+    // Access pack tile dimensions at compile time
+    constexpr uint32_t tile_r_dim = pack_tile_r_dim[cb_id];
+    constexpr uint32_t tile_c_dim = pack_tile_c_dim[cb_id];
 
     // Fast tilize requires 32x32 tiles
     return tile_r_dim == 32 && tile_c_dim == 32;

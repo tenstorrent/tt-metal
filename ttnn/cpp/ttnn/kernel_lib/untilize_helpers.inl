@@ -4,6 +4,13 @@
 // Implementation file for untilize_helpers.hpp
 // This file is included at the end of untilize_helpers.hpp
 
+// Check if unpack_dst_format array is available (from JIT-generated chlkc_unpack_data_format.h)
+// This header is included via chlkc_list.h in the firmware build
+#if __has_include("chlkc_unpack_data_format.h")
+#include "chlkc_unpack_data_format.h"
+#define UNPACK_DATA_FORMAT_AVAILABLE
+#endif
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -12,11 +19,7 @@ namespace compute_kernel_lib {
 
 template <uint32_t cb_id>
 constexpr bool is_integer_format() {
-// Check if unpack_dst_format array is available (from JIT-generated chlkc_unpack_data_format.h)
-// This header is included via chlkc_list.h in the firmware build
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_unpack_data_format.h"
-
+#ifdef UNPACK_DATA_FORMAT_AVAILABLE
     // Access the format at compile time
     constexpr uint32_t format = unpack_dst_format[cb_id];
 
@@ -36,11 +39,9 @@ constexpr bool is_integer_format() {
 
 template <uint32_t cb_id>
 constexpr bool is_fp32_format() {
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_unpack_data_format.h"
+#ifdef UNPACK_DATA_FORMAT_AVAILABLE
     constexpr uint32_t format = unpack_dst_format[cb_id];
-    return format == 4 ||   // Float32
-           format == 20;    // TF32 (if applicable)
+    return format == 0;     // Float32
 #else
     return false;
 #endif
@@ -66,13 +67,13 @@ constexpr uint32_t compute_num_columns(uint32_t total_width, uint32_t max_block_
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_init() {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_fp32 = is_fp32_format<input_cb>();
+    constexpr bool should_pack_untilize = is_integer_format<input_cb>() || is_fp32_format<input_cb>();
 
-    if constexpr (block_width_tiles > dest_limit && is_fp32) {
-        // FP32 with wide width - use standard untilize
+    if constexpr (block_width_tiles > dest_limit && !should_pack_untilize) {
+        // Wide width with format that supports standard untilize (e.g., bfloat16)
         ::untilize_init(input_cb);
     } else if constexpr (block_width_tiles > dest_limit) {
-        // Non-FP32 with wide width - use block-based pack_untilize
+        // Wide width with integer/FP32 - use block-based pack_untilize
         constexpr uint32_t num_columns = compute_num_columns(block_width_tiles, dest_limit);
         constexpr uint32_t column_width = block_width_tiles / num_columns;
         pack_untilize_init<column_width, block_width_tiles>(input_cb, output_cb);
@@ -85,13 +86,13 @@ ALWI void untilize_init() {
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 ALWI void untilize_uninit() {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_fp32 = is_fp32_format<input_cb>();
+    constexpr bool should_pack_untilize = is_integer_format<input_cb>() || is_fp32_format<input_cb>();
 
-    if constexpr (block_width_tiles > dest_limit && is_fp32) {
-        // FP32 with wide width - standard untilize path
+    if constexpr (block_width_tiles > dest_limit && !should_pack_untilize) {
+        // Wide width with format that supports standard untilize
         ::untilize_uninit(input_cb);
     } else {
-        // Pack untilize path (for narrow widths or wide non-FP32)
+        // Pack untilize path (for narrow widths or wide integer/FP32)
         pack_untilize_uninit(output_cb);
     }
 }
@@ -109,20 +110,17 @@ template <
     uint32_t reconfig_from_cb>
 ALWI void untilize(uint32_t num_blocks) {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_fp32 = is_fp32_format<input_cb>();
+    constexpr bool should_pack_untilize = is_integer_format<input_cb>() || is_fp32_format<input_cb>();
     constexpr bool do_init =
         (init_uninit_mode == InitUninitMode::InitAndUninit || init_uninit_mode == InitUninitMode::InitOnly);
     constexpr bool do_uninit =
         (init_uninit_mode == InitUninitMode::InitAndUninit || init_uninit_mode == InitUninitMode::UninitOnly);
 
-    // WaitUpfront pattern always uses standard path because pack_untilize doesn't support it
-    // Also use standard path for wide FP32 types
-    if constexpr (wait_mode == WaitMode::WaitUpfront || (block_width_tiles > dest_limit && is_fp32)) {
+    // For wide tensors: use standard untilize only for formats that support it (not integer/FP32)
+    if constexpr (block_width_tiles > dest_limit && !should_pack_untilize) {
         // =================================================================
         // STANDARD UNTILIZE PATH
-        // Used when:
-        // - wait_mode == WaitUpfront (GroupNorm pattern)
-        // - Width exceeds DEST AND FP32 type (fallback)
+        // Used for wide tensors with formats that support standard untilize (e.g., bfloat16)
         // =================================================================
 
         if constexpr (do_init) {
@@ -130,7 +128,6 @@ ALWI void untilize(uint32_t num_blocks) {
         }
 
         if constexpr (wait_mode == WaitMode::WaitUpfront) {
-            // Wait for all tiles upfront
             uint32_t total_tiles = block_width_tiles * num_blocks;
             cb_wait_front(input_cb, total_tiles);
         }
@@ -152,9 +149,8 @@ ALWI void untilize(uint32_t num_blocks) {
     } else if constexpr (block_width_tiles > dest_limit) {
         // =================================================================
         // BLOCK-BASED PACK UNTILIZE PATH
-        // Used for non-FP32 types with width exceeding DEST limit
+        // Used for wide tensors with integer/FP32 formats
         // Splits wide rows into multiple column chunks that each fit in DEST
-        // Provides hardware acceleration for wide non-FP32 tensors
         // =================================================================
 
         constexpr uint32_t num_columns = compute_num_columns(block_width_tiles, dest_limit);
@@ -162,6 +158,11 @@ ALWI void untilize(uint32_t num_blocks) {
 
         if constexpr (do_init) {
             pack_untilize_init<column_width, block_width_tiles>(input_cb, output_cb);
+        }
+
+        if constexpr (wait_mode == WaitMode::WaitUpfront) {
+            uint32_t total_tiles = block_width_tiles * num_blocks;
+            cb_wait_front(input_cb, total_tiles);
         }
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
@@ -188,6 +189,11 @@ ALWI void untilize(uint32_t num_blocks) {
 
         if constexpr (do_init) {
             pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        }
+
+        if constexpr (wait_mode == WaitMode::WaitUpfront) {
+            uint32_t total_tiles = block_width_tiles * num_blocks;
+            cb_wait_front(input_cb, total_tiles);
         }
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
