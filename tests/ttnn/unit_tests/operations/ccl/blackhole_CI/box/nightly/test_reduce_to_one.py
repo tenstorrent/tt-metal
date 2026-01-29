@@ -101,7 +101,8 @@ def setup_reduce_to_one_test(mesh_device):
 
     # Validate mesh has enough devices for 4x2 submesh
     mesh_rows, mesh_cols = mesh_device.shape
-    assert mesh_rows * mesh_cols >= 8, f"Need at least 8 devices, got {mesh_rows * mesh_cols}"
+    if mesh_rows * mesh_cols < 8:
+        pytest.skip(f"Need at least 8 devices, got {mesh_rows * mesh_cols}")
     logger.info(f"Mesh is {mesh_rows}x{mesh_cols} = {mesh_rows * mesh_cols} devices")
 
     # Setup - create 4x2 submesh
