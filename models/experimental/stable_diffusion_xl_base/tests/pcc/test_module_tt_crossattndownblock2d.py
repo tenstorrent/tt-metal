@@ -21,6 +21,9 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         # 1024x1024 image resolution
         ((1024, 1024), (1, 320, 64, 64), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.997),
         ((1024, 1024), (1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.997),
+        # 512x512 image resolution
+        ((512, 512), (1, 320, 32, 32), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.993),
+        ((512, 512), (1, 640, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.982),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
