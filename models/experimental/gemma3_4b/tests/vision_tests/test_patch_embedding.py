@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 import torch
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.experimental.gemma3_4b.tt.model_config import ModelArgs
 
 from models.experimental.gemma3_4b.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
 from models.experimental.gemma3_4b.tests.references import reference_siglip_patch_embed

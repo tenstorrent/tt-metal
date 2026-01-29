@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.experimental.gemma3_4b.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.mmp import TtGemma3MultiModalProjector
 from models.experimental.gemma3_4b.tests.references import reference_vision_multi_modal
 

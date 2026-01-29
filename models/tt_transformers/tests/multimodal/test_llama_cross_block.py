@@ -219,7 +219,7 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.get_decode_residual_mem_config("decode"),
+                model_args.get_residual_mem_config("decode"),
             )
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(

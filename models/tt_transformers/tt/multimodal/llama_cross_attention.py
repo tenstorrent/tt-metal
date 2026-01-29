@@ -301,7 +301,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
-        return ttnn.to_memory_config(output, self.configuration.get_decode_residual_mem_config("decode"))
+        return ttnn.to_memory_config(output, self.configuration.get_residual_mem_config("decode"))
 
     def forward_prefill(
         self,

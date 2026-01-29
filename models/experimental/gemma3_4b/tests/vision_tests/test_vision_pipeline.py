@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.experimental.gemma3_4b.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 from models.experimental.gemma3_4b.tt.gemma_vision_model import TtSiglipGemmaVisionModel
