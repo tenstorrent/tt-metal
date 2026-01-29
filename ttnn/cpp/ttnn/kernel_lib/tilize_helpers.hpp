@@ -3,40 +3,26 @@
 
 #pragma once
 
-#include <type_traits>
-
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/kernel_lib_types.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 /**
  * @file tilize_helpers.hpp
  * @brief Header-only kernel library for tilize operations
  *
- * This library provides a unified config-based function for ALL tilize operations.
+ * This library provides a single unified function for ALL tilize operations.
  *
  * Key Features:
- * - Config-based API with compile-time CB indices
+ * - ONE function handles everything
  * - Zero runtime overhead (all functions inlined)
  * - Template-based compile-time optimization
- * - Self-documenting named template parameters
+ * - Automatic fast tilize selection when requirements are met
  * - Reduces code duplication across 40+ kernels
  *
  * IMPORTANT: Tilize functions require compute kernel hardware initialization.
  * You MUST call compute_kernel_hw_startup() or a functional equivalent at the
  * start of your kernel before using any tilize functions.
- *
- * Flag-Based Configuration:
- *   Flags represent DEVIATIONS from default behavior.
- *   TilizeFlags::NONE = all defaults (init, uninit, no fast, no dt, do wait)
- *
- *   | Flag        | Meaning                          | Default without flag |
- *   |-------------|----------------------------------|----------------------|
- *   | SKIP_INIT   | Don't call tilize_init           | Do init              |
- *   | SKIP_UNINIT | Don't call tilize_uninit         | Do uninit            |
- *   | FAST        | Use fast_tilize_* functions      | Standard tilize      |
- *   | DT_RECONFIG | Enable data type reconfiguration | Disabled             |
- *   | SKIP_WAIT   | Skip cb_wait_front in loop       | Do wait              |
  *
  * Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -44,209 +30,161 @@
  *   // Initialize compute kernel hardware FIRST
  *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
  *
- *   // Default behavior (most common) - subblock_height, override_input_count, total_rows default to 1, 0, 0
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(tiles_per_row, num_blocks);
+ *   // Simple loop (CBs are compile-time template arguments)
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(32, 10);
  *
- *   // Fast tilize (no need to specify PreviousCB)
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>, TilizeFlags::FAST>>(tiles_per_row, num_blocks);
+ *   // Skip init/uninit (middle of a sequence)
+ *   compute_kernel_lib::tilize<cb_in, cb_out, InitUninitMode::Neither>(32, 10);
  *
- *   // Skip wait (groupnorm pattern)
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>, TilizeFlags::SKIP_WAIT>>(per_core_N, per_core_M);
- *
- *   // With subblock_height (activation pattern)
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(Wt, 1, Ht);
- *
- *   // Data type reconfiguration (requires PreviousCB)
- *   tilize<TilizeConfig<InputCB<new_cb>, OutputCB<cb_out>,
- *                       TilizeFlags::DT_RECONFIG, PreviousCB<old_cb>>>(tiles_per_row, num_blocks);
+ *   // Datatype reconfiguration (switch from old_cb's format)
+ *   compute_kernel_lib::tilize<new_cb, cb_out, InitUninitMode::InitAndUninit,
+ *                              WaitMode::Wait, old_cb>(16, 5);
  */
 
 namespace compute_kernel_lib {
 
 // =============================================================================
-// Config-Based Tilize Functions
+// Constants
+// =============================================================================
+
+/// Invalid CB sentinel value (matches NUM_CIRCULAR_BUFFERS)
+/// Used to indicate no DT reconfiguration when passed as previous_dt_cb
+constexpr uint32_t INVALID_CB = 32;
+
+// =============================================================================
+// Enums
 // =============================================================================
 
 /**
- * @brief Initialize tilize - based on Config
- * @tparam Config TilizeConfig<InputCB<N>, OutputCB<N>, Flags, PreviousCB<N>>
+ * @brief Controls init/uninit behavior at function boundaries
+ *
+ * InitAndUninit: Default - standalone operation, calls both init and uninit
+ * InitOnly: First in a sequence of tilize operations, calls only init
+ * UninitOnly: Last in a sequence, calls only uninit
+ * Neither: Middle of a sequence, skips both init and uninit
  */
-template <typename Config>
-ALWI void tilize_init(uint32_t tiles_per_row) {
-    static_assert(
-        std::is_base_of_v<TilizeConfigBase, Config>,
-        "Config must derive from TilizeConfigBase (use TilizeConfig<InputCB<N>, OutputCB<N>>)");
-
-    constexpr uint32_t input_cb = Config::input_cb;
-    constexpr uint32_t output_cb = Config::output_cb;
-    constexpr uint32_t previous_cb = Config::previous_cb;
-    constexpr TilizeFlags flags = Config::flags;
-
-    constexpr bool use_fast = has_flag(flags, TilizeFlags::FAST);
-    constexpr bool use_dt = has_flag(flags, TilizeFlags::DT_RECONFIG);
-
-    if constexpr (use_dt && use_fast) {
-        fast_tilize_init_with_dt(input_cb, tiles_per_row, output_cb);
-    } else if constexpr (use_dt) {
-        tilize_init_short_with_dt(previous_cb, input_cb, tiles_per_row, output_cb);
-    } else if constexpr (use_fast) {
-        fast_tilize_init(input_cb, tiles_per_row, output_cb);
-    } else {
-        ::tilize_init(input_cb, tiles_per_row, output_cb);
-    }
-}
+enum class InitUninitMode : uint8_t { InitAndUninit, InitOnly, UninitOnly, Neither };
 
 /**
- * @brief Uninitialize tilize - based on Config
- * @tparam Config TilizeConfig<InputCB<N>, OutputCB<N>, Flags, PreviousCB<N>>
+ * @brief Controls whether the function waits for input data
+ *
+ * Wait: Default - calls cb_wait_front before each block iteration
+ * NoWait: No waiting - caller manages synchronization (cb_wait_front called externally)
  */
-template <typename Config>
-ALWI void tilize_uninit() {
-    static_assert(
-        std::is_base_of_v<TilizeConfigBase, Config>,
-        "Config must derive from TilizeConfigBase (use TilizeConfig<InputCB<N>, OutputCB<N>>)");
+enum class WaitMode : uint8_t { Wait, NoWait };
 
-    constexpr uint32_t input_cb = Config::input_cb;
-    constexpr uint32_t output_cb = Config::output_cb;
-    constexpr uint32_t previous_cb = Config::previous_cb;
-    constexpr TilizeFlags flags = Config::flags;
-
-    constexpr bool use_fast = has_flag(flags, TilizeFlags::FAST);
-    constexpr bool use_dt = has_flag(flags, TilizeFlags::DT_RECONFIG);
-
-    if constexpr (use_fast) {
-        fast_tilize_uninit(input_cb, output_cb);
-    } else if constexpr (use_dt) {
-        tilize_uninit_with_dt(input_cb, previous_cb, output_cb);
-    } else {
-        ::tilize_uninit(input_cb, output_cb);
-    }
-}
+// =============================================================================
+// Internal Helpers (declarations)
+// =============================================================================
 
 /**
- * @brief Config-based tilize function
+ * @brief Check if CB has 32x32 tile dimensions at compile time
  *
- * @tparam Config TilizeConfig<InputCB<N>, OutputCB<N>, Flags, PreviousCB<N>>
+ * Fast tilize requires 32x32 tile dimensions. This function checks the tile
+ * configuration from JIT-generated headers when available.
  *
- * @param tiles_per_row Number of tiles per row (output reserve/push count)
- * @param num_blocks Number of blocks to process
- * @param subblock_height Height of each subblock in tiles
- * @param override_input_count Override cb_wait/pop count (0 = use tiles_per_row)
- * @param total_rows Total input rows for variable alignment (0 = disabled)
- *
- * @example
- *   // Default behavior
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(32, 10);
- *
- * @example
- *   // Fast tilize (no need to specify PreviousCB)
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>, TilizeFlags::FAST>>(32, 10);
- *
- * @example
- *   // With subblock_height (activation pattern)
- *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(Wt, 1, Ht);
- *
- * @example
- *   // DT reconfiguration (requires PreviousCB)
- *   tilize<TilizeConfig<InputCB<new_cb>, OutputCB<cb_out>,
- *                       TilizeFlags::DT_RECONFIG, PreviousCB<old_cb>>>(16, 5);
+ * @tparam cb_id Circular buffer ID to check
+ * @return true if CB has 32x32 tiles (or if unable to determine, assumes true)
  */
-template <typename Config>
+template <uint32_t cb_id>
+constexpr bool has_32x32_tiles();
+
+/**
+ * @brief Determine if fast tilize can be used based on compile-time conditions
+ *
+ * Fast tilize is enabled when ALL requirements are met:
+ * 1. Output CB has 32x32 tile dimensions
+ * 2. Half sync mode is enabled (dst_full_sync_en=false)
+ *
+ * Note: Fast tilize drops FP32 precision for higher throughput.
+ * On Blackhole architecture, fast_tilize internally falls back to standard tilize.
+ *
+ * @tparam output_cb Output circular buffer ID
+ * @return true if fast tilize can be used
+ */
+template <uint32_t output_cb>
+constexpr bool can_use_fast_tilize();
+
+// =============================================================================
+// Main Function (declaration)
+// =============================================================================
+
+/**
+ * @brief Unified tilize function handling ALL patterns
+ *
+ * This single function handles:
+ * - Simple loop
+ * - Fast variants (automatically selected when requirements are met)
+ * - Datatype reconfiguration (reconfig_from_cb != INVALID_CB)
+ * - Page-based waiting (when input CB page size differs from tile size):
+ *   - input_pages_per_block: pages to wait for per iteration
+ *   - total_input_pages: total pages to wait for, chunked 32 at a time (takes priority over input_pages_per_block)
+ *
+ * Fast tilize is automatically enabled when:
+ * 1. Output CB has 32x32 tile dimensions
+ * 2. Half sync mode is enabled
+ *
+ * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
+ * Before calling this function, you MUST initialize the compute kernel hardware by
+ * calling compute_kernel_hw_startup() or a functional equivalent at the start of
+ * your kernel. Failure to do so will result in undefined behavior.
+ *
+ * Example:
+ *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+ *   tilize<tt::CBIndex::c_0, tt::CBIndex::c_16>(block_width_tiles, num_blocks);
+ *
+ * @tparam input_cb Input circular buffer ID (must be compile-time constant)
+ * @tparam output_cb Output circular buffer ID (must be compile-time constant)
+ * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
+ * @tparam wait_mode Whether to wait for input (default: Wait)
+ * @tparam reconfig_from_cb CB to reconfigure datatype from (default: INVALID_CB = disabled)
+ *                          When != INVALID_CB, enables datatype reconfiguration from this CB's format
+ *
+ * @param block_width_tiles Number of tiles per tilize call (tiles per output row)
+ * @param num_blocks Number of iterations/blocks to process
+ * @param input_pages_per_block Input page count to wait for per iteration (default: 0 = use block_width_tiles)
+ *                              Use when input CB page size differs from tile size.
+ * @param total_input_pages Total input page count to wait for across all iterations (default: 0 = disabled)
+ *                          When > 0, waits are chunked 32 pages at a time (TILE_HEIGHT), with the last
+ *                          iteration processing remaining pages. Takes priority over input_pages_per_block.
+ *
+ * @example
+ *   // Simple loop
+ *   tilize<cb_in, cb_out>(32, 10);
+ *
+ * @example
+ *   // Skip init/uninit (middle of a sequence)
+ *   tilize<cb_in, cb_out, InitUninitMode::Neither>(32, 10);
+ *
+ * @example
+ *   // Data type reconfiguration
+ *   tilize<new_cb, cb_out, InitUninitMode::InitAndUninit, WaitMode::Wait, old_cb>(16, 5);
+ *
+ * @example
+ *   // Page-based with total pages (conv3d pattern) - chunked 32 at a time
+ *   tilize<cb_in, cb_out>(matmul_K_t, matmul_M_t, 0, num_patches);
+ *
+ * @example
+ *   // Page-based with pages per iteration (convert_to_hwc pattern)
+ *   tilize<cb_in, cb_out>(total_tiles, 1, total_sticks);
+ *
+ * @example
+ *   // Caller-managed waiting (pre-loaded data)
+ *   tilize<cb_in, cb_out, InitUninitMode::InitAndUninit, WaitMode::NoWait>(per_core_N, per_core_M);
+ */
+template <
+    uint32_t input_cb,
+    uint32_t output_cb,
+    InitUninitMode init_uninit_mode = InitUninitMode::InitAndUninit,
+    WaitMode wait_mode = WaitMode::Wait,
+    uint32_t reconfig_from_cb = INVALID_CB>
 ALWI void tilize(
-    uint32_t tiles_per_row,
+    uint32_t block_width_tiles,
     uint32_t num_blocks,
-    uint32_t subblock_height = 1,
-    uint32_t override_input_count = 0,
-    uint32_t total_rows = 0) {
-    static_assert(
-        std::is_base_of_v<TilizeConfigBase, Config>,
-        "Config must derive from TilizeConfigBase (use TilizeConfig<InputCB<N>, OutputCB<N>>)");
-
-    constexpr uint32_t input_cb = Config::input_cb;
-    constexpr uint32_t output_cb = Config::output_cb;
-    constexpr uint32_t previous_cb = Config::previous_cb;
-    constexpr TilizeFlags flags = Config::flags;
-
-    constexpr bool do_init = !has_flag(flags, TilizeFlags::SKIP_INIT);
-    constexpr bool do_uninit = !has_flag(flags, TilizeFlags::SKIP_UNINIT);
-    constexpr bool use_fast = has_flag(flags, TilizeFlags::FAST);
-    constexpr bool use_dt = has_flag(flags, TilizeFlags::DT_RECONFIG);
-    constexpr bool skip_wait = has_flag(flags, TilizeFlags::SKIP_WAIT);
-
-    if constexpr (do_init) {
-        if constexpr (use_dt && use_fast) {
-            fast_tilize_init_with_dt(input_cb, tiles_per_row, output_cb);
-        } else if constexpr (use_dt) {
-            tilize_init_short_with_dt(previous_cb, input_cb, tiles_per_row, output_cb);
-        } else if constexpr (use_fast) {
-            fast_tilize_init(input_cb, tiles_per_row, output_cb);
-        } else {
-            ::tilize_init(input_cb, tiles_per_row, output_cb);
-        }
-    }
-
-    if (total_rows > 0) {
-        uint32_t rows_left = total_rows;
-        constexpr uint32_t TILE_HEIGHT = 32;
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            for (uint32_t h = 0; h < subblock_height; ++h) {
-                uint32_t current_input = rows_left < TILE_HEIGHT ? rows_left : TILE_HEIGHT;
-
-                if constexpr (!skip_wait) {
-                    cb_wait_front(input_cb, current_input);
-                }
-                cb_reserve_back(output_cb, tiles_per_row);
-
-                if constexpr (use_fast) {
-                    fast_tilize_block(input_cb, tiles_per_row, output_cb);
-                } else {
-                    tilize_block(input_cb, tiles_per_row, output_cb);
-                }
-
-                cb_push_back(output_cb, tiles_per_row);
-                cb_pop_front(input_cb, current_input);
-
-                rows_left -= current_input;
-            }
-        }
-    } else {
-        uint32_t input_amount = (override_input_count > 0) ? override_input_count : tiles_per_row;
-
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            for (uint32_t h = 0; h < subblock_height; ++h) {
-                if constexpr (!skip_wait) {
-                    cb_wait_front(input_cb, input_amount);
-                }
-                cb_reserve_back(output_cb, tiles_per_row);
-
-                if constexpr (use_fast) {
-                    fast_tilize_block(input_cb, tiles_per_row, output_cb);
-                } else {
-                    tilize_block(input_cb, tiles_per_row, output_cb);
-                }
-
-                cb_push_back(output_cb, tiles_per_row);
-                cb_pop_front(input_cb, input_amount);
-            }
-        }
-    }
-
-    if constexpr (do_uninit) {
-        if constexpr (use_fast) {
-            fast_tilize_uninit(input_cb, output_cb);
-        } else if constexpr (use_dt) {
-            tilize_uninit_with_dt(input_cb, previous_cb, output_cb);
-        } else {
-            ::tilize_uninit(input_cb, output_cb);
-        }
-    }
-}
+    uint32_t input_pages_per_block = 0,
+    uint32_t total_input_pages = 0);
 
 }  // namespace compute_kernel_lib
 
-// Make config types available without namespace prefix when header is included
-using compute_kernel_lib::InputCB;
-using compute_kernel_lib::OutputCB;
-using compute_kernel_lib::PreviousCB;
-using compute_kernel_lib::TilizeConfig;
-using compute_kernel_lib::TilizeFlags;
+// Include implementation
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.inl"

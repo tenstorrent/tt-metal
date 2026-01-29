@@ -28,7 +28,11 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
-        compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_tilize>>>(1, 1, 1, x_block_size);
+        compute_kernel_lib::tilize<cb_in, cb_tilize>(
+            1,            // block_w (1 tile output)
+            1,            // num_blocks (1 iteration per outer loop)
+            x_block_size  // input_count (asymmetric: rows != tiles)
+        );
 
         // transpose input
         cb_wait_front(cb_tilize, 1);

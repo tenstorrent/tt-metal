@@ -19,22 +19,19 @@
 
 #define DEBUG_PRINT 0
 
-// Helper for conv tilize operations using config-based API
-// CB indices are template parameters, flags computed from init/uninit bools
 #ifdef SPLIT_READER
-#define TILIZE_IN_ATTR __attribute__((noinline))
-#else
-#define TILIZE_IN_ATTR
-#endif
-
 template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
-TILIZE_IN_ATTR void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
-    // Compute flags at compile time: base flags + conditional SKIP_INIT/SKIP_UNINIT
-    constexpr TilizeFlags flags = TilizeFlags::FAST | TilizeFlags::DT_RECONFIG |
-                                  (init_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_INIT) |
-                                  (uninit_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_UNINIT);
-
-    compute_kernel_lib::tilize<TilizeConfig<InputCB<in_cb_id>, OutputCB<out_cb_id>, flags>>(
+__attribute__((noinline)) void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
+#else
+template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
+void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
+#endif
+    constexpr auto init_uninit_mode = init_tilize ? (uninit_tilize ? compute_kernel_lib::InitUninitMode::InitAndUninit
+                                                                   : compute_kernel_lib::InitUninitMode::InitOnly)
+                                                  : (uninit_tilize ? compute_kernel_lib::InitUninitMode::UninitOnly
+                                                                   : compute_kernel_lib::InitUninitMode::Neither);
+    // Pass in_cb_id as previous_dt_cb to ensure DT reconfig (hack for conv)
+    compute_kernel_lib::tilize<in_cb_id, out_cb_id, init_uninit_mode, compute_kernel_lib::WaitMode::Wait, in_cb_id>(
         in_block_w, in_num_subblocks);
 }  // tilize_in()
 
@@ -601,8 +598,7 @@ void kernel_main() {
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
                     // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
-                    compute_kernel_lib::untilize<
-                        UntilizeConfig<WidthInTiles<out_block_w>, InputCB<matmul_partials_cb>, OutputCB<out_cb_id>>>(
+                    compute_kernel_lib::untilize<out_block_w, matmul_partials_cb, out_cb_id>(
                         in0_num_subblocks * out_subblock_h);
                 }
             }
