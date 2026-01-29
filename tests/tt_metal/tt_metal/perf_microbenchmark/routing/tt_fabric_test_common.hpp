@@ -286,6 +286,18 @@ public:
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
 
+    std::vector<CoreCoord> get_available_worker_cores() const override {
+        std::vector<CoreCoord> all_cores;
+        tt::tt_metal::CoreCoord worker_grid = get_worker_grid_size();
+        all_cores.reserve(worker_grid.x * worker_grid.y);
+        for (uint32_t x = 0; x < worker_grid.x; ++x) {
+            for (uint32_t y = 0; y < worker_grid.y; ++y) {
+                all_cores.emplace_back(x, y);
+            }
+        }
+        return all_cores;
+    }
+
     uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const override {
         return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }

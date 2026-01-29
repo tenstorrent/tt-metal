@@ -2318,24 +2318,6 @@ def test_add_i32(device):
     assert torch.equal(torch_add, output_tensor)
 
 
-def test_add_error(device):
-    pytest.skip("Test is skipped because half mem config feature not supported yet")
-    # Create input tensors with specified shapes
-    input_shape = [1, 1, 1, 39576]
-    bias_shape = [1, 39576]
-
-    # Create random tensors
-    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
-    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
-
-    # Convert to TTNN tensors with tile layout
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
-    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
-
-    # Perform the add operation with the specified memory config
-    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, use_legacy=None)
-
-
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -4361,7 +4343,6 @@ def test_binary_sharded_half_mem_config_scalar(device, output_memory_config, sca
 
 
 def test_binary_bcast_sharded_output_half_mem_config(device):
-    pytest.skip("Skipping test due to incomplete implementation of sharded broadcast output")
     """Test binary broadcast with generic sharded memory config inheriting from sharded input"""
     torch.manual_seed(0)
     torch_input_a = torch.rand((2, 7, 64, 128), dtype=torch.bfloat16)
@@ -4383,5 +4364,35 @@ def test_binary_bcast_sharded_output_half_mem_config(device):
     # Use generic height sharded memory config - should inherit from input B
     output = ttnn.add(input_a, input_b, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
     output = ttnn.to_torch(output)
-
     assert_with_pcc(torch_output, output)
+
+    # swap a and b
+    output = ttnn.add(input_b, input_a, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output)
+
+
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_binary_sharded_half_mem_config_interleaved(device, memory_config):
+    torch.manual_seed(0)
+    # Create input tensors with specified shapes
+    input_shape = [1, 1, 1, 395]
+    bias_shape = [395, 395]
+
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the add operation with the specified memory config
+    torch_output = torch.add(torch_input, torch_bias)
+    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=memory_config, use_legacy=None)
+    ttnn_result = ttnn.to_torch(ttnn_result)
+
+    assert_with_pcc(torch_output, ttnn_result)
