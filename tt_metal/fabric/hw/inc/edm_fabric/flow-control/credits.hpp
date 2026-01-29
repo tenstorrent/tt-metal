@@ -362,8 +362,7 @@ private:
      * Helper: Sum 2 byte-aligned channels from packed value
      */
     FORCE_INLINE static uint32_t sum_2_byte_aligned_channels(storage_type packed_value) {
-        PackedDataView data{packed_value};
-        return data.bytes[0] + data.bytes[1];
+        return static_cast<uint8_t>(packed_value + (packed_value >> 16));
     }
 
     /**
@@ -377,12 +376,7 @@ private:
      * - Final sum: (c0 + c2) + c1
      */
     FORCE_INLINE static uint32_t sum_3_byte_aligned_channels(storage_type packed_value) {
-        PackedDataView data{packed_value};
-        // Sum upper and lower 16 bits
-        auto partial = PackedDataView{
-            .packed = static_cast<storage_type>((static_cast<uint32_t>(data.halfs[0]) + static_cast<uint32_t>(data.halfs[1])))};
-        // For 3 channels: partial.bytes[1] == data.bytes[1] (both are c1)
-        return partial.bytes[0] + data.bytes[1];
+        return static_cast<uint8_t>((static_cast<uint32_t>(packed_value) * 0x01010101u) >> 24);
     }
 
     /**
@@ -395,19 +389,14 @@ private:
      * - Adding halfs gives: byte0 = (c0 + c2), byte1 = (c1 + c3)
      * - Final sum: (c0 + c2) + (c1 + c3)
      */
-    FORCE_INLINE static uint32_t sum_4_byte_aligned_channels(storage_type packed_value) {
-        PackedDataView data{packed_value};
-        // Sum upper and lower 16 bits
-        auto partial = PackedDataView{
-            .packed = static_cast<storage_type>((static_cast<uint32_t>(data.halfs[0]) + static_cast<uint32_t>(data.halfs[1])))};
-        // Sum both bytes of the partial result to get all 4 credits
-        return partial.bytes[0] + partial.bytes[1];
+    FORCE_INLINE static uint8_t sum_4_byte_aligned_channels(const storage_type& packed_value) {
+        return static_cast<uint8_t>((static_cast<uint32_t>(packed_value) * 0x01010101u) >> 24);
     }
 
     /**
      * Helper: Sum 2 non-byte-aligned channels from packed value
      */
-    FORCE_INLINE static uint32_t sum_2_non_byte_aligned_channels(storage_type packed_value) {
+    FORCE_INLINE static uint8_t sum_2_non_byte_aligned_channels(storage_type packed_value) {
         uint32_t c0 = static_cast<uint32_t>(packed_value) & CREDIT_MASK;
         uint32_t c1 = (static_cast<uint32_t>(packed_value) >> CREDIT_WIDTH) & CREDIT_MASK;
         return c0 + c1;
@@ -416,7 +405,7 @@ private:
     /**
      * Helper: Sum 3 non-byte-aligned channels from packed value
      */
-    FORCE_INLINE static uint32_t sum_3_non_byte_aligned_channels(storage_type packed_value) {
+    FORCE_INLINE static uint8_t sum_3_non_byte_aligned_channels(storage_type packed_value) {
         uint32_t c0 = static_cast<uint32_t>(packed_value) & CREDIT_MASK;
         uint32_t c1 = (static_cast<uint32_t>(packed_value) >> CREDIT_WIDTH) & CREDIT_MASK;
         uint32_t c2 = (static_cast<uint32_t>(packed_value) >> (2 * CREDIT_WIDTH)) & CREDIT_MASK;
@@ -501,12 +490,12 @@ public:
     /**
      * Pack a single channel's credit value into a new container
      */
-    FORCE_INLINE static PackedValueType pack_channel(uint8_t channel_id, uint32_t value) {
+    FORCE_INLINE static constexpr PackedValueType pack_channel(uint8_t channel_id, uint32_t value) {
         return PackedValueType{static_cast<storage_type>(value) << bit_offset(channel_id)};
     }
 
     template <uint8_t CHANNEL>
-    FORCE_INLINE static PackedValueType pack_channel(uint32_t value) {
+    FORCE_INLINE static constexpr PackedValueType pack_channel(uint32_t value) {
         return pack_channel(CHANNEL, value);
     }
 
@@ -553,9 +542,9 @@ public:
      *   - Step 2: Sum channels 2-4 (next 3 channels, bits 16-39)
      *   - Step 3: Add partial sums
      */
-    FORCE_INLINE static uint32_t sum_all_channels(const PackedValueType& packed) {
+    FORCE_INLINE static uint8_t sum_all_channels(const PackedValueType& packed) {
         if constexpr (NUM_CHANNELS == 1) {
-            return static_cast<uint32_t>(packed.value & CREDIT_MASK);
+            return static_cast<uint8_t>(packed.value & CREDIT_MASK);
         }
         static_assert(credits_are_byte_aligned);
         if constexpr (credits_are_byte_aligned) {

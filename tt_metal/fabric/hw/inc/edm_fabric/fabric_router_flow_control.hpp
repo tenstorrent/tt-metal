@@ -170,7 +170,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 if constexpr (wait_for_txq) {
                     while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
                 }
-                update_sender_side_credits();
+                // update_sender_side_credits();
             }
         }
 
@@ -336,20 +336,11 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
             constexpr uint32_t byte_shift = sender_channel_index * 8;
             constexpr uint32_t byte_mask = 0xFF << byte_shift;
 
-            uint32_t current_byte = acks_received_and_processed & byte_mask;
-            uint32_t delta_byte = packed_num_acks & byte_mask;
-            uint32_t new_byte = (current_byte + delta_byte) & byte_mask;  // Addition with mask for wraparound
-            uint8_t old_unpacked = static_cast<uint8_t>(current_byte >> byte_shift);
-            uint8_t delta_unpacked = static_cast<uint8_t>(delta_byte >> byte_shift);
-            uint8_t new_unpacked = static_cast<uint8_t>(new_byte >> byte_shift);
+            uint32_t result = acks_received_and_processed + packed_num_acks;
+            // Zbb andn helps here: andn(x, mask) = x & ~mask
+            acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | (result & byte_mask);
 
-            // DPRINT << "SEND_PROC_ACK: ch=" << (uint32_t)sender_channel_index
-            //        << " old_packed=" << HEX() << acks_received_and_processed
-            //        << " byte[" << (uint32_t)sender_channel_index << "]=" << DEC() << (uint32_t)old_unpacked << "->" << (uint32_t)new_unpacked
-            //        << " delta=" << (uint32_t)delta_unpacked
-            //        << " new_packed=" << HEX() << ((acks_received_and_processed & ~byte_mask) | new_byte) << ENDL();
-
-            acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | new_byte;
+            // acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | new_byte;
         } else {
             // For counter-based (BH), ack counters are 8-bit and wrap at 256
             // Must use uint8_t semantics to match receiver's wraparound behavior
@@ -524,7 +515,8 @@ template <uint8_t sender_channel_index>
 FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
     if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         if constexpr (multi_txq_enabled) {
-            return (packed_acks >> (sender_channel_index * 8)) & 0xFF;
+            constexpr uint32_t shift = sender_channel_index * 8;
+            return (packed_acks >> shift) & 0xFF;
         } else {
             // WH: Stream register with packing - need to extract this channel's credits
             using PackedCreditsType = tt::tt_fabric::PackedCredits<

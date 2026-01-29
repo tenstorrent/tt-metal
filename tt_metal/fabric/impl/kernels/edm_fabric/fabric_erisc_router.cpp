@@ -651,6 +651,7 @@ FORCE_INLINE void send_next_data(
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
+    // IF LOW LATENCY, MOVE TO AFTER CREDIT!!!
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
@@ -1793,15 +1794,19 @@ FORCE_INLINE
     }
 
     // Process COMPLETIONs from receiver (shared across all senders to this receiver channel)
-    int32_t completions_since_last_check =
-        outbound_to_receiver_channel_pointers.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-    if (completions_since_last_check) {
-        // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
-        if constexpr (enable_debug) {
-            sender_completions_received += completions_since_last_check;
+    constexpr bool enabled = false;
+    if constexpr (enabled) {
+        int32_t completions_since_last_check =
+            outbound_to_receiver_channel_pointers
+                .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        if (completions_since_last_check) {
+            // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
+            if constexpr (enable_debug) {
+                sender_completions_received += completions_since_last_check;
+            }
+            outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+            outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
         }
-        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        outbound_to_receiver_channel_pointers.increment_num_processed_completions(completions_since_last_check);
     }
 
     // Process ACKs from receiver
@@ -1949,9 +1954,7 @@ template <
     typename ReceiverChannelPointersT,
     typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
-    typename LocalTelemetryT,
-    typename ReceiverPacketCreditsViewT = ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id>,
-    typename ReceiverPacketCreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id>>
+    typename LocalTelemetryT>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
@@ -1961,47 +1964,31 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
-    LocalTelemetryT& local_fabric_telemetry,
-    ReceiverPacketCreditsViewT& credits_view,
-    ReceiverPacketCreditsUpdaterT& credits_updater) {
+    LocalTelemetryT& local_fabric_telemetry) {
+    // Stateless credit view/updater - zero cost instantiation
+    using CreditsViewT = ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id>;
+    using CreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id>;
+    static_assert(
+        sizeof(CreditsViewT) == 1 && std::is_trivially_default_constructible_v<CreditsViewT>,
+        "Credits view must be stateless with trivial default constructor");
+    static_assert(
+        sizeof(CreditsUpdaterT) == 1 && std::is_trivially_default_constructible_v<CreditsUpdaterT>,
+        "Credits updater must be stateless with trivial default constructor");
+    CreditsViewT credits_view;
+    CreditsUpdaterT credits_updater;
+    constexpr uint8_t num_channels = decltype(credits_view)::NUM_CHANNELS_VALUE;
+    constexpr uint8_t credit_width = decltype(credits_view)::CREDIT_WIDTH;
 
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
-    uint32_t pkts_received_since_last_check;
-    bool unwritten_packets;
     auto packed_num_packets = credits_view.get_packed();  // Returns PackedCreditContainer - READ ONCE
-    uint32_t new_credits = 0;
-    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH with enable_first_level_ack: Packed credits - read from shared stream register(s)
-        // Type resolved at compile-time from template parameter (single vs multi-register)
-        // pkts_received_since_last_check = packed_num_packets;
-
-        // Track newly received packets that need first-level acks
-        if (packed_num_packets != 0) {
-            // Get raw value for accumulation (still packed, but as scalar)
-            // auto packed_num_packets_raw = packed_num_packets.get();
-
-            if constexpr (enable_first_level_ack) {
-                // Don't accumulate here - ACKs will be sent per-packet during consumption
-            }
-            // Compute sum from cached packed value to avoid race condition
-            // (get_total() would re-read register, potentially seeing new credits that arrive between reads)
-            constexpr uint8_t num_channels = std::remove_reference_t<decltype(credits_view)>::NUM_CHANNELS_VALUE;
-            constexpr uint8_t credit_width = std::remove_reference_t<decltype(credits_view)>::CREDIT_WIDTH;
-            new_credits = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
-            // uint32_t old_unsent = receiver_channel_pointers.m.unsent_messages;
-            receiver_channel_pointers.m.unsent_messages += new_credits;
-            if constexpr (enable_debug) {
-                receiver_packets_received += new_credits;
-            }
-        }
-        unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
-    } else {
-        // BH (multi_txq_enabled) or !enable_first_level_ack: Use stream register
-        pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
-        unwritten_packets = pkts_received_since_last_check != 0;
+    // Track newly received packets that need first-level acks
+    uint32_t new_credits = CreditPacking<num_channels, credit_width>::sum_all_channels(packed_num_packets);
+    receiver_channel_pointers.m.unsent_messages += new_credits;
+    if constexpr (enable_debug) {
+        receiver_packets_received += new_credits;  // adding 0 is fine
     }
-
+    bool unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
 
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
@@ -2111,17 +2098,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     }
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
         if (packed_num_packets != 0) {
-            credits_updater.decrement_packed(packed_num_packets);  // Type-safe container
-        }
-    }
-
-    // Send batch first-level ACK after packet processing (for packed credits mode)
-    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-        if constexpr (enable_first_level_ack) {
-            if (packed_num_packets != 0) {
-                receiver_channel_response_credit_sender.template send_packed_ack_credits<
-                    ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(packed_num_packets);
-            }
+            credits_updater.decrement_packed(packed_num_packets);
+            // CURRENTLY DOES NOT SEND
+            receiver_channel_response_credit_sender
+                .template send_packed_ack_credits<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(packed_num_packets);
         }
     }
 
@@ -2206,16 +2186,12 @@ FORCE_INLINE bool run_receiver_channel_step(
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-        // Instantiate zero-size credits view and updater
         constexpr size_t to_receiver_pkts_sent_id = to_sender_packets_completed_streams[receiver_channel];
-        ReceiverPacketCreditsViewFor<to_receiver_pkts_sent_id> credits_view;
-        ReceiverPacketCreditsUpdaterFor<to_receiver_pkts_sent_id> credits_updater;
-
         return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_pkts_sent_id,
             enable_first_level_ack,
-            DOWNSTREAM_EDM_SIZE,  // Pass size explicitly
+            DOWNSTREAM_EDM_SIZE,
             WriteTridTracker,
             decltype(local_receiver_channels.template get<receiver_channel>()),
             ReceiverChannelPointersT,
@@ -2229,9 +2205,7 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel],
             routing_table,
-            local_fabric_telemetry,
-            credits_view,
-            credits_updater);
+            local_fabric_telemetry);
     }
     return false;
 }
@@ -2545,6 +2519,19 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     routing_table,
                     local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
+            }
+            // Process COMPLETIONs from receiver (shared across all senders to this receiver channel)
+            int32_t completions_since_last_check =
+                outbound_to_receiver_channel_pointer_ch0
+                    .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+            if (completions_since_last_check) {
+                // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
+                if constexpr (enable_debug) {
+                    sender_completions_received += completions_since_last_check;
+                }
+                outbound_to_receiver_channel_pointer_ch0.num_free_slots += completions_since_last_check;
+                outbound_to_receiver_channel_pointer_ch0.increment_num_processed_completions(
+                    completions_since_last_check);
             }
         }
 
