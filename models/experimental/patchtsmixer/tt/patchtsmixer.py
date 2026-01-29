@@ -8,32 +8,57 @@ class TtPatchTSMixerGatedAttention:
     Stage 2 Optimization: L1 memory for weights and outputs
     """
 
-    def __init__(self, device, base_address: str, parameters: dict):
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        use_height_sharding: bool = True,
+        min_k_tiles: int = 1,
+    ):
         self.device = device
         self.base_address = base_address
+        self.use_height_sharding = use_height_sharding
+        self.min_k_tiles = min_k_tiles
 
         # Keep weights in DRAM (hardware multicasts to cores)
         self.weight = parameters[f"{base_address}.attn_layer.weight"]
         self.bias = parameters[f"{base_address}.attn_layer.bias"]
+
+        self.compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
     def __call__(self, x):
         # x shape: (B, C, Np, D)
         B = x.shape[0]
         C = x.shape[1]
 
-        # Linear with multi-core parallelization
-        y = ttnn.linear(
-            x,
-            self.weight,
-            bias=self.bias,
-            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            ),
-        )
+        if self.use_height_sharding:
+            y = apply_linear_height_sharded(
+                x,
+                self.weight,
+                self.bias,
+                M=B * C * x.shape[2],
+                K=x.shape[3],
+                out_shape=(B, C, x.shape[2], x.shape[3]),
+                use_sharding=True,
+                compute_config=self.compute_config,
+                allow_k_padding=True,
+                min_K_tiles=self.min_k_tiles,
+            )
+        else:
+            y = ttnn.linear(
+                x,
+                self.weight,
+                bias=self.bias,
+                core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+                compute_kernel_config=self.compute_config,
+            )
         # Softmax (let TTNN manage memory)
         w = ttnn.softmax(y, dim=-1)
         ttnn.deallocate(y)
@@ -172,10 +197,21 @@ class TtPatchTSMixerMLP:
     Supports HEIGHT sharding optimization for improved parallelization.
     """
 
-    def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0, use_height_sharding: bool = True):
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        eps: float = 0.0,
+        use_height_sharding: bool = True,
+        min_k_tiles_fc1: int = 1,
+        min_k_tiles_fc2: int = 2,
+    ):
         self.device = device
         self.base = base_address
         self.use_height_sharding = use_height_sharding
+        self.min_k_tiles_fc1 = min_k_tiles_fc1
+        self.min_k_tiles_fc2 = min_k_tiles_fc2
 
         # Keep weights in DRAM (hardware multicasts to cores during matmul)
         self.w1 = parameters[f"{self.base}.fc1.weight"]
@@ -247,7 +283,7 @@ class TtPatchTSMixerMLP:
             out_shape=(1, 1, M, expansion_K),  # Keep in 2D for sharded ops
             use_sharding=True,
             compute_config=self.compute_config,
-            min_K_tiles=1,  # Good default for patch/feature mixing
+            min_K_tiles=self.min_k_tiles_fc1,
             return_sharded=True,  # Keep sharded for GELU
         )
 
@@ -265,7 +301,7 @@ class TtPatchTSMixerMLP:
             use_sharding=True,
             compute_config=self.compute_config,
             allow_k_padding=True,
-            min_K_tiles=2,
+            min_K_tiles=self.min_k_tiles_fc2,
             return_sharded=False,
         )
         ttnn.deallocate(y)
@@ -434,7 +470,13 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
             eps=eps,
         )
 
-        self.mlp = TtPatchTSMixerMLP(device=device, base_address=f"{self.base}.mlp", parameters=parameters, eps=eps)
+        self.mlp = TtPatchTSMixerMLP(
+            device=device,
+            base_address=f"{self.base}.mlp",
+            parameters=parameters,
+            eps=eps,
+            min_k_tiles_fc2=1,
+        )
 
         if use_gated_attn:
             self.gate = TtPatchTSMixerGatedAttention(
