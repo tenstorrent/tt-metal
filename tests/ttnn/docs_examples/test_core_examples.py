@@ -133,11 +133,19 @@ def test_to_dtype(device):
     logger.info("TT-NN tensor shape after converting to uint8", tensor.shape)
 
 
+def test_typecast(device):
+    tensor = ttnn.typecast(ttnn.rand((10, 3, 32, 32), dtype=ttnn.bfloat16, device=device), dtype=ttnn.uint16)
+    assert tensor.dtype == ttnn.uint16
+    assert tensor.shape == (10, 3, 32, 32)
+
+    logger.info("TT-NN tensor shape after typecasting to uint16", tensor.shape)
+
+
 def test_to_dtype_nd_sharded(device):
     # Create an ND-sharded tensor of shape [10, 64, 32] (device), then bring it back to host (same dtype)
     host_src = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
-    shard_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    nd_shard_spec = ttnn.NdShardSpec((10, 64, 32), shard_cores, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})
+    nd_shard_spec = ttnn.NdShardSpec((1, 64, 32), shard_cores, ttnn.ShardOrientation.ROW_MAJOR)
     device_tensor = ttnn.to_device(
         host_src, device=device, memory_config=ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
     )

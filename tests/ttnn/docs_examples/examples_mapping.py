@@ -33,6 +33,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.copy_device_to_host_tensor": core.test_copy_device_to_host_tensor,
     "ttnn.copy_host_to_device_tensor": core.test_copy_host_to_device_tensor,
     "ttnn.to_dtype": core.test_to_dtype,
+    "ttnn.typecast": core.test_typecast,
     # Tensor Creation
     "ttnn.arange": tensor_creation.test_arrange,
     "ttnn.empty": tensor_creation.test_empty,

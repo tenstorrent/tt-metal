@@ -196,7 +196,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::to_dtype,
         R"doc(
-        Converts a tensor to the desired dtype
+        Converts a host tensor to the desired dtype.
 
         Args:
             tensor (ttnn.Tensor): the tensor to be converted to the desired dtype.
