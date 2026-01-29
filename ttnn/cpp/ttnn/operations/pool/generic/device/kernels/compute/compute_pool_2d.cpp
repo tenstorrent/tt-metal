@@ -212,7 +212,7 @@ void kernel_main() {
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
-                        add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        add_int_tile<DataFormat::UInt16>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
 
                         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                     }

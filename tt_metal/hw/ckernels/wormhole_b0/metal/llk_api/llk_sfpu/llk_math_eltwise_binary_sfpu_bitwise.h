@@ -15,14 +15,16 @@ inline void llk_math_eltwise_binary_sfpu_bitwise_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
 }
 
-template <
-    bool APPROXIMATE,
-    ckernel::sfpu::BinaryBitwiseOp BITWISE_OP,
-    InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32>
+template <bool APPROXIMATE, sfpu::BinaryBitwiseOp BITWISE_OP, DataFormat data_format>
 inline void llk_math_eltwise_binary_sfpu_bitwise(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for bitwise operation");
+    constexpr InstrModLoadStore INSTRUCTION_MODE =
+        data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_binary_bitwise<APPROXIMATE, BITWISE_OP, INSTRUCTION_MODE>,
+        sfpu::calculate_sfpu_binary_bitwise<APPROXIMATE, BITWISE_OP, INSTRUCTION_MODE>,
         dst_index0,
         dst_index1,
         odst,
