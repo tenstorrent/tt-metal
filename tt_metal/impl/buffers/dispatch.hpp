@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "dispatch/command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
@@ -22,6 +21,11 @@
 namespace tt::tt_metal {
 class IDevice;
 enum class TensorMemoryLayout;
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+struct ReadCoreDataDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -56,9 +60,6 @@ struct ReadBufferDescriptor {
         dst_offset(dst_offset),
         num_pages_read(num_pages_read) {}
 };
-
-using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {

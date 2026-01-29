@@ -13,7 +13,6 @@
 #include <functional>
 #include <memory>
 
-#include "command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
@@ -116,26 +115,6 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
         event->cq_id,
         event->event_id);
     return event_completed;
-}
-
-void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    cq.finish(sub_device_ids);
-    // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
-    if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
-        TT_FATAL(
-            !(MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()),
-            "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-        TT_FATAL(
-            !(MetalContext::instance().watcher_server()->killed_due_to_error()),
-            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-            MetalContext::instance().watcher_server()->log_file_name());
-    }
 }
 
 }  // namespace tt::tt_metal
