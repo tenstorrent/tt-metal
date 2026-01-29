@@ -1295,10 +1295,10 @@ class MLA1D(AbstractModule):
     def _fwd_decode_all_to_all_pre_flash_mla(cls, tt_q: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,32,16,576 L1 interleaved
         # the current perf of this op is 383 µs
-        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["flash_mla_reshard"])
+        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
         # 1,4,128,576  L1 interleaved
         # the current perf of this op is 9.34 µs
-        # tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
+        tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
         return tt_q
 
