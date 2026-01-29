@@ -766,7 +766,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const CoreCoord core_grid_offset,
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt) {
+    std::optional<uint32_t> mm_block_wt,
+    std::optional<uint32_t> mm_M_block_ht,
+    std::optional<uint32_t> mm_N_block_wt) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -1340,6 +1342,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_strided_reduce_scatter_async_
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
                 core_grid_offset,
+                std::nullopt,
+                std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt);
@@ -2139,7 +2143,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     CoreCoord core_grid_offset,
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt) {
+    std::optional<uint32_t> mm_block_wt,
+    std::optional<uint32_t> mm_M_block_ht,
+    std::optional<uint32_t> mm_N_block_wt) {
     return ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
         program,
         input_tensor,
@@ -2164,7 +2170,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         core_grid_offset,
         mm_cores_y,
         mm_block_ht,
-        mm_block_wt);
+        mm_block_wt,
+        mm_M_block_ht,
+        mm_N_block_wt);
 }
 
 StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_program_artifacts(
@@ -2347,7 +2355,9 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         CoreCoord(0, 0),
         operation_attributes.mm_cores_y,
         operation_attributes.mm_block_ht,
-        operation_attributes.mm_block_wt);
+        operation_attributes.mm_block_wt,
+        operation_attributes.mm_M_block_ht,
+        operation_attributes.mm_N_block_wt);
 
     return {std::move(program), std::move(shared_vars)};
 }

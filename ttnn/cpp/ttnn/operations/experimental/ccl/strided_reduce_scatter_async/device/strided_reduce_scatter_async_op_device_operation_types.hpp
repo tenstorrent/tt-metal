@@ -47,6 +47,8 @@ struct operation_attributes_t {
     std::optional<uint32_t> mm_cores_y;
     std::optional<uint32_t> mm_block_ht;
     std::optional<uint32_t> mm_block_wt;
+    std::optional<uint32_t> mm_M_block_ht;
+    std::optional<uint32_t> mm_N_block_wt;
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -68,6 +70,8 @@ struct operation_attributes_t {
         attrs.emplace_back("mm_cores_y", mm_cores_y);
         attrs.emplace_back("mm_block_ht", mm_block_ht);
         attrs.emplace_back("mm_block_wt", mm_block_wt);
+        attrs.emplace_back("mm_M_block_ht", mm_M_block_ht);
+        attrs.emplace_back("mm_N_block_wt", mm_N_block_wt);
         return attrs;
     }
 };

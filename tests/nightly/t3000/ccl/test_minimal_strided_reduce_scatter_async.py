@@ -36,6 +36,8 @@ class ReduceScatterTestConfig:
     mm_cores_y: object = None  # Optional[int]
     mm_block_ht: object = None  # Optional[int]
     mm_block_wt: object = None  # Optional[int]
+    mm_M_block_ht: object = None  # Optional[int]
+    mm_N_block_wt: object = None  # Optional[int]
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -74,6 +76,8 @@ def run_reduce_scatter_impl(
     mm_cores_y=None,
     mm_block_ht=None,
     mm_block_wt=None,
+    mm_M_block_ht=None,
+    mm_N_block_wt=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -211,6 +215,8 @@ def run_reduce_scatter_impl(
                 mm_cores_y=mm_cores_y,
                 mm_block_ht=mm_block_ht,
                 mm_block_wt=mm_block_wt,
+                mm_M_block_ht=mm_M_block_ht,
+                mm_N_block_wt=mm_N_block_wt,
             )
         elif use_new:
             logger.info(f"Using new reduce scatter")
@@ -423,6 +429,8 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=1,
+                mm_M_block_ht=1,
+                mm_N_block_wt=2,
             ),
             id="experimental_strided_minimal_correctness_check_1",
         ),
@@ -444,6 +452,8 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=1,
+                mm_M_block_ht=1,
+                mm_N_block_wt=2,
             ),
             id="experimental_strided_minimal_correctness_check_2",
         ),
@@ -483,6 +493,8 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=1,
+                mm_M_block_ht=1,
+                mm_N_block_wt=2,
             ),
             id="experimental_strided_minimal_correctness_check_3",
         ),
@@ -504,6 +516,8 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=1,
+                mm_M_block_ht=1,
+                mm_N_block_wt=2,
             ),
             id="experimental_strided_minimal_correctness_check_4",
         ),
@@ -596,6 +610,8 @@ def test_strided_reduce_scatter_async(
         mm_cores_y,
         mm_block_ht,
         mm_block_wt,
+        mm_M_block_ht,
+        mm_N_block_wt,
     ) = astuple(test_config)
 
     run_reduce_scatter_impl(
@@ -622,4 +638,6 @@ def test_strided_reduce_scatter_async(
         mm_cores_y=mm_cores_y,
         mm_block_ht=mm_block_ht,
         mm_block_wt=mm_block_wt,
+        mm_M_block_ht=mm_M_block_ht,
+        mm_N_block_wt=mm_N_block_wt,
     )
