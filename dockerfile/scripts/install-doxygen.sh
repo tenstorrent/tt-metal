@@ -30,11 +30,19 @@ echo "${DOXYGEN_SHA256}  ${TMPDIR}/doxygen.tar.gz" | sha256sum -c -
 tar -xzf "${TMPDIR}/doxygen.tar.gz" -C "${TMPDIR}" --strip-components=1
 
 # Create install prefix directory
-mkdir -p "${INSTALL_PREFIX}"
+mkdir -p "${INSTALL_PREFIX}/bin"
 
-# Build and install (doxygen binary release still requires make install)
+# Build and install (doxygen binary release uses DESTDIR for installation root)
 make -C "${TMPDIR}" -j"$(nproc)"
-make -C "${TMPDIR}" install prefix="${INSTALL_PREFIX}"
+# Use DESTDIR to redirect installation - files go to $DESTDIR/usr/local/...
+make -C "${TMPDIR}" install DESTDIR="${INSTALL_PREFIX}"
+
+# Move from DESTDIR structure to flat structure for easier COPY in Dockerfile
+# /staging/usr/local/bin/doxygen -> /staging/bin/doxygen
+if [ -d "${INSTALL_PREFIX}/usr/local/bin" ]; then
+    mv "${INSTALL_PREFIX}/usr/local/bin/"* "${INSTALL_PREFIX}/bin/" 2>/dev/null || true
+    rm -rf "${INSTALL_PREFIX}/usr"
+fi
 
 # Cleanup
 rm -rf "${TMPDIR}"
