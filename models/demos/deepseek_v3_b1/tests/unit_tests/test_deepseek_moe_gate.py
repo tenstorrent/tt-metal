@@ -149,5 +149,5 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     top8_indices, i = torch.sort(top8_indices, dim=-1)
     top8_scores = torch.gather(top8_scores, dim=-1, index=i)
 
-    assert torch.equal(sorted_output_indices_torch, top8_indices), "Output indices do not match"
+    assert torch.equal(sorted_output_indices_torch.to(top8_indices.dtype), top8_indices), "Output indices do not match"
     assert torch.allclose(sorted_output_torch, top8_scores, atol=1e-2, rtol=1e-4), "Output scores do not match"
