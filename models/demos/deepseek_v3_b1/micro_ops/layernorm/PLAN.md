@@ -117,7 +117,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
 
 ### Step 1.4: Kernel Descriptors
 
-- [ ] **1.4.1** Create placeholder kernel files
+- [x] **1.4.1** Create placeholder kernel files
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/kernels/reader.cpp`
     - Minimal reader that does nothing (just `void kernel_main() {}`)
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/kernels/compute.cpp`
