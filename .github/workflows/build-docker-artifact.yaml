@@ -72,6 +72,9 @@ on:
       tool-gdb-tag:
         description: "Docker tag for the GDB tool image"
         value: ${{ jobs.check-tool-images.outputs.gdb-tag }}
+      tool-cmake-tag:
+        description: "Docker tag for the cmake tool image"
+        value: ${{ jobs.check-tool-images.outputs.cmake-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -111,6 +114,8 @@ jobs:
       cba-exists: ${{ steps.check.outputs.cba-exists }}
       gdb-tag: ${{ steps.tags.outputs.gdb-tag }}
       gdb-exists: ${{ steps.check.outputs.gdb-exists }}
+      cmake-tag: ${{ steps.tags.outputs.cmake-tag }}
+      cmake-exists: ${{ steps.check.outputs.cmake-exists }}
       any-missing: ${{ steps.check.outputs.any-missing }}
     steps:
       - name: Checkout repo
@@ -127,6 +132,7 @@ jobs:
           DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
 
           # Compute hashes for each tool (version + install script)
           CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
@@ -134,6 +140,7 @@ jobs:
           DOXYGEN_HASH=$(cat dockerfile/scripts/install-doxygen.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           CBA_HASH=$(cat dockerfile/scripts/install-clangbuildanalyzer.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
 
           # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
@@ -142,6 +149,7 @@ jobs:
           echo "doxygen-tag=${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" >> $GITHUB_OUTPUT
           echo "cba-tag=${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" >> $GITHUB_OUTPUT
           echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
+          echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
 
           # Also output versions for build args
           echo "ccache-version=${CCACHE_VERSION}" >> $GITHUB_OUTPUT
@@ -149,6 +157,7 @@ jobs:
           echo "doxygen-version=${DOXYGEN_VERSION}" >> $GITHUB_OUTPUT
           echo "cba-version=${CBA_VERSION}" >> $GITHUB_OUTPUT
           echo "gdb-version=${GDB_VERSION}" >> $GITHUB_OUTPUT
+          echo "cmake-version=${CMAKE_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Check if tool images exist
         id: check
@@ -170,6 +179,7 @@ jobs:
           check_image "${{ steps.tags.outputs.doxygen-tag }}" "doxygen"
           check_image "${{ steps.tags.outputs.cba-tag }}" "cba"
           check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
+          check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
 
           # Check if any are missing
           if [[ "${{ steps.tags.outputs.ccache-tag }}" == "" ]] || \
@@ -177,7 +187,8 @@ jobs:
              ! docker manifest inspect "${{ steps.tags.outputs.mold-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.doxygen-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.cba-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1; then
+             ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.cmake-tag }}" > /dev/null 2>&1; then
             echo "any-missing=true" >> $GITHUB_OUTPUT
           else
             echo "any-missing=false" >> $GITHUB_OUTPUT
@@ -251,6 +262,16 @@ jobs:
           target: gdb
           push: true
           tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
+
+      - name: Build and push cmake image
+        if: needs.check-tool-images.outputs.cmake-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: cmake
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
 
   # =============================================================================
   # MAIN DOCKER IMAGES: Check and build CI/Dev/Test images
@@ -399,6 +420,7 @@ jobs:
             TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
             TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -418,6 +440,7 @@ jobs:
             TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
             TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -437,6 +460,7 @@ jobs:
             TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
             TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
