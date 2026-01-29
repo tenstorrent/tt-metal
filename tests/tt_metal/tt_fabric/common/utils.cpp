@@ -9,6 +9,15 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <yaml-cpp/yaml.h>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <gtest/gtest.h>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <sstream>
+#include <vector>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -105,6 +114,357 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
         }
     }
     return physical_chip_ids_mapping;
+}
+
+bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
+    if (!std::filesystem::exists(generated_file)) {
+        log_error(tt::LogTest, "Generated file does not exist: {}", generated_file.string());
+        return false;
+    }
+    if (!std::filesystem::exists(golden_file)) {
+        log_error(tt::LogTest, "Golden file does not exist: {}", golden_file.string());
+        return false;
+    }
+
+    try {
+        YAML::Node generated = YAML::LoadFile(generated_file.string());
+        YAML::Node golden = YAML::LoadFile(golden_file.string());
+
+        // Compare the YAML structures
+        if (!generated["asic_to_fabric_node_mapping"] || !golden["asic_to_fabric_node_mapping"]) {
+            log_error(tt::LogTest, "Missing 'asic_to_fabric_node_mapping' key in one of the files");
+            return false;
+        }
+
+        auto gen_mapping = generated["asic_to_fabric_node_mapping"];
+        auto gold_mapping = golden["asic_to_fabric_node_mapping"];
+
+        if (!gen_mapping["hostnames"] || !gold_mapping["hostnames"]) {
+            log_error(tt::LogTest, "Missing 'hostnames' key in one of the files");
+            return false;
+        }
+
+        auto gen_hostnames = gen_mapping["hostnames"];
+        auto gold_hostnames = gold_mapping["hostnames"];
+
+        // Collect all umd_chip_id mappings from all hostnames and meshes (skip hostname comparison)
+        // Key format: "mesh_id:umd_chip_id" to uniquely identify each mapping
+        std::map<std::string, YAML::Node> gen_map_by_chip_id;
+        std::map<std::string, YAML::Node> gold_map_by_chip_id;
+
+        // Helper function to collect chips from a host entry (handles both old and new formats)
+        // Ignores hostname - only collects chips by mesh_id:umd_chip_id
+        auto collect_chips_from_host = [](const YAML::Node& host_node, std::map<std::string, YAML::Node>& chip_map) {
+            if (host_node.IsMap()) {
+                // Check if this is the new format: map with "hostname" and "mesh" keys
+                if (host_node["mesh"]) {
+                    // New format: single host entry with mesh list
+                    // Format: hostname: X
+                    //         mesh:
+                    //           - mesh: 0
+                    //           - chips:
+                    //               - umd_chip_id: 0
+                    auto mesh_list = host_node["mesh"];
+                    uint32_t current_mesh_id = 0;
+
+                    // Iterate through mesh list - entries are either mesh maps or chips maps
+                    for (const auto& entry : mesh_list) {
+                        if (entry.IsMap()) {
+                            if (entry["mesh"]) {
+                                // This is a mesh entry
+                                current_mesh_id = entry["mesh"].as<uint32_t>();
+                            } else if (entry["chips"]) {
+                                // This is a chips entry - collect chips for the current mesh
+                                auto chips_list = entry["chips"];
+                                for (const auto& chip_entry : chips_list) {
+                                    if (chip_entry["umd_chip_id"]) {
+                                        uint32_t umd_chip_id = chip_entry["umd_chip_id"].as<uint32_t>();
+                                        std::string key =
+                                            std::to_string(current_mesh_id) + ":" + std::to_string(umd_chip_id);
+                                        chip_map[key] = YAML::Clone(chip_entry);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;  // Processed new format, exit early
+                }
+
+                // Old format handling below
+                // Old format: could be map of mesh_X -> map of chip_id -> entry
+                // OR map of hostname -> sequence of mesh objects with chips
+                // Check if it's the old sequence format first
+                bool is_old_sequence_format = false;
+                for (const auto& entry_pair : host_node) {
+                    auto entry_value = entry_pair.second;
+                    if (entry_value.IsSequence()) {
+                        // Old format: hostname -> sequence of mesh objects
+                        is_old_sequence_format = true;
+                        for (const auto& mesh_entry : entry_value) {
+                            if (mesh_entry.IsMap() && mesh_entry["mesh"]) {
+                                uint32_t mesh_id = mesh_entry["mesh"].as<uint32_t>();
+                                if (mesh_entry["chips"]) {
+                                    auto chips_list = mesh_entry["chips"];
+                                    for (const auto& chip_entry : chips_list) {
+                                        if (chip_entry["umd_chip_id"]) {
+                                            uint32_t umd_chip_id = chip_entry["umd_chip_id"].as<uint32_t>();
+                                            std::string key =
+                                                std::to_string(mesh_id) + ":" + std::to_string(umd_chip_id);
+                                            chip_map[key] = YAML::Clone(chip_entry);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                if (!is_old_sequence_format) {
+                    // Old map format: map of mesh_X -> map of chip_id -> entry
+                    for (const auto& mesh_pair : host_node) {
+                        std::string mesh_key = mesh_pair.first.as<std::string>();
+                        uint32_t mesh_id;
+                        if (mesh_key.find("mesh_") == 0) {
+                            mesh_id = std::stoul(mesh_key.substr(5));  // Remove "mesh_" prefix
+                        } else {
+                            continue;  // Skip non-mesh keys
+                        }
+                        auto mesh_value = mesh_pair.second;
+                        if (mesh_value.IsMap()) {
+                            // Old map format: chip_id -> entry
+                            for (const auto& chip_pair : mesh_value) {
+                                std::string umd_chip_id_str = chip_pair.first.as<std::string>();
+                                uint32_t umd_chip_id = std::stoul(umd_chip_id_str);
+                                std::string key = std::to_string(mesh_id) + ":" + std::to_string(umd_chip_id);
+                                chip_map[key] = YAML::Clone(chip_pair.second);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        // Collect from generated file
+        if (gen_hostnames.IsSequence()) {
+            // New format: hostnames is a sequence
+            for (const auto& host_entry : gen_hostnames) {
+                collect_chips_from_host(host_entry, gen_map_by_chip_id);
+            }
+        } else if (gen_hostnames.IsMap()) {
+            // Old format: hostnames is a map
+            for (const auto& host_pair : gen_hostnames) {
+                collect_chips_from_host(host_pair.second, gen_map_by_chip_id);
+            }
+        }
+
+        // Collect from golden file
+        if (gold_hostnames.IsSequence()) {
+            // New format: hostnames is a sequence
+            for (const auto& host_entry : gold_hostnames) {
+                collect_chips_from_host(host_entry, gold_map_by_chip_id);
+            }
+        } else if (gold_hostnames.IsMap()) {
+            // Old format: hostnames is a map
+            for (const auto& host_pair : gold_hostnames) {
+                collect_chips_from_host(host_pair.second, gold_map_by_chip_id);
+            }
+        }
+
+        // Compare the collected chip_id mappings
+        std::vector<std::string> mismatch_details;
+
+        if (gen_map_by_chip_id.size() != gold_map_by_chip_id.size()) {
+            std::ostringstream oss;
+            oss << "Mismatch in total number of unique UMD chip IDs: generated=" << gen_map_by_chip_id.size()
+                << ", golden=" << gold_map_by_chip_id.size();
+            mismatch_details.push_back(oss.str());
+
+            // Find missing UMD chip IDs
+            std::vector<std::string> missing_in_golden;
+            std::vector<std::string> missing_in_generated;
+            for (const auto& [chip_key, _] : gen_map_by_chip_id) {
+                if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
+                    missing_in_golden.push_back(chip_key);
+                }
+            }
+            for (const auto& [chip_key, _] : gold_map_by_chip_id) {
+                if (gen_map_by_chip_id.find(chip_key) == gen_map_by_chip_id.end()) {
+                    missing_in_generated.push_back(chip_key);
+                }
+            }
+            if (!missing_in_golden.empty()) {
+                std::ostringstream oss2;
+                oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in generated but missing in golden: ";
+                for (size_t i = 0; i < missing_in_golden.size(); ++i) {
+                    if (i > 0) {
+                        oss2 << ", ";
+                    }
+                    oss2 << missing_in_golden[i];
+                }
+                mismatch_details.push_back(oss2.str());
+            }
+            if (!missing_in_generated.empty()) {
+                std::ostringstream oss2;
+                oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in golden but missing in generated: ";
+                for (size_t i = 0; i < missing_in_generated.size(); ++i) {
+                    if (i > 0) {
+                        oss2 << ", ";
+                    }
+                    oss2 << missing_in_generated[i];
+                }
+                mismatch_details.push_back(oss2.str());
+            }
+        }
+
+        for (const auto& [chip_key, gen_mapping_node] : gen_map_by_chip_id) {
+            if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
+                std::ostringstream oss;
+                oss << "UMD chip ID " << chip_key << ": not found in golden file";
+                mismatch_details.push_back(oss.str());
+                continue;
+            }
+
+            auto gold_mapping_node = gold_map_by_chip_id[chip_key];
+            std::vector<std::string> chip_mismatches;
+
+            // Compare the mapping fields
+            uint32_t gen_umd_chip_id = gen_mapping_node["umd_chip_id"].as<uint32_t>();
+            uint32_t gold_umd_chip_id = gold_mapping_node["umd_chip_id"].as<uint32_t>();
+            if (gen_umd_chip_id != gold_umd_chip_id) {
+                std::ostringstream oss;
+                oss << "umd_chip_id: generated=" << gen_umd_chip_id << ", golden=" << gold_umd_chip_id;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            uint32_t gen_tray_id = gen_mapping_node["asic_position"]["tray_id"].as<uint32_t>();
+            uint32_t gold_tray_id = gold_mapping_node["asic_position"]["tray_id"].as<uint32_t>();
+            if (gen_tray_id != gold_tray_id) {
+                std::ostringstream oss;
+                oss << "tray_id: generated=" << gen_tray_id << ", golden=" << gold_tray_id;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            uint32_t gen_asic_location = gen_mapping_node["asic_position"]["asic_location"].as<uint32_t>();
+            uint32_t gold_asic_location = gold_mapping_node["asic_position"]["asic_location"].as<uint32_t>();
+            if (gen_asic_location != gold_asic_location) {
+                std::ostringstream oss;
+                oss << "asic_location: generated=" << gen_asic_location << ", golden=" << gold_asic_location;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            uint32_t gen_mesh_id = gen_mapping_node["fabric_node_id"]["mesh_id"].as<uint32_t>();
+            uint32_t gold_mesh_id = gold_mapping_node["fabric_node_id"]["mesh_id"].as<uint32_t>();
+            if (gen_mesh_id != gold_mesh_id) {
+                std::ostringstream oss;
+                oss << "fabric_node_id.mesh_id: generated=" << gen_mesh_id << ", golden=" << gold_mesh_id;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            uint32_t gen_chip_id = gen_mapping_node["fabric_node_id"]["chip_id"].as<uint32_t>();
+            uint32_t gold_chip_id = gold_mapping_node["fabric_node_id"]["chip_id"].as<uint32_t>();
+            if (gen_chip_id != gold_chip_id) {
+                std::ostringstream oss;
+                oss << "fabric_node_id.chip_id: generated=" << gen_chip_id << ", golden=" << gold_chip_id;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            uint64_t gen_asic_id = gen_mapping_node["asic_id"].as<uint64_t>();
+            uint64_t gold_asic_id = gold_mapping_node["asic_id"].as<uint64_t>();
+            if (gen_asic_id != gold_asic_id) {
+                std::ostringstream oss;
+                oss << "asic_id: generated=" << gen_asic_id << ", golden=" << gold_asic_id;
+                chip_mismatches.push_back(oss.str());
+            }
+
+            if (!chip_mismatches.empty()) {
+                std::ostringstream oss;
+                oss << "Chip ID " << chip_key << ": ";
+                for (size_t i = 0; i < chip_mismatches.size(); ++i) {
+                    if (i > 0) {
+                        oss << ", ";
+                    }
+                    oss << chip_mismatches[i];
+                }
+                mismatch_details.push_back(oss.str());
+            }
+        }
+
+        if (!mismatch_details.empty()) {
+            log_error(tt::LogTest, "UMD chip ID mapping mismatches detected:");
+            for (const auto& detail : mismatch_details) {
+                log_error(tt::LogTest, "  {}", detail);
+            }
+            log_error(
+                tt::LogTest,
+                "\n"
+                "================================================================================\n"
+                "WARNING: Topology mapping mismatch detected!\n"
+                "================================================================================\n"
+                "The generated ASIC-to-fabric-node mappings do not match the golden reference.\n"
+                "This indicates a change in how ASICs are mapped to fabric nodes.\n"
+                "\n"
+                "IMPORTANT: Changing topology bindings/pinnings is a MAJOR change that can:\n"
+                "  - Cause topology errors in other topologies\n"
+                "  - Break existing deployments\n"
+                "  - Require coordination across multiple teams\n"
+                "\n"
+                "BEFORE regenerating golden files:\n"
+                "  1. Verify this is an intentional change, not a regression\n"
+                "  2. Approval from topology users and scaleout team + Umair Cheema, Aditya Saigal, Allan Liu, Joseph "
+                "Chu, Ridvan Song\n"
+                "  3. Ensure all affected topologies are tested\n"
+                "\n"
+                "To regenerate golden files manually (ONLY after approval):\n"
+                "  See detailed instructions in: tests/tt_metal/tt_fabric/golden_mapping_files/README.md\n"
+                "================================================================================\n");
+            return false;
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Exception while comparing files: {}", e.what());
+        return false;
+    }
+}
+
+void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name) {
+    std::string golden_file_name = golden_name.empty() ? test_name : golden_name;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path golden_dir = root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files";
+
+    // Check this rank's generated file
+    // Ranks are 0-based in distributed_context, but files use 1-based indexing
+    std::string generated_filename =
+        "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
+    std::string golden_filename = golden_file_name + ".yaml";
+
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    std::filesystem::path golden_file = golden_dir / golden_filename;
+
+    // Skip comparison if golden file doesn't exist (first run scenario)
+    if (!std::filesystem::exists(golden_file)) {
+        log_warning(
+            tt::LogTest,
+            "Golden file does not exist: {}. See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
+            "for instructions on generating it. Skipping comparison for now.",
+            golden_file.string());
+        return;
+    }
+
+    bool comparison_result = compare_asic_mapping_files(generated_file, golden_file);
+    EXPECT_TRUE(comparison_result) << "ASIC mapping file mismatch for test " << test_name
+                                   << " (golden: " << golden_file_name << ") on rank " << rank;
+    if (!comparison_result) {
+        FAIL() << "ASIC mapping file mismatch detected on rank " << rank
+               << ". Test must fail when mappings don't match golden reference.";
+    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

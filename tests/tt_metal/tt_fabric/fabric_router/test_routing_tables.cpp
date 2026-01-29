@@ -8,10 +8,14 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
+#include <string>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
+using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -20,6 +24,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace {
 
@@ -93,6 +99,21 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
+// Helper function to generate golden file name from mesh graph descriptor path
+std::string get_golden_name_from_mesh_graph_path(const std::string& mesh_graph_desc_path) {
+    std::filesystem::path path(mesh_graph_desc_path);
+    std::string filename = path.filename().string();
+    // Remove .textproto extension
+    if (filename.size() >= 10 && filename.substr(filename.size() - 10) == ".textproto") {
+        filename = filename.substr(0, filename.size() - 10);
+    }
+    // Replace special characters with underscores
+    std::string golden_name = "T3kCustomMeshGraph_" + filename;
+    std::replace(golden_name.begin(), golden_name.end(), '/', '_');
+    std::replace(golden_name.begin(), golden_name.end(), '-', '_');
+    return golden_name;
+}
+
 TEST(MeshGraphValidation, TestMGDConnections) {
     // TODO: This test is currently not implemented completely connection types currently cannot be mixed
     // Skip for now
@@ -129,6 +150,36 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Determine golden file name based on cluster descriptor
+    const char* mock_cluster = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    const char* mesh_graph = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    std::string golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD";
+
+    if (mock_cluster) {
+        std::string cluster_str(mock_cluster);
+        if (cluster_str.find("2xp150") != std::string::npos) {
+            golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_2xp150";
+        } else if (cluster_str.find("4xn300") != std::string::npos) {
+            golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_4xn300";
+        } else if (cluster_str.find("bh_galaxy_xyz") != std::string::npos) {
+            if (mesh_graph) {
+                std::string mgd_str(mesh_graph);
+                if (mgd_str.find("single_bh_galaxy_torus_xy") != std::string::npos) {
+                    golden_name =
+                        "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz_single_bh_galaxy_torus_xy";
+                } else if (mgd_str.find("single_bh_galaxy") != std::string::npos) {
+                    golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz_single_bh_galaxy";
+                } else {
+                    golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz";
+                }
+            } else {
+                golden_name = "ControlPlaneFixture_TestControlPlaneInitNoMGD_bh_galaxy_xyz";
+            }
+        }
+    }
+
+    check_asic_mapping_against_golden("TestControlPlaneInitNoMGD", golden_name);
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
@@ -146,6 +197,8 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestT3kControlPlaneInit", "ControlPlaneFixture_T3k");
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
@@ -201,6 +254,8 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
+
+    check_asic_mapping_against_golden("TestSingleGalaxy1x32ControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
@@ -249,8 +304,29 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    [[maybe_unused]] auto control_plane = make_control_plane(
+
+    // Create the control plane with the correct mesh graph descriptor
+    // The ControlPlane constructor will automatically write the ASIC mapping file with the correct topology
+    auto control_plane = make_control_plane(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+
+    // Generate unique golden file name based on mesh graph descriptor path only
+    // Use the full path to ensure uniqueness even for duplicate descriptor filenames
+    std::string golden_name = get_golden_name_from_mesh_graph_path(mesh_graph_desc_path);
+    // Add test index to make it unique for duplicate descriptors (extracted from parameterized test)
+    const auto *test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    if (test_info) {
+        // Extract parameter index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
+        // This is only used for uniqueness when the same descriptor appears multiple times
+        std::string test_name = test_info->name();
+        size_t slash_pos = test_name.find('/');
+        if (slash_pos != std::string::npos) {
+            std::string index_str = test_name.substr(slash_pos + 1);
+            golden_name += "_" + index_str;
+        }
+    }
+    // Use a generic test name for logging, but golden_name is always based on mesh graph descriptor path
+    check_asic_mapping_against_golden("TestT3kControlPlaneInit", golden_name);
 }
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
@@ -376,6 +452,8 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     auto asic_location_y_size = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_y_size});
     EXPECT_EQ(*tray_id_y_size, 1) << "Fabric node id " << y_size << " should map to tray ID 1";
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
+
+    check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
