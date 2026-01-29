@@ -132,12 +132,21 @@ class DeepseekGenerator:
         self.random_weights = random_weights
         self.single_layer = single_layer
 
+        # Model runtime state
+        self.model_state = None
+        self.model_shared_state = None
+        self.model_prefill_cfg = None
+        self.model_decode_cfg = None
+        self.model_weight_config = None
+        self.page_tables_tt = None
+
         # Trace state (decode)
         self._trace_id: int | None = None
         self._trace_tokens: ttnn.Tensor | None = None
         self._trace_positions: ttnn.Tensor | None = None
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
+        self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self.enable_trace = enable_trace
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
@@ -279,20 +288,47 @@ class DeepseekGenerator:
 
         # Clean up model states
         try:
-            if hasattr(self, "model_state") and self.model_state is not None:
+            if self.model_state is not None:
                 del self.model_state
         except Exception as e:
             logger.warning(f"Failed to cleanup model state: {e}")
 
         try:
-            if hasattr(self, "model_shared_state") and self.model_shared_state is not None:
+            if self.model_shared_state is not None:
                 del self.model_shared_state
         except Exception as e:
             logger.warning(f"Failed to cleanup model shared state: {e}")
 
+        # Clean up trace state
+        try:
+            if self._trace_id is not None:
+                ttnn.release_trace(self.mesh_device, self._trace_id)
+                del self._trace_id
+            if self._trace_tokens is not None:
+                ttnn.deallocate(self._trace_tokens)
+                del self._trace_tokens
+            if self._trace_positions is not None:
+                ttnn.deallocate(self._trace_positions)
+                del self._trace_positions
+            if self._trace_rot_idxs is not None:
+                ttnn.deallocate(self._trace_rot_idxs)
+                del self._trace_rot_idxs
+            if self._trace_output is not None:
+                ttnn.deallocate(self._trace_output)
+                del self._trace_output
+            if self._trace_page_tables_to_use is not None and self._trace_page_tables_to_use is not self.page_tables_tt:
+                for i, page_table in enumerate(self._trace_page_tables_to_use):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate trace page table {i}: {e}")
+                del self._trace_page_tables_to_use
+        except Exception as e:
+            logger.warning(f"Failed to cleanup trace state: {e}")
+
         # Clean up page tables (TTNN tensors)
         try:
-            if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
+            if self.page_tables_tt is not None:
                 for i, page_table in enumerate(self.page_tables_tt):
                     try:
                         ttnn.deallocate(page_table)
@@ -304,25 +340,25 @@ class DeepseekGenerator:
 
         # Clean up RoPE setup
         try:
-            if hasattr(self, "rope_setup") and self.rope_setup is not None:
+            if self.rope_setup is not None:
                 del self.rope_setup
         except Exception as e:
             logger.warning(f"Failed to cleanup RoPE setup: {e}")
 
         # Clean up CCL
         try:
-            if hasattr(self, "ccl") and self.ccl is not None:
+            if self.ccl is not None:
                 del self.ccl
         except Exception as e:
             logger.warning(f"Failed to cleanup CCL: {e}")
 
         # Clean up configs
         try:
-            if hasattr(self, "model_prefill_cfg") and self.model_prefill_cfg is not None:
+            if self.model_prefill_cfg is not None:
                 del self.model_prefill_cfg
-            if hasattr(self, "model_decode_cfg") and self.model_decode_cfg is not None:
+            if self.model_decode_cfg is not None:
                 del self.model_decode_cfg
-            if hasattr(self, "model_weight_config") and self.model_weight_config is not None:
+            if self.model_weight_config is not None:
                 del self.model_weight_config
 
         except Exception as e:
@@ -330,44 +366,10 @@ class DeepseekGenerator:
 
         # Clean up paged config
         try:
-            if hasattr(self, "paged_config") and self.paged_config is not None:
+            if self.paged_config is not None:
                 del self.paged_config
         except Exception as e:
             logger.warning(f"Failed to cleanup paged config: {e}")
-
-        # Clean up trace state
-        try:
-            if hasattr(self, "_trace_id") and self._trace_id is not None:
-                ttnn.release_trace(self.mesh_device, self._trace_id)
-                del self._trace_id
-        except Exception as e:
-            logger.warning(f"Failed to release trace: {e}")
-        try:
-            if hasattr(self, "_trace_tokens") and self._trace_tokens is not None:
-                ttnn.deallocate(self._trace_tokens)
-                del self._trace_tokens
-            if hasattr(self, "_trace_positions") and self._trace_positions is not None:
-                ttnn.deallocate(self._trace_positions)
-                del self._trace_positions
-            if hasattr(self, "_trace_rot_idxs") and self._trace_rot_idxs is not None:
-                ttnn.deallocate(self._trace_rot_idxs)
-                del self._trace_rot_idxs
-            if hasattr(self, "_trace_output") and self._trace_output is not None:
-                ttnn.deallocate(self._trace_output)
-                del self._trace_output
-            if (
-                hasattr(self, "_trace_page_tables_to_use")
-                and self._trace_page_tables_to_use is not None
-                and self._trace_page_tables_to_use is not getattr(self, "page_tables_tt", None)
-            ):
-                for i, page_table in enumerate(self._trace_page_tables_to_use):
-                    try:
-                        ttnn.deallocate(page_table)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate trace page table {i}: {e}")
-                del self._trace_page_tables_to_use
-        except Exception as e:
-            logger.warning(f"Failed to deallocate trace tensors: {e}")
 
     def __enter__(self):
         """Context manager entry."""
