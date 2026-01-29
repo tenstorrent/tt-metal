@@ -748,6 +748,8 @@ def test_mlp1d_llama_demo(
     logger.info("=== Performance Metrics ===")
     logger.info(f"Device: {device_name}")
     logger.info(f"Mode: {opt_mode}")
+    logger.info(f"Compile prefill: {compile_prefill_time:.2f}s")
+    logger.info(f"Compile decode: {compile_decode_time:.2f}s")
     logger.info(f"TTFT: {avg_ttft_ms:.2f}ms")
     logger.info(f"Decode speed: {tok_s_u:.2f} tok/s/u")
     if top1_acc is not None:
