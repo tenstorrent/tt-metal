@@ -101,7 +101,9 @@ def _golden_function(
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
+# layer_norm may be removed in some branches (e.g., custom generic_op implementation branch)
+if hasattr(ttnn, "layer_norm"):
+    ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
@@ -116,11 +118,20 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     return weight * input_tensor if weight is not None else input_tensor
 
 
-ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
+# rms_norm may not be available during circular import
+if hasattr(ttnn, "rms_norm"):
+    ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
-LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
-LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
-LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
+# LayerNorm configs may be removed in some branches
+if hasattr(ttnn._ttnn.operations.normalization, "LayerNormProgramConfig"):
+    LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
+    LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
+    LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
+else:
+    # Placeholder values when LayerNorm is removed
+    LayerNormProgramConfig = None
+    LayerNormDefaultProgramConfig = None
+    LayerNormShardedMultiCoreProgramConfig = None
 
 
 # group norm helper function

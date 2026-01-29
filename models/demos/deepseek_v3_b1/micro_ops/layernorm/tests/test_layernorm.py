@@ -21,7 +21,9 @@ from models.demos.deepseek_v3_b1.micro_ops.layernorm.op import (
     LayerNormSingleCore,
     _calculate_sizes,
     _create_cb_descriptors,
+    _create_compute_descriptor,
     _create_reader_descriptor,
+    _create_writer_descriptor,
 )
 
 
@@ -300,3 +302,217 @@ def test_reader_descriptor(device):
     assert rt_args[1] > 0, "Gamma buffer address should be non-zero"
     assert rt_args[2] > 0, "Beta buffer address should be non-zero"
     assert rt_args[3] == 0, "start_stick_id should be 0 for single core"
+
+
+def test_compute_descriptor(device):
+    """
+    Test that compute kernel descriptor is created correctly.
+
+    Verifies:
+    - Descriptor is created without errors
+    - Compile-time args include all CB indices, tiles_per_row, num_rows, W
+    - Runtime args contain epsilon (packed as uint32)
+    """
+    torch.manual_seed(42)
+
+    # Test shape
+    shape = [4, 128]
+    dtype = ttnn.bfloat16
+    epsilon = 1e-6
+
+    # Calculate sizes
+    sizes = _calculate_sizes(shape, dtype)
+
+    # Create core grid (single core)
+    core = ttnn.CoreCoord(0, 0)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    # Create compute descriptor
+    compute_desc = _create_compute_descriptor(core_grid, sizes, epsilon)
+
+    # Verify descriptor was created
+    assert compute_desc is not None, "Compute descriptor should not be None"
+
+    # Verify compile-time args are populated
+    # Expected: 10 CB indices + 3 size params = 13 args
+    assert (
+        len(compute_desc.compile_time_args) >= 13
+    ), f"Compile-time args should have at least 13 elements, got {len(compute_desc.compile_time_args)}"
+
+    # Verify CB index compile-time args
+    assert compute_desc.compile_time_args[0] == CB_INPUT_RM, "Arg 0 should be CB_INPUT_RM"
+    assert compute_desc.compile_time_args[1] == CB_INPUT_TILED, "Arg 1 should be CB_INPUT_TILED"
+    assert compute_desc.compile_time_args[2] == CB_GAMMA_RM, "Arg 2 should be CB_GAMMA_RM"
+    assert compute_desc.compile_time_args[3] == CB_GAMMA_TILED, "Arg 3 should be CB_GAMMA_TILED"
+    assert compute_desc.compile_time_args[4] == CB_BETA_RM, "Arg 4 should be CB_BETA_RM"
+    assert compute_desc.compile_time_args[5] == CB_BETA_TILED, "Arg 5 should be CB_BETA_TILED"
+    assert compute_desc.compile_time_args[6] == CB_SCALARS, "Arg 6 should be CB_SCALARS"
+    assert compute_desc.compile_time_args[7] == CB_INTERM, "Arg 7 should be CB_INTERM"
+    assert compute_desc.compile_time_args[8] == CB_OUTPUT_TILED, "Arg 8 should be CB_OUTPUT_TILED"
+    assert compute_desc.compile_time_args[9] == CB_OUTPUT_RM, "Arg 9 should be CB_OUTPUT_RM"
+
+    # Verify size parameters
+    assert compute_desc.compile_time_args[10] == sizes["tiles_per_row"], "Arg 10 should be tiles_per_row"
+    assert compute_desc.compile_time_args[11] == sizes["num_rows"], "Arg 11 should be num_rows"
+    assert compute_desc.compile_time_args[12] == sizes["W"], "Arg 12 should be W"
+
+    # Verify runtime args are populated for core (0, 0)
+    rt_args = compute_desc.runtime_args[0][0]
+    assert len(rt_args) >= 1, f"Runtime args should have at least 1 element, got {len(rt_args)}"
+
+    # Verify epsilon is packed as uint32 (non-zero value)
+    assert rt_args[0] > 0, "Epsilon (packed as uint32) should be non-zero"
+
+
+def test_writer_descriptor(device):
+    """
+    Test that writer kernel descriptor is created correctly.
+
+    Verifies:
+    - Descriptor is created without errors
+    - Compile-time args include CB index, sizes, TensorAccessorArgs
+    - Runtime args contain buffer address and start_stick_id
+    """
+    torch.manual_seed(42)
+
+    # Test shape
+    shape = [4, 128]
+    dtype = ttnn.bfloat16
+
+    # Create torch tensor and device tensor for output
+    output_torch = torch.zeros(shape, dtype=torch.bfloat16)
+    output_tensor = ttnn.from_torch(
+        output_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Calculate sizes
+    sizes = _calculate_sizes(shape, dtype)
+
+    # Create core grid (single core)
+    core = ttnn.CoreCoord(0, 0)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    # Create writer descriptor
+    writer_desc = _create_writer_descriptor(core_grid, output_tensor, sizes)
+
+    # Verify descriptor was created
+    assert writer_desc is not None, "Writer descriptor should not be None"
+
+    # Verify compile-time args are populated
+    # At minimum: CB_OUTPUT_RM + stick_size + num_rows + TensorAccessorArgs
+    assert (
+        len(writer_desc.compile_time_args) >= 3
+    ), f"Compile-time args should have at least 3 elements, got {len(writer_desc.compile_time_args)}"
+
+    # Verify first 3 compile-time args match expected values
+    assert writer_desc.compile_time_args[0] == CB_OUTPUT_RM, "First compile-time arg should be CB_OUTPUT_RM"
+    assert writer_desc.compile_time_args[1] == sizes["stick_size"], "Second compile-time arg should be stick_size"
+    assert writer_desc.compile_time_args[2] == sizes["num_rows"], "Third compile-time arg should be num_rows"
+
+    # Verify runtime args are populated for core (0, 0)
+    rt_args = writer_desc.runtime_args[0][0]
+    assert len(rt_args) >= 2, f"Runtime args should have at least 2 elements, got {len(rt_args)}"
+
+    # Verify buffer address is non-zero
+    assert rt_args[0] > 0, "Output buffer address should be non-zero"
+    assert rt_args[1] == 0, "start_stick_id should be 0 for single core"
+
+
+def test_kernel_descriptors(device):
+    """
+    Test that all kernel descriptors (reader, compute, writer) are created correctly.
+
+    This is the main test for Step 1.4.5, verifying the complete kernel descriptor setup.
+
+    Verifies:
+    - All three kernel descriptors are created without errors
+    - Compile-time args are properly populated for each
+    - Runtime args are properly populated for each
+    """
+    torch.manual_seed(42)
+
+    # Test shape
+    shape = [4, 128]
+    W = shape[-1]
+    dtype = ttnn.bfloat16
+    epsilon = 1e-6
+
+    # Create torch tensors
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    gamma_torch = torch.randn(W, dtype=torch.bfloat16)
+    beta_torch = torch.randn(W, dtype=torch.bfloat16)
+    output_torch = torch.zeros(shape, dtype=torch.bfloat16)
+
+    # Create device tensors (row-major, DRAM interleaved)
+    input_tensor = ttnn.from_torch(
+        input_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma_tensor = ttnn.from_torch(
+        gamma_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_tensor = ttnn.from_torch(
+        beta_torch.reshape(1, W),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        output_torch,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Calculate sizes
+    sizes = _calculate_sizes(shape, dtype)
+
+    # Create core grid (single core)
+    core = ttnn.CoreCoord(0, 0)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    # Create all kernel descriptors
+    reader_desc = _create_reader_descriptor(core_grid, input_tensor, gamma_tensor, beta_tensor, sizes)
+    compute_desc = _create_compute_descriptor(core_grid, sizes, epsilon)
+    writer_desc = _create_writer_descriptor(core_grid, output_tensor, sizes)
+
+    # Verify all descriptors were created successfully
+    assert reader_desc is not None, "Reader descriptor should not be None"
+    assert compute_desc is not None, "Compute descriptor should not be None"
+    assert writer_desc is not None, "Writer descriptor should not be None"
+
+    # Verify each descriptor has kernel source set
+    assert reader_desc.kernel_source is not None, "Reader kernel source should be set"
+    assert compute_desc.kernel_source is not None, "Compute kernel source should be set"
+    assert writer_desc.kernel_source is not None, "Writer kernel source should be set"
+
+    # Verify each descriptor has compile-time args
+    assert len(reader_desc.compile_time_args) > 0, "Reader should have compile-time args"
+    assert len(compute_desc.compile_time_args) > 0, "Compute should have compile-time args"
+    assert len(writer_desc.compile_time_args) > 0, "Writer should have compile-time args"
+
+    # Verify each descriptor has runtime args for core (0, 0)
+    assert len(reader_desc.runtime_args[0][0]) > 0, "Reader should have runtime args"
+    assert len(compute_desc.runtime_args[0][0]) > 0, "Compute should have runtime args"
+    assert len(writer_desc.runtime_args[0][0]) > 0, "Writer should have runtime args"
+
+    # Verify kernel configs are correct types
+    # Reader should use ReaderConfigDescriptor
+    # Compute should use ComputeConfigDescriptor
+    # Writer should use WriterConfigDescriptor
+    assert reader_desc.config is not None, "Reader config should be set"
+    assert compute_desc.config is not None, "Compute config should be set"
+    assert writer_desc.config is not None, "Writer config should be set"

@@ -152,7 +152,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Config: `ttnn.WriterConfigDescriptor()`
     - Return `KernelDescriptor`
 
-- [ ] **1.4.5** Add kernel descriptor unit test
+- [x] **1.4.5** Add kernel descriptor unit test
   - File: `models/demos/deepseek_v3_b1/micro_ops/layernorm/tests/test_layernorm.py`
   - Requirements:
     - Test function: `test_kernel_descriptors(device)`
@@ -161,7 +161,7 @@ This is a step-by-step implementation checklist for the LayerNorm generic op. Ea
     - Verify compile-time and runtime args are populated
   - Verification: `pytest tests/test_layernorm.py::test_kernel_descriptors -v` passes
 
-**Step 1.4 Complete:** [ ]
+**Step 1.4 Complete:** [x]
 
 ---
 

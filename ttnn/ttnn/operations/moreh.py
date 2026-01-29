@@ -20,8 +20,9 @@ fold = ttnn._ttnn.operations.moreh.moreh_fold
 getitem = ttnn._ttnn.operations.moreh.moreh_getitem
 group_norm = ttnn._ttnn.operations.moreh.moreh_group_norm
 group_norm_backward = ttnn._ttnn.operations.moreh.moreh_group_norm_backward
-layer_norm = ttnn._ttnn.operations.moreh.moreh_layer_norm
-layer_norm_backward = ttnn._ttnn.operations.moreh.moreh_layer_norm_backward
+# moreh_layer_norm removed in this branch - using custom generic_op implementation instead
+# layer_norm = ttnn._ttnn.operations.moreh.moreh_layer_norm
+# layer_norm_backward = ttnn._ttnn.operations.moreh.moreh_layer_norm_backward
 linear = ttnn._ttnn.operations.moreh.moreh_linear
 linear_backward = ttnn._ttnn.operations.moreh.moreh_linear_backward
 logsoftmax = ttnn._ttnn.operations.moreh.moreh_logsoftmax
