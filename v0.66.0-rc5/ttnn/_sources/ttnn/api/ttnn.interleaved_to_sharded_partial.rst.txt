@@ -1,0 +1,8 @@
+﻿ttnn.interleaved\_to\_sharded\_partial
+======================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.interleaved_to_sharded_partial:
+
+.. autooperation:: ttnn.interleaved_to_sharded_partial
