@@ -25,7 +25,7 @@ inline std::uint32_t finalization_len = 10;
 // Custom matmul that uses MOP to loop both srcA and srcB along inner dim. Output height
 // and width should be single tile with tile shape [1, 32]. Further work will uplift the
 // custom mm to support for tiles along the width.
-template <int MATH_FIDELITY_DESC>
+template <MathFidelity math_fidelity>
 inline void custom_mm_configure_addrmod(
     const bool transpose,
     [[maybe_unused]] const std::uint32_t kt_dim,
@@ -65,7 +65,7 @@ inline void custom_mm_configure_addrmod(
         .set(ADDR_MOD_3);
 }
 
-template <int NUM_FIDELITY_PHASES>
+template <MathFidelity math_fidelity>
 inline void custom_mm_configure_mop(
     [[maybe_unused]] bool transpose,
     [[maybe_unused]] const std::uint32_t kt_dim,
@@ -118,7 +118,7 @@ inline void custom_mm_configure_mop(
         });
 }
 
-template <int MATH_FIDELITY_DESC>
+template <MathFidelity math_fidelity>
 inline void _llk_math_custom_mm_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -127,11 +127,10 @@ inline void _llk_math_custom_mm_init_(
     const bool partial_face = false,
     const std::uint32_t transpose = 0,
     const std::uint32_t kt_dim = 1) {
-    custom_mm_configure_addrmod<MATH_FIDELITY_DESC>(
+    custom_mm_configure_addrmod<math_fidelity>(
         transpose, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
-    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    custom_mm_configure_mop<MATH_FIDELITY_PHASES>(
+    custom_mm_configure_mop<math_fidelity>(
         transpose > 0, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
     math::reset_counters(p_setrwc::SET_ABD_F);

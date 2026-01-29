@@ -16,7 +16,7 @@
  * Uses llk_math_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
-template <int NUM_FIDELITY_PHASES>
+template <MathFidelity math_fidelity>
 inline void llk_math_custom_mm_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -34,14 +34,15 @@ inline void llk_math_custom_mm_init(
     const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
-    _llk_math_custom_mm_init_<NUM_FIDELITY_PHASES>(
+    _llk_math_custom_mm_init_<math_fidelity>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, kt_dim);
 }
 
 // Template parameter partial_acc:
 //   false (default): Full custom_mm - MVMULs + finalization
 //   true: Partial K accumulation - MVMULs only, no finalization (for intermediate K subblocks)
-template <int NUM_FIDELITY_PHASES, bool partial_acc = false>
-inline void llk_math_custom_mm(const uint dst_index, const bool transpose = false, const std::uint32_t kt_dim = 1) {
+template <MathFidelity math_fidelity, bool partial_acc = false>
+inline void llk_math_custom_mm(
+    const std::uint32_t dst_index, const bool transpose = false, const std::uint32_t kt_dim = 1) {
     _llk_math_custom_mm_<partial_acc>(dst_index, transpose, kt_dim);
 }

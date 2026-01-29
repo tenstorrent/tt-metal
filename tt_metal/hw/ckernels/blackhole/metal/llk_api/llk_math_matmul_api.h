@@ -10,7 +10,7 @@
  * LLK MATMUL
  *************************************************************************/
 
-template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -27,11 +27,11 @@ inline void llk_math_matmul_init(
 
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
-    _llk_math_matmul_init_<NUM_FIDELITY_PHASES, THROTTLE_LEVEL>(
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
-template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
 inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_<NUM_FIDELITY_PHASES, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
