@@ -1,0 +1,39 @@
+{
+  "mode": "tt_run",
+  "device": "wormhole_n300",
+  "dtype": "bfloat16",
+  "image_size_hw": [320, 320],
+  "batch_size": 1,
+  "num_detection_tokens": 100,
+  "stages": {
+    "stage2": {
+      "latency_ms": 9.47,
+      "latency_ms_std": 4.13,
+      "fps": 105.63,
+      "speedup_vs_pytorch": 13.42,
+      "optimizations": ["sharding", "l1_memory", "fused_linear_gelu", "fused_qkv"]
+    },
+    "stage3": {
+      "latency_ms": 6.81,
+      "latency_ms_std": 2.43,
+      "fps": 146.82,
+      "speedup_vs_pytorch": 18.28,
+      "optimizations": ["sharding", "l1_memory", "fused_linear_gelu", "fused_qkv", "fused_sdpa", "bfloat8_activations"]
+    }
+  },
+  "pytorch_baseline": {
+    "latency_ms": 124.50,
+    "latency_ms_std": 8.23,
+    "fps": 8.03
+  },
+  "tt_submodules": [
+    "patch_embeddings",
+    "encoder",
+    "classification_head",
+    "bbox_head"
+  ],
+  "benchmark_config": {
+    "warmup_iterations": 5,
+    "benchmark_iterations": 10
+  }
+}
