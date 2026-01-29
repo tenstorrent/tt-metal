@@ -1686,6 +1686,73 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
+class TestBinaryRowMajor:
+    TEST_SHAPES = [
+        (1, 1, 32, 32),  # clean tile
+        (4, 2, 17, 19),  # multi N/C + weird H/W
+        (1, 1, 3, 1025),  # crosses 1024 in W
+        (2, 2, 1024, 1024),  # large
+    ]
+
+    # Helpers to map strings to types and create tensors
+    def _get_dtypes(self, s):
+        return (torch.bfloat16, ttnn.bfloat16) if s == "bfloat16" else (torch.float32, ttnn.float32)
+
+    def _make_tensor(self, device, shape, dt_pt, dt_tt):
+        host = torch.randn(shape, dtype=dt_pt)
+        tt = ttnn.from_torch(host, dtype=dt_tt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return host, tt
+
+    # Parameterized logic for Native, Scalar, Row, and Col broadcasting
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
+    @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
+    @pytest.mark.parametrize("mode", ["native", "scalar", "row", "col"])
+    def test_binary_row_major_broadcasts(self, device, shape, dtype_str, mode):
+        torch.manual_seed(0)
+        N, C, H, W = shape
+        dt_pt, dt_tt = self._get_dtypes(dtype_str)
+
+        if mode == "native":
+            b_shape = shape
+        elif mode == "scalar":
+            b_shape = (1, 1, 1, 1)
+        elif mode == "row":
+            b_shape = (N, C, 1, W)
+        elif mode == "col":
+            b_shape = (N, C, H, 1)
+
+        pt_a, tt_a = self._make_tensor(device, shape, dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, b_shape, dt_pt, dt_tt)
+
+        # Allow fallback if necessary, but prefer device execution
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
+
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
+
+    # Separate test for mixed row/col broadcast behavior.
+    @pytest.mark.parametrize("shape", TEST_SHAPES)
+    @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
+    def test_binary_row_major_mixed_row_col_bcast(self, device, shape, dtype_str):
+        torch.manual_seed(0)
+        N, C, H, W = shape
+        dt_pt, dt_tt = self._get_dtypes(dtype_str)
+
+        # Mixed row/col broadcast: A has H=1, B has W=1.
+        pt_a, tt_a = self._make_tensor(device, (N, C, 1, W), dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, (N, C, H, 1), dt_pt, dt_tt)
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
+
+        # Swap roles to cover the inverse mixed broadcast.
+        pt_a, tt_a = self._make_tensor(device, (N, C, H, 1), dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, (N, C, 1, W), dt_pt, dt_tt)
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
+
+
 @pytest.mark.parametrize(
     "a_shape, b_shape, a_shard_size, b_shard_size, core_range",
     (
