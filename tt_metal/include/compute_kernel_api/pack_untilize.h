@@ -141,12 +141,23 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
-            UNPACK(
-                (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
-            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(c)));
+            if (enable_unpack_to_dest) {
+                UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+                    icb, c)));
+                MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(c)));
+            } else {
+                UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(icb, c)));
+                MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, false>(c)));
+            }
         }
 
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));

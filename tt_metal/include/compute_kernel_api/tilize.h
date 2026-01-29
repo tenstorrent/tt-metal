@@ -140,14 +140,25 @@ ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
+    // 32bit formats are implemented using unpack to dest, since SrcB is only 19bits wide
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-            0 /*dst index*/)));
+        if (enable_unpack_to_dest) {
+            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+                0 /*dst index*/)));
+        } else {
+            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, false>(0 /*dst index*/)));
+        }
+
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
 
         // Release dest
