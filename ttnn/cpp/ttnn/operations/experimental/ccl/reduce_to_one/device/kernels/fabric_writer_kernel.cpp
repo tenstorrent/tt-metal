@@ -29,10 +29,10 @@
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
 
 void kernel_main() {
-    // Compile-time args
+    // Compile-time args: role, sizes, CB
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t num_workers = get_compile_time_arg_val(2);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(1);
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t packet_cb = get_compile_time_arg_val(3);
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint32_t slot_size_bytes = packet_header_size_bytes + payload_size_bytes;

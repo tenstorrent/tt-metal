@@ -40,11 +40,11 @@ FORCE_INLINE void set_unicast_route(
 }
 
 void kernel_main() {
-    // Compile-time args
+    // Compile-time args: role, sizes, CBs, routing, output coords
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t source_cb = get_compile_time_arg_val(1);  // LEAF: local_cb, others: scratch_cb2
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t source_cb = get_compile_time_arg_val(3);  // LEAF: local_cb, others: scratch_cb2
     constexpr uint32_t packet_cb = get_compile_time_arg_val(4);
     constexpr uint32_t num_hops = get_compile_time_arg_val(5);
     constexpr uint16_t dst_dev_id = get_compile_time_arg_val(6);
