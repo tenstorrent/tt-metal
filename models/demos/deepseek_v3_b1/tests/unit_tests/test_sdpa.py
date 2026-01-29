@@ -47,24 +47,14 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_s
     )
 
     # Create sharded memory configs for Q and output
-    # Q heads sharded onto S1 block output cores (from op.py S1_CORES definition)
-    # S1_CORES = [(1,2), (2,2), (3,2), (4,2), (1,3), (2,3), (3,3), (4,3)]
+    # Q heads sharded onto S1 block output cores (from op.py Grid.BLOCKS definition)
     # With 8 Q shards (128 heads / 16 per core = 8), each Q shard uses 1 core from S1
     tiny_tile = ttnn.Tile((num_q_heads_per_core, 32))
 
-    # Q cores must match S1 output cores - 8 cores for 8 Q shards (0-indexed)
-    q_core_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1)),  # S1 core 0
-            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1)),  # S1 core 1
-            ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 1)),  # S1 core 2
-            ttnn.CoreRange(ttnn.CoreCoord(3, 1), ttnn.CoreCoord(3, 1)),  # S1 core 3
-            ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(0, 2)),  # S1 core 4
-            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(1, 2)),  # S1 core 5
-            ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 2)),  # S1 core 6
-            ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(3, 2)),  # S1 core 7
-        ]
-    )
+    # Q cores must match S1 output cores - use BLOCKS definition from op.py
+    # BLOCKS order: S5, S6, S7, S8, S1, S2, S3, S4 - so S1 is at index 4
+    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[4]
+    q_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores])
     q_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -165,7 +155,7 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_s
     )
 
     # Run the op - stress test with 100 iterations
-    num_iterations = 1000
+    num_iterations = 5000
     logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
     for i in range(num_iterations):
         if i % 10 == 0:
