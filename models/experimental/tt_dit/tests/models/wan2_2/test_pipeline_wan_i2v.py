@@ -14,15 +14,17 @@ import PIL
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
+        "2x2sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
@@ -33,11 +35,11 @@ import PIL
     "width, height",
     [
         (832, 480),
-        # (1280, 720),
+        (1280, 720),
     ],
     ids=[
         "resolution_480p",
-        # "resolution_720p",
+        "resolution_720p",
     ],
 )
 def test_pipeline_inference(
@@ -50,6 +52,7 @@ def test_pipeline_inference(
     topology,
     width,
     height,
+    is_fsdp,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -87,6 +90,7 @@ def test_pipeline_inference(
         boundary_ratio=0.900,
         dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     # Run inference

@@ -1480,7 +1480,7 @@ class WanEncoder:
         output_tile_BTHWC = ttnn.to_layout(output_BTHWC, ttnn.TILE_LAYOUT)
         output_tile_BTHWC = self.quant_conv(output_tile_BTHWC)
         output_BTHWC = ttnn.to_layout(output_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        # Channels second
+        # Permute to channel second exected by torch
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
         # Trim padding on output channels
         output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean

@@ -705,7 +705,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
 
 
 @pytest.mark.parametrize(
-    ("B, dim, T, H, W, mode, upsample_out_dim"),
+    ("B, dim, T, H, W, mode, resample_out_dim"),
     [
         (1, 384, 1, 90, 160, "upsample3d", None),  # decoder.up_blocks.0.upsamplers.0
         (1, 384, 2, 180, 320, "upsample3d", None),  # decoder.up_blocks.1.upsamplers.0
@@ -752,14 +752,14 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cache_len, mean, std, h_axis, w_axis):
+def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample as TorchWanResample
 
     torch_dtype = torch.float32
     torch_model = TorchWanResample(
         dim=dim,
         mode=mode,
-        upsample_out_dim=upsample_out_dim,
+        upsample_out_dim=resample_out_dim,
     )
     torch_model.eval()
 
@@ -771,7 +771,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
     tt_model = WanResample(
         dim=dim,
         mode=mode,
-        resample_out_dim=upsample_out_dim,
+        resample_out_dim=resample_out_dim,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -1047,7 +1047,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, reset_seeds):
+def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
 
     # mesh_device.disable_and_clear_program_cache()
@@ -1154,56 +1154,58 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for i in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {i}")
-                if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                    logger.info(f"feat_cache {i} is Rep")
-                    assert torch_feat_cache[i] == "Rep"
+            for cache_idx in range(len(tt_feat_cache)):
+                logger.info(f"checking feat_cache {cache_idx}")
+                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
+                    logger.info(f"feat_cache {cache_idx} is Rep")
+                    assert torch_feat_cache[cache_idx] == "Rep"
                     continue
                 tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[i],
+                    tt_feat_cache[cache_idx],
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                         mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
                     ),
                 )
                 tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[i].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[i].shape[1]]
+                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
+                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
                     logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[i].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[i].shape[3]]
+                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
+                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
                     logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(f"feat_cache {i} shape: {torch_feat_cache[i].shape}, {tt_feat_cache_back.shape}")
+                logger.info(
+                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
+                )
                 try:
-                    assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
                 except Exception as e:
                     logger.error(
-                        f"Error checking feat_cache {i}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
+                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
                     )
                     # breakpoint()
                     raise e
 
         # Defrag the cache
         tt_feat_cache_host = []
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[i])
+        for j in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+                tt_feat_cache_host.append(tt_feat_cache[j])
             else:
                 tt_feat_cache_host.append(
                     ttnn.to_torch(
-                        tt_feat_cache[i],
+                        tt_feat_cache[j],
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
                         ),
                     )
                 )
-                ttnn.deallocate(tt_feat_cache[i])
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache[i] = tt_feat_cache_host[i]
+                ttnn.deallocate(tt_feat_cache[j])
+        for j in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+                tt_feat_cache[j] = tt_feat_cache_host[j]
             else:
-                tt_feat_cache[i] = bf16_tensor_2dshard(
-                    tt_feat_cache_host[i],
+                tt_feat_cache[j] = bf16_tensor_2dshard(
+                    tt_feat_cache_host[j],
                     mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     shard_mapping={h_axis: 2, w_axis: 3},
@@ -1381,7 +1383,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, reset_seeds):
+def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d as TorchWanEncoder3D
 
     # mesh_device.disable_and_clear_program_cache()
@@ -1489,56 +1491,58 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for i in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {i}")
-                if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                    logger.info(f"feat_cache {i} is Rep")
-                    assert torch_feat_cache[i] == "Rep"
+            for cache_idx in range(len(tt_feat_cache)):
+                logger.info(f"checking feat_cache {cache_idx}")
+                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
+                    logger.info(f"feat_cache {cache_idx} is Rep")
+                    assert torch_feat_cache[cache_idx] == "Rep"
                     continue
                 tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[i],
+                    tt_feat_cache[cache_idx],
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                         mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
                     ),
                 )
                 tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[i].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[i].shape[1]]
+                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
+                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
                     logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[i].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[i].shape[3]]
+                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
+                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
                     logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(f"feat_cache {i} shape: {torch_feat_cache[i].shape}, {tt_feat_cache_back.shape}")
+                logger.info(
+                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
+                )
                 try:
-                    assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
                 except Exception as e:
                     logger.error(
-                        f"Error checking feat_cache {i}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
+                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
                     )
                     # breakpoint()
                     raise e
 
         # Defrag the cache
         tt_feat_cache_host = []
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[i])
+        for j in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+                tt_feat_cache_host.append(tt_feat_cache[j])
             else:
                 tt_feat_cache_host.append(
                     ttnn.to_torch(
-                        tt_feat_cache[i],
+                        tt_feat_cache[j],
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
                         ),
                     )
                 )
-                ttnn.deallocate(tt_feat_cache[i])
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache[i] = tt_feat_cache_host[i]
+                ttnn.deallocate(tt_feat_cache[j])
+        for j in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
+                tt_feat_cache[j] = tt_feat_cache_host[j]
             else:
-                tt_feat_cache[i] = bf16_tensor_2dshard(
-                    tt_feat_cache_host[i],
+                tt_feat_cache[j] = bf16_tensor_2dshard(
+                    tt_feat_cache_host[j],
                     mesh_device,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     shard_mapping={h_axis: 2, w_axis: 3},
