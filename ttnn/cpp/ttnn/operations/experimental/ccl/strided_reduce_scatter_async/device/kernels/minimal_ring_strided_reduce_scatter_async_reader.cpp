@@ -35,6 +35,10 @@ constexpr uint32_t slice_Ht = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(14);
 constexpr uint32_t dim = get_compile_time_arg_val(15);
+constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(16);
+constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -55,7 +59,7 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 16;
+    constexpr uint32_t ct_idx = 20;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -107,19 +111,15 @@ void kernel_main() {
     DPRINT << "page_size: " << page_size << ENDL();
 
     // Let's set some particular values for the params used
-    const uint32_t M_blocks_per_core = 1;
-    const uint32_t mm_N_blocks_per_slice = 1;
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const uint32_t chunk_width_in_tiles = 2;
     const uint32_t chunk_width = 2;
-    const uint32_t mm_block_ht = 2;
     const uint32_t N_block_wt = 2;
+    const uint32_t last_mm_core_idx = mm_cores_y - 1;
 
     uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
-
-    const uint32_t last_mm_core_idx = 0;
 
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
