@@ -14,7 +14,6 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
 #include <tt_stl/reflection.hpp>
 
 namespace tt {
@@ -32,45 +31,24 @@ private:
     size_t hlk_args_size{0};  // size of hlk_args_t in bytes (result of sizeof())
 
 public:
-    DataFormat buf_dataformat_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_num_faces_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_partial_face_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_face_r_dim_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_narrow_tile_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_tile_r_dim_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_tile_c_dim_arr[NUM_CIRCULAR_BUFFERS]{};
-    uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS]{};
+    std::vector<DataFormat> buf_dataformat_arr;
+    std::vector<uint32_t> buf_num_faces_arr;
+    std::vector<uint32_t> buf_partial_face_arr;
+    std::vector<uint32_t> buf_face_r_dim_arr;
+    std::vector<uint32_t> buf_narrow_tile_arr;
+    std::vector<uint32_t> buf_tile_r_dim_arr;
+    std::vector<uint32_t> buf_tile_c_dim_arr;
+    std::vector<uint32_t> buf_tile_size_arr;
 
-    tt_hlk_desc() {
-        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
-            buf_dataformat_arr[i] = DataFormat::Invalid;
-            buf_num_faces_arr[i] = constants::TILE_HW / constants::FACE_HW;
-            buf_partial_face_arr[i] = 0;
-            buf_face_r_dim_arr[i] = constants::FACE_HEIGHT;
-            buf_narrow_tile_arr[i] = 0;
-            buf_tile_r_dim_arr[i] = constants::TILE_HEIGHT;
-            buf_tile_c_dim_arr[i] = constants::TILE_WIDTH;
-            buf_tile_size_arr[i] = constants::BFLOAT8_B_TILE_HW;
-        }
-    }
-
-    tt_hlk_desc(tt_hlk_desc& in) {
-        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
-            buf_dataformat_arr[i] = in.buf_dataformat_arr[i];
-            buf_num_faces_arr[i] = in.buf_num_faces_arr[i];
-            buf_partial_face_arr[i] = in.buf_partial_face_arr[i];
-            buf_face_r_dim_arr[i] = in.buf_face_r_dim_arr[i];
-            buf_narrow_tile_arr[i] = in.buf_narrow_tile_arr[i];
-            buf_tile_r_dim_arr[i] = in.buf_tile_r_dim_arr[i];
-            buf_tile_c_dim_arr[i] = in.buf_tile_c_dim_arr[i];
-            buf_tile_size_arr[i] = in.buf_tile_size_arr[i];
-        }
-
-        math_fidelity = in.math_fidelity;
-        hlk_args = in.hlk_args;
-        hlk_args_size = in.hlk_args_size;
-        approximation_mode = in.approximation_mode;
-    }
+    tt_hlk_desc(uint32_t max_cbs) :
+        buf_dataformat_arr(max_cbs, DataFormat::Invalid),
+        buf_num_faces_arr(max_cbs, constants::TILE_HW / constants::FACE_HW),
+        buf_partial_face_arr(max_cbs, 0),
+        buf_face_r_dim_arr(max_cbs, constants::FACE_HEIGHT),
+        buf_narrow_tile_arr(max_cbs, 0),
+        buf_tile_r_dim_arr(max_cbs, constants::TILE_HEIGHT),
+        buf_tile_c_dim_arr(max_cbs, constants::TILE_WIDTH),
+        buf_tile_size_arr(max_cbs, constants::BFLOAT8_B_TILE_HW) {}
 
     DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
 
@@ -122,7 +100,7 @@ public:
     // rk: added by fw-dma-test-2 team
     size_t get_hlk_args_size() const { return hlk_args_size; }
 
-    const DataFormat* get_buf_dataformats() const { return buf_dataformat_arr; }
+    const DataFormat* get_buf_dataformats() const { return buf_dataformat_arr.data(); }
 
 };  // tt_hlk_desc
 }  // namespace tt
@@ -151,7 +129,7 @@ template <>
 struct std::hash<tt::tt_hlk_desc> {
     std::size_t operator()(const tt::tt_hlk_desc& obj) const {
         std::size_t hash_value = 0;
-        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
             ttsl::hash::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
             ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
             ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));

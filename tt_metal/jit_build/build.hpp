@@ -57,9 +57,11 @@ public:
         uint64_t build_key,
         size_t fw_compile_hash,
         tt::ARCH arch,
+        uint32_t max_cbs,
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
+    uint32_t get_max_cbs() const { return max_cbs_; };
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
@@ -70,6 +72,7 @@ public:
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
+    uint32_t max_cbs_{};
 
     // Paths
     std::string root_;

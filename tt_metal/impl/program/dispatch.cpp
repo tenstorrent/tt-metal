@@ -308,16 +308,18 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size) {
     uint32_t max_local_end_index = 0;
-    uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t min_remote_start_index = max_cbs;
 
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
-        uint32_t local_cb_mask = kernel_config.local_cb_mask();
-        uint32_t current_local_end_index = local_cb_mask == 0 ? 0 : 32 - __builtin_clz(local_cb_mask);
+        uint64_t local_cb_mask = kernel_config.local_cb_mask();
+        uint32_t current_local_end_index =
+            local_cb_mask == 0 ? 0
+                               : ProgramImpl::cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(local_cb_mask));
         max_local_end_index = std::max(max_local_end_index, current_local_end_index);
         min_remote_start_index = std::min(min_remote_start_index, (uint32_t)kernel_config.min_remote_cb_start_index());
     }
-
     local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t remote_cb_offset = base_offset + local_cb_size;
     for (auto& kg : kernel_groups) {
@@ -325,9 +327,8 @@ uint32_t finalize_cbs(
         kernel_config.local_cb_offset() = base_offset;
         kernel_config.remote_cb_offset() = remote_cb_offset;
     }
-
-    uint32_t remote_cb_size = (NUM_CIRCULAR_BUFFERS - min_remote_start_index) *
-                              UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t remote_cb_size =
+        (max_cbs - min_remote_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t total_cb_size = local_cb_size + remote_cb_size;
     cb_offset = base_offset;
     cb_size = total_cb_size;
@@ -1071,6 +1072,7 @@ public:
     void construct_commands(
         IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
         const auto& hal = MetalContext::instance().hal();
+        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
         const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
@@ -1106,8 +1108,8 @@ public:
                     }
                     for (const auto& buffer_index : cb->remote_buffer_indices()) {
                         const uint32_t base_index =
-                            remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            remote_offset_index +
+                            ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                         cb_config_payload[base_index] = cb->config_address();
                         cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
@@ -2045,6 +2047,7 @@ void update_program_dispatch_commands(
     }
 
     // Update CB Configs
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
@@ -2063,7 +2066,7 @@ void update_program_dispatch_commands(
                 cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
                                                                    UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
@@ -2451,11 +2454,12 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
 
     std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
     const auto& hal = MetalContext::instance().hal();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         all_cb_configs_payloads.push_back(
-            std::vector<uint32_t>(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
+            std::vector<uint32_t>(max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
         auto& cb_config_payload = all_cb_configs_payloads.back();
         uint32_t first_unused_index = 0;
         for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
@@ -2473,7 +2477,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
                 first_unused_index = std::max(first_unused_index, base_index + 4);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
                                                                    UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
