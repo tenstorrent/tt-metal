@@ -48,15 +48,15 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_2;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_7;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -145,10 +145,13 @@ void kernel_main() {
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        //-------------------------------------------------------------------------
-        // Pipelined reading of W0/W1
-        //-------------------------------------------------------------------------
-        uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+        for (chunks_per_expert) {  // TODO: (GR)
+
+            //-------------------------------------------------------------------------
+            // Pipelined reading of W0/W1
+            //-------------------------------------------------------------------------
+            uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+        }
 
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
