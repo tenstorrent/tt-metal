@@ -108,8 +108,6 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
       - name: Check for latency data
         id: check-latency-data
         if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' }}
