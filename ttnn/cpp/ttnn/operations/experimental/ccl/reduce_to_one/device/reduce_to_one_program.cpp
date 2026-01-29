@@ -394,9 +394,9 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // === Create Kernels ===
 
     // Reader kernel: handles data arrival and pushes to compute
-    // Pass all 3 received CB indices - kernel decides which to use based on role/round
+    // Args: [0] role, [1] num_tiles, [2-5] CBs (local, received r1/r2/r3)
     std::vector<uint32_t> reader_ct_args = {
-        role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles};
+        role, compute_num_tiles, local_cb, received_cb_r1, received_cb_r2, received_cb_r3};
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
@@ -406,13 +406,14 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     // Worker writer kernel: ALL shard cores assemble and send packets to dedicated fabric core
     // LEAF: reads from local_cb (no compute), others: reads from scratch_cb2 (compute output)
     // ROOT1: gathers final results to output core
+    // Args: [0] role, [1-2] sizes, [3-4] CBs, [5-7] routing, [8-9] output coords
     uint32_t worker_source_cb = is_mesh_leaf ? local_cb : scratch_cb2;
     auto output_phys_core = device->worker_core_from_logical_core(output_core);
     std::vector<uint32_t> worker_writer_ct_args = {
         role,
-        worker_source_cb,
         compute_num_tiles,
         payload_size_bytes,
+        worker_source_cb,
         packet_cb,
         num_hops,
         dst_fabric_node_id.chip_id,
@@ -427,7 +428,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     // Fabric writer kernel: dedicated fabric cores handle fabric communication
     // These cores only forward worker packets, they don't have their own shard data
-    std::vector<uint32_t> fabric_writer_ct_args = {role, payload_size_bytes, num_worker_slots, packet_cb};
+    // Args: [0] role, [1-2] sizes, [3] CB
+    std::vector<uint32_t> fabric_writer_ct_args = {role, num_worker_slots, payload_size_bytes, packet_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
@@ -435,18 +437,16 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         tt::tt_metal::WriterDataMovementConfig(fabric_writer_ct_args));
 
     // Compute kernel: reduction for ROOT devices, early exits for LEAF
-    // Pass all 3 received CB indices - kernel decides which to use based on role/round
-    // scratch_cb, scratch_cb2: scratch buffers for intermediate results (stable addresses)
-    // output_cb: final output (ROOT1 writes final result here)
+    // Args: [0] role, [1] num_tiles, [2-8] CBs (local, received r1/r2/r3, output, scratch, scratch2)
     std::vector<uint32_t> compute_ct_args = {
+        role,
+        compute_num_tiles,
         local_cb,
         received_cb_r1,
         received_cb_r2,
         received_cb_r3,
         output_cb,
         scratch_cb,
-        compute_num_tiles,
-        role,
         scratch_cb2};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,

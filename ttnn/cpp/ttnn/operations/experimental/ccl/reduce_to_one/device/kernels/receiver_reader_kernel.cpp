@@ -22,13 +22,13 @@
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
 
 void kernel_main() {
-    // Compile-time args
+    // Compile-time args: role, num_tiles, CBs
     constexpr uint32_t device_role = get_compile_time_arg_val(0);
-    constexpr uint32_t local_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(2);  // Round 1: LEAF → ROOT*
-    constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(3);  // Round 2: ROOT3 → ROOT2/ROOT1
-    constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(4);  // Round 3: ROOT2 → ROOT1
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t local_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(3);  // LEAF → ROOT*
+    constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(4);  // ROOT3 → ROOT2/ROOT1
+    constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(5);  // ROOT2 → ROOT1
 
     if constexpr (device_role == MESH_LEAF) {
         return;

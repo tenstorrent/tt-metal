@@ -13,15 +13,16 @@ namespace NAMESPACE {
 // Device roles
 enum MeshRole : uint32_t { MESH_LEAF = 0, MESH_ROOT3 = 1, MESH_ROOT2 = 2, MESH_ROOT1 = 3 };
 
-constexpr uint32_t local_cb = get_compile_time_arg_val(0);        // Input tensor
-constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(1);  // Round 1: LEAF → ROOT*
-constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(2);  // Round 2: ROOT3 → ROOT2/ROOT1
-constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(3);  // Round 3: ROOT2 → ROOT1
-constexpr uint32_t output_cb = get_compile_time_arg_val(4);       // Final output tensor (ROOT1 only)
-constexpr uint32_t scratch_cb = get_compile_time_arg_val(5);      // Scratch for intermediate results
-constexpr uint32_t num_tiles = get_compile_time_arg_val(6);
-constexpr uint32_t device_role = get_compile_time_arg_val(7);
-constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(8);  // Second scratch buffer (stable addr)
+// Compile-time args: role, num_tiles, CBs (local, received r1/r2/r3, output, scratch, scratch2)
+constexpr uint32_t device_role = get_compile_time_arg_val(0);
+constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t local_cb = get_compile_time_arg_val(2);
+constexpr uint32_t received_cb_r1 = get_compile_time_arg_val(3);  // LEAF → ROOT*
+constexpr uint32_t received_cb_r2 = get_compile_time_arg_val(4);  // ROOT3 → ROOT2/ROOT1
+constexpr uint32_t received_cb_r3 = get_compile_time_arg_val(5);  // ROOT2 → ROOT1
+constexpr uint32_t output_cb = get_compile_time_arg_val(6);
+constexpr uint32_t scratch_cb = get_compile_time_arg_val(7);
+constexpr uint32_t scratch_cb2 = get_compile_time_arg_val(8);
 
 // Helper to perform one reduction step: in1_cb + in2_cb → out_cb
 template <uint32_t in1_cb, uint32_t in2_cb, uint32_t out_cb>
