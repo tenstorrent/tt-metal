@@ -1,13 +1,33 @@
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool caching
+#
+# Third-party tools are pulled from pre-built GHCR images to avoid hitting
+# upstream endpoints repeatedly. Tool images are built by Dockerfile.tools
+# and pushed to GHCR by build-docker-artifact.yaml.
+#
+# To build locally without GHCR (e.g., for testing), you can build tool images first:
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
+#   docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
+#   ... etc
+# Then build with:
+#   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local ...
 
 #############################################################
-# Tool version and hash configuration (centralized)
+# Tool image configuration (pre-built images from GHCR)
 # NOTE: ARGs used in FROM must be declared before any FROM statement
 #############################################################
 
 # Ubuntu base image version
 ARG UBUNTU_VERSION=22.04
+
+# Tool images from GHCR (built by Dockerfile.tools, pushed by build-docker-artifact.yaml)
+# These default to placeholder values; the CI workflow passes actual GHCR tags.
+# For local builds, either build the tool images first or let Docker build from scratch.
+ARG TOOL_CCACHE_IMAGE=scratch
+ARG TOOL_MOLD_IMAGE=scratch
+ARG TOOL_DOXYGEN_IMAGE=scratch
+ARG TOOL_CBA_IMAGE=scratch
+ARG TOOL_GDB_IMAGE=scratch
 
 # uv - Python package manager
 # Pinned to specific SHA256 for reproducible builds per:
@@ -15,6 +35,7 @@ ARG UBUNTU_VERSION=22.04
 ARG UV_VERSION=0.9.26
 ARG UV_IMAGE_DIGEST=sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
 
+# Tool versions (used for fallback local builds if tool images not provided)
 ARG CCACHE_VERSION=4.10.2
 ARG CCACHE_SHA256=80cab87bd510eca796467aee8e663c398239e0df1c4800a0b5dff11dca0b4f18
 
@@ -31,32 +52,24 @@ ARG GDB_VERSION=14.2
 ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
 
 #############################################################
-# ccache layer - simple binary extraction (no dependencies)
+# Tool layers - pulled from pre-built GHCR images
+# These images contain binaries at /install/{bin,lib,...}
 #############################################################
 
-FROM alpine:3.19 AS ccache-layer
-ARG CCACHE_VERSION
-ARG CCACHE_SHA256
-COPY dockerfile/scripts/install-ccache.sh /tmp/install-ccache.sh
-RUN apk add --no-cache bash wget && \
-    CCACHE_VERSION=${CCACHE_VERSION} \
-    CCACHE_SHA256=${CCACHE_SHA256} \
-    INSTALL_DIR=/install \
-    /bin/bash /tmp/install-ccache.sh
+# ccache layer - pre-built from GHCR
+FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
 
-#############################################################
-# mold layer - simple binary extraction (no dependencies)
-#############################################################
+# mold layer - pre-built from GHCR
+FROM ${TOOL_MOLD_IMAGE} AS mold-layer
 
-FROM alpine:3.19 AS mold-layer
-ARG MOLD_VERSION
-ARG MOLD_SHA256
-COPY dockerfile/scripts/install-mold.sh /tmp/install-mold.sh
-RUN apk add --no-cache bash wget && \
-    MOLD_VERSION=${MOLD_VERSION} \
-    MOLD_SHA256=${MOLD_SHA256} \
-    INSTALL_DIR=/install \
-    /bin/bash /tmp/install-mold.sh
+# doxygen layer - pre-built from GHCR
+FROM ${TOOL_DOXYGEN_IMAGE} AS doxygen-layer
+
+# ClangBuildAnalyzer layer - pre-built from GHCR
+FROM ${TOOL_CBA_IMAGE} AS cba-layer
+
+# GDB layer - pre-built from GHCR
+FROM ${TOOL_GDB_IMAGE} AS gdb-layer
 
 #############################################################
 # uv layer - copy from official distroless image
@@ -84,73 +97,16 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 #############################################################
-# doxygen builder - requires make to install
-#############################################################
-
-FROM base AS doxygen-builder
-ARG DOXYGEN_VERSION
-ARG DOXYGEN_SHA256
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget make \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY dockerfile/scripts/install-doxygen.sh /tmp/install-doxygen.sh
-RUN DOXYGEN_VERSION=${DOXYGEN_VERSION} \
-    DOXYGEN_SHA256=${DOXYGEN_SHA256} \
-    INSTALL_PREFIX=/staging \
-    /bin/bash /tmp/install-doxygen.sh
-
-#############################################################
-# ClangBuildAnalyzer builder - requires cmake to build
-#############################################################
-
-FROM base AS cba-builder
-ARG CBA_VERSION
-ARG CBA_SHA256
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget cmake build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY dockerfile/scripts/install-clangbuildanalyzer.sh /tmp/install-clangbuildanalyzer.sh
-RUN CBA_VERSION=${CBA_VERSION} \
-    CBA_SHA256=${CBA_SHA256} \
-    INSTALL_PREFIX=/staging \
-    /bin/bash /tmp/install-clangbuildanalyzer.sh
-
-#############################################################
-# GDB builder - requires configure/make to build
-#############################################################
-
-FROM base AS gdb-builder
-ARG GDB_VERSION
-ARG GDB_SHA256
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget build-essential texinfo libgmp-dev libmpfr-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY dockerfile/scripts/install-gdb.sh /tmp/install-gdb.sh
-RUN GDB_VERSION=${GDB_VERSION} \
-    GDB_SHA256=${GDB_SHA256} \
-    INSTALL_PREFIX=/staging \
-    /bin/bash /tmp/install-gdb.sh
-
-#############################################################
 # CI Build image
 #############################################################
 
 FROM base AS ci-build
 
-# Copy pre-built ccache from layer (no redownload/rebuild on base changes)
+# Copy pre-built tools from GHCR tool images
+# These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
 COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
-
-# Copy pre-built doxygen from builder stage
-COPY --from=doxygen-builder /staging/ /usr/local/
-
-# Copy pre-built ClangBuildAnalyzer from builder stage
-COPY --from=cba-builder /staging/ /usr/local/
+COPY --from=doxygen-layer /install/ /usr/local/
+COPY --from=cba-layer /install/ /usr/local/
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
@@ -204,7 +160,7 @@ RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
-# Copy pre-built mold from layer (no redownload/rebuild on base changes)
+# Copy pre-built mold from GHCR tool image
 COPY --from=mold-layer /install/bin/ /usr/local/bin/
 COPY --from=mold-layer /install/lib/ /usr/local/lib/
 
@@ -275,8 +231,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy pre-built GDB for non-24.04 Ubuntu versions
 # 24.04 has gdb 15.1 by default which is sufficient
+# GDB is pulled from pre-built GHCR tool image
 RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
-RUN --mount=from=gdb-builder,source=/staging,target=/gdb-staging \
+RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     if [ "$UBUNTU_VERSION" != "24.04" ]; then \
         echo "Installing custom GDB for Ubuntu $UBUNTU_VERSION" && \
         cp -a /gdb-staging/* /usr/local/; \
