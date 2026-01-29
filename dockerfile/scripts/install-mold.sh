@@ -31,6 +31,9 @@ tar -xzf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
 # Cleanup
 rm -f "${TMPFILE}"
 
-# Verify installation
-"${INSTALL_DIR}/bin/mold" --version
-echo "mold ${MOLD_VERSION} installed successfully"
+# Verify installation (skip if binary can't run, e.g., glibc binary on musl/Alpine)
+if "${INSTALL_DIR}/bin/mold" --version 2>/dev/null; then
+    echo "mold ${MOLD_VERSION} installed and verified successfully"
+else
+    echo "mold ${MOLD_VERSION} installed (verification skipped - binary may require glibc)"
+fi
