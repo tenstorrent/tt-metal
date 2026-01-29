@@ -67,9 +67,17 @@ jobs:
           github.event_name == 'schedule'
             && 'wh_galaxy,bh_galaxy'
             || (
-                 (inputs.wormhole && 'wh_galaxy' || '')
-                 +
-                 (inputs.blackhole && (inputs.wormhole && ',bh_galaxy' || 'bh_galaxy') || '')
-               )
+              inputs.wormhole && inputs.blackhole
+                && 'wh_galaxy,bh_galaxy'
+                || (
+                  inputs.wormhole
+                    && 'wh_galaxy'
+                    || (
+                      inputs.blackhole
+                        && 'bh_galaxy'
+                        || ''
+                    )
+                )
+            )
         }}
       scheduled: ${{ github.event_name == 'schedule' }}
