@@ -3,6 +3,10 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/experimental/context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/experimental/runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/experimental/cluster_query.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
