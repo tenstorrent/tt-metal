@@ -74,55 +74,6 @@ SoftmaxDefaultProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxDefault
 SoftmaxShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxShardedMultiCoreProgramConfig
 
 
-def _golden_function(
-    input_tensor: ttnn.Tensor,
-    *,
-    epsilon=1e-12,
-    residual_input_tensor=None,
-    weight=None,
-    bias=None,
-    **_,
-):
-    import torch
-
-    if residual_input_tensor is not None:
-        input_tensor += residual_input_tensor
-
-    if weight is not None:
-        if len(weight.shape) >= 2:
-            weight = weight.squeeze()
-        weight = weight.to(input_tensor.dtype)
-
-    if bias is not None:
-        if len(bias.shape) >= 2:
-            bias = bias.squeeze()
-        bias = bias.to(input_tensor.dtype)
-
-    return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
-
-
-ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
-    import torch
-
-    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
-
-    if weight is not None and weight.dtype in [torch.float16, torch.bfloat16]:
-        input_tensor = input_tensor.to(weight.dtype)
-
-    return weight * input_tensor if weight is not None else input_tensor
-
-
-ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
-
-LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
-LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
-LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
-
-
 # group norm helper function
 def determine_expected_group_norm_sharded_config_and_grid_size(
     *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False

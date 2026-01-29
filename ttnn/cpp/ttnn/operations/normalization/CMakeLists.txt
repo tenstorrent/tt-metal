@@ -15,9 +15,6 @@ file(
     GLOB_RECURSE kernels
     batch_norm/device/kernels/*
     groupnorm/device/kernels/*
-    layernorm/device/kernels/*
-    layernorm_distributed/device/kernels/*
-    rmsnorm_distributed/device/kernels/*
     softmax/device/kernels/*
     kernel_util/compute/*
     kernel_util/dataflow/*
@@ -30,11 +27,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            layernorm/layernorm.hpp
-            layernorm/device/layernorm_types.hpp
-            layernorm_distributed/device/layernorm_distributed_types.hpp
-            layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
-            rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
             softmax/device/softmax_program_factory_general.hpp
@@ -64,20 +56,6 @@ target_sources(
         groupnorm/device/groupnorm_mcast_program_factory.cpp
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
-        layernorm/device/layernorm_device_operation.cpp
-        layernorm/device/layernorm_common.cpp
-        layernorm/device/layernorm_op_multi_core.cpp
-        layernorm/device/layernorm_op_multi_core_sharded.cpp
-        layernorm/layernorm.cpp
-        layernorm_distributed/device/layernorm_post_all_gather_device_operation.cpp
-        layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp
-        layernorm_distributed/device/layernorm_post_all_gather_welford_program_factory.cpp
-        layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp
-        layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp
-        layernorm_distributed/device/layernorm_pre_all_gather_welford_program_factory.cpp
-        layernorm_distributed/layernorm_post_all_gather.cpp
-        layernorm_distributed/layernorm_pre_all_gather.cpp
-        rmsnorm/rmsnorm.cpp
         softmax/softmax.cpp
         softmax/device/softmax_device_operation.cpp
         softmax/device/softmax_program_factory_general.cpp
