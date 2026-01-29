@@ -48,7 +48,6 @@ class TtPatchTSMixerGatedAttention:
                 out_shape=(B, C, x.shape[2], x.shape[3]),
                 use_sharding=True,
                 compute_config=self.compute_config,
-                allow_k_padding=True,
                 min_K_tiles=self.min_k_tiles,
             )
         else:
@@ -300,7 +299,6 @@ class TtPatchTSMixerMLP:
             out_shape=(1, 1, M, out_K),
             use_sharding=True,
             compute_config=self.compute_config,
-            allow_k_padding=True,
             min_K_tiles=self.min_k_tiles_fc2,
             return_sharded=False,
         )
