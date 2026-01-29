@@ -12,6 +12,7 @@
 // TRISC: Performs RoPE compute
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rope.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
@@ -31,6 +32,11 @@ void kernel_main() {
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    unified_kernels::setup_sharded_buffer(in_cb, Wt);
+    unified_kernels::setup_sharded_buffer(cos_cb, Wt);
+    unified_kernels::setup_sharded_buffer(sin_cb, Wt);
+    unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
 
     // Reader args: CB indices for sharded input signaling
     deepseek_b1_ops::Rope::ReaderArgs rope_args{
