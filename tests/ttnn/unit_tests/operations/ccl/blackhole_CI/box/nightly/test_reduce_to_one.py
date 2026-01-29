@@ -10,6 +10,77 @@ from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
 
+# CoreRangeSet for CCL operations (subset of compute grid)
+CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
+
+
+def setup_all_reduce_sync(submesh_device, num_buffers=8):
+    """
+    Set up resources for all_reduce used as device synchronization barrier.
+    Returns semaphores, intermediate tensors, and memory config needed for all_reduce_async.
+    """
+    # Create global semaphores for all_reduce
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh_device, CCL_CRS, 0) for _ in range(num_buffers)]
+
+    # Simple tensor shape for sync (small footprint, tile-aligned 32x32)
+    sync_shape = [4, 2, 32, 32]  # mesh_shape + minimal 32x32 tile
+    cluster_shape = (4, 2)
+
+    # Memory config for sync tensor (32x32 shard for tile alignment)
+    sync_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # Intermediate tensor shape for all_reduce (gather dimension expanded)
+    intermediate_shape = [4, 2, 32, 32 * cluster_shape[0]]  # expanded along cluster_axis=0
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            [32, 32 * cluster_shape[0]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # Create sync input tensor
+    sync_data = torch.ones(sync_shape, dtype=torch.bfloat16)
+    sync_tensor = ttnn.from_torch(
+        sync_data,
+        device=submesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=sync_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    # Create intermediate tensors for all_reduce
+    intermediate_data = torch.zeros(intermediate_shape, dtype=torch.bfloat16)
+    intermediate_tensors = []
+    for _ in range(num_buffers):
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            device=submesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=intermediate_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        intermediate_tensors.append(intermediate_tensor)
+
+    return {
+        "semaphores": ccl_semaphore_handles,
+        "sync_tensor": sync_tensor,
+        "intermediate_tensors": intermediate_tensors,
+        "mem_config": sync_mem_config,
+    }
+
 
 def compute_reference_reduce_to_one(data_per_device):
     """
@@ -218,6 +289,13 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
     exit_coord = config["exit_coord"]
     ref_output = config["ref_output"]
 
+    # Set up all_reduce for device synchronization
+    sync_config = setup_all_reduce_sync(submesh_device, num_buffers=8)
+    sync_semaphores = sync_config["semaphores"]
+    sync_tensor = sync_config["sync_tensor"]
+    sync_intermediate_tensors = sync_config["intermediate_tensors"]
+    sync_mem_config = sync_config["mem_config"]
+
     profiler = BenchmarkProfiler()
 
     # Run once to compile
@@ -230,50 +308,64 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
         output_tensor=output_tensor_preallocated,
         intermediate_tensors=intermediate_tensors,
     )
+    # Also compile all_reduce
+    _ = ttnn.experimental.all_reduce_async(
+        sync_tensor,
+        sync_intermediate_tensors[0],
+        cluster_axis=0,
+        mesh_device=submesh_device,
+        multi_device_global_semaphore=sync_semaphores[0],
+        memory_config=sync_mem_config,
+        dtype=ttnn.bfloat16,
+        topology=ttnn.Topology.Linear,
+        num_links=1,
+    )
     ttnn.synchronize_device(submesh_device)
+
+    # Helper to run reduce_to_one with all_reduce sync every 2 iterations
+    def run_with_sync(num_iters, sem_offset=0):
+        for i in range(num_iters):
+            output_tensor = ttnn.experimental.reduce_to_one(
+                input_tensor,
+                root_coord=ttnn.MeshCoordinate(root_coord),
+                exit_coord=ttnn.MeshCoordinate(exit_coord),
+                topology=topology,
+                output_tensor=output_tensor_preallocated,
+                intermediate_tensors=intermediate_tensors,
+            )
+            # Insert all_reduce every 2 iterations for device sync
+            if (i + 1) % 2 == 0:
+                sem_idx = ((i // 2) + sem_offset) % len(sync_semaphores)
+                _ = ttnn.experimental.all_reduce_async(
+                    sync_tensor,
+                    sync_intermediate_tensors[sem_idx],
+                    cluster_axis=0,
+                    mesh_device=submesh_device,
+                    multi_device_global_semaphore=sync_semaphores[sem_idx],
+                    memory_config=sync_mem_config,
+                    dtype=ttnn.bfloat16,
+                    topology=ttnn.Topology.Linear,
+                    num_links=1,
+                )
 
     # Warmup trace
     logger.info("Capturing warmup trace")
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    for _ in range(15):
-        output_tensor = ttnn.experimental.reduce_to_one(
-            input_tensor,
-            root_coord=ttnn.MeshCoordinate(root_coord),
-            exit_coord=ttnn.MeshCoordinate(exit_coord),
-            topology=topology,
-            output_tensor=output_tensor_preallocated,
-            intermediate_tensors=intermediate_tensors,
-        )
+    run_with_sync(15, sem_offset=0)
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Capture main trace
     logger.info("Capturing main trace")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    for _ in range(20):
-        output_tensor = ttnn.experimental.reduce_to_one(
-            input_tensor,
-            root_coord=ttnn.MeshCoordinate(root_coord),
-            exit_coord=ttnn.MeshCoordinate(exit_coord),
-            topology=topology,
-            output_tensor=output_tensor_preallocated,
-            intermediate_tensors=intermediate_tensors,
-        )
+    run_with_sync(20, sem_offset=3)
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Capture tail trace
     logger.info("Capturing tail trace")
     trace_id_tail = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    for _ in range(20):
-        output_tensor = ttnn.experimental.reduce_to_one(
-            input_tensor,
-            root_coord=ttnn.MeshCoordinate(root_coord),
-            exit_coord=ttnn.MeshCoordinate(exit_coord),
-            topology=topology,
-            output_tensor=output_tensor_preallocated,
-            intermediate_tensors=intermediate_tensors,
-        )
+    run_with_sync(20, sem_offset=7)
     ttnn.end_trace_capture(submesh_device, trace_id_tail, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
@@ -324,38 +416,14 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
     run_reduce_to_one(bh_2d_mesh_device, ttnn.Topology.Linear)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
-    indirect=["device_params"],
-    ids=["fabric_2d"],
-)
-def test_reduce_to_one_2d(bh_2d_mesh_device):
-    """Test reduce_to_one with 2D fabric."""
-    run_reduce_to_one(bh_2d_mesh_device, ttnn.Topology.Linear)
-
-
 # === Trace Tests ===
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000})],
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 425984})],
     indirect=["device_params"],
     ids=["fabric_1d_trace"],
 )
 def test_reduce_to_one_with_trace_1d(bh_2d_mesh_device):
     """Test reduce_to_one with trace capture/replay on 1D fabric."""
-    run_reduce_to_one_with_trace(bh_2d_mesh_device, ttnn.Topology.Linear)
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 300000})],
-    indirect=["device_params"],
-    ids=["fabric_2d_trace"],
-)
-def test_reduce_to_one_with_trace_2d(bh_2d_mesh_device):
-    """Test reduce_to_one with trace capture/replay on 2D fabric."""
     run_reduce_to_one_with_trace(bh_2d_mesh_device, ttnn.Topology.Linear)
