@@ -42,6 +42,7 @@ public:
     virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
+    virtual std::vector<CoreCoord> get_available_worker_cores() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
     virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
