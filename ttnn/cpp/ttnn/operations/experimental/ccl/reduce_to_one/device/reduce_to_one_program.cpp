@@ -17,7 +17,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 // Device roles for 2x4 mesh with 3-level reduction tree
 //
@@ -373,7 +373,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         role, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, compute_num_tiles, scratch_cb, scratch_cb2};
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -385,7 +385,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         role, worker_source_cb, compute_num_tiles, payload_size_bytes, packet_cb, output_cb};
     auto worker_writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(worker_writer_ct_args));
 
@@ -402,7 +402,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         output_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
         fabric_cores_set,
         tt::tt_metal::WriterDataMovementConfig(fabric_writer_ct_args));
 
@@ -422,7 +422,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         scratch_cb2};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -596,4 +596,4 @@ void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

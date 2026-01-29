@@ -14,7 +14,7 @@
 #include "reduce_to_one_op.hpp"
 
 using namespace tt::tt_metal;
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 void ReduceToOneOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
@@ -192,17 +192,17 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
         semaphores);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
-ttnn::operations::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
+ttnn::operations::experimental::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<std::vector<Tensor>>& optional_intermediate_tensors) {
-    using OperationType = ttnn::operations::ccl::ReduceToOneOp;
+    using OperationType = ttnn::operations::experimental::ccl::ReduceToOneOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{root_coord, exit_coord, topology, input_tensor.tensor_spec()},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensors});

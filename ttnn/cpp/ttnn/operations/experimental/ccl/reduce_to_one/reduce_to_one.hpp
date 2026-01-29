@@ -11,7 +11,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn {
-namespace operations::ccl {
+namespace operations::experimental::ccl {
 
 struct ExecuteReduceToOne {
     static ttnn::Tensor invoke(
@@ -23,9 +23,9 @@ struct ExecuteReduceToOne {
         const std::optional<std::vector<ttnn::Tensor>>& optional_intermediate_tensors = std::nullopt);
 };
 
-}  // namespace operations::ccl
+}  // namespace operations::experimental::ccl
 
-constexpr auto reduce_to_one =
-    ttnn::register_operation<"ttnn::reduce_to_one", ttnn::operations::ccl::ExecuteReduceToOne>();
+constexpr auto reduce_to_one = ttnn::
+    register_operation<"ttnn::experimental::reduce_to_one", ttnn::operations::experimental::ccl::ExecuteReduceToOne>();
 
 }  // namespace ttnn
