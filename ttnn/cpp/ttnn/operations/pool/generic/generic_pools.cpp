@@ -796,7 +796,8 @@ static std::vector<Tensor> pool2d_DRAM(
     }
 
     TT_FATAL(
-        min_input_slice_in_sliced_dim >= effective_kernel_size,
+        dram_slice_config.num_slices == 1 ||  // L1 path will handle this case
+            min_input_slice_in_sliced_dim >= effective_kernel_size,
         "Cannot fit Pool2D operation in L1 memory with DRAM slicing. The smallest input slice (size={}) "
         "in the {} dimension is smaller than the effective kernel size ({}). "
         "Kernel: {}x{}, Stride: {}x{}, Dilation: {}x{}, Num slices: {}, Slicing dimension: {}. "
