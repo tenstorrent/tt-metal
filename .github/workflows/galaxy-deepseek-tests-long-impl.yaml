@@ -40,7 +40,6 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI_LONG_SEQ_LEN
         MESH_DEVICE: TG
-        DEEPSEEK_MAX_SEQ_LEN: "32768"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -66,7 +65,8 @@ jobs:
         timeout-minutes: 240
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests/test_mla.py models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 600 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN=32768 pytest models/demos/deepseek_v3/tests/test_mla.py models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 600 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN=4096 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 600 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

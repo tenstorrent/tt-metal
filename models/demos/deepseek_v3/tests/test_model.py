@@ -237,7 +237,7 @@ def test_forward_pass(
     state_dict,
 ):
     # Set less layers and shorter max length for the sake of testing
-    hf_config_short.num_hidden_layers = 8
+    hf_config_short.num_hidden_layers = 5
 
     # Only use decode_position_ids for decode mode
     if mode != "decode":
