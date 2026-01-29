@@ -429,14 +429,15 @@ class MLP(AbstractModule):
         return x6
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        # All gather for efficient matmuls (only if tensor parallel)
+        if is_tensor_parallel:
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -469,10 +470,11 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(activated)
 
-        # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        # Reduce-scatter across devices to sum partial results (only if tensor parallel)
+        if is_tensor_parallel:
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+            )
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -483,12 +485,13 @@ class MLP(AbstractModule):
         return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, is_tensor_parallel: bool = True) -> ttnn.Tensor:
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        # All gather (only if tensor parallel)
+        if is_tensor_parallel:
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -507,11 +510,14 @@ class MLP(AbstractModule):
         w2_out = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
 
-        # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
-        ttnn.deallocate(w2_out)
+        # Add reduce-scatter (only if tensor parallel)
+        if is_tensor_parallel:
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+            )
+            ttnn.deallocate(w2_out)
+        else:
+            output = w2_out
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output
