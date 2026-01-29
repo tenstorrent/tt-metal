@@ -375,4 +375,4 @@ class SeedManager:
             new_seeds = 32 * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
         new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        # ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
