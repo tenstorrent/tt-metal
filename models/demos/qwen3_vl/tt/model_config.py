@@ -112,7 +112,7 @@ class VisionModelArgs(ModelArgs):
 
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        
+
         if self.dummy_weights:
             # Skip loading checkpoint weights when using dummy_weights
             # Use from_config to instantiate without loading full checkpoint

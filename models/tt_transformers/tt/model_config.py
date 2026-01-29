@@ -1984,6 +1984,8 @@ class ModelArgs:
             # Use from_config directly to avoid loading checkpoint weights
             logger.info(f"Creating model with dummy weights using .from_config (no checkpoint loading)")
             model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            # Initialize weights with the model's _init_weights method
+            model.apply(model._init_weights)
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
