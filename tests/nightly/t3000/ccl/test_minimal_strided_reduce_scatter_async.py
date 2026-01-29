@@ -33,6 +33,9 @@ class ReduceScatterTestConfig:
     verify_output_shape: bool
     verify_output_pcc: bool
     small_random_ints: bool
+    mm_cores_y: object = None  # Optional[int]
+    mm_block_ht: object = None  # Optional[int]
+    mm_block_wt: object = None  # Optional[int]
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -68,6 +71,9 @@ def run_reduce_scatter_impl(
     use_strided=False,
     verify_output_shape=True,
     verify_output_pcc=True,
+    mm_cores_y=None,
+    mm_block_ht=None,
+    mm_block_wt=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -202,6 +208,9 @@ def run_reduce_scatter_impl(
                 chunks_per_sync=chunks_per_sync,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                mm_cores_y=mm_cores_y,
+                mm_block_ht=mm_block_ht,
+                mm_block_wt=mm_block_wt,
             )
         elif use_new:
             logger.info(f"Using new reduce scatter")
@@ -572,6 +581,9 @@ def test_strided_reduce_scatter_async(
         verify_output_shape,
         verify_output_pcc,
         small_random_ints,
+        mm_cores_y,
+        mm_block_ht,
+        mm_block_wt,
     ) = astuple(test_config)
 
     run_reduce_scatter_impl(
@@ -595,4 +607,7 @@ def test_strided_reduce_scatter_async(
         use_strided=use_strided,
         verify_output_shape=verify_output_shape,
         verify_output_pcc=verify_output_pcc,
+        mm_cores_y=mm_cores_y,
+        mm_block_ht=mm_block_ht,
+        mm_block_wt=mm_block_wt,
     )
