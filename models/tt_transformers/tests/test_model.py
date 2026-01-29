@@ -58,11 +58,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
@@ -288,7 +284,7 @@ def test_model_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -314,9 +310,7 @@ def test_model_inference(
         )
 
         # Convert ttnn tensor to torch tensor
-        mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
-        )
+        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=model_args.cluster_shape)
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
             .permute(2, 1, 0, 3)
@@ -337,7 +331,7 @@ def test_model_inference(
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                dims=(None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -403,7 +397,7 @@ def test_model_inference(
                                     layer_past,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
-                                        dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                        dims=(0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
                                 )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -426,7 +420,7 @@ def test_model_inference(
                                     layer_past,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
-                                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                                        dims=(0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
                                 )[:batch, :, :, :]

@@ -18,11 +18,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -69,7 +65,7 @@ def test_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl)
 
     # Create reference model (unchanged)
     partial_state_dict = {
@@ -98,9 +94,7 @@ def test_rms_norm_inference(
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
-        ),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=model_args.cluster_shape),
     )[:1, :, :, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)

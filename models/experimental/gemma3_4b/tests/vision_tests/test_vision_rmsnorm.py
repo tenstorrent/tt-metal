@@ -77,7 +77,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl, TG=tt_model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl)
 
     input = torch.rand(1, 1, 1152)
 

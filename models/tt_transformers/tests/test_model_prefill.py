@@ -20,11 +20,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
@@ -277,7 +273,7 @@ def test_model_inference(
                                 layer_past,
                                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                                     mesh_device,
-                                    dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                    dims=(0, 1),
                                     mesh_shape=model_args.cluster_shape,
                                 ),
                             )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -300,7 +296,7 @@ def test_model_inference(
                                 layer_past,
                                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                                     mesh_device,
-                                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                                    dims=(0, 1),
                                     mesh_shape=model_args.cluster_shape,
                                 ),
                             )

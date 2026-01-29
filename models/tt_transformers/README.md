@@ -228,9 +228,8 @@ The device name used is:
 - `N150` for N150
 - `N300` for N300
 - `T3K` for LoudBox / QuietBox
-- `TG` for Galaxy
 
-By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K` or `TG`.
+By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, or `T3K`.
 
 Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a multi-chip system.
 
@@ -319,16 +318,16 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 **Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 32k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
 
 Max Prefill Chunk Sizes (text-only):
-|              |      N150     |      N300     |      T3K       |      TG     |
-|--------------|---------------|---------------|----------------|-------------|
-| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
-| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
-| Qwen2.5-7B | 4k tokens | 32k tokens | 128k tokens | 128k tokens |
-| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
-| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
-| Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-| Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
-| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
+|              |      N150     |      N300     |      T3K       |
+|--------------|---------------|---------------|----------------|
+| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    |
+| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    |
+| Qwen2.5-7B   | 4k tokens     | 32k tokens    | 128k tokens    |
+| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    |
+| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    |
+| Llama3.1-70B | Not supported | Not supported | 32k tokens     |
+| Llama3.2-90B | Not supported | Not supported | 32k tokens     |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens |
 
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.

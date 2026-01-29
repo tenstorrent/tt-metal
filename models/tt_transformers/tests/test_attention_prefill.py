@@ -21,11 +21,7 @@ from models.tt_transformers.tt.rope import get_rot_mats
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
@@ -148,7 +144,7 @@ def test_attention_inference(
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
-        force_replicated=False if model_args.is_galaxy else True,
+        force_replicated=True,
     )
 
     tt_out = tt_model(
@@ -199,7 +195,7 @@ def test_attention_inference(
                         cache,
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device,
-                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                            dims=(0, 1),
                             mesh_shape=model_args.cluster_shape,
                         ),
                     )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -223,7 +219,7 @@ def test_attention_inference(
                     cache,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                         mesh_device,
-                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                        dims=(0, 1),
                         mesh_shape=model_args.cluster_shape,
                     ),
                 )[:batch_size, :, :, :]

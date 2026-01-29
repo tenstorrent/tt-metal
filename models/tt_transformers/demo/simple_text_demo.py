@@ -276,7 +276,7 @@ def prepare_generator_args(
 # num_layers (int): Number of layers to use
 # mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
-# MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+# MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
@@ -806,9 +806,7 @@ def test_demo_text(
         if "accuracy" in test_id and "ci-token-matching" not in test_id:
             pytest.skip("CI only runs the tests with performance optimizations except for ci-token-matching case")
 
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    # Note: 32-device meshes are not supported by tt_transformers; see models/demos/llama3_70b_galaxy
 
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -878,7 +876,7 @@ def test_demo_text(
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
         if num_devices == 32 and not tg_enabled:
-            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
+            pytest.skip("CI only runs a limited set of configurations on 32-device systems")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
@@ -1363,19 +1361,16 @@ def test_demo_text(
             "N150_Llama-3.2-1B": 160,
             "N300_Llama-3.2-1B": 250,  # TODO Update target
             "T3K_Llama-3.2-1B": 300,  # TODO Update target
-            "TG_Llama-3.2-1B": 300,  # TODO Update target
             #
             "N150_Llama-3.2-3B": 60,
             "N300_Llama-3.2-3B": 100,  # TODO Update target
             "T3K_Llama-3.2-3B": 150,  # TODO Update target
-            "TG_Llama-3.2-3B": 150,  # TODO Update target
             #
             "N150_Llama-3.1-8B": 23,
             "P150_Llama-3.1-8B": 23,  # TODO Update target
             "N300_Llama-3.1-8B": 38,
             "P300_Llama-3.1-8B": 38,
             "T3K_Llama-3.1-8B": 45,
-            "TG_Llama-3.1-8B": 45,  # TODO Update target
             #
             "N150_Llama-3.2-11B": 23,
             "N300_Llama-3.2-11B": 38,  # TODO Update target
