@@ -1511,13 +1511,21 @@ public:
                 last_end = transfer.end();
             }
             std::vector<uint8_t*> data_collection_location;
-            uint32_t total_data_size = 0;
-            for (const auto& span : batched_data) {
-                total_data_size += span.size();
-            }
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_dispatch_program_commands()) {
-                log_info(tt::LogDispatch, "Assembling Batched Transfer Command: num_sub_cmds={}, total_data_size={} bytes", 
-                    batched_dispatch_subcmds[i].size(), total_data_size);
+                log_info(tt::LogDispatch, "Assembling Batched Transfer Command: num_sub_cmds={}", 
+                    batched_dispatch_subcmds[i].size());
+                for (size_t subcmd_idx = 0; subcmd_idx < batched_dispatch_subcmds[i].size(); ++subcmd_idx) {
+                    const auto& subcmd = batched_dispatch_subcmds[i][subcmd_idx];
+                    bool is_unlinked = (subcmd.flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK) != 0;
+                    log_info(tt::LogDispatch, "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, flags=0x{:x} {}", 
+                        subcmd_idx, 
+                        subcmd.noc_xy_addr, 
+                        subcmd.addr, 
+                        subcmd.length_minus1 + 1,
+                        subcmd.num_mcast_dests,
+                        subcmd.flags,
+                        is_unlinked ? "(UNLINK)" : "");
+                }
             }
             
             device_command_sequence.add_dispatch_write_packed_large(
