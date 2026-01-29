@@ -314,7 +314,14 @@ void create_and_cache_mesh_workload(
             emit_mesh_workload_annotation<mesh_device_operation_t>(
                 cached_workload.workload, operation_attributes, tensor_args);
 
-            if (program_cache.is_enabled()) {
+            // Don't cache programs during graph capture mode (when GraphTracker hook is set).
+            // In NO_DISPATCH mode, buffer allocations are mocked with address=0, so cached programs
+            // would contain invalid buffer addresses. If we cached these programs and later ran in
+            // NORMAL mode, the cache hit would reuse programs with address=0, causing device hangs.
+            // By skipping the cache during graph capture, we ensure NORMAL mode always creates
+            // fresh programs with valid buffer addresses.
+            bool should_cache = program_cache.is_enabled() && !tt::tt_metal::GraphTracker::instance().get_hook();
+            if (should_cache) {
                 program_cache.insert(
                     program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
                 auto& cached_program_factory = program_cache.get(program_hash);
