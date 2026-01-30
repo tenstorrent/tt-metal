@@ -9,11 +9,11 @@ This test measures the raw device kernel execution time using the device profile
 It runs the model without trace (per-op dispatch) and reports device FPS.
 
 Usage:
-    # Default 320x320
+    # Default 640x640
     pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v -m models_device_performance_bare_metal
 
-    # Run with 640x640
-    pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v -m models_device_performance_bare_metal --input-size 640
+    # Run with 320x320
+    pytest models/experimental/yunet/tests/perf/test_yunet_device_perf.py -v -m models_device_performance_bare_metal --input-size 320
 """
 
 import pytest
@@ -22,11 +22,27 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 
 
 # Expected performance for each input size (samples/s)
-# Measured on P150 Blackhole
-EXPECTED_PERF = {
-    320: 1150,  # Range: 1100-1200 samples/s
-    640: 450,  # Range: 400-500 samples/s
+EXPECTED_PERF_BLACKHOLE = {
+    320: 1150,
+    640: 450,
 }
+
+EXPECTED_PERF_WORMHOLE = {
+    320: 480,
+    640: 170,
+}
+
+
+def get_expected_perf(input_h):
+    """Get expected perf based on device architecture."""
+    import ttnn
+
+    is_wormhole = "wormhole_b0" in ttnn.get_arch_name()
+
+    if is_wormhole:
+        return EXPECTED_PERF_WORMHOLE.get(input_h, 150)
+    else:
+        return EXPECTED_PERF_BLACKHOLE.get(input_h, 300)
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -35,17 +51,12 @@ def test_perf_device_bare_metal_yunet(input_size):
     Device performance test for YUNet.
 
     Runs the PCC test with device profiler enabled to measure raw kernel execution time.
-    This gives the pure device capability.
-
-    Measured:
-        - 320x320: ~1150 samples/s (range: 1100-1200)
-        - 640x640: ~450 samples/s (range: 400-500)
 
     Args:
         input_size: Tuple of (height, width) from conftest.py --input-size option
     """
     input_h, input_w = input_size
-    expected_perf = EXPECTED_PERF.get(input_h, 300)
+    expected_perf = get_expected_perf(input_h)
     batch_size = 1
 
     subdir = f"ttnn_YUNet_{input_h}x{input_w}"

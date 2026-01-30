@@ -38,7 +38,7 @@ logging.basicConfig(
 # Global variables
 model = None
 device = None
-INPUT_SIZE = 320  # Default input size
+INPUT_SIZE = 640  # Default input size
 
 
 @app.get("/")
@@ -135,7 +135,7 @@ def decode_detections(cls_outs, box_outs, obj_outs, kpt_outs, orig_w, orig_h, in
 
 
 @app.post("/facedetection")
-async def facedetection(file: UploadFile = File(...), input_size: int = 320, conf_thresh: float = 0.35):
+async def facedetection(file: UploadFile = File(...), input_size: int = 640, conf_thresh: float = 0.35):
     """Run face detection on uploaded image."""
     global model, device
 

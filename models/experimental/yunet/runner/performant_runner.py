@@ -19,8 +19,8 @@ class YunetPerformantRunner:
     def __init__(
         self,
         device,
-        input_height=320,
-        input_width=320,
+        input_height=640,
+        input_width=640,
         act_dtype=ttnn.bfloat16,
     ):
         self.device = device

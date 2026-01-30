@@ -11,9 +11,9 @@ def pytest_addoption(parser):
     parser.addoption(
         "--input-size",
         action="store",
-        default="320",
+        default="640",
         choices=["320", "640"],
-        help="Input size for YUNet model (320 or 640). Default: 320",
+        help="Input size for YUNet model (320 or 640). Default: 640",
     )
 
 

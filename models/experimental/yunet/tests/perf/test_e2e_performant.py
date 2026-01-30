@@ -5,11 +5,11 @@
 YUNet E2E Performance Test using Trace + 2CQ.
 
 Usage:
-    # Default 320x320
+    # Default 640x640
     pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v
 
-    # Run with 640x640
-    pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v --input-size 640
+    # Run with 320x320
+    pytest models/experimental/yunet/tests/perf/test_e2e_performant.py -v --input-size 320
 """
 
 import time
@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.device import Arch
 from models.experimental.yunet.runner.performant_runner import YunetPerformantRunner
 from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
 
@@ -30,17 +31,22 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-# Expected FPS thresholds (E2E is PCIe-limited)
-EXPECTED_FPS = {
-    320: 250,  # 320x320 - PCIe limit ~280 FPS, device ~700 FPS
-    640: 60,  # 640x640 - PCIe limit ~70 FPS, device ~200+ FPS
+# Expected FPS thresholds
+EXPECTED_FPS_BLACKHOLE = {
+    320: 250,
+    640: 60,
+}
+
+EXPECTED_FPS_WORMHOLE = {
+    320: 150,
+    640: 35,
 }
 
 
 def run_yunet_inference(
     device,
-    input_height=320,
-    input_width=320,
+    input_height=640,
+    input_width=640,
     num_iterations=100,
     act_dtype=ttnn.bfloat16,
 ):
@@ -98,15 +104,16 @@ def test_yunet_e2e_performant(device, input_size):
     """
     End-to-end performance test for YUNet using Trace + 2CQ runner.
 
-    This test measures the throughput including host-to-device transfers
-    for each iteration, which is the realistic E2E scenario.
-
-    Note: E2E FPS is PCIe-limited, not device-limited.
-    - 320x320: ~280 FPS (PCIe limit), device can do ~700 FPS
-    - 640x640: ~70 FPS (PCIe limit), device can do ~200+ FPS
+    This test measures the throughput including host-to-device transfers.
     """
     input_height, input_width = input_size
-    expected_fps = EXPECTED_FPS.get(input_height, 60)
+
+    # Select expected FPS based on device architecture
+    is_wormhole = device.arch() == Arch.WORMHOLE_B0
+    if is_wormhole:
+        expected_fps = EXPECTED_FPS_WORMHOLE.get(input_height, 30)
+    else:
+        expected_fps = EXPECTED_FPS_BLACKHOLE.get(input_height, 60)
 
     fps, inference_time_avg = run_yunet_inference(
         device,
