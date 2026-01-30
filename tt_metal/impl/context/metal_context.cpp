@@ -440,7 +440,7 @@ MetalContext& MetalContext::instance() {
         TT_ASSERT(g_instance, "MetalContext is tearing down but no instance exists.");
         // During teardown multiple threads may call instance() to access the same instance, so return the existing
         // instance in that case instead of deadlocking.
-        return *g_instance;
+        return *g_instance.load(std::memory_order_acquire);
     }
     std::lock_guard lock(g_instance_mutex);
     if (!g_instance) {
@@ -454,11 +454,12 @@ MetalContext& MetalContext::instance() {
             registered_atexit = true;
         }
     }
-    return *g_instance;
+    return *g_instance.load(std::memory_order_acquire);
 }
 
 void MetalContext::destroy_instance(bool check_device_count) {
-    std::lock_guard lock(g_instance_mutex);
+    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
+    // one thread while no work is being done on the MetalContext.
     if (!g_instance) {
         return;
     }
@@ -469,7 +470,7 @@ void MetalContext::destroy_instance(bool check_device_count) {
     is_tearing_down = true;
     delete g_instance;
     is_tearing_down = false;
-    g_instance = nullptr;
+    g_instance.store(nullptr, std::memory_order_release);
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
