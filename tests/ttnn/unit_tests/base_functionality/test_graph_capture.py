@@ -425,11 +425,11 @@ def test_extract_levelized_graph(device):
     assert len(levelized_graph_2) >= len(levelized_graph_1)
 
 
-def test_multiple_dispatch_combination_graph_capture(device):
+def test_program_cache_invalidation_across_dispatch_modes(device):
     def test_conv(device):
         weights_shape = (32, 3, 3, 3)
         bias_shape = (1, 1, 1, 32)
-        input_shape = [1, 3, 320, 320]
+
 
         conv_params = {
             "in_channels": 3,
@@ -491,8 +491,8 @@ def test_multiple_dispatch_combination_graph_capture(device):
 
         weight = torch.randn(weights_shape).bfloat16()
         bias = torch.randn(bias_shape).bfloat16()
-        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32)
-        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32, device=device)
+        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32, device=device)
 
         [x, [output_height, output_width], _] = ttnn.conv2d(
             input_tensor=ttnn_input,
@@ -508,7 +508,7 @@ def test_multiple_dispatch_combination_graph_capture(device):
     try:
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         test_conv(device)
-        captured_graph = ttnn.graph.end_graph_capture()
+        ttnn.graph.end_graph_capture()
         test_conv(device)
     except Exception as e:
         print(f"Error during test_conv: {e}")
