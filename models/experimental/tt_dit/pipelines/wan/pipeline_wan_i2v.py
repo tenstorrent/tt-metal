@@ -61,9 +61,16 @@ class WanPipelineI2V(WanPipeline):
         """
         # Reshape to make the channel last
         U, B, NPad, T_size = latents.shape
+        z_dim = self.vae.config.z_dim
+        if T_size % z_dim != 0:
+            raise ValueError(
+                f"Expected T_size ({T_size}) to be divisible by VAE z_dim ({z_dim}) in get_model_input, "
+                "but got a non-divisible size. Check upstream padding/latents construction."
+            )
+        t_chunks = T_size // z_dim
         # break out the channels for processing
-        latents = latents.reshape(U, B, NPad, T_size // self.vae.config.z_dim, -1)
-        cond_latents = cond_latents.reshape(U, B, NPad, T_size // self.vae.config.z_dim, -1)
+        latents = latents.reshape(U, B, NPad, t_chunks, -1)
+        cond_latents = cond_latents.reshape(U, B, NPad, t_chunks, -1)
 
         # concatenate the latents and cond_latents
         model_input = torch.cat([latents, cond_latents], dim=-1).reshape(U, B, NPad, -1)
