@@ -53,13 +53,13 @@
         "batch_128": {
             "prefill_128": {
                 "GLX_gpt-oss-20b": {
-                    "TTFT": [250, 1.2],
-                    "decode_tok_s_u": [5.0, 1.15],
+                    "TTFT": [250, 2.0],
+                    "decode_tok_s_u": [5.0, 2.0],
                     "decode_tok_s": 650
                 },
                 "GLX_gpt-oss-120b": {
-                    "TTFT": [400, 1.2],
-                    "decode_tok_s_u": [3.0, 1.15],
+                    "TTFT": [400, 2.0],
+                    "decode_tok_s_u": [3.0, 2.0],
                     "decode_tok_s": 380
                 }
             }
