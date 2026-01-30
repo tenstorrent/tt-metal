@@ -111,29 +111,17 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     Tensor& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = tensor_args.input_tensor.device()->get_view();
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    devices_to_use = (operation_attributes.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                                              : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-    uint32_t target_ring_size = devices_to_use.size();
 
-    // cluster_axis
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            }
-        }
-    }
+    // Use MeshCoordinates to find forward and backward devices
+    // This is safe on bigmesh where remote devices might not exist on this rank
+    uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, ttnn::ccl::Topology::Linear, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, -1, ttnn::ccl::Topology::Linear, operation_attributes.cluster_axis);
 
     // Program creation
     Program program{};
@@ -190,8 +178,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             }
         }
     } else {
-        is_first_device = !backward_device.has_value();
-        is_last_device = !forward_device.has_value();
+        is_first_device = !backward_coord.has_value();
+        is_last_device = !forward_coord.has_value();
         if (!is_first_device) {
             backward_device_offset = 1;
         }
@@ -318,23 +306,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
-                if (backward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                writer_rt_args.push_back(backward_coord.has_value());
+                if (backward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
             } else {
-                writer_rt_args.push_back(forward_device.has_value());
+                writer_rt_args.push_back(forward_coord.has_value());
 
-                if (forward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                if (forward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
