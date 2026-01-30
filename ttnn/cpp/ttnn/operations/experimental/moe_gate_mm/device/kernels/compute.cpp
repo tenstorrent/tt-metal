@@ -6,6 +6,8 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/copy_dest_values.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -36,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    const uint32_t num_w_tiles_h = send_core ? 2 * 72 : 2 * 76;
+    const uint32_t num_w_tiles_h = send_core ? (2 * 72) : (2 * 76 + 1);
     constexpr uint32_t num_w_tiles_w = 1;
 
     //-------------------------------------------------------------------------
@@ -46,8 +48,10 @@ void kernel_main() {
     constexpr uint32_t w_tiles_per_txn = noc_packet_size / 2048;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
     const uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
-    const uint32_t w_last_block_txns = ((num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block) / w_tiles_per_txn;
-    const uint32_t w_tiles_per_block_last = w_last_block_txns * w_tiles_per_txn;
+    const uint32_t w_remaining_tiles = (num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block;
+    const uint32_t w_last_block_txns = (w_remaining_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;  // Ceiling division
+    const uint32_t w_tiles_per_block_last = w_remaining_tiles - 1;
+    const uint32_t bias_tile_index = w_tiles_per_block_last;  // Bias is the last tile in the last block
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -163,7 +167,6 @@ void kernel_main() {
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
-        cb_pop_front(cb_r2c_w, w_tiles_per_block);
 
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
 
@@ -171,6 +174,34 @@ void kernel_main() {
         cb_wait_front(cb_w2c_in2, 1);
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2, 0, 0);
         cb_pop_front(cb_w2c_in2, 1);
+
+        // Sigmoid the output
+        sigmoid_tile_init();
+        sigmoid_tile(0);
+
+        // Retain this copy for final scores
+        copy_dest_values_init();
+        copy_dest_values(1, 0);
+
+        tile_regs_commit();
+
+        // 1. Pack the sigmoid result to a temp CB
+        tile_regs_wait();
+        cb_reserve_back(cb_s2c_out, 1);
+        pack_tile(0, cb_s2c_out);
+        cb_push_back(cb_s2c_out, 1);
+        tile_regs_release();
+
+        tile_regs_acquire();
+
+        // 2. Re-init for broadcast add
+        add_bcast_rows_init_short(cb_s2c_out, cb_r2c_w);
+
+        // 3. Broadcast add: result += broadcast(bias_row)
+        // The bias tile is at index bias_tile_index within the current CB
+        cb_wait_front(cb_s2c_out, 1);
+        add_tiles_bcast_rows(cb_s2c_out, cb_r2c_w, 0, bias_tile_index, 0, 0);
+        cb_pop_front(cb_s2c_out, 1);
 
         tile_regs_commit();
         tile_regs_wait();
@@ -181,5 +212,7 @@ void kernel_main() {
         // Signal to DM1 that we have finished
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
+
+        cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
 }

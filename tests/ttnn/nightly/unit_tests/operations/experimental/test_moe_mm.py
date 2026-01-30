@@ -57,12 +57,22 @@ def create_torch_w(L, K, N):
     return torch_w
 
 
-def prepare_w_tensor(torch_w, L, K, N, ring2cores):
+def create_torch_bias(L, N):
+    """
+    Create torch bias tensor.
+    """
+    # torch_bias = torch.rand((L, N), dtype=torch.bfloat16) - 0.5
+    torch_bias = torch.rand((L, N), dtype=torch.bfloat16) - 5
+    return torch_bias
+
+
+def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
     """
     Prepare the w tensor by padding and reordering tiles.
 
     Args:
         torch_w: Weight tensor of shape (L, K, N)
+        torch_bias: Bias tensor of shape (L, N)
         L: Number of layers
         K: Input dimension
         N: Output dimension
@@ -76,6 +86,8 @@ def prepare_w_tensor(torch_w, L, K, N, ring2cores):
     # 4 cores get 1/3rd of K tiles and 2 N tiles -> Type 2 (send flag is 1)
     # Every third core is of type 2.
     w_tile_view = torch_w.view(L, Kt, ttnn.TILE_SIZE, Nt, ttnn.TILE_SIZE)
+
+    bias_tile_view = torch_bias.view(L, Nt, ttnn.TILE_SIZE)
 
     each_shard = []
 
@@ -95,7 +107,7 @@ def prepare_w_tensor(torch_w, L, K, N, ring2cores):
             # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
             interleaved_chunks = interleaved.view(L, 72, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
 
-            padding = torch.zeros(L, 4, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE, dtype=torch_w.dtype)
+            padding = torch.zeros(L, 5, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE, dtype=torch_w.dtype)
             torch_w_with_padding = torch.cat([interleaved_chunks, padding], dim=1)
             each_shard.append(torch_w_with_padding)
         else:
@@ -108,7 +120,17 @@ def prepare_w_tensor(torch_w, L, K, N, ring2cores):
             interleaved = torch.cat([even_tiles, odd_tiles], dim=-1)
 
             # Put one each of even and odd tiles in width dimension.
-            each_shard.append(interleaved.view(L, 76, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE))
+            all_tiles = interleaved.reshape(L, 76, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
+
+            # Create the bias tile with zero padding.
+            bias_tile = torch.zeros((L, 1, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE), dtype=torch_bias.dtype)
+
+            # Add data from bias tensor to the bias tile.
+            bias_tile[:, 0, 0, : ttnn.TILE_SIZE] = bias_tile_view[:, current_N_tile, :]
+
+            # Append the bias tensor to the end of the all tiles.
+            w_bias_tile = torch.cat([all_tiles, bias_tile], dim=1)
+            each_shard.append(w_bias_tile)
             current_N_tile += 1
 
     torch_w_all_banks = torch.stack(each_shard, dim=0)
@@ -200,7 +222,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     # Create DRAM shard spec for w
     # Tensor shape: (L, K, N) -> Sharded across N cores
     # ------------------------------------------------------------------------
-    w_shard_height = 76 * ttnn.TILE_SIZE
+    w_shard_height = L * (76 + 1) * ttnn.TILE_SIZE
     w_shard_width = 2 * ttnn.TILE_SIZE
 
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
@@ -231,10 +253,11 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     if check_accuracy:
         torch_input = create_torch_input(L, in0_num_cores, M, K)
         torch_w = create_torch_w(L, K, N)
+        torch_bias = create_torch_bias(L, N)
 
         # ------------------------------------------------------------------------
         # Prepare w tensor (padded, and reordered)
-        torch_w_reordered = prepare_w_tensor(torch_w, L, K, N, ring2cores)
+        torch_w_reordered = prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores)
         # Create tt_w tensor with DRAM sharding
         tt_w = ttnn.from_torch(
             torch_w_reordered,
@@ -297,7 +320,11 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
             # Compute gate activations for each expert
             # (L, M, K) @ (L, K, N) -> (L, M, N)
-            torch_w_output_ref = torch_input_ref @ torch_w
+            torch_mm_out = torch_input_ref @ torch_w
+            torch_sigmoid_out = torch.nn.functional.sigmoid(torch_mm_out)
+            torch_bias_out = torch_sigmoid_out + torch_bias[:, None, :]
+
+            torch_w_output_ref = torch_bias_out
 
         # Calculate accuracy metrics for each layer
         for layer_id in range(L):

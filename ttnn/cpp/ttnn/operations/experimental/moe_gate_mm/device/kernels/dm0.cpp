@@ -61,18 +61,18 @@ void kernel_main() {
     constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    const uint32_t num_w_tiles_h = send_core ? 2 * 72 : 2 * 76;
+    const uint32_t num_w_tiles_h = send_core ? (2 * 72) : (2 * 76 + 1);
     constexpr uint32_t num_w_tiles_w = 1;
 
     //-------------------------------------------------------------------------
     // W reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t w_txns_per_block = 8;
-    constexpr uint32_t w_tiles_per_txn = noc_packet_size / w_tile_size;
+    constexpr uint32_t w_tiles_per_txn = noc_packet_size / 2048;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
     const uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
-    const uint32_t w_last_block_txns = ((num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block) / w_tiles_per_txn;
-    const uint32_t w_tiles_per_block_last = w_last_block_txns * w_tiles_per_txn;
+    const uint32_t w_remaining_tiles = (num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block;
+    const uint32_t w_last_block_txns = (w_remaining_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;  // Ceiling division
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
