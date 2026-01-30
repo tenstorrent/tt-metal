@@ -11,6 +11,11 @@
 #include "program/program_impl.hpp"
 
 namespace tt::tt_metal {
+namespace distributed {
+class MeshWorkloadImpl;
+class MeshDevice;
+}  // namespace distributed
+
 namespace program_dispatch {
 uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
