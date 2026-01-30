@@ -198,7 +198,9 @@ jobs:
             if [ "$BRANCH_VS_MAIN_COMMITS" -gt 0 ]; then
               echo "🔄 Branch is $BRANCH_VS_MAIN_COMMITS commits behind latest main - merging latest changes"
               if ! git merge origin/main --no-edit; then
-                echo "❌ Merge with latest main failed - conflicts need manual resolution"
+                echo "❌ Merge with latest main failed - conflicts need manual resolution."
+                echo "   This usually means your mirrored branch is conflicting with recent changes on origin/main in the LLK submodule."
+                echo "   Please resolve the merge conflicts locally (e.g., checkout '$MIRRORED_BRANCH', merge origin/main, fix conflicts), push the updated branch to origin, and re-run this workflow."
                 exit 1
               fi
               echo "✅ Successfully merged latest submodule main into branch"
