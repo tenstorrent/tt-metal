@@ -23,6 +23,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -997,6 +998,102 @@ size_t GetNumPCIeDevices() { return MetalContext::instance().get_cluster().numbe
 
 ChipId GetPCIeDeviceID(ChipId device_id) {
     return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+}
+
+namespace {
+static const std::unordered_map<tt::ARCH, std::vector<uint16_t>> ubb_bus_ids = {
+    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+};
+
+uint32_t calculate_ubb_tray_id(tt::ARCH arch, uint16_t bus_id) {
+    auto it = ubb_bus_ids.find(arch);
+    if (it == ubb_bus_ids.end()) {
+        return 0;
+    }
+    const auto& tray_bus_ids = it->second;
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
+    if (tray_bus_id_it != tray_bus_ids.end()) {
+        return static_cast<uint32_t>(std::distance(tray_bus_ids.begin(), tray_bus_id_it) + 1);
+    }
+    return 0;
+}
+}  // namespace
+
+std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray() {
+    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+
+    std::unordered_map<uint32_t, std::vector<uint32_t>> result;
+    const auto& chips_with_mmio = cluster_desc->get_chips_with_mmio();
+
+    for (const auto& [chip_id, pcie_id] : chips_with_mmio) {
+        auto board_type = cluster_desc->get_board_type(chip_id);
+        if (board_type == BoardType::UBB_WORMHOLE || board_type == BoardType::UBB_BLACKHOLE) {
+            auto bus_id = cluster_desc->get_bus_id(chip_id);
+            auto tray_id = calculate_ubb_tray_id(cluster_desc->get_arch(), bus_id);
+            if (tray_id > 0) {
+                result[tray_id].push_back(pcie_id);
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<std::pair<std::pair<uint32_t, uint16_t>, std::pair<uint32_t, uint16_t>>> GetTP2DevicePairsWithBusIds() {
+    // Returns Ethernet-connected device pairs for TP2 (Tensor Parallel 2) on Galaxy/UBB systems.
+    //
+    // E.g. Galaxy/UBB topology per tray (8 chips):
+    //   4 - 3 - 2 - 1  (bus_id positions 4, 3, 2, 1)
+    //   |   |   |   |
+    //   5 - 6 - 7 - 8  (bus_id positions 5, 6, 7, 8)
+    //
+    // Adjacent positions in bus_id order (1-2, 3-4, 5-6, 7-8) are Ethernet-connected.
+    //
+    // Algorithm:
+    //   1. Group chips by tray using bus_id upper nibble
+    //   2. Sort chips within each tray by bus_id lower nibble (physical position)
+    //   3. Pair adjacent chips: [0,1], [2,3], [4,5], [6,7]
+    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+    const auto& chips_with_mmio = cluster_desc->get_chips_with_mmio();
+
+    struct ChipInfo {
+        uint32_t pcie_id;
+        uint16_t bus_id;
+    };
+    std::unordered_map<uint32_t, std::vector<ChipInfo>> chips_by_tray;
+
+    for (const auto& [chip_id, pcie_id] : chips_with_mmio) {
+        auto board_type = cluster_desc->get_board_type(chip_id);
+        if (board_type == BoardType::UBB_WORMHOLE || board_type == BoardType::UBB_BLACKHOLE) {
+            auto bus_id = cluster_desc->get_bus_id(chip_id);
+            auto tray_id = calculate_ubb_tray_id(cluster_desc->get_arch(), bus_id);
+            if (tray_id > 0) {
+                chips_by_tray[tray_id].push_back({static_cast<uint32_t>(pcie_id), bus_id});
+            }
+        }
+    }
+
+    std::vector<std::pair<std::pair<uint32_t, uint16_t>, std::pair<uint32_t, uint16_t>>> pairs;
+
+    for (auto& [tray_id, chips] : chips_by_tray) {
+        std::sort(chips.begin(), chips.end(), [](const ChipInfo& a, const ChipInfo& b) {
+            return (a.bus_id & 0x0F) < (b.bus_id & 0x0F);
+        });
+
+        for (size_t i = 0; i + 1 < chips.size(); i += 2) {
+            auto& chip_a = chips[i];
+            auto& chip_b = chips[i + 1];
+            if (chip_a.pcie_id < chip_b.pcie_id) {
+                pairs.emplace_back(
+                    std::make_pair(chip_a.pcie_id, chip_a.bus_id), std::make_pair(chip_b.pcie_id, chip_b.bus_id));
+            } else {
+                pairs.emplace_back(
+                    std::make_pair(chip_b.pcie_id, chip_b.bus_id), std::make_pair(chip_a.pcie_id, chip_a.bus_id));
+            }
+        }
+    }
+
+    return pairs;
 }
 
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }

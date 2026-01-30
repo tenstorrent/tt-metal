@@ -20,9 +20,11 @@
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -273,6 +275,25 @@ void device_module(nb::module_& m_device) {
     m_device.def("GetPCIeDeviceID", &tt::tt_metal::GetPCIeDeviceID, R"doc(
         Returns associated mmio device of give device id.
     )doc");
+
+    m_device.def(
+        "GetPCIeDevicesPerTray",
+        &tt::tt_metal::GetPCIeDevicesPerTray,
+        R"doc(
+            Get the mapping of tray IDs to PCIe device IDs based on physical topology.
+            Returns Dict[int, List[int]] mapping tray ID (1-indexed) to PCIe device IDs.
+            Returns empty dict if not on a Galaxy system.
+        )doc");
+
+    m_device.def(
+        "GetTP2DevicePairsWithBusIds",
+        &tt::tt_metal::GetTP2DevicePairsWithBusIds,
+        R"doc(
+            Get TP2-compatible device pairs with bus_id information.
+            Returns List[Tuple[Tuple[int, int], Tuple[int, int]]] of
+            ((pcie_id_1, bus_id_1), (pcie_id_2, bus_id_2)) pairs.
+            Devices are sorted by bus_id position within each tray and paired sequentially.
+        )doc");
 
     m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, nb::arg("root_dir"), R"doc(
         Sets the root directory for TT Metal operations.

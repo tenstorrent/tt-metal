@@ -6,6 +6,8 @@
 
 #include <initializer_list>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -86,6 +88,26 @@ bool IsGalaxyCluster();
 size_t GetNumPCIeDevices();
 
 ChipId GetPCIeDeviceID(ChipId device_id);
+
+/**
+ * Returns a mapping of tray IDs to PCIe device IDs based on physical topology.
+ * This is used on Galaxy systems to determine which devices belong to which tray.
+ *
+ * Return value: std::unordered_map<uint32_t, std::vector<uint32_t>>
+ *               Maps tray ID (1-indexed) to list of PCIe device IDs.
+ *               Returns empty map if not on a Galaxy system.
+ */
+std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray();
+
+/**
+ * Returns TP2-compatible device pairs with bus_id information.
+ * On Galaxy systems, devices with adjacent bus_ids are Ethernet-connected.
+ * Devices are sorted by bus_id position within each tray and paired sequentially.
+ * Each entry contains: ((pcie_id_1, bus_id_1), (pcie_id_2, bus_id_2))
+ *
+ * Return value: std::vector<std::pair<std::pair<uint32_t, uint16_t>, std::pair<uint32_t, uint16_t>>>
+ */
+std::vector<std::pair<std::pair<uint32_t, uint16_t>, std::pair<uint32_t, uint16_t>>> GetTP2DevicePairsWithBusIds();
 
 // clang-format off
 /**
