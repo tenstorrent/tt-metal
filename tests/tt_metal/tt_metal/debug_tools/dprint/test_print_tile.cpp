@@ -36,6 +36,7 @@
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.
+// Note that in this test the kernels print only 1 tile.
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 using namespace tt::tt_metal;
@@ -235,8 +236,8 @@ void RunTest(
 
     // Create an input CB with the right data format
     uint32_t tile_size = tt::tile_size(data_format);
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
-                                              .set_page_size(CBIndex::c_0, tile_size);
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}}).set_page_size(CBIndex::c_0, tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(tile_size, {{CBIndex::c_1, data_format}}).set_page_size(CBIndex::c_1, tile_size);
@@ -299,11 +300,11 @@ struct TestParams {
     tt::DataFormat data_format;
 };
 
-class PrintTilesFixture : public DPrintSeparateFilesFixture, public ::testing::WithParamInterface<TestParams> {};
+class PrintTileFixture : public DPrintSeparateFilesFixture, public ::testing::WithParamInterface<TestParams> {};
 
 INSTANTIATE_TEST_SUITE_P(
-    PrintTilesTests,
-    PrintTilesFixture,
+    PrintTileTests,
+    PrintTileFixture,
     ::testing::Values(
         TestParams{tt::DataFormat::Float32},
         TestParams{tt::DataFormat::Float16_b},
@@ -314,11 +315,11 @@ INSTANTIATE_TEST_SUITE_P(
         TestParams{tt::DataFormat::UInt8},
         TestParams{tt::DataFormat::UInt16},
         TestParams{tt::DataFormat::UInt32}),
-    [](const ::testing::TestParamInfo<PrintTilesFixture::ParamType>& info) {
+    [](const ::testing::TestParamInfo<PrintTileFixture::ParamType>& info) {
         return std::string(enchantum::to_string(info.param.data_format));
     });
 
-TEST_P(PrintTilesFixture, TestPrintTiles) {
+TEST_P(PrintTileFixture, TestPrintTile) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
