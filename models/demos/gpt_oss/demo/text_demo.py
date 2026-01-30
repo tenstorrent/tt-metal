@@ -236,7 +236,7 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             128,  # batch_size
             1,  # repeat_batches
-            8 * 1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
