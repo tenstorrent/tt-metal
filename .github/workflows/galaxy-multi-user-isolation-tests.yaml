@@ -210,7 +210,7 @@ jobs:
 
       - name: Check test results
         run: |
-          RESULTS_DIR="${TEST_RESULTS_DIR:-.multi-user-test-results}"
+          RESULTS_DIR=".multi-user-test-results"
           NUM_CONTAINERS=${{ matrix.num_containers }}
           CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
