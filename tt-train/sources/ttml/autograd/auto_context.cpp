@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "core/tt_profiler.hpp"
+#include "core/tt_tensor_utils.hpp"
 
 namespace ttml::autograd {
 
@@ -156,6 +157,35 @@ void ParallelismContext::configure(
     if (enable_tp) {
         m_tp_axis = axis++;
     }
+
+    // Create CP rank tensor if CP is enabled
+    if (enable_cp) {
+        create_cp_rank_tensor();
+    }
+}
+
+void ParallelismContext::create_cp_rank_tensor() {
+    if (!m_cp_axis.has_value() || m_mesh_device == nullptr) {
+        return;
+    }
+
+    uint32_t cp_size = get_cp_size();
+
+    // Create rank values [0, 1, 2, ..., cp_size-1] as float
+    // Shape: (1, 1, 1, cp_size) - will be sharded along last dim so each device gets one value
+    std::vector<float> rank_values(cp_size);
+    for (uint32_t i = 0; i < cp_size; ++i) {
+        rank_values[i] = static_cast<float>(i);
+    }
+
+    // Shard along dim 3 (last dim) on CP axis - each device gets its rank
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*m_mesh_device, /*dim=*/3, m_cp_axis);
+    m_cp_rank_tensor = core::from_vector(
+        rank_values, ttnn::Shape({1U, 1U, 1U, cp_size}), m_mesh_device, ttnn::Layout::ROW_MAJOR, mapper.get());
+}
+
+std::optional<ttnn::Tensor> ParallelismContext::get_cp_rank_tensor() const {
+    return m_cp_rank_tensor;
 }
 
 uint32_t ParallelismContext::get_dp_size() const {

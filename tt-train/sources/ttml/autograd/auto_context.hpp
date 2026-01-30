@@ -61,11 +61,21 @@ public:
         return m_cp_axis.has_value();
     }
 
+    // Get CP rank tensor - each device's shard contains its rank (0, 1, 2, ..., cp_size-1)
+    // Shape: (1, 1, 1, 1) per device shard, value = device's CP rank
+    // Returns nullopt if CP is not enabled
+    [[nodiscard]] std::optional<ttnn::Tensor> get_cp_rank_tensor() const;
+
 private:
+    void create_cp_rank_tensor();
+
     ttnn::distributed::MeshDevice* m_mesh_device = nullptr;
     std::optional<uint32_t> m_dp_axis = std::nullopt;
     std::optional<uint32_t> m_cp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
+
+    // Sharded tensor where device i holds value i (for CP rank)
+    std::optional<ttnn::Tensor> m_cp_rank_tensor = std::nullopt;
 };
 
 class AutoContext {

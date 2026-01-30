@@ -28,7 +28,10 @@ namespace ttml::ops::distributed {
  * @param query Local query tensor (B, H, S_local, D)
  * @param key Local key tensor (B, G, S_local, D)
  * @param value Local value tensor (B, G, S_local, D)
- * @param mask Optional attention mask
+ * @param mask Optional attention mask with shape (1, 1, S_local, S_full)
+ *             where S_full = S_local * cp_size. Each device's mask contains
+ *             attention values for its Q chunk attending to ALL K positions.
+ *             Rolled per-device using ParallelismContext::get_cp_rank_tensor().
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups <= num_heads,
