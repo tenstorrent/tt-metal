@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
 #ifdef FP32_DEST_ACC_EN
 #define WITH_FP32_DEST_ACC(x) x
@@ -18,8 +18,7 @@
 #define WITH_FP32_DEST_ACC(x)
 #endif
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
@@ -283,5 +282,4 @@ void MAIN {
 
     cb_pop_front(cb_scalar_args, 5);
     cb_pop_front(cb_one, onetile);
-}  // void MAIN
-}  // namespace NAMESPACE
+}

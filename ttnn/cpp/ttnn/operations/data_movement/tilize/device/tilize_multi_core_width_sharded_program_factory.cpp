@@ -82,7 +82,7 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
 
     tt::tt_metal::KernelHandle unary_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize_compute_width_sharded.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize_compute_width_sharded.cpp",
         total_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
