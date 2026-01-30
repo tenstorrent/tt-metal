@@ -49,13 +49,14 @@ constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
+constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
 
-constexpr uint32_t num_ct_args = 27;
+constexpr uint32_t num_ct_args = 28;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -223,7 +224,6 @@ void kernel_main() {
 
         // Let's set some particular values for the params used
         const uint32_t batch_size = input_tensor_B;
-        const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
 
         uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);

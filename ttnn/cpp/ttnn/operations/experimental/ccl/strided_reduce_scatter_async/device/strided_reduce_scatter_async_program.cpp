@@ -311,7 +311,8 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t N_block_wt,
-    const uint32_t chunk_width_in_tiles) {
+    const uint32_t chunk_width_in_tiles,
+    const uint32_t chunks_per_mm_N_block) {
     if (normalized_dim == 0) {
         return {
             ring_index,               // my_chip_id
@@ -349,6 +350,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         mm_cores_y,               // mm_cores_y
         N_block_wt,               // N_block_wt
         chunk_width_in_tiles,     // chunk_width_in_tiles
+        chunks_per_mm_N_block,    // chunks_per_mm_N_block
     };
 }
 
@@ -377,7 +379,8 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t N_block_wt,
-    const uint32_t chunk_width_in_tiles) {
+    const uint32_t chunk_width_in_tiles,
+    const uint32_t chunks_per_mm_N_block) {
     if (normalized_dim == 0) {
         return {
             ring_index,                     // my_chip_id
@@ -415,6 +418,7 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         mm_cores_y,                     // mm_cores_y
         N_block_wt,                     // N_block_wt
         chunk_width_in_tiles,           // chunk_width_in_tiles
+        chunks_per_mm_N_block,          // chunks_per_mm_N_block
     };
 }
 
@@ -914,6 +918,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_N_block_wt_val = mm_N_block_wt.value_or(slice_Wt);
     uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(2);
     uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
+    // div_up(mm_N_block_wt_val, chunk_width_in_tiles_val)
+    uint32_t chunks_per_mm_N_block_val = (mm_N_block_wt_val + chunk_width_in_tiles_val - 1) / chunk_width_in_tiles_val;
 
     // Introduce checks for current assumptions
     TT_FATAL(
@@ -1055,7 +1061,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_block_ht_val,
             mm_cores_y_val,
             mm_M_block_ht_val,
-            chunk_width_in_tiles_val);
+            chunk_width_in_tiles_val,
+            chunks_per_mm_N_block_val);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1107,7 +1114,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_block_ht_val,
             mm_cores_y_val,
             mm_M_block_ht_val,
-            chunk_width_in_tiles_val);
+            chunk_width_in_tiles_val,
+            chunks_per_mm_N_block_val);
 
     append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
