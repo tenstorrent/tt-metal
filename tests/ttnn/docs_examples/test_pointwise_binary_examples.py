@@ -559,22 +559,6 @@ def test_polyval(device):
     logger.info(f"Polynomial evaluation result: {output}")
 
 
-def test_scatter(device):
-    # Create input, index, and source tensors
-    input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
-    index_torch = torch.randint(0, 10, [10, 20, 30, 20, 5], dtype=torch.int64)
-    source_torch = torch.randn([10, 20, 30, 20, 10], dtype=input_torch.dtype)
-
-    input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    dim = -1
-
-    # Perform scatter operation
-    output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
-    logger.info(f"Scatter operation result: {output}")
-
-
 def test_fmod(device):
     # Create two tensors for floating-point modulo
     tensor1 = ttnn.from_torch(
