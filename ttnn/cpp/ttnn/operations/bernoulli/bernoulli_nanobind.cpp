@@ -32,7 +32,7 @@ void bind_bernoulli_operation(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            This operations supports tensors according to the following data types and layout:
+            This operation supports tensors according to the following data types and layouts:
 
             .. list-table:: input tensor and output tensor (if provided)
                 :header-rows: 1
