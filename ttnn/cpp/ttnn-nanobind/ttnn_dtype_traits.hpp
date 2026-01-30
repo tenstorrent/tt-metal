@@ -118,7 +118,7 @@ enum class DtypeID : uint32_t {
 
 template <DtypeID nb_dtype, typename = int>  // sfinae to allow for partial specializations
 struct py_to_ {
-    constexpr static auto ttnn_DataType = DataType::INVALID;
+    constexpr static std::optional<DataType> ttnn_DataType = std::nullopt;
 };
 
 // for some reason ttnn maps float16 to bfloat16
@@ -162,13 +162,6 @@ struct ttnn_datatype_traits {
     using underlying_type = void;
     static constexpr nbdlp::dtype value{.code = 0, .bits = 0, .lanes = 0};
     static constexpr auto name = nbd::descr<0>();
-};
-
-template <>
-struct ttnn_datatype_traits<DataType::INVALID> {
-    using underlying_type = void;
-    static constexpr nbdlp::dtype value{.code = 0, .bits = 0, .lanes = 0};
-    static constexpr auto name = nbd::const_name("INVALID");
 };
 
 template <>
@@ -264,33 +257,23 @@ constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
         case DataType::UINT8: return ttnn_datatype_traits<DataType::UINT8>::value;
         case DataType::UINT16: return ttnn_datatype_traits<DataType::UINT16>::value;
         case DataType::INT32: return ttnn_datatype_traits<DataType::INT32>::value;
-        case DataType::INVALID: [[fallthrough]];
-        default: TT_THROW("get_dtype_from_ttnn_datatype: got INVALID or unhandled DataType.");
     }
-
-    return {};
+    TT_THROW("get_dtype_from_ttnn_datatype: got unhandled DataType.");
 }
 
 [[nodiscard]]
-constexpr DataType get_ttnn_datatype_from_dtype(nbdlp::dtype dt) noexcept {
+constexpr DataType get_ttnn_datatype_from_dtype(nbdlp::dtype dt) {
     switch (static_cast<DtypeID>(nbdlp_dtype_to_int(dt))) {
-        case DtypeID::UINT64: return py_to_<DtypeID::UINT64>::ttnn_DataType;
         case DtypeID::INT64: return py_to_<DtypeID::INT64>::ttnn_DataType;
-        case DtypeID::UINT32: return py_to_<DtypeID::UINT32>::ttnn_DataType;
         case DtypeID::INT32: return py_to_<DtypeID::INT32>::ttnn_DataType;
-        case DtypeID::UINT16: return py_to_<DtypeID::UINT16>::ttnn_DataType;
         case DtypeID::INT16: return py_to_<DtypeID::INT16>::ttnn_DataType;
         case DtypeID::UINT8: return py_to_<DtypeID::UINT8>::ttnn_DataType;
-        case DtypeID::INT8: return py_to_<DtypeID::INT8>::ttnn_DataType;
-        case DtypeID::FLOAT64: return py_to_<DtypeID::FLOAT64>::ttnn_DataType;
         case DtypeID::FLOAT32: return py_to_<DtypeID::FLOAT32>::ttnn_DataType;
         case DtypeID::FLOAT16: return py_to_<DtypeID::FLOAT16>::ttnn_DataType;
         case DtypeID::BFLOAT16: return py_to_<DtypeID::BFLOAT16>::ttnn_DataType;
         default:
             TT_THROW("get_ttnn_datatype_from_dtype: got unexpected dlpack dtype. code: {}, bits: {}", dt.code, dt.bits);
     }
-
-    return DataType::INVALID;
 }
 
 constexpr PyDType get_PyDType_from_dtype(nb::dlpack::dtype dt) {

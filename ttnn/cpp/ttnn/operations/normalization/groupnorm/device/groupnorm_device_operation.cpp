@@ -229,7 +229,7 @@ TensorSpec GroupNormDeviceOperation::compute_output_specs(
             return TensorSpec(
                 input_tensor.logical_shape(),
                 TensorLayout::fromPaddedShape(
-                    program_config.out_data_format,
+                    program_config.out_data_format.value(),
                     PageConfig(program_config.output_layout),
                     mem_config,
                     input_tensor.logical_shape(),

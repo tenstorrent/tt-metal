@@ -10,7 +10,7 @@
 namespace ttnn::experimental::prim {
 
 struct GeluBackwardParams {
-    const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    const std::optional<tt::tt_metal::DataType> output_dtype;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const std::string approximate = "none";
 };

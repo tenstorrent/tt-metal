@@ -686,7 +686,7 @@ void post_conv2d_op_memory_checks(
     const auto& memory_config = operation_attributes.memory_config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& block_config = operation_attributes.block_config;
-    const auto dtype = operation_attributes.dtype;
+    const auto dtype = operation_attributes.dtype.value();
     const auto& input_tensor_shape = operation_attributes.input_tensor_shape;
     const auto& enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
     const auto& enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;

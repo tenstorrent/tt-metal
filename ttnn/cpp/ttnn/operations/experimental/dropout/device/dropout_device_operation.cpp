@@ -30,11 +30,8 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
-    if (preallocated_output_tensor.has_value()) {
-        out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->dtype();
-    }
+    auto output_datatype = preallocated_output_tensor.has_value() ? preallocated_output_tensor->dtype()
+                                                                  : args.output_dtype.value_or(input_tensor.dtype());
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
         "Dropout operation requires input and output data types to match. Input data type: {}, Output data type: {}",
@@ -100,7 +97,8 @@ TensorSpec DropoutDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    const auto output_dtype = args.output_dtype.value_or(tensor_args.input.dtype());
+    return TensorSpec(output_shape, TensorLayout(output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor DropoutDeviceOperation::create_output_tensors(

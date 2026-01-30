@@ -11,7 +11,7 @@ namespace ttnn::prim {
 
 struct InterleavedToShardedParams {
     tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
+    std::optional<tt::tt_metal::DataType> output_dtype;
     bool keep_l1_aligned{};
 };
 

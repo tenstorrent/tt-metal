@@ -139,7 +139,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
         return TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(
-                operation_attributes.output_dtype,
+                operation_attributes.output_dtype.value_or(input_tensor.dtype()),
                 PageConfig(Layout::TILE),
                 mem_config,
                 input_shape,
@@ -149,7 +149,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     return TensorSpec(
         input_shape,
         TensorLayout::fromPaddedShape(
-            operation_attributes.output_dtype,
+            operation_attributes.output_dtype.value_or(input_tensor.dtype()),
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,
             input_shape,

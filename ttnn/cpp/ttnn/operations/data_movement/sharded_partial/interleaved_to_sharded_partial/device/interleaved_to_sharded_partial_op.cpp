@@ -23,7 +23,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
     const auto& num_slices = operation_attributes.num_slices;
     const auto& slice_index = operation_attributes.slice_index;
     const auto& grid_size = operation_attributes.grid_size;
-    const auto& output_dtype = operation_attributes.output_dtype;
+    const auto output_dtype = operation_attributes.output_dtype.value_or(input_tensor.dtype());
 
     // Validate output tensor
     TT_FATAL(
@@ -75,7 +75,9 @@ TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            operation_attributes.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+            operation_attributes.output_dtype.value_or(input_tensor.dtype()),
+            tt::tt_metal::PageConfig(input_tensor.layout()),
+            mem_config));
 }
 
 Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(

@@ -73,10 +73,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
+    auto output_datatype = preallocated_output_tensor.has_value() ? preallocated_output_tensor->dtype()
+                                                                  : args.output_dtype.value_or(input_tensor.dtype());
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->dtype();
     }
 
     auto input_datatype = input_tensor.dtype();
@@ -137,10 +137,11 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
 
     const auto output_shape = tensor_args.input.logical_shape();
+    const auto output_dtype = args.output_dtype.value_or(tensor_args.input.dtype());
     return TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
-            args.output_dtype,
+            output_dtype,
             PageConfig(output_layout),
             args.output_memory_config,
             output_shape,

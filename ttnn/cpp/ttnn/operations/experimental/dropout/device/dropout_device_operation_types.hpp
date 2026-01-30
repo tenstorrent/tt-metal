@@ -9,7 +9,7 @@
 namespace ttnn::experimental::prim {
 
 struct DropoutParams {
-    const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    const std::optional<tt::tt_metal::DataType> output_dtype;
     const tt::tt_metal::MemoryConfig output_memory_config;
 
     // Specifies the seed for the dropout operation.

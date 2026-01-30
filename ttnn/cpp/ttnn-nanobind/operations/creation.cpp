@@ -121,11 +121,10 @@ auto create_nanobind_from_buffer_overload() {
                     return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
                 }
                 case DataType::BFLOAT8_B:
-                case DataType::BFLOAT4_B:
-                case DataType::INVALID: {
+                case DataType::BFLOAT4_B: {
                     // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
                     // Both are empty structs, so let's not allow users to use them for this particular operation
-                    TT_THROW("Unreachable");
+                    TT_THROW("Unsupported DataType for buffer creation");
                 }
             }
             // This is a fallback to make the compiler happy.

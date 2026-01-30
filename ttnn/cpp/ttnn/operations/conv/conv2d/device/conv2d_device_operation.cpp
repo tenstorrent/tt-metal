@@ -70,7 +70,7 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         return TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                args.dtype,
+                args.dtype.value(),
                 tt::tt_metal::PageConfig(output_layout),
                 mem_config,
                 tt::tt_metal::Alignment(
@@ -82,7 +82,7 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            args.dtype,
+            args.dtype.value(),
             tt::tt_metal::PageConfig(output_layout),
             args.memory_config,
             output_shape,
@@ -102,9 +102,9 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
     if (args.untilize_out) {
         TT_FATAL(
-            (args.dtype == DataType::BFLOAT16) || (args.dtype == DataType::FLOAT32),
+            (args.dtype.value() == DataType::BFLOAT16) || (args.dtype.value() == DataType::FLOAT32),
             "Untilize output requires BFLOAT16 or FLOAT32 data type but got {}",
-            args.dtype);
+            args.dtype.value());
     }
     if (args.memory_config.is_sharded()) {
         uint32_t per_core_out_matrix_width_ntiles = args.parallelization_config.per_core_out_matrix_width_ntile;

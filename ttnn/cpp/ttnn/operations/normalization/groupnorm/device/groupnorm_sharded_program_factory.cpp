@@ -34,7 +34,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     float eps = operation_attributes.eps;
     uint32_t num_groups = operation_attributes.num_groups;
     uint32_t num_batches = a.padded_shape()[0];
-    DataType im_data_format = program_config.im_data_format;
+    DataType im_data_format = program_config.im_data_format.value();
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     bool inplace = program_config.inplace;
     bool use_welford = operation_attributes.use_welford;
