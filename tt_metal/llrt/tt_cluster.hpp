@@ -8,7 +8,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
