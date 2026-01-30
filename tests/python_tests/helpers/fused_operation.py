@@ -9,7 +9,7 @@ import torch
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat
-from .fused_math import Math
+from .fused_math import Math, MatmulFpu
 from .fused_operand import Operand, OperandMapping
 from .fused_packer import Packer
 from .fused_unpacker import Unpacker, UnpackerTilizeA
@@ -58,6 +58,7 @@ class FusedOperation:
     dst_index: int = 0
     srca_reuse_count: int = 4
     output_pack_dims: Tuple[int, int] = None
+    batch_size: int = 0
 
     def __post_init__(self):
         mapping = self.operand_mapping
@@ -125,13 +126,6 @@ class FusedOperation:
 
         if self.output_pack_dims is None:
             self.output_pack_dims = self.output.dimensions
-        else:
-            self.output_pack_dims[0] = min(
-                self.output_pack_dims[0], self.output.dimensions[0]
-            )
-            self.output_pack_dims[1] = min(
-                self.output_pack_dims[1], self.output.dimensions[1]
-            )
 
         self.output_tiles_h = self.output_pack_dims[0] // 32
         self.output_tiles_w = self.output_pack_dims[1] // 32
@@ -151,6 +145,14 @@ class FusedOperation:
             self.bh_tilize = Tilize.Yes
         else:
             self.bh_tilize = Tilize.No
+
+        if self.batch_size <= 0 or self.batch_size > self.output.tile_count:
+            self.batch_size = self.output.tile_count
+
+        if isinstance(self.math.fpu, MatmulFpu):
+            tile_count = self.output.tile_count
+            if self.batch_size != 1 and self.batch_size != tile_count:
+                self.batch_size = tile_count
 
     @property
     def src_a(self) -> Operand:
@@ -205,8 +207,6 @@ class FusedOperation:
         master_golden_tensor = self.packer().golden(master_golden_tensor, self, config)
 
         self.output._master_golden = master_golden_tensor.flatten()
-
-        self.output.dimensions = self.output_pack_dims
 
         return master_golden_tensor
 

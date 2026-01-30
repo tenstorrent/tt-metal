@@ -174,5 +174,9 @@ class FusedKernelGenerator:
         fused_test_cpp_dir = test_cpp_dir / FUSED_TESTS_DIR
         fused_test_cpp_dir.mkdir(parents=True, exist_ok=True)
 
-        with open(test_cpp_dir / f"{test_name}", "w") as f:
+        cpp_path = test_cpp_dir / f"{test_name}"
+
+        with open(cpp_path, "w") as f:
             f.write(combined)
+
+        os.system(f'clang-format -i "{cpp_path}"')

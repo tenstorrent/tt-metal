@@ -1,5 +1,5 @@
 dest_acc: "Yes"
-profiler_enabled: true
+# profiler_enabled: true
 loop_factor: 16
 
 operations:
@@ -18,12 +18,13 @@ operations:
           operation: "Fill"
           approximation_mode: "No"
           iterations: 32
-          dst_dest_tile_index: 2
+          dst_dest_tile_index: 0
           fill_const_value: 1.0
     packer: "Packer"
     math_fidelity: "LoFi"
     unpack_transpose_within_face: "Yes"
     unpack_transpose_faces: "No"
+    batch_size: 3
 
   - src_a: "datacopy_output"
     src_b: "input_B"
@@ -53,6 +54,7 @@ operations:
           dst_dest_tile_index: 1
     packer: "Packer"
     math_fidelity: "LoFi"
+    batch_size: 2
 
   - src_a: "tilized_output"
     src_b: "X"
@@ -72,10 +74,11 @@ operations:
           approximation_mode: "No"
           iterations: 8
           src1_dest_tile_index: 0
-          src2_dest_tile_index: 1
-          dst_dest_tile_index: 2
+          src2_dest_tile_index: 0
+          dst_dest_tile_index: 0
     packer: "Packer"
     math_fidelity: "HiFi4"
+    batch_size: 1
 
   - src_a: "reduced_output"
     src_b: "input_B"
@@ -120,6 +123,7 @@ operations:
     packer: "Packer"
     math_fidelity: "HiFi2"
     output_pack_dims: [32, 64]
+    batch_size: 1
 
   - src_a: "matmul_result"
     src_b: "input_C"

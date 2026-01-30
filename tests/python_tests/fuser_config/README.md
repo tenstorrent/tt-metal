@@ -58,6 +58,7 @@ operations:
     packer: "Packer"          # Which packer to use
 
     # Hardware Settings
+    batch_size: 4             # Number of tiles per batch
     math_fidelity: "HiFi3"
     dest_sync: "Full"
     unpack_transpose_within_face: "Yes"
@@ -132,8 +133,6 @@ Dimensions of the src_b operand in format `[height, width]`. Same rules as `src_
 
 #### `output_pack_dims` (array of 2 integers, optional)
 Override dimensions of the output operand in format `[height, width]`. Same rules as `src_a_dims`.
-
-**Important:** The result of the FPU operation must fit in dest, which has limited capacity based on `dest_sync` and `dest_acc` settings. This is especially critical for `Matmul` operations where the result dimensions may differ from input dimensions. See the dest tile capacity table in the Hardware Configuration section.
 
 ---
 
@@ -325,6 +324,16 @@ Specifies which packer to use. Options:
 ---
 
 ### Hardware Configuration
+
+#### `batch_size` (integer, optional)
+Controls how many output tiles are processed together in a single batch. The system automatically determines the optimal batch size based on dest capacity, but you can manually override it when needed.
+See the dest tile capacity table in the [Global Settings](#global-settings) section.
+
+**Automatic Batch Size Determination:** When `batch_size` is not specified or set to a value that exceeds dest capacity, the system automatically adjusts it based on dest capacity.
+
+**Special Case for Matmul:** When using `Matmul` FPU and the output exceeds dest capacity, `batch_size` is automatically set to 1, meaning one output tile is computed at a time.
+
+**Manual Override:** You can manually specify `batch_size` in the YAML configuration. This is useful for performance tuning or when you want explicit control over batching behavior. However, the system will still enforce that `batch_size` does not exceed dest capacity or total output tile count.
 
 #### `dest_sync` (string, optional)
 Controls the synchronization mode between the math unit and packer. When set to `"Half"` (the default), dest operates in half synchronization mode (double buffering), where the math unit and packer can work on different halves of dest simultaneously. When set to `"Full"`, dest operates in full synchronization mode (single buffering), where the math unit and packer share the full dest space without overlap.

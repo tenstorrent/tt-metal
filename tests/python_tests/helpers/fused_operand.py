@@ -252,9 +252,17 @@ class OperandRegistry:
     ) -> OperandMapping:
         if src_a not in self.operands:
             self.add_input(src_a, dimensions=src_a_dims, data_format=input_format)
+        else:
+            existing = self.operands[src_a]
+            if list(existing.dimensions) != list(src_a_dims):
+                existing.dimensions = list(src_a_dims)
 
         if src_b not in self.operands:
             self.add_input(src_b, dimensions=src_b_dims, data_format=input_format)
+        else:
+            existing = self.operands[src_b]
+            if list(existing.dimensions) != list(src_b_dims):
+                existing.dimensions = list(src_b_dims)
 
         if src_a_tensor is not None:
             self.operands[src_a].set_data(src_a_tensor)

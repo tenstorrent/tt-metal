@@ -287,6 +287,8 @@ def parse_operation(
         ]
     if "output_pack_dims" in op_config:
         kwargs["output_pack_dims"] = op_config["output_pack_dims"]
+    if "batch_size" in op_config:
+        kwargs["batch_size"] = op_config["batch_size"]
 
     return FusedOperation(
         operand_mapping=operand_mapping,

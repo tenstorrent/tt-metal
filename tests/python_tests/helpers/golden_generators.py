@@ -1286,6 +1286,7 @@ class UnarySFPUGolden:
         dest_idx: int = 0,
         fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
+        skip_tilize: bool = False,
     ):
         self.data_format = data_format
         self.dest_acc = dest_acc
@@ -1324,7 +1325,8 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
-        result = tilize_block(result, dimensions, input_format).flatten()
+        if not skip_tilize:
+            result = tilize_block(result, dimensions, input_format).flatten()
 
         start = ELEMENTS_PER_TILE * dest_idx
         elements_to_process = TILE_SIZE * iterations
@@ -1353,7 +1355,8 @@ class UnarySFPUGolden:
             + TILE_SIZE * iterations
         ] = torch.tensor(op_res, dtype=format_dict[dst_format])
 
-        result = untilize_block(result, input_format, dimensions).flatten()
+        if not skip_tilize:
+            result = untilize_block(result, input_format, dimensions).flatten()
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
@@ -1686,6 +1689,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         num_iterations: int,
         dimensions: tuple[int, int],
         data_format: DataFormat,
+        skip_tilize: bool = False,
     ):
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
@@ -1711,10 +1715,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 dst_idx,
             )
 
-        if data_format != DataFormat.Bfp8_b:
+        if not skip_tilize and data_format != DataFormat.Bfp8_b:
             result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
         else:
-            result = tensor.flatten()
+            result = tensor.flatten().clone()
 
         for name, idx in [
             ("src1_idx", src1_idx),
@@ -1760,7 +1764,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
             result[dst_row_start : dst_row_start + elements_per_row] = result_row
 
-        if data_format != DataFormat.Bfp8_b:
+        if not skip_tilize and data_format != DataFormat.Bfp8_b:
             result = untilize_block(result, data_format, dimensions)
 
         return result

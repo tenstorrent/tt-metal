@@ -207,6 +207,7 @@ class MatmulUnpacker(Unpacker):
         ct_dim = operation.ct_dim
         rt_dim = operation.rt_dim
         kt_dim = operation.kt_dim
+        batch_size = operation.batch_size
 
         transpose_faces = "true" if operation.unpack_transpose_faces.value else "false"
         transpose_within_face = (
@@ -218,26 +219,44 @@ class MatmulUnpacker(Unpacker):
                 "MatmulUnpacker does not support different values for transpose_faces and transpose_within_face"
             )
 
-        return f"    _llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        if batch_size == 1:
+            return f"    _llk_unpack_AB_matmul_init_<>({transpose_faces}, 1, 1, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        else:
+            return f"    _llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
 
     def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
         ct_dim = operation.ct_dim
         rt_dim = operation.rt_dim
         kt_dim = operation.kt_dim
+        batch_size = operation.batch_size
         unpack_tile_size_a = operation.tile_size_unpack_a
         unpack_tile_size_b = operation.tile_size_unpack_b
 
-        code = (
-            f"    for (uint32_t j = 0; j < {kt_dim}; j++)\n"
-            f"    {{\n"
-            f"        _llk_unpack_AB_matmul_<>(\n"
-            f"            L1_ADDRESS(buffer_A{stage}[0]), L1_ADDRESS(buffer_B{stage}[0]),\n"
-            f"            j, j * {ct_dim}, {unpack_tile_size_a}, {unpack_tile_size_b}, false, false, {ct_dim}, {rt_dim}, {kt_dim}\n"
-            f"        );\n"
-            f"    }}\n"
-            f"\n"
-        )
+        if batch_size == 1:
+            code = (
+                f"    for (uint32_t mt = 0; mt < {rt_dim}; ++mt) {{\n"
+                f"        for (uint32_t nt = 0; nt < {ct_dim}; ++nt) {{\n"
+                f"            for (uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
+                f"                _llk_unpack_AB_matmul_<>(\n"
+                f"                    L1_ADDRESS(buffer_A{stage}[0]), L1_ADDRESS(buffer_B{stage}[0]),\n"
+                f"                    mt * {kt_dim} + kt, kt * {ct_dim} + nt,\n"
+                f"                    {unpack_tile_size_a}, {unpack_tile_size_b}, false, false, 1, 1, {kt_dim}\n"
+                f"                );\n"
+                f"            }}\n"
+                f"        }}\n"
+                f"    }}\n"
+            )
+        else:
+            code = (
+                f"    for (uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
+                f"        _llk_unpack_AB_matmul_<>(\n"
+                f"            L1_ADDRESS(buffer_A{stage}[0]), L1_ADDRESS(buffer_B{stage}[0]),\n"
+                f"            kt, kt * {ct_dim},\n"
+                f"            {unpack_tile_size_a}, {unpack_tile_size_b}, false, false, {ct_dim}, {rt_dim}, {kt_dim}\n"
+                f"        );\n"
+                f"    }}\n"
+            )
 
         return code
 
