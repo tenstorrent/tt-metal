@@ -34,9 +34,9 @@ KERNEL_ENTRY {
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-    // Setup input CB for all heads (Ht * Wt tiles), sin/cos for one head (Wt tiles, reused)
+    // Setup sharded buffers: input CB contains Ht * Wt tiles total (consumed in Ht iterations),
+    // sin/cos CBs contain Wt tiles each (reused for all Ht heads)
     unified_kernels::setup_sharded_buffer(in_cb, Wt);
-    DPRINT << "Ht = " << Ht << ", Wt = " << Wt << ENDL();
     unified_kernels::setup_sharded_buffer(cos_cb, Wt);
     unified_kernels::setup_sharded_buffer(sin_cb, Wt);
     unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);

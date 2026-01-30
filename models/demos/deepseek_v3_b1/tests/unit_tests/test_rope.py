@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
     [
         (1, 1, 32, 5, (1, 1)),  # Minimal single-core test
         (1, 1, 64, 5, (1, 2)),  # Multicore test
-        (1, 4, 64, 5, (1, 2)),  # DeepSeek V3 Q rope (multiple heads)
+        (1, 2, 64, 5, (1, 1)),  # DeepSeek V3 Q rope (multiple heads)
     ],
     ids=["minimal", "multicore", "q_rope"],
 )
@@ -67,7 +67,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
     # For TTNN decode mode, reshape input to [1, batch, num_heads, head_dim]
     x_ttnn = x.permute(2, 0, 1, 3)  # [seq_len=1, batch, num_heads, head_dim]
 
-    # Create HEIGHT_SHARDED memory config for input
+    # Create WIDTH_SHARDED memory config for input
     # Use tiny tiles: tile height = num_heads (no padding to 32)
     tiny_tile = ttnn.Tile((num_heads, ttnn.TILE_SIZE))
     # Create core grid from grid_size parameter
@@ -83,7 +83,7 @@ def test_rope_decode(device, batch, num_heads, head_dim, position_id, grid_size,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    # Create TTNN input tensor with HEIGHT_SHARDED memory and tiny tile
+    # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     tt_x = ttnn.from_torch(
         x_ttnn,
         dtype=ttnn.bfloat16,

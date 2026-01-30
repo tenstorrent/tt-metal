@@ -523,8 +523,8 @@ class PreSDPA:
             ("matmul3_out_w_per_core", matmul3_out_w),
         ]
 
-        # Is it okay to hardcode like this? Or should this be derived from matmul2 output shape?
-        qrope_head_dim_per_core_t = 2  # head_dim (64) // TILE_SIZE (32) = 2 tiles
+        # Qrope head configuration: each qrope core processes 2 heads, each head is 64 elements (2 1x32 tiles)
+        qrope_head_dim_per_core_t = 2  # head_dim (64) // TILE_SIZE (32) = 2 tiles per head
         qrope_num_heads_per_core = 2  # Each qrope core processes 2 heads
 
         # RoPE compile-time args (only on Qrope cores)
