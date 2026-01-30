@@ -46,7 +46,6 @@ class BroadcastRMSNorm:
         semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=None,
-        topology=None,
         num_links=1,
         using_persistent_buffers=True,
         epsilon=1e-6,
@@ -61,8 +60,6 @@ class BroadcastRMSNorm:
             skip_ccl: If True, skip CCL broadcast and run RMSNorm only (single-device mode).
                       In this mode, semaphores and sender_coord are ignored.
         """
-        if topology is None:
-            topology = ttnn.Topology.Linear
 
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
@@ -77,8 +74,6 @@ class BroadcastRMSNorm:
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-
-        grid = mesh_device.compute_with_storage_grid_size()
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -171,7 +166,6 @@ class BroadcastRMSNorm:
                 device_idx = row * mesh_cols + col
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
-                output_tensor_device = output_tensors_per_device[device_idx]
 
                 # Worker core is the data core (from shard grid)
                 input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
