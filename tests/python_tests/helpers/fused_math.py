@@ -8,6 +8,7 @@ import torch
 
 from .golden_generators import (  # TilizeGolden,
     BinarySFPUGolden,
+    BroadcastGolden,
     DataCopyGolden,
     EltwiseBinaryGolden,
     MatmulGolden,
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 from .chip_architecture import ChipArchitecture
 from .llk_params import (
     ApproximationMode,
+    BroadcastType,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -165,10 +167,11 @@ class EltwiseFpu(Fpu):
         math_fidelity = operation.math_fidelity.value
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
 
         return (
             f"    // Operation {stage}: Eltwise {op} FPU\n"
-            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, BroadcastType::NONE, {math_fidelity}>({num_faces}, 0);\n"
+            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>({num_faces}, 0);\n"
         )
 
     def calculate(
@@ -179,9 +182,10 @@ class EltwiseFpu(Fpu):
         dest_acc = config.dest_acc.value
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
 
         return (
-            f"    _llk_math_eltwise_binary_<{op}, BroadcastType::NONE, dest_sync{stage},\n"
+            f"    _llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
             f"        {dest_acc}, {math_fidelity}, EltwiseBinaryReuseDestType::NONE>({num_faces}, {tile_idx}, false\n"
             f"    );\n"
         )
@@ -301,9 +305,14 @@ class DatacopyFpu(Fpu):
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
+        if operation.broadcast_type != BroadcastType.None_:
+            source_tensor = tensor_b
+        else:
+            source_tensor = tensor_a
+
         golden_generator = get_golden_generator(DataCopyGolden)
         golden_tensor = golden_generator(
-            tensor_a,
+            source_tensor,
             operation.output.data_format,
             num_faces=operation.num_faces,
             input_dimensions=operation.src_a.dimensions,
@@ -316,7 +325,7 @@ class DatacopyFpu(Fpu):
         stage = operation.stage_id
         dest_acc = config.dest_acc.value
         tilize_en = "true" if operation.bh_tilize.value else "false"
-        broadcast_type = "BroadcastType::NONE"
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
         data_copy_type = f"DataCopyType::{operation.data_copy_type.name}"
         num_faces = operation.num_faces
         is_int_fpu_en = dest_acc
@@ -344,7 +353,7 @@ class DatacopyFpu(Fpu):
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.value
-        broadcast_type = "BroadcastType::NONE"
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         data_copy_type = f"DataCopyType::{operation.data_copy_type.name}"
         num_faces = operation.num_faces
@@ -648,30 +657,16 @@ class Math:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
-        from .tilize_untilize import tilize_block, untilize_block
-
-        result = self.fpu.golden(tensor_a, tensor_b, operation, config)
-
-        if not self.sfpu:
-            return result
-
         batch_size = operation.batch_size
         data_format = operation.output.data_format
+        tile_cnt = operation.output.tile_count
+        tile_size = 1024
 
-        if isinstance(self.fpu, MatmulFpu):
-            rt_dim = operation.rt_dim
-            ct_dim = operation.ct_dim
-            tile_cnt = rt_dim * ct_dim
-            dimensions = [rt_dim * 32, ct_dim * 32]
-        else:
-            tile_cnt = operation.output.tile_count
-            dimensions = operation.output.dimensions
+        result = self.fpu.golden(tensor_a, tensor_b, operation, config).flatten()
 
         result_tilized = tilize_block(
-            result.flatten(), dimensions, data_format
+            result, operation.max_output_dimensions, data_format
         ).flatten()
-
-        tile_size = 1024
 
         batch_start = 0
         for batch_start in range(0, tile_cnt, batch_size):
@@ -691,7 +686,12 @@ class Math:
 
             result_tilized[batch_start_elem:batch_end_elem] = batch_tensor.flatten()
 
-        result = untilize_block(result_tilized, data_format, dimensions)
+        dimensions = operation.output.dimensions
+        num_elements = dimensions[0] * dimensions[1]
+
+        result = untilize_block(
+            result_tilized.flatten()[:num_elements], data_format, dimensions
+        ).reshape(dimensions)
 
         return result
 

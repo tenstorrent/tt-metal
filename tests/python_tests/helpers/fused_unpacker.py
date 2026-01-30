@@ -12,9 +12,9 @@ if TYPE_CHECKING:
 
 from .chip_architecture import ChipArchitecture
 from .fused_math import ReduceFpu
-from .golden_generators import TransposeGolden, get_golden_generator
-from .llk_params import PerfRunType, Transpose
-from .tilize_untilize import tilize_block
+from .golden_generators import BroadcastGolden, TransposeGolden, get_golden_generator
+from .llk_params import BroadcastType, PerfRunType, Transpose
+from .tilize_untilize import tilize_block, untilize_block
 
 
 class Unpacker:
@@ -277,6 +277,24 @@ class UnpackerAB(Unpacker):
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
+        if operation.broadcast_type != BroadcastType.None_:
+            tilized_b = tilize_block(
+                tensor_b, operation.src_b.dimensions, operation.src_b.data_format
+            )
+            broadcast_golden = get_golden_generator(BroadcastGolden)
+            broadcast_result = broadcast_golden(
+                operation.broadcast_type,
+                tilized_b,
+                operation.src_b.data_format,
+                operation.num_faces,
+                operation.src_b.tile_count,
+                operation.face_r_dim,
+            )
+            tensor_b = untilize_block(
+                broadcast_result,
+                operation.src_b.data_format,
+                operation.src_b.dimensions,
+            )
 
         if operation.unpack_transpose_faces == Transpose.Yes:
             tensor_a = t_matrix.transpose_faces_multi_tile(
@@ -303,30 +321,34 @@ class UnpackerAB(Unpacker):
     def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
-        broadcast_type = "BroadcastType::NONE"
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
+
+        if (
+            operation.broadcast_type == BroadcastType.Scalar
+            and operation.unpack_transpose_faces.value
+        ):
+            raise ValueError("SrcA transpose is not supported with scalar broadcast")
 
         transpose_faces = "true" if operation.unpack_transpose_faces.value else "false"
         transpose_within_face = (
             "true" if operation.unpack_transpose_within_face.value else "false"
         )
 
-        if transpose_within_face != transpose_faces:
-            raise ValueError(
-                "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
-            )
-
         if isinstance(operation.math.fpu, ReduceFpu):
+            if operation.broadcast_type != BroadcastType.None_:
+                raise ValueError("ReduceFpu does not support broadcasted inputs.")
+
             reduce_dim = operation.math.fpu.reduce_dim()
-            within_face_16x16_transpose = (
-                1 if reduce_dim == "ReduceDim::REDUCE_ROW" else 0
-            )
             return (
-                f"    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>({within_face_16x16_transpose});\n"
-                f"    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;\n"
-                f"    config_unpacker_x_end<UNP_SEL>({face_r_dim});\n"
-                f"    _llk_unpack_AB_mop_config_<BroadcastType::NONE>(false, 4, false);\n"
+                f"_llk_unpack_AB_reduce_init_<{reduce_dim}, {broadcast_type}>(\n"
+                f"{face_r_dim}, {num_faces}, false, {transpose_faces}, {transpose_within_face});\n"
             )
         else:
+            if transpose_within_face != transpose_faces:
+                raise ValueError(
+                    "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
+                )
+
             return f"    _llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
 
     def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
@@ -359,32 +381,52 @@ class UnpackerA(Unpacker):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        if operation.unpack_transpose_faces == Transpose.Yes:
-            tensor_a = t_matrix.transpose_faces_multi_tile(
-                tensor_a,
-                operation.src_a.data_format,
-                operation.src_a.tile_count,
-                tilize=True,
-                untilize=True,
-                input_dimensions=operation.src_a.dimensions,
+        if operation.broadcast_type != BroadcastType.None_:
+            tensor_b = tensor_a
+            tensor_b = tilize_block(
+                tensor_b, operation.src_a.dimensions, operation.src_a.data_format
             )
+            broadcast_golden = get_golden_generator(BroadcastGolden)
+            tensor_b = broadcast_golden(
+                operation.broadcast_type,
+                tensor_b,
+                operation.src_a.data_format,
+                operation.num_faces,
+                operation.src_a.tile_count,
+                operation.face_r_dim,
+            )
+            tensor_b = untilize_block(
+                tensor_b,
+                operation.src_a.data_format,
+                operation.src_a.dimensions,
+            )
+        else:
+            if operation.unpack_transpose_faces == Transpose.Yes:
+                tensor_a = t_matrix.transpose_faces_multi_tile(
+                    tensor_a,
+                    operation.src_a.data_format,
+                    operation.src_a.tile_count,
+                    tilize=True,
+                    untilize=True,
+                    input_dimensions=operation.src_a.dimensions,
+                )
 
-        if operation.unpack_transpose_within_face == Transpose.Yes:
-            tensor_a = t_matrix.transpose_within_faces_multi_tile(
-                tensor_a,
-                operation.src_a.data_format,
-                operation.src_a.tile_count,
-                tilize=True,
-                untilize=True,
-                input_dimensions=operation.src_a.dimensions,
-            )
+            if operation.unpack_transpose_within_face == Transpose.Yes:
+                tensor_a = t_matrix.transpose_within_faces_multi_tile(
+                    tensor_a,
+                    operation.src_a.data_format,
+                    operation.src_a.tile_count,
+                    tilize=True,
+                    untilize=True,
+                    input_dimensions=operation.src_a.dimensions,
+                )
 
         return tensor_a.flatten(), tensor_b.flatten()
 
     def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
-        broadcast_type = "BroadcastType::NONE"
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
         eltwise_reuse_type = "NONE"
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
@@ -392,6 +434,7 @@ class UnpackerA(Unpacker):
         transpose_within_face = (
             "true" if operation.unpack_transpose_within_face.value else "false"
         )
+
         return (
             f"    _llk_unpack_A_init_<{broadcast_type}, false, EltwiseBinaryReuseDestType::{eltwise_reuse_type}, {unpack_to_dest}>(\n"
             f"        {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
@@ -402,7 +445,7 @@ class UnpackerA(Unpacker):
         stage = operation.stage_id
         tile_cnt = operation.output.tile_count
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
-        broadcast_type = "BroadcastType::NONE"
+        broadcast_type = f"BroadcastType::{operation.broadcast_type.value}"
 
         code = (
             f"    for (int i = 0; i < {tile_cnt}; ++i)\n"
@@ -448,9 +491,11 @@ class UnpackerTilizeA(Unpacker):
     def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
         face_r_dim = operation.face_r_dim
-        block_ct_dim = operation.block_ct_dim
+        block_ct_dim = operation.dest_tiles_w
         transpose_faces = operation.unpack_transpose_faces.value
         transpose_within_face = operation.unpack_transpose_within_face.value
+        if operation.broadcast_type != BroadcastType.None_:
+            raise ValueError("UnpackerTilizeA does not support broadcast")
 
         if transpose_faces or transpose_within_face:
             raise ValueError("UnpackerTilizeA does not support transpose")
@@ -461,8 +506,8 @@ class UnpackerTilizeA(Unpacker):
         stage = operation.stage_id
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
-        block_rt_dim = operation.block_rt_dim
-        block_ct_dim = operation.block_ct_dim
+        block_rt_dim = operation.dest_tiles_h
+        block_ct_dim = operation.dest_tiles_w
 
         # Blackhole
         if config.architecture == ChipArchitecture.BLACKHOLE:

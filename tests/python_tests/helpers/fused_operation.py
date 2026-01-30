@@ -14,6 +14,7 @@ from .fused_operand import Operand, OperandMapping
 from .fused_packer import Packer
 from .fused_unpacker import Unpacker, UnpackerTilizeA
 from .llk_params import (
+    BroadcastType,
     DataCopyType,
     DestSync,
     MathFidelity,
@@ -57,8 +58,8 @@ class FusedOperation:
     dest_sync: DestSync = DestSync.Half
     dst_index: int = 0
     srca_reuse_count: int = 4
-    output_pack_dims: Tuple[int, int] = None
     batch_size: int = 0
+    broadcast_type: BroadcastType = BroadcastType.None_
 
     def __post_init__(self):
         mapping = self.operand_mapping
@@ -67,15 +68,6 @@ class FusedOperation:
         src_a = registry.get(mapping.src_a)
         src_b = registry.get(mapping.src_b)
         output = registry.get(mapping.output)
-
-        input_A_dimensions = src_a.dimensions if src_a.dimensions else [32, 32]
-        input_B_dimensions = src_b.dimensions if src_b.dimensions else [32, 32]
-
-        from .format_config import InputOutputFormat
-
-        formats = InputOutputFormat(
-            input_format=src_a.data_format, output_format=output.data_format
-        )
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -100,47 +92,29 @@ class FusedOperation:
 
         self.tile_size = 16 * 16 * self.num_faces
 
-        self.buffer_A_tile_size = format_tile_sizes[formats.input_format]
-        self.buffer_B_tile_size = format_tile_sizes[formats.input_format]
-        self.buffer_Res_tile_size = format_tile_sizes[formats.output_format]
+        self.buffer_A_tile_size = format_tile_sizes[self.src_a.data_format]
+        self.buffer_B_tile_size = format_tile_sizes[self.src_b.data_format]
+        self.buffer_Res_tile_size = format_tile_sizes[self.output.data_format]
 
         num_rows = 32
         num_cols = 32
 
-        validate_tile_dimensions(input_A_dimensions[0], num_rows)
-        validate_tile_dimensions(input_A_dimensions[1], num_cols)
-        validate_tile_dimensions(input_B_dimensions[0], num_rows)
-        validate_tile_dimensions(input_B_dimensions[1], num_cols)
+        validate_tile_dimensions(self.src_a.dimensions[0], num_rows)
+        validate_tile_dimensions(self.src_a.dimensions[1], num_cols)
+        validate_tile_dimensions(self.src_b.dimensions[0], num_rows)
+        validate_tile_dimensions(self.src_b.dimensions[1], num_cols)
 
-        full_rt_dim = input_A_dimensions[0] // num_rows
-        full_ct_dim = input_B_dimensions[1] // num_cols
+        self.rt_dim = self.output.dimensions[0] // num_rows
+        self.ct_dim = self.output.dimensions[1] // num_cols
+        self.kt_dim = self.src_a.dimensions[1] // num_cols
 
-        self.full_rt_dim = full_rt_dim
-        self.full_ct_dim = full_ct_dim
-        self.block_rt_dim = full_rt_dim
-        self.block_ct_dim = full_ct_dim
-
-        self.rt_dim = input_A_dimensions[0] // num_rows
-        self.ct_dim = input_B_dimensions[1] // num_cols
-        self.kt_dim = input_A_dimensions[1] // num_cols
-
-        if self.output_pack_dims is None:
-            self.output_pack_dims = self.output.dimensions
-
-        self.output_tiles_h = self.output_pack_dims[0] // 32
-        self.output_tiles_w = self.output_pack_dims[1] // 32
-
-        self.dest_tiles_h = self.output.dimensions[0] // 32
-        self.dest_tiles_w = self.output.dimensions[1] // 32
-
-        self.output_pack_tile_cnt = self.output_tiles_h * self.output_tiles_w
-
-        self.output.pack_dims = self.output_pack_dims
+        self.dest_tiles_h = self.output.dimensions[0] // num_rows
+        self.dest_tiles_w = self.output.dimensions[1] // num_cols
 
         if (
             get_chip_architecture() == ChipArchitecture.BLACKHOLE
             and self.unpacker is UnpackerTilizeA
-            and formats.input_format != DataFormat.Bfp8_b
+            and self.src_a.data_format != DataFormat.Bfp8_b
         ):
             self.bh_tilize = Tilize.Yes
         else:
@@ -153,6 +127,9 @@ class FusedOperation:
             tile_count = self.output.tile_count
             if self.batch_size != 1 and self.batch_size != tile_count:
                 self.batch_size = tile_count
+
+        if self.broadcast_type != BroadcastType.None_:
+            self.data_copy_type = DataCopyType.B2D
 
     @property
     def src_a(self) -> Operand:
@@ -168,6 +145,11 @@ class FusedOperation:
     def output(self) -> Operand:
         mapping = self.operand_mapping
         return mapping.operand_registry.get(mapping.output)
+
+    @property
+    def max_output_dimensions(self) -> Tuple[int, int]:
+        mapping = self.operand_mapping
+        return mapping.resolve_output_dimensions(mapping.operand_registry)
 
     def unpack(self, config) -> str:
         unpacker_instance = self.unpacker()
@@ -226,4 +208,6 @@ class FusedOperation:
             f"  Math Fidelity: {self.math_fidelity}\n"
             f"  Unpack Transpose Faces: {self.unpack_transpose_faces}\n"
             f"  Unpack Transpose Within Faces: {self.unpack_transpose_within_face}\n"
+            f"  Batch Size: {self.batch_size}\n"
+            f"  Broadcast Type: {self.broadcast_type}\n"
         )

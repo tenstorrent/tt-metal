@@ -19,7 +19,6 @@ class Operand:
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
-    pack_dims: Optional[Tuple[int, int]] = None
     _data: Optional[torch.Tensor] = None
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
@@ -31,8 +30,6 @@ class Operand:
             raise ValueError(
                 f"Input operand '{self.name}' must have dimensions and data_format"
             )
-        if self.is_input():
-            self.pack_dims = self.dimensions
 
     def is_input(self) -> bool:
         return not self.is_output
@@ -146,12 +143,19 @@ class OperandMapping:
         self.operand_registry = operand_registry
 
     def create_output_operand(
-        self, operand_registry: "OperandRegistry", output_format: DataFormat
+        self,
+        operand_registry: "OperandRegistry",
+        output_format: DataFormat,
+        output_dims: Tuple[int, int],
     ):
         if self.output in operand_registry.operands:
             return
 
-        output_dims = self.resolve_output_dimensions(operand_registry)
+        max_output_dims = self.resolve_output_dimensions(operand_registry)
+
+        if output_dims[0] > max_output_dims[0] or output_dims[1] > max_output_dims[1]:
+            raise ValueError(f"Max output dimensions are {max_output_dims}")
+
         operand_registry.add_output(
             name=self.output,
             dimensions=output_dims,
@@ -164,8 +168,8 @@ class OperandMapping:
         src_a_op = operand_registry.get(self.src_a)
         src_b_op = operand_registry.get(self.src_b)
 
-        M = src_a_op.pack_dims[0]
-        N = src_b_op.pack_dims[1]
+        M = src_a_op.dimensions[0]
+        N = src_b_op.dimensions[1]
 
         return (M, N)
 
@@ -243,6 +247,7 @@ class OperandRegistry:
         output: str,
         src_a_dims: Tuple[int, int] = [32, 32],
         src_b_dims: Tuple[int, int] = [32, 32],
+        output_dims: Tuple[int, int] = [64, 64],
         input_format: DataFormat = DataFormat.Float16_b,
         output_format: DataFormat = DataFormat.Float16_b,
         src_a_tensor: torch.Tensor = None,
@@ -281,6 +286,6 @@ class OperandRegistry:
             operand_registry=self,
         )
 
-        mapping.create_output_operand(self, output_format)
+        mapping.create_output_operand(self, output_format, output_dims)
 
         return mapping

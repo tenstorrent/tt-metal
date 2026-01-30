@@ -30,17 +30,7 @@ class Packer:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
-        if isinstance(operation.math.fpu, MatmulFpu):
-            full_height = operation.dest_tiles_h * 32
-            full_width = operation.dest_tiles_w * 32
-            tensor = tensor.reshape(full_height, full_width)
-        else:
-            tensor = tensor.reshape(operation.output.dimensions)
-
-        return tensor[
-            : operation.output_pack_dims[0],
-            : operation.output_pack_dims[1],
-        ]
+        return tensor
 
     def _wait_for_math(self) -> str:
         return "_llk_packer_wait_for_math_done_();\n"
@@ -56,10 +46,8 @@ class Packer:
         code = f"for (uint32_t mt = 0; mt < {rt_dim}; ++mt) {{\n"
         code += f"for (uint32_t nt = 0; nt < {ct_dim}; ++nt) {{\n"
         code += self._wait_for_math()
-        code += f"if (mt < {operation.output_tiles_h} && nt < {operation.output_tiles_w}) {{\n"
-        code += f"uint32_t l1_idx = mt * {operation.output_tiles_w} + nt;\n"
-        code += self.pack(operation, config, 0, "l1_idx")
-        code += "}\n"
+        code += f"uint32_t tile_idx = mt * {operation.dest_tiles_w} + nt;\n"
+        code += self.pack(operation, config, 0, "tile_idx")
         code += self._dest_section_done(config)
         code += "}\n"
         code += "}\n"
@@ -68,8 +56,6 @@ class Packer:
     def _batch_loop(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         batch_size = operation.batch_size
         tile_cnt = operation.output.tile_count
-        tiles_h = operation.output_tiles_h
-        tiles_w = operation.output_tiles_w
 
         num_full_batches = tile_cnt // batch_size
         remaining_tiles = tile_cnt % batch_size
@@ -82,13 +68,8 @@ class Packer:
             )
             code += self._wait_for_math()
             code += f"for (uint32_t i = 0; i < {batch_size}; ++i) {{\n"
-            code += f"uint32_t global_tile_idx = batch * {batch_size} + i;\n"
-            code += f"uint32_t tr = global_tile_idx / {tiles_w};\n"
-            code += f"uint32_t tc = global_tile_idx % {tiles_w};\n"
-            code += f"if (tr < {tiles_h} && tc < {tiles_w}) {{\n"
-            code += f"uint32_t l1_idx = tr * {tiles_w} + tc;\n"
-            code += self.pack(operation, config, "i", "l1_idx")
-            code += "}\n"
+            code += f"uint32_t tile_idx = batch * {batch_size} + i;\n"
+            code += self.pack(operation, config, "i", "tile_idx")
             code += "}\n"
             code += self._dest_section_done(config)
             code += "}\n"
@@ -96,13 +77,8 @@ class Packer:
         if remaining_tiles > 0:
             code += self._wait_for_math()
             code += f"for (uint32_t i = 0; i < {remaining_tiles}; ++i) {{\n"
-            code += f"uint32_t global_tile_idx = {num_full_batches * batch_size} + i;\n"
-            code += f"uint32_t tr = global_tile_idx / {tiles_w};\n"
-            code += f"uint32_t tc = global_tile_idx % {tiles_w};\n"
-            code += f"if (tr < {tiles_h} && tc < {tiles_w}) {{\n"
-            code += f"uint32_t l1_idx = tr * {tiles_w} + tc;\n"
-            code += self.pack(operation, config, "i", "l1_idx")
-            code += "}\n"
+            code += f"uint32_t tile_idx = {num_full_batches * batch_size} + i;\n"
+            code += self.pack(operation, config, "i", "tile_idx")
             code += "}\n"
             code += self._dest_section_done(config)
 

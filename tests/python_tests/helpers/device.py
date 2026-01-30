@@ -401,9 +401,9 @@ def collect_pipeline_results(
                 f"Output operand '{output_name}' does not have an L1 address. "
             )
 
-        output_dimensions = operation.output_pack_dims
+        output_dimensions = operation.output.dimensions
         output_format = output_operand.data_format
-        tile_cnt = operation.output_pack_tile_cnt
+        tile_cnt = operation.output.tile_count
 
         read_bytes_cnt = (
             output_operand.data_format.num_bytes_per_tile(TILE_ELEMENTS) * tile_cnt
