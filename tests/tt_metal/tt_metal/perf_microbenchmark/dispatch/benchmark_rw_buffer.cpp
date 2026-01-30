@@ -143,9 +143,8 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique =
+    auto pinned_mem =
         experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
-    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
     auto write_transfer = distributed::ShardDataTransfer(coord)
@@ -220,9 +219,8 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique =
+    auto pinned_mem =
         experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
-    std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
     auto read_transfer = distributed::ShardDataTransfer{coord}
