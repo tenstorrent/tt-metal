@@ -714,7 +714,7 @@ jobs:
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     if: |
       github.event.inputs.use_database == 'true' ||
       github.event.schedule == '0 3 * * *' ||
@@ -1298,7 +1298,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
