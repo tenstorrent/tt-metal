@@ -29,6 +29,7 @@ Usage:
 
 """
 
+import json
 import os
 import re
 import subprocess
@@ -563,8 +564,12 @@ def test_mlp1d_llama_demo(
     if measure_accuracy and token_acc:
         input_prompts = [token_acc.prepare_ref_tokens(tokenizer)]
     else:
-        # Use a simple prompt for performance tests
-        input_prompts = ["What is the meaning of life?"] * batch_size
+        # Use the same 128-token prompts as simple_text_demo.py for fair perf comparison
+        prompt_file = "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json"
+        with open(prompt_file, "r") as f:
+            prompts_data = json.load(f)
+        # Repeat/truncate prompts to match batch_size
+        input_prompts = [prompts_data[i % len(prompts_data)]["prompt"] for i in range(batch_size)]
 
     # Create page table for paged attention
     page_table = None

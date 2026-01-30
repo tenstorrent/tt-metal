@@ -64,4 +64,4 @@
   sku: wh_llmbox
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
-  timeout: 10
+  timeout: 15
