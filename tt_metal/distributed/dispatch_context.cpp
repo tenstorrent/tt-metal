@@ -14,11 +14,10 @@
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
+#include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
 
-namespace tt::tt_metal {
-
-namespace experimental {
+namespace tt::tt_metal::experimental {
 
 // Define the static member with custom deleter
 std::unique_ptr<DispatchContext, DispatchContext::Deleter> DispatchContext::dispatch_context_ptr_ = nullptr;
@@ -51,29 +50,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
     // Query the number of command queues requested
     populate_fd_kernels(active_devices, num_hw_cqs);
-
-    for (auto* dev : active_devices) {
-        populate_cq_static_args(dev);
-    }
-
-    for (auto* dev : active_devices) {
-        create_cq_program(dev);
-    }
-    compile_cq_programs();
-
-    std::vector<std::shared_future<void>> events;
-    for (auto* dev : active_devices) {
-        events.emplace_back(detail::async([dev]() {
-            dev->init_command_queue_device();
-            log_info(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
-        }));
-    }
-    for (const auto& event : events) {
-        event.get();
-    }
-
-    fast_dispatch_enabled_ = true;
-    num_fd_inits_++;
+    device_manager->configure_and_load_fast_dispatch_kernels();
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
@@ -92,6 +69,8 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
             cq_shared_state,
             std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl)));
     }
+    fast_dispatch_enabled_ = true;
+    num_fd_inits_++;
 }
 
 void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_device) {
@@ -124,6 +103,4 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 }
 
-}  // namespace experimental
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental

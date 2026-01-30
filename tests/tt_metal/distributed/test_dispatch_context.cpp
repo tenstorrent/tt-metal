@@ -32,6 +32,10 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape(4, 8)));
+
+    // Terminating without initializing should throw
+    EXPECT_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get()), std::runtime_error);
+
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
@@ -81,6 +85,9 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
+
+    // Initializing again should throw
+    EXPECT_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()), std::runtime_error);
 }
 
 }  // namespace tt::tt_metal::distributed::test

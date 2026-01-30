@@ -15,6 +15,12 @@ class MeshDevice;
 
 namespace experimental {
 
+// This class provides APIs to dynamically enable and teardown Fast Dispatch during runtime.
+// Functionality is currently limited to Galaxy clusters.
+// Note: The functionality in this class is extremely application specific, and will likely be
+// removed once we implement a proper weight loading solution for Low Latency Decode.
+// As such its exposed as experimental.
+
 class DispatchContext {
 public:
     static DispatchContext& get();
