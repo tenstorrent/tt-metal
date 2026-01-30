@@ -1,0 +1,108 @@
+name: 'Parse Platform'
+description: 'Parses platform dropdown (e.g., "Ubuntu 22.04") into distro, version, and toolchain'
+
+inputs:
+  platform:
+    description: 'Platform string (e.g., "Ubuntu 22.04", "Ubuntu 24.04")'
+    required: false
+    default: ''
+  distro:
+    description: 'Direct distro input (used when platform is not set)'
+    required: false
+    default: ''
+  version:
+    description: 'Direct version input (used when platform is not set)'
+    required: false
+    default: ''
+  default-distro:
+    description: 'Default distro if neither platform nor distro is set'
+    required: false
+    default: 'ubuntu'
+  default-version:
+    description: 'Default version if neither platform nor version is set'
+    required: false
+    default: '22.04'
+  enable-lto:
+    description: 'Override LTO setting (true/false/auto). If "auto" or empty, uses platform default'
+    required: false
+    default: 'auto'
+
+outputs:
+  distro:
+    description: 'Parsed distribution (ubuntu)'
+    value: ${{ steps.parse.outputs.distro }}
+  version:
+    description: 'Parsed version (22.04, 24.04)'
+    value: ${{ steps.parse.outputs.version }}
+  toolchain:
+    description: 'Appropriate toolchain for the platform'
+    value: ${{ steps.parse.outputs.toolchain }}
+  enable-lto:
+    description: 'Whether LTO should be enabled for this platform'
+    value: ${{ steps.parse.outputs.enable-lto }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: parse
+      shell: bash
+      run: |
+        # Helper function to output enable-lto value
+        # If user provided explicit override (true/false), use it; otherwise use platform default
+        output_enable_lto() {
+          local platform_default="$1"
+          local override="${{ inputs.enable-lto }}"
+          if [ "$override" = "true" ] || [ "$override" = "false" ]; then
+            echo "enable-lto=$override" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable-lto=$platform_default" >> "$GITHUB_OUTPUT"
+          fi
+        }
+
+        # Parse platform dropdown if provided, otherwise use direct inputs or defaults
+        if [ -n "${{ inputs.platform }}" ]; then
+          case "${{ inputs.platform }}" in
+            "Ubuntu 22.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=22.04" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+              ;;
+            "Ubuntu 24.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=24.04" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+              ;;
+            *)
+              # Unknown platform, use legacy fallback
+              echo "distro=${{ inputs.default-distro }}" >> "$GITHUB_OUTPUT"
+              echo "version=${{ inputs.default-version }}" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+              ;;
+          esac
+        else
+          # No platform dropdown, use direct inputs or defaults
+          DISTRO="${{ inputs.distro }}"
+          VERSION="${{ inputs.version }}"
+          [ -z "$DISTRO" ] && DISTRO="${{ inputs.default-distro }}"
+          [ -z "$VERSION" ] && VERSION="${{ inputs.default-version }}"
+
+          echo "distro=$DISTRO" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Determine toolchain based on distro
+          if [ "$DISTRO" = "ubuntu" ]; then
+            if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
+              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+            else
+              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              output_enable_lto "false"
+            fi
+          else
+            echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+            output_enable_lto "false"
+          fi
+        fi

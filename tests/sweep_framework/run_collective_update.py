@@ -412,7 +412,7 @@ def main():
     # Inform about ijson availability
     if not IJSON_AVAILABLE:
         print("Note: ijson library not found. For better performance with very large files (>500MB),")
-        print("      install it with: pip install ijson")
+        print("      install it with: uv pip install ijson")
         print()
 
     # Validate directory exists
