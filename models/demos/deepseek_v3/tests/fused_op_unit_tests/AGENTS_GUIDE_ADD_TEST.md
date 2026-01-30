@@ -58,7 +58,13 @@ Change the module test command based on the module that the new fused op is cont
 
 ## Update resutls
 Path results csv: 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv', where MODULE is the module and OP_NAME is the op name
-Remove any previous results csv file for this op if existing, and remove all logs in the 'logs' subfolder for this op. Test all test funcitons and parameter configurations for the op. Since some tests take very long (especially the long sequence lengths), test each parameter combination separately; use CI=false. Create a csv summary of results in 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv', where MODULE is the module and OP_NAME is the op name. Before each run, reset the machine using 'tt-smi -glx_reset'. Set a 20 mins timeout, if you need a longer timeout update the timeout in AGENTS_GUIDE_ADD_TEST.md with the new timeout, look at the output log before killing the run, leave it running if the log changed within the last 10 mins. Use the following structure for the csv: test_name,status,pcc,e2e perf, device perf,failure_reason (optional),comment (optional), link, timestamp. Add one line per concrete test (parameter combination) with all details filled in. In 'comment' column add any comments for potential fixes if the test is failing or any other comments of interest. Copy the log file for each test configuration into the logs sub-folder and add a link to the log file to the 'link' column in the results csv. Update the README.md with the new status of the test, or create a new row if it did not exist before; see Update instructions in the README.md for more details.
+1. Remove any previous results csv file for this op if existing, and remove all logs in the 'logs' subfolder for this op. Test all test funcitons and parameter configurations for the op.
+2. Create a new empty results csv file, use the following structure for the csv: test_name,status,pcc,e2e perf, device perf,failure_reason (optional),comment (optional), link, timestamp.
+3. Run each test case one by one
+  1. Reset the machine using 'tt-smi -glx_reset'
+  2. Run the test case; use a timeout of 20 mins, if you need a longer timeout update the timeout in AGENTS_GUIDE_ADD_TEST.md with the new timeout; use CI=false
+  3. Add a new line to the results csv for the current test case with all details filled in. In 'comment' column add any comments for potential fixes if the test is failing or any other comments of interest. Copy the log file for each test configuration into the logs sub-folder and add a link to the log file to the 'link' column in the results csv.
+  4. Update the README.md with the new status of the test, or create a new row if it did not exist before; see Update instructions in the README.md for more details.
 
 ## Performance measurements:
 - Performance measurements use three metrics: e2e_duration, kernel_duration, op_to_op_latency
