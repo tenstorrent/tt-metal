@@ -14,14 +14,12 @@
 namespace ttnn::experimental::prim {
 
 struct MoEParams {
-    uint32_t num_experts;
     uint32_t layer_id;
     std::optional<uint32_t> cluster_axis;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("num_experts", num_experts);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
