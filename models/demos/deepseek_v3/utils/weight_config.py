@@ -21,7 +21,7 @@ from models.demos.deepseek_v3.utils.run_config import WeightConfig
 # Cache metadata keys/version to detect stale weight configs
 _WEIGHT_CONFIG_META_KEY = "__meta__"
 _WEIGHT_CONFIG_WEIGHTS_KEY = "__weights__"
-_WEIGHT_CONFIG_SCHEMA_VERSION = 1
+_WEIGHT_CONFIG_SCHEMA_VERSION = 2
 
 
 def _wrap_weight_config(weight_config: WeightConfig) -> dict[str, Any]:

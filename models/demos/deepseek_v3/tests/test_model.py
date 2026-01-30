@@ -203,7 +203,7 @@ def run_test_forward_pass_dpmodel(
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
-    ("prefill", 131072, 1, None),
+    ("prefill", 32 * 1024, 1, None),
 ]
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)

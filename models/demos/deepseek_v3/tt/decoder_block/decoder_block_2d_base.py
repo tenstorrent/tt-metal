@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from abc import abstractmethod
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -88,9 +86,6 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        seq_len = x.shape[2]
-        debug_decoder = os.getenv("DEEPSEEK_V3_DEBUG_DECODER") == "1" and seq_len > 8192
-
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
@@ -102,21 +97,6 @@ class DecoderBlock2DBase(DecoderBlockBase):
         x += mla_out
         ttnn.deallocate(mla_out)
 
-        if debug_decoder:
-            x_torch = ttnn.to_torch(
-                x,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    cfg["mla"]["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mla"]["mesh_shape"]
-                ),
-            )
-            first_half = x_torch[..., :8192, :]
-            second_half = x_torch[..., 8192:, :]
-            logger.info(
-                f"DEBUG decoder x (after MLA residual): shape={x_torch.shape}, "
-                f"first_half: mean={first_half.mean():.4f}, std={first_half.std():.4f}, max={first_half.abs().max():.4f}; "
-                f"second_half: mean={second_half.mean():.4f}, std={second_half.std():.4f}, max={second_half.abs().max():.4f}"
-            )
-
         # MLP norm
         mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
 
@@ -124,39 +104,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
         ttnn.deallocate(mlp_norm_out)
 
-        if debug_decoder:
-            mlp_out_torch = ttnn.to_torch(
-                mlp_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    cfg["mla"]["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mla"]["mesh_shape"]
-                ),
-            )
-            first_half = mlp_out_torch[..., :8192, :]
-            second_half = mlp_out_torch[..., 8192:, :]
-            logger.info(
-                f"DEBUG decoder mlp_out: shape={mlp_out_torch.shape}, "
-                f"first_half: mean={first_half.mean():.4f}, std={first_half.std():.4f}, max={first_half.abs().max():.4f}; "
-                f"second_half: mean={second_half.mean():.4f}, std={second_half.std():.4f}, max={second_half.abs().max():.4f}"
-            )
-
         # MLP Residual
         x += mlp_out
         ttnn.deallocate(mlp_out)
-
-        if debug_decoder:
-            x_torch = ttnn.to_torch(
-                x,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    cfg["mla"]["mesh_device"], dims=(-2, -1), mesh_shape=cfg["mla"]["mesh_shape"]
-                ),
-            )
-            first_half = x_torch[..., :8192, :]
-            second_half = x_torch[..., 8192:, :]
-            logger.info(
-                f"DEBUG decoder x (after MLP residual): shape={x_torch.shape}, "
-                f"first_half: mean={first_half.mean():.4f}, std={first_half.std():.4f}, max={first_half.abs().max():.4f}; "
-                f"second_half: mean={second_half.mean():.4f}, std={second_half.std():.4f}, max={second_half.abs().max():.4f}"
-            )
 
         return x
 
