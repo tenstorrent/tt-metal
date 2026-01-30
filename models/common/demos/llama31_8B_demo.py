@@ -17,15 +17,15 @@ Supports:
 Usage:
     # Token accuracy test on N150
     MESH_DEVICE=N150 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    python_env/bin/pytest models/common/demos/mlp_1d_llama_demo.py -k "token-accuracy" -v
+    python_env/bin/pytest models/common/demos/llama31_8B_demo.py -k "token-accuracy" -v
 
     # Batch-1 latency test on N300
     MESH_DEVICE=N300 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    python_env/bin/pytest models/common/demos/mlp_1d_llama_demo.py -k "batch-1" --performance -v
+    python_env/bin/pytest models/common/demos/llama31_8B_demo.py -k "batch-1" --performance -v
 
     # Batch-32 throughput test on T3K
     MESH_DEVICE=T3K HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    python_env/bin/pytest models/common/demos/mlp_1d_llama_demo.py -k "batch-32" --performance -v
+    python_env/bin/pytest models/common/demos/llama31_8B_demo.py -k "batch-32" --performance -v
 
 """
 
