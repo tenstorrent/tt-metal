@@ -1,0 +1,10 @@
+We need to create a new fused op for deepseek_v3_b1.
+Lets call the opp output_hidden under deepseek_v3_b1/fused_ops .
+The op needs to run matmul followed by a gather.
+matmul shape: [1, 8192] x [8192, 6144]
+matmul output shape: [1, 6144]
+matmul runs on 96 cores on 8x12 core grid
+
+Look at pres_dpa_kernel.cpp for reference. It runs a matmul followed by a gather with other ops running before and after.
+Reference matmul and gather ops are under deepseek_v3_b1/micro_ops/matmul and deepseek_v3_b1/micro_ops/gather.
+Reference tests are under deepseek_v3_b1/tests/unit_tests/test_matmul.py and deepseek_v3_b1/tests/unit_tests/test_gather.py, deepseek_v3_b1/tests/unit_tests/test_pre_sdpa.py
