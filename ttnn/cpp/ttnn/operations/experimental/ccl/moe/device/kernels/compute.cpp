@@ -115,61 +115,62 @@ void kernel_main() {
     uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         for (chunks_per_expert) {  // TODO: (GR)
-            //---------------------------------------------------------------------
-            // Compute in @ {W0,W1}
-            //---------------------------------------------------------------------
+        }
 
-            // TODO: (GR) wait for chunk to arrive
+        //---------------------------------------------------------------------
+        // Compute in @ {W0,W1}
+        //---------------------------------------------------------------------
 
-            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
-                uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        // TODO: (GR) wait for chunk to arrive
 
-                tile_regs_acquire();
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
-                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+        for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+            uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
 
-                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                        matmul_block(
-                            cb_s2c_in,
-                            cb_r2c_w0_w1,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                    }
-                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+            tile_regs_acquire();
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+
+                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                    matmul_block(
+                        cb_s2c_in,
+                        cb_r2c_w0_w1,
+                        in0_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
                 }
-
-                tile_regs_commit();
-
-                // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
-                // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-                TTI_SEMWAIT(
-                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                    semaphore::t6_sem(semaphore::MATH_PACK),
-                    p_stall::STALL_ON_ZERO);
-
-                // Make SFPU access the appropriate half of the destination registers
-                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                //---------------------------------------------------------------------
-                // Apply SILU activation and then eltwise multiply
-                //---------------------------------------------------------------------
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
-
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
-                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
-                tile_regs_release();
+                cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
+
+            tile_regs_commit();
+
+            // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
+            // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
+            TTI_SEMWAIT(
+                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                semaphore::t6_sem(semaphore::MATH_PACK),
+                p_stall::STALL_ON_ZERO);
+
+            // Make SFPU access the appropriate half of the destination registers
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+            //---------------------------------------------------------------------
+            // Apply SILU activation and then eltwise multiply
+            //---------------------------------------------------------------------
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+            pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+            tile_regs_release();
         }
 
         // Signal to DM1 that the output from this core is ready
