@@ -18,32 +18,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
-# Cache metadata keys/version to detect stale weight configs
-_WEIGHT_CONFIG_META_KEY = "__meta__"
-_WEIGHT_CONFIG_WEIGHTS_KEY = "__weights__"
-_WEIGHT_CONFIG_SCHEMA_VERSION = 2
-
-
-def _wrap_weight_config(weight_config: WeightConfig) -> dict[str, Any]:
-    """Wrap weight_config with metadata for cache validation."""
-    return {
-        _WEIGHT_CONFIG_META_KEY: {"schema_version": _WEIGHT_CONFIG_SCHEMA_VERSION},
-        _WEIGHT_CONFIG_WEIGHTS_KEY: weight_config,
-    }
-
-
-def _unwrap_weight_config(raw_config: Any) -> tuple[dict[str, Any] | None, WeightConfig]:
-    """Unwrap metadata if present; return (meta, weight_config)."""
-    if (
-        isinstance(raw_config, dict)
-        and _WEIGHT_CONFIG_META_KEY in raw_config
-        and _WEIGHT_CONFIG_WEIGHTS_KEY in raw_config
-    ):
-        meta = raw_config.get(_WEIGHT_CONFIG_META_KEY, None)
-        weights = raw_config.get(_WEIGHT_CONFIG_WEIGHTS_KEY, None)
-        return meta, weights
-    return None, raw_config
-
 
 @contextmanager
 def locked_file(file_path: Path, mode: str = "r", exclusive: bool = False):
@@ -119,21 +93,7 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
         return None
 
     with locked_file(config_path, "r", exclusive=False) as f:
-        raw_config = json.load(f, object_hook=try_decode_saved_weight)
-
-    meta, weight_config = _unwrap_weight_config(raw_config)
-    if meta is None:
-        logger.warning("Cached weight config missing metadata; will recalculate weights")
-        return None
-    if weight_config is None:
-        logger.warning("Cached weight config missing weights section; will recalculate weights")
-        return None
-    if meta.get("schema_version") != _WEIGHT_CONFIG_SCHEMA_VERSION:
-        logger.warning(
-            f"Cached weight config schema_version={meta.get('schema_version')} "
-            f"does not match expected {_WEIGHT_CONFIG_SCHEMA_VERSION}; will recalculate weights"
-        )
-        return None
+        weight_config = json.load(f, object_hook=try_decode_saved_weight)
 
     try:
         validate_weight_config_paths(weight_cache_path, weight_config)
@@ -215,7 +175,7 @@ def get_weight_config(
     # Save config with relative paths for portability
     # Use exclusive lock to prevent concurrent writes and corruption
     with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(_wrap_weight_config(weight_config), f, cls=WeightConfigEncoder)
+        json.dump(weight_config, f, cls=WeightConfigEncoder)
 
     # Return normalized config with absolute paths for runtime use
     normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
