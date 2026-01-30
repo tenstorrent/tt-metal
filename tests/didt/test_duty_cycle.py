@@ -206,6 +206,9 @@ def test_duty_cycle(
         pytest.param((4, 2), id="4x2"),
         pytest.param((8, 1), id="8x1"),
         pytest.param((8, 2), id="8x2"),
+        pytest.param((8, 3), id="8x3"),
+        pytest.param((6, 4), id="6x4"),
+        pytest.param((8, 4), id="8x4"),
     ],
 )
 @pytest.mark.parametrize(
@@ -249,8 +252,11 @@ def test_mesh_size_duty_cycle(
     non_mm_loops,
     wl_loops,
 ):
-    if mesh_coordinate[0] == 4 and sub_mesh_shape[0] == 8:
-        pytest.skip("Sub-mesh x coordinate cannot be 4 if sub-mesh x dimension is 8")
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate is can fit within the parent mesh of MESH_X by MESH_Y
+    if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
+        pytest.skip(
+            f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"
+        )
     sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
     logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
     test_duty_cycle(sub_mesh_device, didt_workload_iterations, determinism_check_interval, non_mm_loops, wl_loops)
