@@ -91,7 +91,7 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
         loaded_weight = weights_dict[name]
         if loaded_weight.dtype == torch.float8_e4m3fn:
             loaded_weight_scale = weights_dict[f"{name}_scale_inv"]
-            loaded_weight = dequantize(loaded_weight, loaded_weight_scale, (128, 128))
+            loaded_weight = dequantize(loaded_weight, loaded_weight_scale, (128, 128)).to(tensor.dtype)
             del loaded_weight_scale
         if loaded_weight.dtype != tensor.dtype:
             loaded_weight = loaded_weight.to(dtype=tensor.dtype)
@@ -109,7 +109,7 @@ def unload_weight_from_weights_dict(
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         if name not in weights_dict:
             return tensor
-        tensor.data = torch.empty(0)
+        tensor.data = torch.empty(0, dtype=tensor.dtype)
         return tensor
 
     return unload_weight
