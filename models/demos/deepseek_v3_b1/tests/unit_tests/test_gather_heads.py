@@ -159,7 +159,6 @@ def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
 
     # Shard sizes
     qnope_elements_per_core = qnope_shard_shape[0] * qnope_shard_shape[1]  # 512
-    qrope_heads_per_core = qrope_shard_shape[0]  # 2
     qrope_elements_per_head = qrope_shard_shape[1]  # 64
 
     # Head size = qnope (512) + qrope (64) = 576 elements
