@@ -38,9 +38,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace tt::tt_metal {
-
-namespace unit_tests::compute::mul_reduce_scalar {
+namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar {
 
 struct MulReduceScalarConfig {
     uint32_t num_tiles = 1;
@@ -121,14 +119,14 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
     SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles});
 
     uint32_t byte_size = config.num_tiles * TILE_BYTE_SIZE;
-    auto packed_input0 =
-        generate_packed_uniform_random_vector<uint32_t, bfloat16>(0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
 
     bfloat16 one_bf16 = bfloat16(1.0f);
     uint16_t one_u16 = std::bit_cast<uint16_t>(one_bf16);
     std::vector<uint32_t> packed_input1(byte_size / sizeof(uint32_t));
-    for (size_t i = 0; i < packed_input1.size(); ++i) {
-        packed_input1[i] = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
+    for (uint32_t& val : packed_input1) {
+        val = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
     }
 
     tt_metal::detail::WriteToBuffer(*src0_dram_buffer, packed_input0);
@@ -167,9 +165,7 @@ bool run_mul_reduce_scalar_test(IDevice* device, const MulReduceScalarConfig& co
     return pass;
 }
 
-}  // namespace unit_tests::compute::mul_reduce_scalar
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 

@@ -5,8 +5,8 @@
 #pragma once
 
 #include "compute_kernel_api/eltwise_binary.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "experimental/llk_math_mul_reduce_scalar_api.h"
 #endif
 #ifdef TRISC_UNPACK
