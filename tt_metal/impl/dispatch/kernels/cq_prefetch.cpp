@@ -1605,7 +1605,7 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
-    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
     uint32_t total_length = cmd->relay_linear_packed.total_length;
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
@@ -1613,7 +1613,7 @@ uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     ASSERT(total_length > 0);
     // DPRINT << "linear_packed: " << total_length << " " << cmd->relay_linear_packed.stride << ENDL();
 
-    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmdLarge);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
     uint32_t* l1_cache_pos = l1_cache;
     if (cmddat_wrap_enable && sub_cmds_length > remaining) {
@@ -1646,14 +1646,13 @@ uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_
 // Separate implementation that fetches more data from exec buf when cmd has been split
 static uint32_t process_exec_buf_relay_linear_packed_cmd(
     uint32_t& cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache, PrefetchExecBufState& exec_buf_state) {
-    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
     uint32_t total_length = cmd->relay_linear_packed.total_length;
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
     uint32_t stride = cmd->relay_linear_packed.stride;
 
-    void* end =
-        copy_into_l1_cache<sizeof(CQPrefetchCmdLarge)>(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
+    void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
     // Store a sentinal non 0 value at the end to save a test/branch in read path
     ((CQPrefetchRelayLinearPackedSubCmd*)end)->length = 1;

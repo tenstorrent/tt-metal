@@ -184,12 +184,11 @@ struct CQPrefetchRelayRingbufferSubCmd {
 } __attribute__((packed));
 
 struct CQPrefetchRelayLinearPackedCmd {
+    uint8_t pad;
     uint16_t count;
-    uint16_t pad;
     uint32_t noc_xy_addr;
     uint32_t total_length;  // aggregate length of all sub-read-cmds
     uint32_t stride;        // stride to start of next cmd
-    uint32_t pad2;
 } __attribute__((packed));
 
 struct CQPrefetchRelayLinearPackedSubCmd {
@@ -213,6 +212,7 @@ struct CQPrefetchCmd {
         CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
         CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
         CQPrefetchRelayRingbufferCmd relay_ringbuffer;
+        CQPrefetchRelayLinearPackedCmd relay_linear_packed;
     } __attribute__((packed));
 };
 
@@ -222,7 +222,6 @@ struct CQPrefetchCmdLarge {
     union {
         CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayLinearCmd relay_linear;
-        CQPrefetchRelayLinearPackedCmd relay_linear_packed;
         uint8_t padding[32 - sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };

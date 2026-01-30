@@ -269,8 +269,8 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
     static_assert(sizeof(CQPrefetchRelayLinearPackedSubCmd) % sizeof(uint32_t) == 0);
 
     uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayLinearPackedSubCmd);
-    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
-    auto initialize_relay_linear_packed_cmd = [&](CQPrefetchCmdLarge* relay_linear_packed_cmd) {
+    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_relay_linear_packed_cmd = [&](CQPrefetchCmd* relay_linear_packed_cmd) {
         relay_linear_packed_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED;
         relay_linear_packed_cmd->relay_linear_packed.noc_xy_addr = noc_xy_addr;
         relay_linear_packed_cmd->relay_linear_packed.total_length = total_length;
@@ -278,18 +278,18 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
         relay_linear_packed_cmd->relay_linear_packed.count = num_sub_cmds;
         relay_linear_packed_cmd->relay_linear_packed.pad = 0;
     };
-    CQPrefetchCmdLarge* relay_linear_packed_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
+    CQPrefetchCmd* relay_linear_packed_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
 
     if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmdLarge relay_linear_packed_cmd{};
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_linear_packed_cmd{};
         initialize_relay_linear_packed_cmd(&relay_linear_packed_cmd);
-        this->memcpy(relay_linear_packed_cmd_dst, &relay_linear_packed_cmd, sizeof(CQPrefetchCmdLarge));
+        this->memcpy(relay_linear_packed_cmd_dst, &relay_linear_packed_cmd, sizeof(CQPrefetchCmd));
     } else {
         initialize_relay_linear_packed_cmd(relay_linear_packed_cmd_dst);
     }
 
     this->memcpy(
-        reinterpret_cast<char*>(relay_linear_packed_cmd_dst) + sizeof(CQPrefetchCmdLarge),
+        reinterpret_cast<char*>(relay_linear_packed_cmd_dst) + sizeof(CQPrefetchCmd),
         &sub_cmds[offset_idx],
         sub_cmds_sizeB);
 }
