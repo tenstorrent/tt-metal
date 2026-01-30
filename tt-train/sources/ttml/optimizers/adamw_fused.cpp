@@ -73,7 +73,7 @@ void AdamWFused::step() {
             max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
         }
 
-        ttml::metal::adamw_fused(
+        ttml::metal::adamw(
             param,
             gradients,
             exp_avg,

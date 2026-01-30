@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "adamw_full_precision.hpp"
+#include "adamw.hpp"
 
 #include "device/adamw_device_operation.hpp"
 
 namespace ttml::metal {
 
-ttnn::Tensor adamw_full_precision(
+ttnn::Tensor adamw(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -20,7 +20,8 @@ ttnn::Tensor adamw_full_precision(
     float beta1_pow,
     float beta2_pow,
     float epsilon,
-    float weight_decay) {
+    float weight_decay,
+    bool stochastic_rounding) {
     return ttnn::prim::adamw(
         param_in,
         grad,
@@ -35,7 +36,7 @@ ttnn::Tensor adamw_full_precision(
         epsilon,
         weight_decay,
         max_exp_avg_sq.has_value(),
-        false);  // stochastic_rounding disabled for full precision
+        stochastic_rounding);
 }
 
 }  // namespace ttml::metal
