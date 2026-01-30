@@ -47,8 +47,9 @@ def test_sentence_bert_demo_inference(
     mesh_device, inputs, model_name, sequence_length, model_location_generator, is_ci_env
 ):
     batch_size = len(inputs[0]) * mesh_device.get_num_devices()
-    config = transformers.BertConfig.from_pretrained(model_name, local_files_only=is_ci_env)
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, local_files_only=is_ci_env)
+    # Allow downloading models in CI environment if they're not cached locally
+    config = transformers.BertConfig.from_pretrained(model_name, local_files_only=False)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, local_files_only=False)
     encoded_input = tokenizer(
         inputs[0] * mesh_device.get_num_devices(),
         padding="max_length",
