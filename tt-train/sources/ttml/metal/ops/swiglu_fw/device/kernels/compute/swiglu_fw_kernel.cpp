@@ -16,7 +16,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-namespace NAMESPACE {
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -38,9 +37,10 @@ namespace NAMESPACE {
 // ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t Wt = get_compile_time_arg_val(2);         // total C
-constexpr uint32_t hidden_Wt = get_compile_time_arg_val(3);  // total K
+constexpr uint32_t max_rows_for_sync = get_compile_time_arg_val(1);  // Loop iterations for multicast sync
+constexpr uint32_t block_size = get_compile_time_arg_val(2);
+constexpr uint32_t Wt = get_compile_time_arg_val(3);         // total C
+constexpr uint32_t hidden_Wt = get_compile_time_arg_val(4);  // total K
 
 const uint32_t hidden_Wt_rounded_up =
     ((hidden_Wt + block_size - 1) / block_size) * block_size;  // Round up to nearest block_size
@@ -270,8 +270,9 @@ inline void compute_M_for_r() {
             copy_tile(cb_xw3_idx, tile_offset, xw3_reg);
 
             // Apply SiLU activation to compute SiLU(XW1)
+            // Copy xw1_reg to silu_reg (first arg is source, second is destination)
             copy_dest_values_init();
-            copy_dest_values(silu_reg, xw1_reg);
+            copy_dest_values(xw1_reg, silu_reg);
             sigmoid_tile_init();
             sigmoid_tile(silu_reg);
             // Multiply XW1 * sigmoid(XW1) to get SiLU(XW1)
@@ -319,11 +320,16 @@ inline void compute_M_for_r() {
 //             Y_partial[r, c] += M[r, k] * W2[k, c]
 //         store Y_partial[r, c] → Y[r, c]
 // ============================================================================
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
-    for (uint32_t r = 0; r < num_rows_per_core; ++r) {
+    // UNIFORM PADDING FOR MULTICAST SYNC:
+    // Loop for max_rows_for_sync iterations to stay in sync with multicast sender.
+    // For padding rows (r >= num_rows_per_core), we consume inputs but don't produce output.
+    for (uint32_t r = 0; r < max_rows_for_sync; ++r) {
+        const bool is_padding_row = (r >= num_rows_per_core);
+
         // ---- Phase A: Accumulate XW1[r,:] and XW3[r,:] in tiles over p ----
         // XW1[r,k] = sum_p( X[r,p] * W1[p,k] )
         // XW3[r,k] = sum_p( X[r,p] * W3[p,k] )
@@ -341,18 +347,27 @@ inline void MAIN {
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-                const bool first_k_block = (k_block_start == 0);
-                const bool last_k_block = (k_block_start + block_size >= hidden_Wt);
-                mul_AxB_accumulate_C(
-                    /* cb_a_idx */ cb_m_idx,
-                    /* cb_b_idx */ cb_w2_idx,
-                    /* cb_c_partial_idx */ cb_y_partial_idx,
-                    /* cb_c_final_idx */ cb_y_idx,
-                    /* a_start_idx */ k_block_start,
-                    /* ab_block_size */ k_block_size,
-                    /* c_block_size */ c_block_size,
-                    /* first_ab_block */ first_k_block,
-                    /* last_ab_block */ last_k_block);
+
+                if (is_padding_row) {
+                    // PADDING ROW: Just consume W2 data to stay in sync, don't compute or output
+                    constexpr uint32_t tiles_per_batch = block_size * block_size;
+                    cb_wait_front(cb_w2_idx, tiles_per_batch);
+                    cb_pop_front(cb_w2_idx, tiles_per_batch);
+                } else {
+                    // ACTUAL ROW: Compute and output normally
+                    const bool first_k_block = (k_block_start == 0);
+                    const bool last_k_block = (k_block_start + block_size >= hidden_Wt);
+                    mul_AxB_accumulate_C(
+                        /* cb_a_idx */ cb_m_idx,
+                        /* cb_b_idx */ cb_w2_idx,
+                        /* cb_c_partial_idx */ cb_y_partial_idx,
+                        /* cb_c_final_idx */ cb_y_idx,
+                        /* a_start_idx */ k_block_start,
+                        /* ab_block_size */ k_block_size,
+                        /* c_block_size */ c_block_size,
+                        /* first_ab_block */ first_k_block,
+                        /* last_ab_block */ last_k_block);
+                }
                 // TODO(maciek): consider double buffering row of M. This would require additional space in the CB.
                 // and maybe some smarter usage of cb_m_idx.
             }
@@ -362,5 +377,3 @@ inline void MAIN {
         cb_pop_front(cb_m_idx, hidden_Wt_rounded_up);
     }
 }
-
-}  // namespace NAMESPACE
