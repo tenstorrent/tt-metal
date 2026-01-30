@@ -20,7 +20,7 @@ struct Core {
     static constexpr bool is_active_core = get_named_compile_time_arg_val("is_active_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
 // ============================================================================
 // Define args per RISC (different compile-time arg layout per processor)
 // ============================================================================
@@ -92,4 +92,3 @@ KERNEL_ENTRY {
     deepseek_b1_ops::Rope::Op<RopeCTArgs, Core::is_active_core> rope;
     rope(rope_args);
 }
-KERNEL_END
