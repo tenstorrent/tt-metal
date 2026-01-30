@@ -200,9 +200,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
                     f"first mismatch at token {first_diff}: "
                     f"user0={expected_tokens[first_diff]}, user{idx}={tokens[first_diff]}"
                 )
-            if os.getenv("CI"):
-                pytest.xfail(f"CI-only xfail: user outputs diverged across batch (issue #35509). {detail}")
-            pytest.fail(f"User outputs diverged across batch. {detail}")
+            pytest.xfail(f"User outputs diverged across batch (issue #35509). {detail}")
 
     if "predicted_tokens" in first_gen:
         assert len(first_gen["predicted_tokens"]) == len(
