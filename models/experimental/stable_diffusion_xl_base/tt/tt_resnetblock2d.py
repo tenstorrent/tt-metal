@@ -199,8 +199,7 @@ class TtResnetBlock2D(LightweightModule):
         )
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        # Note: moving this add to NG has perf impact, to be investigated
-        hidden_states = ttnn.add_(hidden_states, temb, use_legacy=True)
+        hidden_states = ttnn.add_(hidden_states, temb)
 
         if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
             mem_cfg = ttnn.create_sharded_memory_config(
@@ -272,8 +271,7 @@ class TtResnetBlock2D(LightweightModule):
         if input_tensor.memory_config() != hidden_states.memory_config():
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
 
-        # Note: Moving this to NG results in error caused by shard shape, to be investigated
-        ttnn.add_(hidden_states, input_tensor, use_legacy=True)
+        ttnn.add_(hidden_states, input_tensor)
 
         if "up_blocks.2.resnets.2" not in self.module_path:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
