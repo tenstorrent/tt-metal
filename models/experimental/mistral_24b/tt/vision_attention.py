@@ -28,7 +28,7 @@ def apply_rotary_pos_emb_vision_tt(q, k, cos, sin):
     cos = ttnn.unsqueeze(cos, 0)
     sin = ttnn.unsqueeze(sin, 0)
 
-    q_embed = ttnn.add(ttnn.mul(q, cos, use_legacy=True), ttnn.mul(rotate_half(q), sin, use_legacy=True))
+    q_embed = ttnn.add(ttnn.mul(q, cos), ttnn.mul(rotate_half(q), sin))
     k_embed = ttnn.add(ttnn.mul(k, cos), ttnn.mul(rotate_half(k), sin))
     return q_embed, k_embed
 

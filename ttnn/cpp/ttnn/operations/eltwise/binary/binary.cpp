@@ -235,6 +235,40 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
     return false;
 }
 
+// For BFloat8_b/BFloat4_b, we need to handle typecast with potential memory layout mismatches
+auto convert_to_bfloat16(const auto& tensor, bool needs_typecast) {
+    if (!needs_typecast) {
+        return tensor;
+    }
+
+    // Handle scalar vs tensor types
+    if constexpr (requires { tensor.dtype(); }) {
+        // It's a Tensor
+        // Check if it's already BFLOAT16, no conversion needed
+        if (tensor.dtype() == DataType::BFLOAT16) {
+            return tensor;
+        }
+
+        // If the tensor is BFloat8_b/BFloat4_b, convert to BFLOAT16
+        if (is_block_format(tensor.dtype())) {
+            // If the tensor is sharded, we need to convert to DRAM interleaved_first
+            // because typecast doesn't support sharded inputs for BFloat8_b
+            if (tensor.is_sharded()) {
+                auto dram_tensor = ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG);
+                // Ensure the conversion succeeded
+                TT_FATAL(!dram_tensor.is_sharded(), "Failed to convert sharded BFloat8_b tensor to DRAM");
+                return ttnn::typecast(dram_tensor, DataType::BFLOAT16);
+            }
+            // For DRAM interleaved tensors, typecast directly
+            return ttnn::typecast(tensor, DataType::BFLOAT16);
+        }
+
+        // For other types, use the existing to_dtype conversion
+        return detail::to_dtype(tensor, DataType::BFLOAT16);
+    }
+    // It's a scalar, just return it
+    return tensor;
+}
 }  // namespace detail
 
 bool is_legacy_only(
@@ -423,47 +457,8 @@ inline auto invoke_binary_ng(
         return result;
     }
 
-    // For BFloat8_b/BFloat4_b, we need to handle typecast with potential memory layout mismatches
-    // When inputs have different memory layouts (e.g., sharded vs DRAM), we need to handle this carefully
-    auto convert_to_bfloat16 = [](const auto& tensor, bool needs_typecast) -> auto {
-        if (!needs_typecast) {
-            return tensor;
-        }
-
-        // Handle scalar vs tensor types
-        if constexpr (requires { tensor.dtype(); }) {
-            // It's a Tensor
-            // Check if it's already BFLOAT16, no conversion needed
-            if (tensor.dtype() == DataType::BFLOAT16) {
-                return tensor;
-            }
-
-            // If the tensor is BFloat8_b/BFloat4_b, convert to BFLOAT16
-            if (detail::is_block_format(tensor.dtype())) {
-                // If the tensor is sharded, we need to convert to DRAM first
-                // because typecast doesn't support sharded inputs for BFloat8_b
-                if (tensor.is_sharded()) {
-                    auto dram_tensor = ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG);
-                    // Ensure the conversion succeeded
-                    if (dram_tensor.is_sharded()) {
-                        TT_FATAL(false, "Failed to convert sharded BFloat8_b tensor to DRAM");
-                    }
-                    return ttnn::typecast(dram_tensor, DataType::BFLOAT16);
-                }
-                // For DRAM tensors, typecast directly
-                return ttnn::typecast(tensor, DataType::BFLOAT16);
-            }
-
-            // For other types, use the existing to_dtype conversion
-            return detail::to_dtype(tensor, DataType::BFLOAT16);
-        } else {
-            // It's a scalar, just return it
-            return tensor;
-        }
-    };
-
-    const auto input_a = convert_to_bfloat16(lhs, typecast_a);
-    const auto input_b = convert_to_bfloat16(rhs, typecast_b);
+    const auto input_a = detail::convert_to_bfloat16(lhs, typecast_a);
+    const auto input_b = detail::convert_to_bfloat16(rhs, typecast_b);
     const auto output_tensor =
         output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
 
