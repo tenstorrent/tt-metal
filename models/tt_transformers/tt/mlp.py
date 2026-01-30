@@ -45,6 +45,8 @@ class MLP(LightweightModule):
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        # w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim, 8192 // args.num_devices)
+        # w2_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         as_sharded_tensor = lambda name, type, dims: ttnn.as_tensor(
@@ -60,6 +62,27 @@ class MLP(LightweightModule):
             ),
             cache_file_name=cache_name(name),
         )
+
+        # as_sharded_tensor_W2 = lambda name, type, dims: ttnn.as_tensor(
+        #     (
+        #         pad_to_size(pad_hidden_dim(
+        #             torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1]
+        #         ), dim=1, size=8192)
+        #         if "w2" in name
+        #         else pad_hidden_dim(torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1])
+        #     ),  # Grab only the wX part of the name
+        #     dtype=type,
+        #     device=self.mesh_device,
+        #     # mesh_mapper=ttnn.ShardTensor2dMesh(
+        #     #     self.mesh_device,
+        #     #     dims=(2, 3) if (args.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or args.is_galaxy) else (3, 2),
+        #     #     mesh_shape=args.cluster_shape,
+        #     # ),
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0,1), mesh_shape=args.cluster_shape),
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=w2_mem_config,
+        #     #cache_file_name=cache_name(name),
+        # )
 
         # Sharded weights
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
@@ -77,6 +100,7 @@ class MLP(LightweightModule):
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
+        # self.w2 = as_sharded_tensor_W2("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
@@ -244,6 +268,29 @@ class MLP(LightweightModule):
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
+
+        # w2_in = ttnn.to_memory_config(
+        #     w2_in, self.model_config["MLP_OUTPUT_MEMCFG"]
+        # )
+        # self.w2 = ttnn.reshape(self.w2,(1,1, self.w2.shape[0], self.w2.shape[1]))
+        # _, w2_out_reduced = ttnn.experimental.all_gather_matmul_async(
+        #     w2_in,
+        #     self.w2,
+        #     persistent_output_buffer=None,
+        #     dim=3,
+        #     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        #     all_gather_core_grid_offset=(0, 4),
+        #     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        #     num_links=1,
+        #     memory_config_ag=self.model_config["MLP_OUTPUT_MEMCFG"],
+        #     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"],
+        #     program_config=self.model_config["ALL_GATHER_MLP_PROGRAM_CFG"],
+        #     compute_kernel_config=li_ff2_compute_kernel_cfg,
+        #     chunks_per_sync=10,
+        #     num_workers_per_link=2,
+        #     num_buffers_per_channel=2,
+        # )
+
         w2_out = ttnn.linear(
             w2_in,
             self.w2,

@@ -5,6 +5,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -300,7 +301,7 @@ class Attention(LightweightModule):
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
-
+        pt_wo = F.pad(pt_wo, (0, 8192 - 5376))
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
@@ -312,9 +313,9 @@ class Attention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
-            ),
+            # cache_file_name=(
+            #     cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            # ),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -628,13 +629,14 @@ class Attention(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     num_links=1,
                     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     chunks_per_sync=10,
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
+                # return dense_out_sharded
             else:
                 all_gather_output = ttnn.experimental.all_gather_async(
                     attn_output_cat,
@@ -660,7 +662,7 @@ class Attention(LightweightModule):
 
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            # dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
         else:
