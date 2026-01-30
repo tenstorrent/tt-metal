@@ -37,19 +37,16 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
     if constexpr (!skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_arg_val<uint32_t>(1),  // tensor_address0
-            get_arg_val<uint32_t>(2),  // tile_id_start
-            get_arg_val<uint32_t>(3),  // tile_id_end
+            get_arg_val<uint32_t>(0),  // tensor_address0
+            get_arg_val<uint32_t>(1),  // tile_id_start
+            get_arg_val<uint32_t>(2),  // tile_id_end
         };
     }
 
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
 
-    // RMSNorm reader runtime args - scalar is always arg 0
-    deepseek_b1_ops::RMSNorm::ReaderArgs rms_args{
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(num_elements))
-    };
+    // RMSNorm reader runtime args
+    deepseek_b1_ops::RMSNorm::ReaderArgs rms_args{};
 
 // -----------------------
 // BRISC: Broadcast writer
@@ -110,11 +107,10 @@ void kernel_main() {
 
     deepseek_b1_ops::RMSNorm::ComputeArgs rms_args{
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_named_compile_time_arg_val("rmsnorm_interm_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
         get_arg_val<uint32_t>(0),  // epsilon (runtime arg 0)
+        get_arg_val<float>(1),     // scalar (1/N)
     };
 
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;

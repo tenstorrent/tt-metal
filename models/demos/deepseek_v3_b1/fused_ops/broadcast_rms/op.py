@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
-from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 class BroadcastRMSNorm:
@@ -107,12 +107,9 @@ class BroadcastRMSNorm:
 
         # CB indices for rms norm
         input_cb = 0
-        scalars_cb = 1
-        interm_cb = 2
-        gamma_cb = 3
-        output_cb = 4
-        # CB index for broadcast
-        # src0_cb_index = 5 #use interm_cb of rmsnorm instead
+        pkt_cb = 1
+        gamma_cb = 2
+        output_cb = 3
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -123,7 +120,6 @@ class BroadcastRMSNorm:
         HALF_16x32_TILE = ttnn.Tile((16, 32))
         is_16x32_tile = (input_shape[1] // FULL_32x32_TILE.tile_shape[1]) % FULL_32x32_TILE.tile_shape[0] != 0
         interpreted_tile = HALF_16x32_TILE if is_16x32_tile else FULL_32x32_TILE
-        num_faces = interpreted_tile.num_faces
         tile_height, tile_width = interpreted_tile.tile_shape
 
         # Calculate single tile size in bytes (bfloat16 = 2 bytes per element)
@@ -140,7 +136,7 @@ class BroadcastRMSNorm:
 
         # Compute 1/sqrt(num_elements) for RMS reduction
         inv_sqrt_numel = 1.0 / math.sqrt(float(numel))
-        scalar_packed = float_to_bfloat16_packed(inv_sqrt_numel)
+        scalar_packed = float_to_uint32(inv_sqrt_numel)
 
         # Define circular buffer page size
         cb_page_size = tile_size
@@ -202,7 +198,7 @@ class BroadcastRMSNorm:
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast reader args (dummy values when skip_ccl)
-                    ("cb0_id", interm_cb if not skip_ccl else 0),
+                    ("cb0_id", pkt_cb if not skip_ccl else 0),
                     ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
                     ("is_sender", int(is_sender) if not skip_ccl else 0),
@@ -210,9 +206,6 @@ class BroadcastRMSNorm:
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
                     ("is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
-                    # RMSNorm reader args (always valid)
-                    ("rmsnorm_num_faces", num_faces),
-                    ("rmsnorm_scalars_cb", scalars_cb),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -220,7 +213,7 @@ class BroadcastRMSNorm:
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     # CCL broadcast writer args (dummy values when skip_ccl)
-                    ("cb0_id", interm_cb if not skip_ccl else 0),
+                    ("cb0_id", pkt_cb if not skip_ccl else 0),
                     ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
                     ("num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
@@ -239,7 +232,7 @@ class BroadcastRMSNorm:
                     # RMSNorm/common args (always valid)
                     # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
                     # writes to CB 0 which is backed by intermediate_tensor_mesh
-                    ("intermediate_cb", input_cb if not skip_ccl else interm_cb),
+                    ("intermediate_cb", input_cb if not skip_ccl else pkt_cb),
                     ("gamma_cb", gamma_cb),
                     ("num_tiles", num_tiles),
                 ]
@@ -248,8 +241,6 @@ class BroadcastRMSNorm:
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
-                    ("rmsnorm_scalars_cb", scalars_cb),
-                    ("rmsnorm_interm_cb", interm_cb),
                     ("rmsnorm_gamma_cb", gamma_cb),
                     ("rmsnorm_output_cb", output_cb),
                     ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
@@ -259,19 +250,12 @@ class BroadcastRMSNorm:
 
                 # Reader runtime args
                 reader_rt_args = ttnn.RuntimeArgs()
-                if skip_ccl:
-                    # Single-device mode: just scalar
-                    reader_rt_args[worker_core.x][worker_core.y] = [
-                        int(scalar_packed),
-                    ]
-                else:
-                    # Multi-device mode: CCL reader args
-                    reader_rt_args[worker_core.x][worker_core.y] = [
-                        int(scalar_packed),
-                        int(input_tensor_device.buffer_address()),  # tensor_address0
-                        tile_id_start,  # tile_id_start
-                        input_num_pages,  # tile_id_end
-                    ]
+
+                reader_rt_args[worker_core.x][worker_core.y] = [
+                    int(input_tensor_device.buffer_address()),  # tensor_address0
+                    tile_id_start,  # tile_id_start
+                    input_num_pages,  # tile_id_end
+                ]
 
                 # Writer runtime args
                 writer_rt_args = ttnn.RuntimeArgs()
@@ -342,30 +326,17 @@ class BroadcastRMSNorm:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB 1: Scalars (epsilon and reduction scalar)
-                scalars_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=scalars_cb,
+                # CB 2: packet buffer
+                pkt_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=pkt_cb,
                     data_format=data_format,
                     page_size=cb_page_size,
                     tile=tile_descriptor,
                 )
-                scalars_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=cb_page_size,
-                    core_ranges=worker_core_set,
-                    format_descriptors=[scalars_cb_format],
-                )
-
-                # CB 2: Intermediate buffer
-                interm_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=interm_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-                interm_cb_descriptor = ttnn.CBDescriptor(
+                pkt_cb_descriptor = ttnn.CBDescriptor(
                     total_size=num_tiles * cb_page_size,
                     core_ranges=worker_core_set,
-                    format_descriptors=[interm_cb_format],
+                    format_descriptors=[pkt_cb_format],
                 )
 
                 # CB 3: Gamma (created from sharded gamma tensor)
@@ -385,8 +356,6 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
-                    ncrisc_common_runtime_args=[0],
-                    trisc_common_runtime_args=[epsilon_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
@@ -400,8 +369,7 @@ class BroadcastRMSNorm:
                     kernels=unified_kernel.get_kernel_descriptors(),
                     cbs=[
                         in_cb_descriptor,
-                        scalars_cb_descriptor,
-                        interm_cb_descriptor,
+                        pkt_cb_descriptor,
                         gamma_cb_descriptor,
                         out_cb_descriptor,
                     ],
@@ -417,7 +385,7 @@ class BroadcastRMSNorm:
 
                 if len(program.kernels) >= 3:
                     compute_rt_args = ttnn.RuntimeArgs()
-                    compute_rt_args[worker_core.x][worker_core.y] = [int(epsilon_packed)]
+                    compute_rt_args[worker_core.x][worker_core.y] = [epsilon_packed, scalar_packed]
                     program.kernels[2].runtime_args = compute_rt_args
 
                 # Append fabric connection args to writer kernel if there are connections (CCL mode only)
