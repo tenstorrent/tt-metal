@@ -85,8 +85,9 @@ class TorchTTNNTensor(torch.Tensor):
             self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(**kwargs), dtype=self.dtype
         )
 
+    def set_distributed_config(self, distributed_config: DistributedTensorConfig):
+        self._distributed_config = distributed_config
+
     @property
     def ttnn_distributed_config(self) -> Optional[DistributedTensorConfig]:
-        if "distributed_config" in self.__dict__:
-            return self.distributed_config
-        return None
+        return self.__dict__.get("_distributed_config", None)
