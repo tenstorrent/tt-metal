@@ -8,8 +8,8 @@ import ttnn
 from loguru import logger
 
 # Import from local reference files
-from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
-from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
+from models.demos.nlp.llms.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import MoEGate
 
 
 def get_valid_group_combinations(group_scores, topk_groups, atol=0.075):

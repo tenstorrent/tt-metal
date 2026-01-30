@@ -227,7 +227,7 @@ jobs:
           device_perf_model_name: "non-civ2_tests"
           commands: |
             pytest models/demos/vision/classification/mnist/tests -m models_device_performance_bare_metal
-            pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            pytest models/demos/nlp/llms/falcon7b/common/tests -m models_device_performance_bare_metal
             pytest models/demos/vision/segmentation/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -255,7 +255,7 @@ jobs:
         with:
           device_perf_model_name: "distilbert"
           commands: |
-            pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+            pytest models/demos/nlp/encoder/distilbert/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['distilbert'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -282,7 +282,7 @@ jobs:
         with:
           device_perf_model_name: "bert_tiny"
           commands: |
-            pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
+            pytest models/demos/nlp/encoder/bert_tiny/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['bert-tiny'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -291,7 +291,7 @@ jobs:
         with:
           device_perf_model_name: "squeezebert"
           commands: |
-            pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
+            pytest models/demos/nlp/encoder/squeezebert/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['squeezebert'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -337,7 +337,7 @@ jobs:
         with:
           device_perf_model_name: "mamba"
           commands: |
-            pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
+            pytest models/demos/nlp/llms/mamba/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['mamba'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -346,7 +346,7 @@ jobs:
         with:
           device_perf_model_name: "metal_BERT_large_11"
           commands: |
-            # pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+            # pytest models/demos/nlp/encoder/metal_BERT_large_11/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['metal-bert-large-11'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

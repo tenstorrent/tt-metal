@@ -11,10 +11,10 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
-  pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/test_demo.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -111,7 +111,7 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  uv pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -119,12 +119,12 @@ run_t3000_qwen25_vl_tests() {
   # Qwen2.5-VL-32B
   qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
   tt_cache_32b=$TT_CACHE_HOME/$qwen25_vl_32b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 600 || fail=1
 
   # Qwen2.5-VL-72B
   qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 900 || fail=1
 
   echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
 
@@ -135,7 +135,7 @@ run_t3000_qwen25_vl_tests() {
 
 run_t3000_qwen3_vl_tests() {
   # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen3_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -143,7 +143,7 @@ run_t3000_qwen3_vl_tests() {
   # Qwen3-VL-32B
   qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
   tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen3_vl/demo/demo.py --timeout 600
 }
 
 run_t3000_qwen3_tests() {
@@ -231,7 +231,7 @@ run_t3000_falcon7b_tests(){
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/t3000/input_data_t3000.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -262,8 +262,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/nlp/llms/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/nlp/llms/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
   mixtral8x7=mistralai/Mixtral-8x7B-v0.1
   tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
 
@@ -305,7 +305,7 @@ run_t3000_sentence_bert_tests() {
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
   # Sentence BERT demo test
-  pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/nlp/encoder/sentence_bert/t3000/demo/demo.py --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -431,20 +431,20 @@ run_t3000_gpt_oss_tests() {
   start_time=$(date +%s)
 
   # Install gpt-oss requirements
-  uv pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 900 models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B accuracy tests completed"
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/nlp/llms/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
 
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 900 models/demos/nlp/llms/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B accuracy tests completed"
 
   # Record the end time

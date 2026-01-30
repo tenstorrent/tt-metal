@@ -187,13 +187,13 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
-    pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
+    pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/test_llama_model.py -k "quick"
+    pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
-    # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
-    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "mini-stress-test"
+    # pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_decode.py -k "full"
+    pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_decode.py -k "mini-stress-test"
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -203,7 +203,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
 test_suite_bh_ttnn_stress_tests() {

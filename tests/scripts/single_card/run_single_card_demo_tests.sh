@@ -23,7 +23,7 @@ echo "[CONFIG] PYTEST_CMD=${PYTEST_CMD}"
 
 run_falcon7b_func() {
 
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -47,7 +47,7 @@ run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
-  uv pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise $PYTEST_CMD output
   export PYTEST_ADDOPTS="--tb=short"
@@ -58,13 +58,13 @@ run_qwen25_vl_perfunc() {
   qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b $PYTEST_CMD -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b $PYTEST_CMD -n auto models/demos/nlp/llms/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
   for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
-    HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path $PYTEST_CMD -n auto models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 900 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 
@@ -109,7 +109,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  $PYTEST_CMD models/demos/wormhole/sentence_bert/demo/demo.py
+  $PYTEST_CMD models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py
 
 }
 
@@ -167,15 +167,15 @@ run_vgg_func() {
 
 run_bert_tiny_func() {
 
-  pytest models/demos/wormhole/bert_tiny/demo/demo.py
+  pytest models/demos/nlp/encoder/bert_tiny/demo/demo.py
 
 }
 
 run_bert_func() {
   fail=0
 
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  $PYTEST_CMD models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
+  $PYTEST_CMD models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
+  $PYTEST_CMD models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -203,7 +203,7 @@ run_sdxl_func() {
 
 run_distilbert_func() {
 
-  pytest models/demos/wormhole/distilbert/demo/demo.py
+  pytest models/demos/nlp/encoder/distilbert/demo/demo.py
 
 }
 
@@ -216,7 +216,7 @@ run_mnist_func() {
 
 run_squeezebert_func() {
 
-  $PYTEST_CMD models/demos/squeezebert/demo/demo.py
+  $PYTEST_CMD models/demos/nlp/encoder/squeezebert/demo/demo.py
 
 }
 
@@ -279,13 +279,13 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/common/demo/input_data.json' models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py
 
 }
 
 run_mamba_perf() {
 
-  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
+  $PYTEST_CMD -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/mamba/demo/prompts.json' models/demos/nlp/llms/mamba/demo/demo.py --timeout 420
 
 }
 
