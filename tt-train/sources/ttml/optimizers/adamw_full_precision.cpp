@@ -81,7 +81,7 @@ void AdamWFullPrecision::step() {
         }
 
         // Call the metal kernel - updates master_weights, exp_avg, exp_avg_sq in place
-        ttml::metal::adamw_full_precision(
+        ttml::metal::adamw(
             master_weights,
             gradients,
             exp_avg,

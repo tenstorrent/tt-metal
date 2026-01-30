@@ -313,10 +313,8 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_fused.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_full_precision.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
