@@ -667,6 +667,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test-database-connection:
+    name: 🔍 Test Database Connection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Test database connection
+        env:
+          TTNN_OPS_TEST_DB_URL: ${{ secrets.TTNN_OPS_TEST_DB_URL }}
+        run: |
+          echo "Testing database connection..."
+          if [ -z "$TTNN_OPS_TEST_DB_URL" ]; then
+            echo "❌ ERROR: TTNN_OPS_TEST_DB_URL secret is not set"
+            exit 1
+          fi
+
+          # Test connection with a simple query
+          psql "$TTNN_OPS_TEST_DB_URL" -c "SELECT version();" || {
+            echo "❌ Database connection failed"
+            exit 1
+          }
+
+          echo "✅ Database connection successful"
+
   display-workflow-options:
     name: 📋 Display workflow options
     runs-on: ubuntu-22.04
