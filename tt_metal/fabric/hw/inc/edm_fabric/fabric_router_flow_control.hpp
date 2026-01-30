@@ -117,16 +117,23 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
                 if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word
-                    // Safe multi-channel addition: NO carries between channels!
+                    // Safe multi-channel addition using masked-pair addition (branch-free)
                     auto current = PackingType::PackedValueType{ack_counters[0]};
                     auto delta = PackingType::PackedValueType{static_cast<uint32_t>(packed_value.get())};
 
-                    // Optimized add_packed: parallel byte addition or unrolled loop
-                    // Performance: ~8-13 instructions (Zbb), fully inlined, no branches
-                    auto result = PackingType::add_packed(current, delta);
+                    uint32_t current_val = current.value;
+                    uint32_t delta_val = delta.value;
 
-                    ack_counters[0] = result.get();
-                    ack_counters_base_l1_ptr[0] = ack_counters[0];
+                    // Masked-pair addition: prevents carries between bytes
+                    // Add to bytes 0,2: any carry goes to bytes 1,3 which we mask out
+                    uint32_t b0_2 = current_val + (delta_val & 0x00FF00FFu);
+                    // Add to bytes 1,3: any carry goes to bytes 2,4 which we mask out
+                    uint32_t b1_3 = current_val + (delta_val & 0xFF00FF00u);
+                    // Combine: take bytes 0,2 from b0_2 and bytes 1,3 from b1_3
+                    uint32_t result = (b0_2 & 0x00FF00FFu) | (b1_3 & 0xFF00FF00u);
+
+                    ack_counters[0] = result;
+                    ack_counters_base_l1_ptr[0] = result;
                 } else {
                     // 5 channels: two words (4 in lower, 1 in upper)
                     // Max channels per VC is 5
@@ -134,23 +141,25 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
                     uint64_t packed_val = packed_value.get();
 
-                    // Lower word: 4 channels (bytes 0-3)
-                    using LowerPackingType = tt::tt_fabric::CreditPacking<4, 8>;
-                    auto current_lower = LowerPackingType::PackedValueType{ack_counters[0]};
-                    auto delta_lower = LowerPackingType::PackedValueType{static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL)};
-                    auto result_lower = LowerPackingType::add_packed(current_lower, delta_lower);
+                    // Lower word: 4 channels (bytes 0-3) - use masked-pair addition
+                    uint32_t current_lower = ack_counters[0];
+                    uint32_t delta_lower = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
 
-                    ack_counters[0] = result_lower.get();
-                    ack_counters_base_l1_ptr[0] = ack_counters[0];
+                    // Masked-pair addition for lower 4 channels
+                    uint32_t b0_2_lower = current_lower + (delta_lower & 0x00FF00FFu);
+                    uint32_t b1_3_lower = current_lower + (delta_lower & 0xFF00FF00u);
+                    uint32_t result_lower = (b0_2_lower & 0x00FF00FFu) | (b1_3_lower & 0xFF00FF00u);
 
-                    // Upper word: 1 channel (byte 4)
-                    using UpperPackingType = tt::tt_fabric::CreditPacking<1, 8>;
-                    auto current_upper = UpperPackingType::PackedValueType{ack_counters[1]};
-                    auto delta_upper = UpperPackingType::PackedValueType{static_cast<uint32_t>(packed_val >> 32)};
-                    auto result_upper = UpperPackingType::add_packed(current_upper, delta_upper);
+                    ack_counters[0] = result_lower;
+                    ack_counters_base_l1_ptr[0] = result_lower;
 
-                    ack_counters[1] = result_upper.get();
-                    ack_counters_base_l1_ptr[1] = ack_counters[1];
+                    // Upper word: 1 channel (byte 4) - single byte, no carries possible
+                    uint8_t current_upper = static_cast<uint8_t>(ack_counters[1] & 0xFF);
+                    uint8_t delta_upper = static_cast<uint8_t>((packed_val >> 32) & 0xFF);
+                    uint8_t result_upper = current_upper + delta_upper;  // uint8_t wraps naturally
+
+                    ack_counters[1] = result_upper;
+                    ack_counters_base_l1_ptr[1] = result_upper;
                 }
                 // Wait for eth queue if requested (safer but slower)
 
