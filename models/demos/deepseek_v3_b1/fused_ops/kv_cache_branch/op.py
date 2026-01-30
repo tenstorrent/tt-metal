@@ -67,6 +67,8 @@ class KVCacheBranch:
         sin_tensor,
         trans_mat_tensor,
         output_tensor,
+        kv_cache_tensor,
+        kv_cache_write_index,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -79,6 +81,8 @@ class KVCacheBranch:
             gamma_tensor: Gamma tensor (must be sharded)
             cos_tensor: Cos tensor (must be sharded)
             sin_tensor: Sin tensor (must be sharded)
+            kv_cache_tensor: Optional KV cache tensor in DRAM (interleaved) to write results to
+            kv_cache_write_index: Sequence position index to write to in KV cache
             epsilon: Epsilon for RMSNorm
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -117,6 +121,13 @@ class KVCacheBranch:
         inv_sqrt_numel = 1.0 / math.sqrt(float(kv_numel))
         kv_scalar_packed = float_to_uint32(inv_sqrt_numel)
         epsilon_packed = float_to_uint32(epsilon)
+
+        # KV Cache tensor setup
+        # Tile size is now derived from output CB in kernel using get_tile_size()
+        kv_cache_buffer_addr = kv_cache_tensor.buffer_address()
+        kv_cache_tile = kv_cache_tensor.get_tile()
+        # Calculate starting tile ID based on write index
+        # KV cache shape is [1, 1, seq_len, kv_dim], tiles are [32, 32]
 
         # CB indices
         # CONSOLIDATE!!!!!!!!!
@@ -166,6 +177,11 @@ class KVCacheBranch:
             ("rmsnorm_rsqrt_fast_approx", 0),
         ]
 
+        kv_rmsnorm_brisc_named_compile_time_args = [
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
+            ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
+        ]
+
         kv_rmsnorm_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
             ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
@@ -179,6 +195,7 @@ class KVCacheBranch:
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
 
+        # KV cache tile size is now derived from output CB in kernel using get_tile_size()
         # ========================================================================
         # Gather setup: k nope matmul cores (senders) -> kv rmsnorm core (receiver)
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
@@ -240,6 +257,10 @@ class KVCacheBranch:
         ]
 
         # ROPE
+        krope_brisc_named_compile_time_args = [
+            ("k_rope_output_cb", k_rope_output_cb),
+            ("Wt", 1),
+        ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
             ("cos_cb", cos_cb),
@@ -429,7 +450,14 @@ class KVCacheBranch:
             + krope_ncrisc_named_compile_time_args,
             # BRISC named compile-time args
             brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
-            + dkv_matmul_brisc_named_compile_time_args,
+            + dkv_matmul_brisc_named_compile_time_args
+            + kv_rmsnorm_brisc_named_compile_time_args
+            + krope_brisc_named_compile_time_args,
+            # BRISC common runtime args: KV cache buffer address and write position
+            brisc_common_runtime_args=[
+                kv_cache_buffer_addr,
+                kv_cache_write_index,
+            ],
             # TRISC named compile-time args
             trisc_named_compile_time_args=kv_rmsnorm_trisc_named_compile_time_args
             + dkv_matmul_trisc_named_compile_time_args
@@ -507,6 +535,7 @@ class KVCacheBranch:
             cos_tensor,
             sin_tensor,
             trans_mat_tensor,
+            kv_cache_tensor,
             output_tensor,
         ]
         output = ttnn.generic_op(io_tensors, program_descriptor)
