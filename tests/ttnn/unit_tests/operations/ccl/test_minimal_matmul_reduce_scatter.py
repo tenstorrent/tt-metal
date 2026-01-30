@@ -73,7 +73,7 @@ def run_reduce_scatter_impl(
     logger.info("Creating persistent buffers")
     rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[2] //= rs_num_batches
+    # single_batch_input_shape[2] //= rs_num_batches
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),
@@ -98,7 +98,8 @@ def run_reduce_scatter_impl(
         )
         for _ in range(num_iters)
     ]
-
+    print("Persistent intermediate buffer shape: ", persistent_intermediate_buffers[0].shape)
+    print("Persistent output buffer shape: ", persistent_output_buffers[0].shape)
     logger.info("Done creating persistent buffers")
 
     ##### Matmul weight setup #####

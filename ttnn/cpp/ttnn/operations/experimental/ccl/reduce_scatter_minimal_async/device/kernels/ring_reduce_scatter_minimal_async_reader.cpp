@@ -108,10 +108,10 @@ void kernel_main() {
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
+    if constexpr (fuse_op) {
+        matmul_receiver.wait_for_matmul_batch(0);
+    }
     for (uint32_t b = 0; b < input_tensor_B; b++) {
-        if constexpr (fuse_op) {
-            matmul_receiver.wait_for_matmul_batch(b);
-        }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;
 

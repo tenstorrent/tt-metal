@@ -257,10 +257,12 @@ void kernel_main() {
         // We get reuse on in1 when striding M block
         reuse_block = true;
 #endif
+    }
+
 #ifdef FUSE_RS
         op_signaler.synchronize_workers_and_signal_op(0);
 #endif
-    }
+
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     DPRINT << "Finish Matmul in1 sender/out kernel" << ENDL();
