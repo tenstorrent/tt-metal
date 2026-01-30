@@ -11,7 +11,7 @@
 namespace ttml::metal::optimizers::adamw::device {
 
 AdamWDeviceOperation::program_factory_t AdamWDeviceOperation::select_program_factory(
-    [[maybe_unused]] const operation_attributes_t& args, [[maybe_unused]] const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return AdamWProgramFactory{};
 }
 
