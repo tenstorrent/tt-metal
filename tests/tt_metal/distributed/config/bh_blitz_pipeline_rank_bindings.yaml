@@ -5,238 +5,238 @@ rank_bindings:
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 1
-  mesh_id: 1
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 2
-  mesh_id: 2
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 3
-  mesh_id: 3
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 4
-  mesh_id: 4
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 5
-  mesh_id: 5
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 6
-  mesh_id: 6
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 7
-  mesh_id: 7
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 8
-  mesh_id: 8
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 9
-  mesh_id: 9
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 10
-  mesh_id: 10
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 11
-  mesh_id: 11
+  mesh_id: 0
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 12
-  mesh_id: 12
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 13
-  mesh_id: 13
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 14
-  mesh_id: 14
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 15
-  mesh_id: 15
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 16
-  mesh_id: 16
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 17
-  mesh_id: 17
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 18
-  mesh_id: 18
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 19
-  mesh_id: 19
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 20
-  mesh_id: 20
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 21
-  mesh_id: 21
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 22
-  mesh_id: 22
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 23
-  mesh_id: 23
+  mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 24
-  mesh_id: 24
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 25
-  mesh_id: 25
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 26
-  mesh_id: 26
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 27
-  mesh_id: 27
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 28
-  mesh_id: 28
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 29
-  mesh_id: 29
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 30
-  mesh_id: 30
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 31
-  mesh_id: 31
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 32
-  mesh_id: 32
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 33
-  mesh_id: 33
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 34
-  mesh_id: 34
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 35
-  mesh_id: 35
+  mesh_id: 2
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 36
-  mesh_id: 36
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 37
-  mesh_id: 37
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 38
-  mesh_id: 38
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 39
-  mesh_id: 39
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 40
-  mesh_id: 40
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 41
-  mesh_id: 41
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 42
-  mesh_id: 42
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 43
-  mesh_id: 43
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,4,7,12,14,18,26,31
 - rank: 44
-  mesh_id: 44
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 3,6,8,10,19,24,25,29
 - rank: 45
-  mesh_id: 45
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
 - rank: 46
-  mesh_id: 46
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 2,5,11,13,15,22,27,28
 - rank: 47
-  mesh_id: 47
+  mesh_id: 3
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 1,9,16,17,20,21,23,30
-mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto
+mesh_graph_desc_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_pipeline.textproto
