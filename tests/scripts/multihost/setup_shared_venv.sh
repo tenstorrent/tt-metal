@@ -29,7 +29,9 @@ tmp_env_dir="${TARGET_VENV}.tmp.$$"
     echo "INFO: ${TARGET_VENV} already exists, skipping copy"
   else
     echo "INFO: Creating ${TARGET_VENV} via temporary directory ${tmp_env_dir}"
+    set -x
     cp -a "${SOURCE_VENV}" "${tmp_env_dir}"
     mv "${tmp_env_dir}" "${TARGET_VENV}"
+    set +x
   fi
 ) 9>"${lockfile}"
