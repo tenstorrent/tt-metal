@@ -19,6 +19,7 @@
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -1020,10 +1021,10 @@ uint32_t calculate_ubb_tray_id(tt::ARCH arch, uint16_t bus_id) {
 }
 }  // namespace
 
-std::unordered_map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray() {
+std::map<uint32_t, std::vector<uint32_t>> GetPCIeDevicesPerTray() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
 
-    std::unordered_map<uint32_t, std::vector<uint32_t>> result;
+    std::map<uint32_t, std::vector<uint32_t>> result;
     const auto& chips_with_mmio = cluster_desc->get_chips_with_mmio();
 
     for (const auto& [chip_id, pcie_id] : chips_with_mmio) {
