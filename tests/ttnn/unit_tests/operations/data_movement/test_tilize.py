@@ -52,41 +52,31 @@ def test_tilize_fp32_truncation(device, shape, use_multicore):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_tilize_row_major_to_width_sharded(device, dtype):
-    """
-    Test tilize operation for row major to width sharded tensors.
-
-    Shape: [32, 256*64] = [32, 16384]
-    Width sharded with shard shape: [32, 256]
-    Distributed on 64 cores (8x8 grid), with 8 tiles per core.
-    """
-    # Define tensor shape: [32, 256*64]
-    tensor_shape = [32, 256 * 64]  # [32, 16384]
-
-    # Define width sharding configuration
-    # Shard shape: [32, 256] (full height, width divided across 64 cores)
-    shard_shape = [32, 256]
-
-    # 64 cores in an 8x8 grid
-    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+@pytest.mark.parametrize("tensor_shape", [[32, 256 * 64]])
+@pytest.mark.parametrize("shard_shape", [[32, 256]])
+@pytest.mark.parametrize(
+    "shard_core_grid", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})]
+)  # 64 cores in an 8x8 grid
+def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_shape, shard_core_grid):
+    torch.manual_seed(42)
 
     shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     # Create test data
-    torch.manual_seed(42)
-    input_torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
+    for _ in range(30):
+        input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
 
-    # Convert to ttnn tensor with row major layout and width sharding
-    input_ttnn_tensor = ttnn.from_torch(
-        input_torch_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory_config
-    )
+        # Convert to ttnn tensor with row major layout and width sharding
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_memory_config,
+        )
 
-    torch.set_printoptions(profile="full")
-
-    ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
-    output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
-    torch.equal(input_torch_tensor, output_torch_tensor)
-    print(output_torch_tensor)
-    # assert torch.allclose(input_torch_tensor, output_torch_tensor, rtol=1e-2, atol=1e-2)
+        ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
+        output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+        torch.equal(input_torch_tensor, output_torch_tensor)
