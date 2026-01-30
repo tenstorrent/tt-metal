@@ -130,6 +130,79 @@ LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNorm
 LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
 
 
+def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.CoreRangeSet, width: int):
+    """
+    Create reciprocals tensor for layer norm with Welford algorithm.
+
+    Generates reciprocal values [1/1, 1/2, 1/3, ..., 1/width] where width is
+    the per-core width in elements. The tensor is replicated for each core so that
+    when sharded to L1 memory, each core has a complete copy.
+
+    This tensor is required when using the Welford algorithm (use_welford=True) for
+    numerically stable incremental mean/variance computation.
+
+    Args:
+        device: The device to create the tensor on.
+        core_range_set: The set of cores to shard the reciprocals across.
+        width: The width per core in elements (for sharded inputs, this is shard_spec.shape[1];
+               for non-sharded inputs, this is the full tensor width).
+
+    Returns:
+        A HEIGHT_SHARDED tensor in L1 with shape (num_cores, width) containing
+        the reciprocal lookup table values in float32 format.
+
+    Example:
+        >>> # For sharded input
+        >>> shard_spec = input_tensor.memory_config().shard_spec
+        >>> recip_tensor = ttnn.create_layer_norm_reciprocals(
+        ...     device, shard_spec.grid, shard_spec.shape[1]
+        ... )
+        >>> # For non-sharded input
+        >>> grid = device.compute_with_storage_grid_size()
+        >>> core_range_set = ttnn.CoreRangeSet({
+        ...     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))
+        ... })
+        >>> recip_tensor = ttnn.create_layer_norm_reciprocals(
+        ...     device, core_range_set, input_tensor.shape[-1]
+        ... )
+    """
+    import torch
+
+    num_cores = core_range_set.num_cores()
+
+    # Compute reciprocals: 1/1, 1/2, 1/3, ..., 1/width
+    reciprocals = [1.0 / (i + 1) for i in range(width)]
+
+    # Replicate for all cores
+    all_reciprocals = reciprocals * num_cores
+
+    # Create torch tensor
+    torch_tensor = torch.tensor(all_reciprocals, dtype=torch.float32).reshape(num_cores, width)
+
+    # Create shard spec and memory config for HEIGHT_SHARDED L1
+    recip_shard_spec = ttnn.ShardSpec(
+        core_range_set,
+        (1, width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        recip_shard_spec,
+    )
+
+    # Convert to ttnn tensor on device
+    recip_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    return recip_tensor
+
+
 # group norm helper function
 def determine_expected_group_norm_sharded_config_and_grid_size(
     *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False
