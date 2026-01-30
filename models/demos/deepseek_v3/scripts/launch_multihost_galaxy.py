@@ -157,7 +157,7 @@ def build_mpi_args(cfg: ModeConfig) -> str:
     )
 
 
-def build_tcp_interface() -> str:
+def tcp_interface() -> str:
     return "cnx1"
 
 
@@ -241,7 +241,7 @@ def build_tt_run_command(
     tt_run_cmd = [
         "tt-run",
         "--tcp-interface",
-        build_tcp_interface(),
+        tcp_interface(),
         "--rank-binding",
         rank_binding_path,
         "--mpi-args",
