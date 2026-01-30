@@ -1788,12 +1788,14 @@ FORCE_INLINE
 
         constexpr uint32_t shift = sender_channel_index * 8;
         uint8_t new_acks_unpacked = new_acks_for_this_channel >> shift;
-                                                                                                                                                        
-        // Simplified: pass packed_acks directly since increment_num_processed_acks now handles packed format
-        uint32_t acks_to_increment = new_acks_for_this_channel;
+
+        // increment_num_processed_acks expects UNPACKED value (not packed!)
+        // It internally calls add_to_channel<sender_channel_index>(current, delta)
+        // where delta must be uint8_t. Passing packed value causes truncation.
+        uint32_t acks_to_increment = new_acks_unpacked;
         if constexpr (!multi_txq_enabled) {
             // For overlay regs, negate for decrement
-            acks_to_increment = -new_acks_for_this_channel;
+            acks_to_increment = -static_cast<int32_t>(new_acks_unpacked);
         }
         sender_channel_from_receiver_credits.increment_num_processed_acks<sender_channel_index>(acks_to_increment);
         send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(

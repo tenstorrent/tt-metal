@@ -109,59 +109,47 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         template<bool wait_for_txq, typename PackedValueType>
         FORCE_INLINE void send_packed_ack_credits(const PackedValueType& packed_value) {
             if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-                // Both formats use 8-bit byte-aligned packing on BH, so we can add directly
+                // Use safe CreditPacking helper to add packed values without carries between channels
+                // This replaces the previous manual byte-by-byte loop with optimized, tested code
+                using PackingType = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
+
                 constexpr size_t CREDITS_PER_WORD = 4;
 
                 if constexpr (NUM_SENDER_CHANNELS <= CREDITS_PER_WORD) {
                     // ≤4 channels: single word
-                    // Add byte-by-byte to prevent carries between channels
-                    uint32_t packed_val = static_cast<uint32_t>(packed_value.get());
-                    uint32_t old_counter = ack_counters[0];
+                    // Safe multi-channel addition: NO carries between channels!
+                    auto current = PackingType::PackedValueType{ack_counters[0]};
+                    auto delta = PackingType::PackedValueType{static_cast<uint32_t>(packed_value.get())};
 
-                    // Extract each byte, add with wraparound, pack back
-                    // INEFFICIENT BUT SAFE. STAGING FOR OPTIMIZATION TO BE DONE LATER!!!
-                    uint32_t result = 0;
-                    #pragma unroll
-                    for (size_t ch = 0; ch < NUM_SENDER_CHANNELS; ++ch) {
-                        uint8_t old_byte = (old_counter >> (ch * 8)) & 0xFF;
-                        uint8_t delta_byte = (packed_val >> (ch * 8)) & 0xFF;
-                        uint8_t new_byte = old_byte + delta_byte;  // Wraps at 256
-                        result |= (static_cast<uint32_t>(new_byte) << (ch * 8));
-                    }
+                    // Optimized add_packed: parallel byte addition or unrolled loop
+                    // Performance: ~8-13 instructions (Zbb), fully inlined, no branches
+                    auto result = PackingType::add_packed(current, delta);
 
-                    ack_counters[0] = result;
+                    ack_counters[0] = result.get();
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
                 } else {
-                    // 5-8 channels: two words
-                    // Add byte-by-byte to prevent carries between channels
-                    uint64_t packed_val = packed_value.get();
-                    uint32_t lower_word = static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL);
-                    uint32_t old_lower = ack_counters[0];
+                    // 5 channels: two words (4 in lower, 1 in upper)
+                    // Max channels per VC is 5
+                    static_assert(NUM_SENDER_CHANNELS == 5, "Multi-word case expects exactly 5 channels");
 
-                    // Process lower 4 channels (bytes 0-3)
-                    uint32_t result_lower = 0;
-                    #pragma unroll
-                    for (size_t ch = 0; ch < CREDITS_PER_WORD; ++ch) {
-                        uint8_t old_byte = (old_lower >> (ch * 8)) & 0xFF;
-                        uint8_t delta_byte = (lower_word >> (ch * 8)) & 0xFF;
-                        uint8_t new_byte = old_byte + delta_byte;
-                        result_lower |= (static_cast<uint32_t>(new_byte) << (ch * 8));
-                    }
-                    ack_counters[0] = result_lower;
+                    uint64_t packed_val = packed_value.get();
+
+                    // Lower word: 4 channels (bytes 0-3)
+                    using LowerPackingType = tt::tt_fabric::CreditPacking<4, 8>;
+                    auto current_lower = LowerPackingType::PackedValueType{ack_counters[0]};
+                    auto delta_lower = LowerPackingType::PackedValueType{static_cast<uint32_t>(packed_val & 0xFFFFFFFFULL)};
+                    auto result_lower = LowerPackingType::add_packed(current_lower, delta_lower);
+
+                    ack_counters[0] = result_lower.get();
                     ack_counters_base_l1_ptr[0] = ack_counters[0];
 
-                    uint32_t upper_word = static_cast<uint32_t>(packed_val >> 32);
-                    uint32_t old_upper = ack_counters[1];
+                    // Upper word: 1 channel (byte 4)
+                    using UpperPackingType = tt::tt_fabric::CreditPacking<1, 8>;
+                    auto current_upper = UpperPackingType::PackedValueType{ack_counters[1]};
+                    auto delta_upper = UpperPackingType::PackedValueType{static_cast<uint32_t>(packed_val >> 32)};
+                    auto result_upper = UpperPackingType::add_packed(current_upper, delta_upper);
 
-                    // Process upper channels (bytes 4-7)
-                    uint32_t result_upper = 0;
-                    for (size_t ch = 0; ch < (NUM_SENDER_CHANNELS - 4); ++ch) {
-                        uint8_t old_byte = (old_upper >> (ch * 8)) & 0xFF;
-                        uint8_t delta_byte = (upper_word >> (ch * 8)) & 0xFF;
-                        uint8_t new_byte = old_byte + delta_byte;
-                        result_upper |= (static_cast<uint32_t>(new_byte) << (ch * 8));
-                    }
-                    ack_counters[1] = result_upper;
+                    ack_counters[1] = result_upper.get();
                     ack_counters_base_l1_ptr[1] = ack_counters[1];
                 }
                 // Wait for eth queue if requested (safer but slower)
@@ -308,32 +296,42 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         // instead of here (per-sender-channel) since completions are shared across all senders to same receiver
     }
 
-    // template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
-    // FORCE_INLINE std::tuple<uint32_t, uint32_t> get_num_unprocessed_acks_from_receiver() {
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
-        // static_assert(sender_channel_index * 8 < 32, "Assuming 8-bit credits: sender_channel_index * 8 must fit in 32-bit word");
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        // Mask raw_value before subtraction to prevent borrows/carries from other channels
-        uint32_t byte_mask = 0xFF << (sender_channel_index * 8);
+
+        // Use safe CreditPacking helper to compute difference without borrows
+        // This extracts only the target channel's byte and subtracts with correct wraparound
+        using PackingType = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
+
         uint32_t raw_value = *acks_received_counter_ptr;
-        uint32_t masked_raw = raw_value & byte_mask;  // Keep only this channel's byte
-        uint32_t diff_packed = masked_raw - (acks_received_and_processed & byte_mask);
-                                                                                                      
-        return diff_packed;
+        auto raw_packed = PackingType::PackedValueType{raw_value};
+        auto processed_packed = PackingType::PackedValueType{acks_received_and_processed};
+
+        // Safe diff: extracts bytes, subtracts with uint8_t wrap
+        // Performance: ~3 instructions (2 extractions + 1 subtraction)
+        uint8_t diff = PackingType::template diff_channels<sender_channel_index>(raw_packed, processed_packed);
+
+        // Return PACKED value (shifted to channel position) for compatibility with calling code
+        // The caller in fabric_erisc_router.cpp:1786 masks with (0xFF << (channel_idx * 8))
+        // and expects the value to be at that bit position
+        return static_cast<uint32_t>(diff) << (sender_channel_index * 8);
     }
 
     template <uint8_t sender_channel_index>
     FORCE_INLINE void increment_num_processed_acks(size_t packed_num_acks) {
         if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-            static_assert(sender_channel_index * 8 < 32, "Assuming 8-bit credits: sender_channel_index * 8 must fit in 32-bit word");
-            // Add packed values directly, then mask to keep only this channel's byte
-            // Carries are discarded by masking, giving correct wraparound behavior
-            constexpr uint32_t byte_shift = sender_channel_index * 8;
-            constexpr uint32_t byte_mask = 0xFF << byte_shift;
+            // Use safe CreditPacking helper to add to single channel without carries
+            using PackingType = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
 
-            uint32_t result = acks_received_and_processed + packed_num_acks;
-            acks_received_and_processed = (acks_received_and_processed & ~byte_mask) | (result & byte_mask);
+            auto current = PackingType::PackedValueType{acks_received_and_processed};
+            auto updated = PackingType::template add_to_channel<sender_channel_index>(
+                current,
+                static_cast<uint8_t>(packed_num_acks)
+            );
+
+            acks_received_and_processed = updated.get();
+            // Performance: ~5 instructions (Zbb optimized), fully inlined
         } else {
             // For counter-based (BH), ack counters are 8-bit and wrap at 256
             // Must use uint8_t semantics to match receiver's wraparound behavior
