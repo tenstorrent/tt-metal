@@ -430,7 +430,6 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
         weights_shape = (32, 3, 3, 3)
         bias_shape = (1, 1, 1, 32)
 
-
         conv_params = {
             "in_channels": 3,
             "out_channels": 32,
@@ -491,8 +490,8 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
 
         weight = torch.randn(weights_shape).bfloat16()
         bias = torch.randn(bias_shape).bfloat16()
-        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32, device=device)
-        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32, device=device)
+        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32)
+        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32)
 
         [x, [output_height, output_width], _] = ttnn.conv2d(
             input_tensor=ttnn_input,
