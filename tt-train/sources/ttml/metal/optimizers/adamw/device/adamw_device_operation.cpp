@@ -132,7 +132,7 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t ttml_adamw(
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t adamw(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
