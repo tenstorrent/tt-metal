@@ -97,3 +97,16 @@ def test_complex_tensor(device):
     imag = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
     complex_tensor = ttnn.complex_tensor(real, imag)
     logger.info("TT-NN complex tensor:", complex_tensor)
+
+
+def test_index_fill(device):
+    # Create a TT-NN tensor with values filled at the specified indices along the specified dimension
+    torch_input = torch.rand([32, 32], dtype=torch.bfloat16)
+    torch_index = torch.tensor([0, 2])
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_index = ttnn.from_torch(torch_index, device=device)
+    output = ttnn.index_fill(
+        tt_input, 1, tt_index, 10.0
+    )  # Need to ensure 10.0 is a float to match the bfloat16 dtype of the input tensor
+    logger.info("TT-NN index_fill tensor:", output)
