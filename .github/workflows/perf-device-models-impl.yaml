@@ -134,11 +134,12 @@ jobs:
           fi
 
           # Define which models belong to each matrix group
+          # oft removed from P150 BH due to issue 36807 (https://github.com/tenstorrent/tt-metal/issues/36807)
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
             "N300 WH B0 Set 1": ["stable-diffusion-xl", "stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit"],
             "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0", "ops-perf-tests"],
-            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "panoptic-deeplab", "ops-perf-tests"] # oft removed due to issue 36807 (https://github.com/tenstorrent/tt-metal/issues/36807)
+            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "panoptic-deeplab", "ops-perf-tests"]
           }'
 
           # Original matrix definition
