@@ -32,7 +32,7 @@ struct fmt::formatter<ttnn::operations::unary::UnaryWithParam> {
             return fmt::format_to(ctx.out(), "UnaryWithParam(op_type={})", param.op_type);
         }             return fmt::format_to(
                 ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
-       
+
     }
 };
 
