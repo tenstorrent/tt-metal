@@ -4,11 +4,9 @@
 
 """
 CCL Broadcast Operation using ttnn.generic_op
-
 This module implements a multi-device broadcast operation where a sender device
 broadcasts data to all other devices in the mesh. Supports both single-axis
 and dual-axis broadcast configurations.
-
 For dual-axis broadcast on a 2D mesh:
 1. Primary sender broadcasts across secondary axis to create a secondary sender
 2. Both sender and secondary sender broadcast along the primary axis to their columns
@@ -21,7 +19,6 @@ import ttnn
 class DeepseekMinimalBroadcast:
     """
     Multi-device broadcast implementation using ttnn.generic_op.
-
     This class implements broadcast from a sender device to all other devices
     in a mesh using the fabric infrastructure.
     """
@@ -30,10 +27,8 @@ class DeepseekMinimalBroadcast:
     def golden(input_tensor):
         """
         PyTorch reference implementation of broadcast for validation.
-
         Args:
             input_tensor: Input tensor (torch.Tensor) - the data at sender
-
         Returns:
             Output tensor that would be on each device after broadcast
         """
@@ -53,7 +48,6 @@ class DeepseekMinimalBroadcast:
     ):
         """
         Execute broadcast operation using generic_op.
-
         Args:
             input_tensor_mesh: Input tensor mesh (sender has data, others have zeros)
             output_tensor: Pre-allocated output tensor mesh
@@ -63,7 +57,6 @@ class DeepseekMinimalBroadcast:
             secondary_cluster_axis: Secondary axis for dual-axis broadcast (optional)
             num_links: Number of links to use (default 1)
             using_persistent_buffers: Whether to use persistent buffers (default True)
-
         Returns:
             Output tensor with broadcast data on all devices
         """
@@ -113,8 +106,8 @@ class DeepseekMinimalBroadcast:
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
         # Kernel paths
-        reader_kernel_path = "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/kernels/broadcast_tile_reader_batch1.cpp"
-        writer_kernel_path = "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/kernels/broadcast_tile_writer_batch1.cpp"
+        # Use unified kernel for both reader and writer roles
+        ccl_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/ccl_broadcast/kernels/ccl_broadcast_kernel.cpp"
 
         # For each device in the mesh, create appropriate program
         for row in range(mesh_rows):
@@ -159,37 +152,44 @@ class DeepseekMinimalBroadcast:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                # Reader compile-time args
-                reader_compile_args = [
-                    src0_cb_index,  # cb0_id
-                    num_pages_per_packet,  # packet_size_in_pages
-                    page_size_bytes,  # tensor0_page_size
-                    int(is_sender),  # is_sender
-                    core_noc_x,
-                    core_noc_y,
-                    int(is_secondary_sender),  # is_secondary_sender
-                    int(is_sender or is_secondary_sender),  # is_active_broadcaster
+                # Reader named compile-time args
+                reader_named_compile_time_args = [
+                    ("cb0_id", src0_cb_index),
+                    ("packet_size_in_pages", num_pages_per_packet),
+                    ("tensor0_page_size", page_size_bytes),
+                    ("is_sender", 1 if is_sender else 0),
+                    ("core_noc_x", core_noc_x),
+                    ("core_noc_y", core_noc_y),
+                    ("is_secondary_sender", 1 if is_secondary_sender else 0),
+                    ("is_active_broadcaster", 1 if (is_sender or is_secondary_sender) else 0),
                 ]
 
-                # Writer compile-time args
-                writer_compile_args = [
-                    src0_cb_index,  # cb0_id
-                    num_pages_per_packet,  # packet_size_in_pages
-                    page_size_bytes,  # tensor0_page_size
-                    num_targets_forward,  # num_targets_forward_direction
-                    num_targets_backward,  # num_targets_backward_direction
-                    int(is_sender),  # is_sender
-                    core_noc_x,
-                    core_noc_y,
-                    int(is_secondary_sender),  # is_secondary_sender
-                    int(has_secondary_target),  # has_secondary_target
-                    int(has_reverse_secondary_connection),  # has_reverse_secondary_connection
-                    start_distance_forward,  # start_distance_in_hops_forward
-                    range_hops_forward,  # range_hops_forward
-                    start_distance_backward,  # start_distance_in_hops_backward
-                    range_hops_backward,  # range_hops_backward
-                    using_persistent_buffers,  # using_persistent_buffers
+                # Writer named compile-time args
+                writer_named_compile_time_args = [
+                    ("cb0_id", src0_cb_index),
+                    ("packet_size_in_pages", num_pages_per_packet),
+                    ("tensor0_page_size", page_size_bytes),
+                    ("num_targets_forward_direction", num_targets_forward),
+                    ("num_targets_backward_direction", num_targets_backward),
+                    ("is_sender", 1 if is_sender else 0),
+                    ("core_noc_x", core_noc_x),
+                    ("core_noc_y", core_noc_y),
+                    ("is_secondary_sender", 1 if is_secondary_sender else 0),
+                    ("has_secondary_target", 1 if has_secondary_target else 0),
+                    ("has_reverse_secondary_connection", 1 if has_reverse_secondary_connection else 0),
+                    ("start_distance_in_hops_forward", start_distance_forward),
+                    ("range_hops_forward", range_hops_forward),
+                    ("start_distance_in_hops_backward", start_distance_backward),
+                    ("range_hops_backward", range_hops_backward),
+                    ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
                 ]
+
+                union_named_compile_time_args = []
+                _seen_ct = set()
+                for name, val in reader_named_compile_time_args + writer_named_compile_time_args:
+                    if name not in _seen_ct:
+                        _seen_ct.add(name)
+                        union_named_compile_time_args.append((name, val))
 
                 # Reader runtime args
                 reader_rt_args = ttnn.RuntimeArgs()
@@ -260,20 +260,22 @@ class DeepseekMinimalBroadcast:
                     format_descriptors=[cb_config],
                 )
 
-                # Create reader kernel
+                # Create reader kernel using unified kernel file
                 reader_kernel = ttnn.KernelDescriptor(
-                    kernel_source=reader_kernel_path,
+                    kernel_source=ccl_kernel_path,
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=worker_core_set,
-                    compile_time_args=reader_compile_args,
+                    named_compile_time_args=union_named_compile_time_args,
                     runtime_args=reader_rt_args,
                     config=ttnn.ReaderConfigDescriptor(),
                 )
 
-                # Create writer kernel
+                # Create writer kernel using unified kernel file
                 writer_kernel = ttnn.KernelDescriptor(
-                    kernel_source=writer_kernel_path,
+                    kernel_source=ccl_kernel_path,
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=worker_core_set,
-                    compile_time_args=writer_compile_args,
+                    named_compile_time_args=union_named_compile_time_args,
                     runtime_args=writer_rt_args,
                     config=ttnn.WriterConfigDescriptor(),
                 )
@@ -289,7 +291,12 @@ class DeepseekMinimalBroadcast:
                 if num_connections > 0:
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, 1, worker_core  # kernel_idx (writer kernel)
+                        fabric_node_id,
+                        dst_nodes,
+                        [0],
+                        program,
+                        1,  # kernel_idx (writer kernel)
+                        worker_core,
                     )
                     writer_rt_args_ref.extend(fabric_args)
 
