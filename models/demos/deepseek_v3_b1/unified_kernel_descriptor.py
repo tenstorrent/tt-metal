@@ -80,6 +80,9 @@ class UnifiedKernelDescriptor:
     ncrisc_common_runtime_args: list = field(default_factory=list)
     brisc_common_runtime_args: list = field(default_factory=list)
     trisc_common_runtime_args: list = field(default_factory=list)
+    ncrisc_runtime_args: list = field(default_factory=list)  # Per-core runtime args: [(CoreCoord, [args])]
+    brisc_runtime_args: list = field(default_factory=list)  # Per-core runtime args: [(CoreCoord, [args])]
+    trisc_runtime_args: list = field(default_factory=list)  # Per-core runtime args: [(CoreCoord, [args])]
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
 
@@ -124,6 +127,7 @@ class UnifiedKernelDescriptor:
             compile_time_args=self.ncrisc_compile_time_args,
             named_compile_time_args=self.ncrisc_named_compile_time_args,
             common_runtime_args=self.ncrisc_common_runtime_args,
+            runtime_args=self.ncrisc_runtime_args if self.ncrisc_runtime_args else None,
             config=ttnn.ReaderConfigDescriptor(),
         )
 
@@ -135,6 +139,7 @@ class UnifiedKernelDescriptor:
             compile_time_args=self.brisc_compile_time_args,
             named_compile_time_args=self.brisc_named_compile_time_args,
             common_runtime_args=self.brisc_common_runtime_args,
+            runtime_args=self.brisc_runtime_args if self.brisc_runtime_args else None,
             config=ttnn.WriterConfigDescriptor(),
         )
 
@@ -147,6 +152,7 @@ class UnifiedKernelDescriptor:
             compile_time_args=self.trisc_compile_time_args,
             named_compile_time_args=self.trisc_named_compile_time_args,
             common_runtime_args=self.trisc_common_runtime_args,
+            runtime_args=self.trisc_runtime_args if self.trisc_runtime_args else None,
             config=compute_config,
         )
 
@@ -204,6 +210,19 @@ class UnifiedKernelDescriptor:
             core_coords = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(core_tuples)]
             core_range_set = ttnn.CoreRangeSet(core_coords)
 
+            # Filter per-core runtime args for this group's cores
+            core_tuple_set = set(core_tuples)
+
+            def filter_runtime_args(runtime_args):
+                if not runtime_args:
+                    return None
+                filtered = [(core, args) for core, args in runtime_args if (core.x, core.y) in core_tuple_set]
+                return filtered if filtered else None
+
+            ncrisc_rt_args = filter_runtime_args(self.ncrisc_runtime_args)
+            brisc_rt_args = filter_runtime_args(self.brisc_runtime_args)
+            trisc_rt_args = filter_runtime_args(self.trisc_runtime_args)
+
             # Create NCRISC/BRISC/TRISC kernel descriptors for this group
             descriptors.append(
                 ttnn.KernelDescriptor(
@@ -213,6 +232,7 @@ class UnifiedKernelDescriptor:
                     compile_time_args=self.ncrisc_compile_time_args,
                     named_compile_time_args=ncrisc_named_compile_time_args_merged,
                     common_runtime_args=self.ncrisc_common_runtime_args,
+                    runtime_args=ncrisc_rt_args,
                     config=ttnn.ReaderConfigDescriptor(),
                 )
             )
@@ -224,6 +244,7 @@ class UnifiedKernelDescriptor:
                     compile_time_args=self.brisc_compile_time_args,
                     named_compile_time_args=brisc_named_compile_time_args_merged,
                     common_runtime_args=self.brisc_common_runtime_args,
+                    runtime_args=brisc_rt_args,
                     config=ttnn.WriterConfigDescriptor(),
                 )
             )
@@ -235,6 +256,7 @@ class UnifiedKernelDescriptor:
                     compile_time_args=self.trisc_compile_time_args,
                     named_compile_time_args=trisc_named_compile_time_args_merged,
                     common_runtime_args=self.trisc_common_runtime_args,
+                    runtime_args=trisc_rt_args,
                     config=compute_config,
                 )
             )
