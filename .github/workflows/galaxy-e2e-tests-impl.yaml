@@ -62,7 +62,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        #ARCH_NAME: ${{ matrix.test-group.sku }} #TODO: get rid of ARCH_NAME from container
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
