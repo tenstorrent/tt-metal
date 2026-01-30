@@ -28,7 +28,7 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/moe/moe_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
