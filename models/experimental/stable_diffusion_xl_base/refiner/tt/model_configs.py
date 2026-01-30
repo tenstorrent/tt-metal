@@ -345,21 +345,21 @@ class RefinerModelOptimisations(ModelOptimisations):
                 # # # GEGLU # # #
                 "2D_GEGLU_LINEAR_768_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=1,
                     per_core_M=16,
                     per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=5,
+                    out_subblock_w=2,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_768_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=1,
                     per_core_M=16,
                     per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=4,
+                    out_subblock_w=2,
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
@@ -411,7 +411,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                 # TODO: Optimzize this config
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=4,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=5,
                     out_subblock_h=1,
@@ -947,11 +947,24 @@ class RefinerModelOptimisations(ModelOptimisations):
                 return ttnn.L1_MEMORY_CONFIG
             else:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-        if "ff.net" in module_path or "proj.split" in module_path:
+        # GEGLU linear 2 (proj.split.gelu) uses DRAM to avoid L1 OOM; checked before broad ff.net
+        if "proj.split.gelu" in module_path:
             if "down_blocks.2" in module_path or "up_blocks.1" in module_path or "mid_block" in module_path:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             else:
                 return ttnn.DRAM_MEMORY_CONFIG
+        if "proj.split" in module_path:
+            if "down_blocks.2" in module_path or "up_blocks.1" in module_path or "mid_block" in module_path:
+                return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            else:
+                return ttnn.L1_MEMORY_CONFIG
+        # FF second linear (ff.net.2): L1 block sharded in refiner
+        # Use DRAM for seq=4096 blocks (down_blocks.1, up_blocks.2) to avoid CB clash with QKV
+        if "ff.net.2" in module_path:
+            if "down_blocks.1" in module_path or "up_blocks.2" in module_path:
+                return ttnn.L1_MEMORY_CONFIG
+            return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+
         return None
 
     def get_conv_config(self, conv_path):

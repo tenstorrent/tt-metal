@@ -14,6 +14,9 @@ class TtGEGLU(LightweightModule):
         super().__init__()
 
         self.device = device
+
+        self.module_path = module_path
+
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]
         w1, w2 = weights.chunk(2, dim=0)  # Each: [out_dim // 2, in_dim]
@@ -38,7 +41,7 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
-        tracy.signpost("GEGLU Linear 1 Start")
+        tracy.signpost(f"GEGLU Linear 1 Start: {self.module_path}")
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
@@ -49,7 +52,7 @@ class TtGEGLU(LightweightModule):
         )
         tracy.signpost("GEGLU Linear 1 End")
 
-        tracy.signpost("GEGLU Linear 2 Start")
+        tracy.signpost(f"GEGLU Linear 2 Start: {self.module_path}")
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
