@@ -267,13 +267,13 @@ jobs:
       perf-device-models-result: ${{ steps.monitor.outputs.perf-device-models-result }}
     steps:
       - name: Skip if not enabled
-        if: matrix.should-run != 'true'
+        if: matrix.should-run != true && matrix.should-run != 'true'
         run: |
           echo "⚪ Skipping ${{ matrix.name }} - not enabled for this run"
 
       - name: Trigger and monitor workflow
         id: monitor
-        if: matrix.should-run == 'true'
+        if: matrix.should-run == true || matrix.should-run == 'true'
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
           WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
