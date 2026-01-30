@@ -401,10 +401,16 @@ jobs:
             fi
           done
 
-          # If we somehow exit the retry loop without success (shouldn't happen)
-          echo "❌ $DISPLAY_NAME failed after $max_attempts attempts"
-          echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
-          exit 1
+          # Fallback for unexpected exit from retry loop (shouldn't normally be reached)
+          if [ "$attempt" -gt "$max_attempts" ]; then
+            echo "❌ $DISPLAY_NAME failed after $max_attempts attempts"
+            echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "❌ $DISPLAY_NAME monitoring ended unexpectedly (attempt: $attempt/$max_attempts, should_retry: $should_retry)"
+            echo "$OUTPUT_KEY=unknown:$run_url" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
   # Job 3: Terminate spawned workflows if parent is cancelled
   cancel-on-failure:
