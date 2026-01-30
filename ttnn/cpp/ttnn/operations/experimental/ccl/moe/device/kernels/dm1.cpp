@@ -99,7 +99,6 @@ void kernel_main() {
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
     // TODO: (GR) read num experts per token
-
     uint32_t metadata_ready_semaphore_id =       /* CT arg */
         uint32_t per_expert_total_tokens_cb_id = /* CT arg */
 
@@ -114,10 +113,11 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         for (chunks_per_exert) {  // TODO: (GR)
-
-            // Wait for compute core to tell us that all mm01 data is ready
-            cb_wait_front(cb_c2w_rdy, 1);
         }
+
+        // Wait for compute core to tell us that all mm01 data is ready
+        cb_wait_front(cb_c2w_rdy, 1);
+
         cb_pop_front(cb_c2w_rdy, 1);
 
         // TODO: (GR) signal that input is free

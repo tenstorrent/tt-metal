@@ -100,16 +100,16 @@ MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs
     //-------------------------------------------------------------------------
     // Matmul outputs
     //-------------------------------------------------------------------------
-    // TODO: (GR) - Adrian knows shape???
-    auto intermediate_shape = ttnn::Shape({1, 1});
-    auto intermediate_spec = TensorSpec(
-        Shape(intermediate_shape),
+    // TODO: (GR)
+    auto matmul_output_shape = ttnn::Shape({1, 1});
+    auto matmul_output_spec = TensorSpec(
+        Shape(matmul_output_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    return {tilized_output_spec, expert_activation_spec, e_t_spec, intermediate_spec};
+    return {tilized_output_spec, expert_activation_spec, e_t_spec, matmul_output_spec};
 }
 
 MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tensors(
