@@ -84,6 +84,13 @@ class MLA2D(MLA1D):
                 topology=ttnn.Topology.Ring,
                 num_links=4,
             ),
+            "seq_ag_2_prefill": AllGatherAsyncConfig(
+                mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,
+                dim=3,
+                topology=ttnn.Topology.Linear,
+                num_links=4,
+            ),
             "seq_rs_prefill": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=0,
                 dim=2,
@@ -214,6 +221,10 @@ class MLA2D(MLA1D):
             page_table=page_table,
         )
         ttnn.deallocate(x_next)
+
+        x_out = ttnn.experimental.all_gather_async(
+            x_out, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_2_prefill"])
+        )
 
         x_rs = (
             ttnn.experimental.reduce_scatter_minimal_async(

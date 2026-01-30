@@ -60,6 +60,7 @@ class MLA1D(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        print("Converting MLA1D weights...")
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
@@ -101,7 +102,7 @@ class MLA1D(AbstractModule):
                 ("q_a_proj", "wq_a", (q_lora_rank, dim), (0, -2)),
                 ("q_b_proj", "wq_b", (num_heads * q_head_dim, q_lora_rank), (0, -1)),
                 ("kv_a_proj_with_mqa", "wkv_a", (kv_lora_rank + qk_rope_head_dim, dim), (0, -2)),
-                ("o_proj", "wo", (dim, num_heads * v_head_dim), (0, -1)),
+                ("o_proj", "wo", (dim, num_heads * v_head_dim), (0, -2)),
             ]
         }
 
@@ -225,7 +226,7 @@ class MLA1D(AbstractModule):
         k_chunk_size = 128  # TODO: Make dynamic?
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            compute_with_storage_grid_size=(8, 8),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
@@ -270,7 +271,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
             num_links=4,
         )
         wq_a_ag_config = AllGatherAsyncConfig(
@@ -278,7 +279,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
             num_links=4,
         )
 
@@ -288,7 +289,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
             num_links=4,
         )
         wkv_a_r_config = {
@@ -308,7 +309,15 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
+            num_links=4,
+        )
+
+        wo_rs_config = ReduceScatterAsyncMinimalConfig(
+            cluster_axis=1,
+            dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
             num_links=4,
         )
 
@@ -334,6 +343,7 @@ class MLA1D(AbstractModule):
             "wkv_a_ag_prefill": wkv_a_ag_config,
             "wkv_a_r_prefill": wkv_a_r_config,
             "wo_ag_prefill": wo_ag_config,
+            "wo_rs_prefill": wo_rs_config,
             "mesh_device": mesh_device,
         }
 
@@ -1100,16 +1110,23 @@ class MLA1D(AbstractModule):
             if seq_len != padded_seq_len:
                 out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
         else:
-            # Non-chunked path for shorter sequences
-            # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads_local * v_head_dim))
+            # # Non-chunked path for shorter sequences
+            # # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads_local * v_head_dim))
+            # v_out = ttnn.experimental.nlp_concat_heads(v_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # v_out = ttnn.experimental.all_gather_async(
+            #     v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            # )  # [1, seq_len, num_heads, v_head_dim]
+
+            # # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
+            # # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            # out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+
+            # -------------------------------------------
             v_out = ttnn.experimental.nlp_concat_heads(v_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            v_out = ttnn.experimental.all_gather_async(
-                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-            )  # [1, seq_len, num_heads, v_head_dim]
-
-            # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
-            # v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            v_out = ttnn.linear(v_out, **cfg["wo"])
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                v_out, **ccl.populate_reduce_scatter_runtime_args(cfg["wo_rs_prefill"])
+            )
 
         return out
