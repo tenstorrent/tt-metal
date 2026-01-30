@@ -708,6 +708,37 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             buffer.device()->dram_channel_from_logical_core(core));
     }
     
+    // Issue wait commands once at the beginning if needed
+    if (dispatch_params.issue_wait && num_worker_counters > 0) {
+        DeviceCommandCalculator calculator;
+        for (int i = 0; i < num_worker_counters; ++i) {
+            calculator.add_dispatch_wait();
+        }
+        
+        const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+        
+        for (const auto& sub_device_id : sub_device_ids) {
+            auto offset_index = *sub_device_id;
+            command_sequence.add_dispatch_wait(
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+                0,
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                dispatch_params.expected_num_workers_completed[offset_index]);
+        }
+        
+        TT_ASSERT(
+            command_sequence.write_offset_bytes() == cmd_sequence_sizeB,
+            "Command sequence size mismatch, calculator: {}, command sequence: {}",
+            cmd_sequence_sizeB,
+            command_sequence.write_offset_bytes());
+        
+        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    }
+    
     // Helper lambda to emit a command pair
     auto emit_command_pair = [&]() {
         if (write_sub_cmds.empty() && relay_sub_cmds.empty()) {
@@ -722,32 +753,12 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator;
-        if (dispatch_params.issue_wait) {
-            for (int i = 0; i < num_worker_counters; ++i) {
-                calculator.add_dispatch_wait();
-            }
-            dispatch_params.issue_wait = false;  // Only issue wait for first command pair
-        }
-        
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
         calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
         
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-        
-        // Add wait commands if needed
-        if (num_worker_counters > 0 && dispatch_params.total_pages_written == 0) {
-            for (const auto& sub_device_id : sub_device_ids) {
-                auto offset_index = *sub_device_id;
-                command_sequence.add_dispatch_wait(
-                    CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-                    0,
-                    MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                    dispatch_params.expected_num_workers_completed[offset_index]);
-            }
-            num_worker_counters = 0;  // Only add waits once
-        }
         
         // Add write packed large unicast command
         command_sequence.add_dispatch_write_packed_large_unicast(
