@@ -174,6 +174,7 @@ target_sources(
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
