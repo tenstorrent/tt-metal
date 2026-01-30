@@ -110,7 +110,7 @@ jobs:
           run-type: ${{ steps.check.outputs.run_type }}
           conclusion: ${{ steps.check.outputs.conclusion }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          database-url: ${{ secrets.TTNN_OPS_DATABASE_URL }}
+          database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
 
       - name: Skip notification
         if: steps.check.outputs.should_notify != 'true'
