@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -183,7 +183,6 @@ def test_deepseek_v3_mla_wkv_b2_sequence_trace_mode(
     # Create HEIGHT_SHARDED memory config for input (matching flash_mla output)
     # For multi-device shape with batch=128 and 4 heads, total height = 1 * 4 * 128 = 512
     # Use 16 cores (4x4 grid) with shard height 32, matching model's pattern
-    grid_size = device.compute_with_storage_grid_size()
     attn_out_core_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}  # 4x4 grid = 16 cores
     )

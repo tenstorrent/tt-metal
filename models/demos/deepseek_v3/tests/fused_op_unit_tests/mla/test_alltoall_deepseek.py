@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -251,7 +251,6 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
             subdevice_id=worker_sub_device_id,
             profiler=profiler,
         )
-        tt_out_tensor_list = [tt_out_tensor]
     else:
         # Run without trace (for debugging)
         tt_out_tensor = ttnn.experimental.all_to_all_async_generic(
@@ -265,7 +264,6 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
             topology=topology,
             subdevice_id=worker_sub_device_id,
         )
-        tt_out_tensor_list = [tt_out_tensor]
 
     # Verify output shape
     tt_output_torch = ttnn.to_torch(tt_out_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))

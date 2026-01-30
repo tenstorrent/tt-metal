@@ -1098,29 +1098,23 @@ class MLA1D(AbstractModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
-        # the current perf of this op is 28.81 µs
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
         # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        # the current perf of this op is 106 µs
         tt_q_kv = ttnn.experimental.all_gather_async(
             tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
         )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-        # the current perf of this op is 7.75 µs
         tt_q_kv = ttnn.experimental.fast_reduce_nc(
             tt_q_kv,
             **cfg["wq_kv_a_r_decode"],
         )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
 
         # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
-        # the current perf of this op is 1.5 µs
         tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
-        # the current perf of this op is 1.3 µs
         tt_kv_nope = ttnn.slice(
             tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, bsz, q_lora_rank + kv_lora_rank], **cfg["kv_nope_slice_decode"]
         )
-        # the current perf of this op is 1 µs
         tt_kv_rope = ttnn.slice(
             tt_q_kv,
             [0, 0, 0, q_lora_rank + kv_lora_rank],
@@ -1141,30 +1135,24 @@ class MLA1D(AbstractModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         # Q Norm
         # 1,1,32,1536, width sharded 8x2 [32,96]
-        # the current perf of this op is 7.34 µs
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         # 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV Norm
         # 1,1,32,512 8x2 [32,32]
-        # the current perf of this op is 6.68 µs
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
         # 1,1,32,512 8x2 [32,32]
-        # the current perf of this op is 0.75 µs
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,512 L1 interleaved
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        # the current perf of this op is 7.6 µs
         tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, bsz, 1, qk_rope_head_dim]
         # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        # the current perf of this op is 1.04 µs
         tt_kv_rope = ttnn.to_memory_config(
             tt_kv_rope, **cfg["kv_rope_reshard"]
         )  # Needs interleaved inputs because "HC transpose does not support sharded+tilized inputs"
         # 1,32,1,64 4x8 [32,64]
-        # the current perf of this op is 4.5 µs
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -1173,24 +1161,18 @@ class MLA1D(AbstractModule):
             is_decode_mode=True,
         )
         # 1,32,1,64 4x8 [32,64]
-        # the current perf of this op is 1.19 µs
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
         # 1,32,1,64 L1 interleaved
-        # the current perf of this op is 1.5 µs
         tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
 
-        # the current perf of this op is 1.36 µs
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
 
-        # the current perf of this op is 45 µs
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         # 1,32,1(32),576 L1 interleaved
-        # the current perf of this op is 31 µs
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
         # 1,32,1(32),576 L1 interleaved
-        # the current perf of this op is 2.54 µs
         tt_kvpe = ttnn.mesh_partition(
             tt_kvpe,
             dim=1,
@@ -1199,7 +1181,6 @@ class MLA1D(AbstractModule):
         )
         # 1,4,1(32),576 L1 interleaved
 
-        # the current perf of this op is 2.8 µs
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         # 1,4,1(32),576 height sharded 1x4 [32,576]
         ttnn.deallocate(tt_kv_nope)
@@ -1218,7 +1199,6 @@ class MLA1D(AbstractModule):
     ) -> None:
         # Update KVPE Cache
         # 1,4,1(32),576 height sharded 1x4 [32,576]
-        # the current perf of this op is 10 µs
         ttnn.experimental.paged_update_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1239,10 +1219,8 @@ class MLA1D(AbstractModule):
         qk_nope_head_dim: int,
     ) -> ttnn.Tensor:
         # 1,1,32,1536, width sharded 8x2 [32,96]
-        # the current perf of this op is 57.5 µs
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
-        # the current perf of this op is 39 µs
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
         # 32,1,16,192 L1 interleaved
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
@@ -1254,24 +1232,19 @@ class MLA1D(AbstractModule):
 
         # Q Rope: wkv_b1
         # 32,1,16,128 L1 interleaved
-        # the current perf of this op is 106 µs
         tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
         # 1,16,32,128 L1 interleaved
-        # the current perf of this op is 50 µs
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
         # 1,16,32,512 L1 interleaved
-        # the current perf of this op is 23 µs
         tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
         # 1,32,16,512 L1 interleaved
 
         # Q RoPE
         # 32,1,16,64 height sharded 8x4 [32,64]
-        # the current perf of this op is 1.7 µs
         tt_q_rope = ttnn.permute(
             tt_q_rope, **cfg["q_rope_permute"]
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
         # 1,32,16,64 height sharded 8x4 [32,64]
-        # the current perf of this op is 4.5 µs
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -1280,13 +1253,11 @@ class MLA1D(AbstractModule):
             is_decode_mode=True,
         )
         # 1,32,16,64 width sharded 8x4 [32,64]
-        # the current perf of this op is 1.18 µs
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
         # 1,32,16,64 L1 interleaved
 
         # Concat Q Nope and Q Rope
         # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
-        # the current perf of this op is 7.90 µs
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
         # 1,32,16,576 L1 interleaved
         return tt_q
@@ -1294,10 +1265,8 @@ class MLA1D(AbstractModule):
     @classmethod
     def _fwd_decode_all_to_all_pre_flash_mla(cls, tt_q: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,32,16,576 L1 interleaved
-        # the current perf of this op is 383 µs
         tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
         # 1,4,128,576  L1 interleaved
-        # the current perf of this op is 9.34 µs
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
         return tt_q
@@ -1312,7 +1281,6 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
     ) -> ttnn.Tensor:
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
-        # the current perf of this op is 195 µs
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
@@ -1327,19 +1295,15 @@ class MLA1D(AbstractModule):
     @classmethod
     def _fwd_decode_wkv_b2(cls, attn_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,4,128,512 height sharded 8x9 [32,512]
-        # the current perf of this op is 3.86 µs
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
         # 1,4,128,512 L1 interleaved
         # wkv_b2: DP
-        # the current perf of this op is 71 µs
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
         # 1,128,4,512 L1 interleaved
-        # the current perf of this op is 142 µs
         v_out = ttnn.linear(
             attn_out, **cfg["wkv_b2"]
         )  # NOTE: Known limitation: "Number of shards along height 16 must not exceed number of cores 1" when passing in memory_config=height_sharded_memory_config
         # 1,128,4,128 L1 interleaved = [1, num_heads_local, bsz, v_head_dim]
-        # the current perf of this op is 8 µs
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))
         # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
         return v_out
@@ -1355,10 +1319,8 @@ class MLA1D(AbstractModule):
         v_head_dim: int,
     ) -> ttnn.Tensor:
         # 1,4,128,128 L1 interleaved
-        # the current perf of this op is 118 µs
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         # 1,32,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        # the current perf of this op is 175 µs
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
         # 1,1,32,16384 L1 interleaved
         return v_out
@@ -1366,7 +1328,6 @@ class MLA1D(AbstractModule):
     @classmethod
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,1,32,16384 L1 interleaved
-        # the current perf of this op is 259.59 µs
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         # 1,1,32,896 width sharded 7x4 [32,32]
         return out

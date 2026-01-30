@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -109,7 +109,6 @@ def test_deepseek_v3_mla_paged_update_cache_trace_mode(
     head_dim = cache_shape_params["head_dim"]
     num_blocks = cache_shape_params["num_blocks"]
     block_size = cache_shape_params["block_size"]
-    batch_size_full = cache_shape_params["batch_size"]
 
     # Create paged cache
     tt_cache, torch_cache = create_paged_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size)

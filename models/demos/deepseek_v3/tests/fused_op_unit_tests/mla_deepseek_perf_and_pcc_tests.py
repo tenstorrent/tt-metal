@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -475,7 +475,6 @@ def test_permute_deepseek_perf(
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_permute_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "TransposeDeviceOperation" if step_name != "q_nope_permute_pre_linear" else "PermuteDeviceOperation"
-    warmup_iters = warmup_iters  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)
@@ -534,7 +533,6 @@ def test_rope_deepseek_perf(
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_rope_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "RotaryEmbeddingLlamaDeviceOperation"
-    warmup_iters = warmup_iters  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)
@@ -593,7 +591,6 @@ def test_concat_deepseek_perf(
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_concat_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "ConcatDeviceOperation"
-    warmup_iters = warmup_iters  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)

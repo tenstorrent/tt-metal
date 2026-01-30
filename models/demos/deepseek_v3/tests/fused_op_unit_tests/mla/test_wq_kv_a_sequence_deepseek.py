@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -324,7 +324,6 @@ def test_deepseek_v3_mla_wq_kv_a_sequence_trace_mode(
 
     # Create WIDTH_SHARDED memory config for input (matching model line 1103)
     # 7x4 grid with shard shape [32, 32]
-    grid_size = mesh_device.compute_with_storage_grid_size()
     input_core_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(

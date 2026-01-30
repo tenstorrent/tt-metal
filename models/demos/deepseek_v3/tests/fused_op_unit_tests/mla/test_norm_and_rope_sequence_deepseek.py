@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -376,9 +376,6 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
     # Create RMS norm gammas
     q_norm_gamma = torch.ones(q_input_shape[-1], dtype=torch.bfloat16)
     kv_norm_gamma = torch.ones(kv_nope_input_shape[-1], dtype=torch.bfloat16)
-
-    # Create WIDTH_SHARDED memory configs for inputs
-    grid_size = device.compute_with_storage_grid_size()
 
     # Q: WIDTH_SHARDED 8x2 [32, 96]
     q_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})  # 8x2 grid
