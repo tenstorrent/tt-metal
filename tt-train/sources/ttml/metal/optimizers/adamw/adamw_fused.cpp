@@ -22,7 +22,7 @@ ttnn::Tensor adamw_fused(
     float epsilon,
     float weight_decay,
     bool stochastic_rounding) {
-    return ttnn::prim::ttml_adamw(
+    return ttnn::prim::adamw(
         param_in,
         grad,
         exp_avg,

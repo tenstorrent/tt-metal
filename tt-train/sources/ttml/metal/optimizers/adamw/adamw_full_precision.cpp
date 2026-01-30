@@ -21,7 +21,7 @@ ttnn::Tensor adamw_full_precision(
     float beta2_pow,
     float epsilon,
     float weight_decay) {
-    return ttnn::prim::ttml_adamw(
+    return ttnn::prim::adamw(
         param_in,
         grad,
         exp_avg,
