@@ -760,12 +760,9 @@ BatchedTransfers assemble_runtime_args_commands(
                     size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
                     LOG_TRACY_LAZY(
                         tt::LogDispatch,
-                        "Common RTA (MCAST via kernel_group): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                        "Common RTA (MCAST via kernel_group): core_range={}, noc_xy=0x{:x}, "
                         "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
-                        core_range.start_coord.x,
-                        core_range.start_coord.y,
-                        core_range.end_coord.x,
-                        core_range.end_coord.y,
+                        core_range,
                         noc_xy_addr,
                         transfer_info.num_dests,
                         crta_offset,
@@ -824,12 +821,10 @@ BatchedTransfers assemble_runtime_args_commands(
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
                             LOG_TRACY_LAZY(
                                 tt::LogDispatch,
-                                "Unique RTA (UNICAST): logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}, "
+                                "Unique RTA (UNICAST): logical_core={}, virtual_core={}, noc_xy=0x{:x}, "
                                 "rta_size={} bytes",
-                                core_coord.x,
-                                core_coord.y,
-                                virtual_core.x,
-                                virtual_core.y,
+                                core_coord,
+                                virtual_core,
                                 device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
                                 kg->total_rta_size);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
@@ -924,11 +919,9 @@ BatchedTransfers assemble_runtime_args_commands(
                                 device->virtual_core_from_logical_core(core_coord, core_type);
                             LOG_TRACY_LAZY(
                                 tt::LogDispatch,
-                                "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
-                                core_coord.x,
-                                core_coord.y,
-                                virtual_core_coords.x,
-                                virtual_core_coords.y,
+                                "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
+                                core_coord,
+                                virtual_core_coords,
                                 device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr =
@@ -953,11 +946,8 @@ BatchedTransfers assemble_runtime_args_commands(
                             auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                             LOG_TRACY_LAZY(
                                 tt::LogDispatch,
-                                "  core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}",
-                                core_range.start_coord.x,
-                                core_range.start_coord.y,
-                                core_range.end_coord.x,
-                                core_range.end_coord.y,
+                                "  core_range={}, noc_xy=0x{:x}, num_dests={}",
+                                core_range,
                                 noc_xy,
                                 mcast_dests.num_dests);
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
@@ -1049,12 +1039,9 @@ public:
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
                     LOG_TRACY_LAZY(
                         tt::LogDispatch,
-                        "Semaphore (MCAST/WORKER): core_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, "
+                        "Semaphore (MCAST/WORKER): core_range={}, noc_xy=0x{:x}, num_dests={}, "
                         "L1_addr=0x{:x}, initial_value={}",
-                        core_range.start_coord.x,
-                        core_range.start_coord.y,
-                        core_range.end_coord.x,
-                        core_range.end_coord.y,
+                        core_range,
                         noc_xy_addr,
                         dst_noc_info.num_dests,
                         start_addr,
@@ -1083,9 +1070,8 @@ public:
                     auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
                     LOG_TRACY_LAZY(
                         tt::LogDispatch,
-                        "  virtual_core=({},{}), noc_xy=0x{:x}",
-                        virtual_core.x,
-                        virtual_core.y,
+                        "  virtual_core={}, noc_xy=0x{:x}",
+                        virtual_core,
                         noc_xy);
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
@@ -1199,16 +1185,10 @@ public:
                 uint32_t start_addr = program.get_program_config(index).cb_offset;
                 LOG_TRACY_LAZY(
                     tt::LogDispatch,
-                    "Circular Buffers (MCAST): logical_range=(({},{})-({},{})), virtual_range=(({},{})-({},{})), "
+                    "Circular Buffers (MCAST): logical_range={}, virtual_range={}, "
                     "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
-                    core_range.start_coord.x,
-                    core_range.start_coord.y,
-                    core_range.end_coord.x,
-                    core_range.end_coord.y,
-                    virtual_start.x,
-                    virtual_start.y,
-                    virtual_end.x,
-                    virtual_end.y,
+                    core_range,
+                    virtual_range,
                     noc_xy_addr,
                     core_range.size(),
                     start_addr,
@@ -1278,12 +1258,9 @@ public:
                                 [&](const CoreRange& core_range) {
                                     log_trace(
                                         tt::LogDispatch,
-                                        "Kernel Binary (UNICAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                                        "Kernel Binary (UNICAST): core_range={}, noc_xy=0x{:x}, "
                                         "L1_addr=0x{:x}, size={} bytes",
-                                        core_range.start_coord.x,
-                                        core_range.start_coord.y,
-                                        core_range.end_coord.x,
-                                        core_range.end_coord.y,
+                                        core_range,
                                         noc_encoding,
                                         kg_transfer_info.dst_base_addrs[kernel_idx],
                                         kg_transfer_info.lengths[kernel_idx]);
@@ -1291,10 +1268,9 @@ public:
                                 [&](const CoreCoord& core_coord) {
                                     log_trace(
                                         tt::LogDispatch,
-                                        "Kernel Binary (UNICAST): core=({},{}), noc_xy=0x{:x}, L1_addr=0x{:x}, size={} "
+                                        "Kernel Binary (UNICAST): core={}, noc_xy=0x{:x}, L1_addr=0x{:x}, size={} "
                                         "bytes",
-                                        core_coord.x,
-                                        core_coord.y,
+                                        core_coord,
                                         noc_encoding,
                                         kg_transfer_info.dst_base_addrs[kernel_idx],
                                         kg_transfer_info.lengths[kernel_idx]);
@@ -1370,12 +1346,9 @@ public:
                                 [&](const CoreRange& core_range) {
                                     log_trace(
                                         tt::LogDispatch,
-                                        "Kernel Binary (MCAST): core_range=(({},{})-({},{})), noc_xy=0x{:x}, "
+                                        "Kernel Binary (MCAST): core_range={}, noc_xy=0x{:x}, "
                                         "num_dests={}, L1_addr=0x{:x}, size={} bytes",
-                                        core_range.start_coord.x,
-                                        core_range.start_coord.y,
-                                        core_range.end_coord.x,
-                                        core_range.end_coord.y,
+                                        core_range,
                                         noc_encoding,
                                         num_mcast_dests,
                                         kg_transfer_info.dst_base_addrs[kernel_idx],
@@ -1384,10 +1357,9 @@ public:
                                 [&](const CoreCoord& core_coord) {
                                     log_trace(
                                         tt::LogDispatch,
-                                        "Kernel Binary (MCAST): core=({},{}), noc_xy=0x{:x}, num_dests={}, "
+                                        "Kernel Binary (MCAST): core={}, noc_xy=0x{:x}, num_dests={}, "
                                         "L1_addr=0x{:x}, size={} bytes",
-                                        core_coord.x,
-                                        core_coord.y,
+                                        core_coord,
                                         noc_encoding,
                                         num_mcast_dests,
                                         kg_transfer_info.dst_base_addrs[kernel_idx],
@@ -1764,16 +1736,10 @@ public:
                         auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                         LOG_TRACY_LAZY(
                             tt::LogDispatch,
-                            "Launch Message (MCAST): logical_range=(({},{})-({},{})), "
-                            "virtual_range=(({},{})-({},{})), noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
-                            core_range.start_coord.x,
-                            core_range.start_coord.y,
-                            core_range.end_coord.x,
-                            core_range.end_coord.y,
-                            virtual_start.x,
-                            virtual_start.y,
-                            virtual_end.x,
-                            virtual_end.y,
+                            "Launch Message (MCAST): logical_range={}, "
+                            "virtual_range={}, noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
+                            core_range,
+                            virtual_range,
                             noc_xy,
                             core_range.size(),
                             kernel_group->launch_msg.size());
@@ -1799,11 +1765,9 @@ public:
                                 auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
                                 LOG_TRACY_LAZY(
                                     tt::LogDispatch,
-                                    "  logical_core=({},{}), virtual_core=({},{}), noc_xy=0x{:x}",
-                                    logical_coord.x,
-                                    logical_coord.y,
-                                    virtual_coord.x,
-                                    virtual_coord.y,
+                                    "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
+                                    logical_coord,
+                                    virtual_coord,
                                     noc_xy);
                                 unicast_cmds.sub_cmds.emplace_back(
                                     CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
