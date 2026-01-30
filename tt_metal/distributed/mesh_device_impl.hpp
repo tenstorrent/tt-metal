@@ -40,6 +40,7 @@ class Allocator;
 class CommandQueue;
 class SubDevice;
 class SystemMemoryManager;
+class DummyDevice;
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -153,6 +154,8 @@ private:
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    std::shared_ptr<DummyDevice> dummy_reference_device_;
 
 public:
     MeshDeviceImpl(

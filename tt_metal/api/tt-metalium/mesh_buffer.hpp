@@ -136,7 +136,9 @@ private:
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
-        state_(OwnedBufferState{std::move(backing_buffer)}) {}
+        state_(OwnedBufferState{std::move(backing_buffer)}),
+        dummy_reference_buffer_(
+            Buffer::create(mesh_device, 0, 0, BufferType::DRAM, BufferShardingArgs(), std::nullopt, std::nullopt)) {}
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
@@ -151,7 +153,9 @@ private:
         address_(address),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
-        state_(ExternallyOwnedState{}) {}
+        state_(ExternallyOwnedState{}),
+        dummy_reference_buffer_(
+            Buffer::create(mesh_device, 0, 0, BufferType::DRAM, BufferShardingArgs(), std::nullopt, std::nullopt)) {}
 
     void initialize_device_buffers();
     MeshBufferConfig config_;
@@ -173,6 +177,8 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    std::shared_ptr<Buffer> dummy_reference_buffer_;
 };
 
 class AnyBuffer {
