@@ -32,7 +32,7 @@ void bind_uniform_operation(nb::module_& mod) {
             ttnn.Tensor: The `input` tensor with updated values drawn from the specified uniform distribution.
 
         Note:
-            This operations supports tensors according to the following data types and layout:
+            This operation supports tensors according to the following data types and layouts:
 
             .. list-table:: input tensor
                 :header-rows: 1
