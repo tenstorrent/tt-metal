@@ -42,6 +42,7 @@ sfpi_inline void load_value_param_int(uint value) {
         // if msb(value) == 1, we need to invert for SFPSWAP to work
         sfpi::vConstIntPrgm0 = (int)value >= 0 ? value : ~value;
     } else {
+        // set L0 = 0x80000000
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
     }
 }
