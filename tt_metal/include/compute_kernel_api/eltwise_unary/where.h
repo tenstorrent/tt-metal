@@ -19,7 +19,8 @@ namespace ckernel {
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
  *
- * @tparam data_format Template argument specifying the data type. Supported types: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
  *
  * | Argument              | Description                                                              | Type     | Valid Range                                           | Required |
  * |-----------------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
