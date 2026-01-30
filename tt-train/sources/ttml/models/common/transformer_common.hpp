@@ -31,46 +31,6 @@ enum class WeightTyingType {
 class KvCache;
 
 autograd::TensorPtr memory_efficient_runner(
-    auto&& forward_impl,
-    const autograd::TensorPtr& input,
-    const autograd::TensorPtr& mask,
-    std::shared_ptr<KvCache> kv_cache,
-    const uint32_t layer_idx,
-    const uint32_t new_tokens) {
-    if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
-        return forward_impl(input, mask, kv_cache, layer_idx, new_tokens);
-    }
-
-    auto generator = autograd::ctx().get_generator();
-
-    autograd::TensorPtr out;
-    {
-        auto scoped = ttml::core::Scoped(
-            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
-            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
-        out = forward_impl(input, mask, kv_cache, layer_idx, new_tokens);
-    }
-
-    autograd::GradFunction grad = [input, mask, kv_cache, layer_idx, new_tokens, out, &forward_impl, generator]() {
-        auto input_detached = autograd::create_tensor(input->get_value());
-        autograd::TensorPtr output;
-        {
-            auto scoped = ttml::core::Scoped(
-                [&generator]() { autograd::ctx().set_generator(generator); },
-                [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
-            output = forward_impl(input_detached, mask, kv_cache, layer_idx, new_tokens);
-        }
-        output->set_grad(out->get_grad());
-        output->backward();
-        input->add_grad(input_detached->get_grad());
-    };
-
-    auto links = autograd::get_links(input);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-    return out;
-}
-
-autograd::TensorPtr memory_efficient_runner(
     auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
         return forward_impl(input, mask);

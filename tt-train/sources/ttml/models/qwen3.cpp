@@ -135,8 +135,12 @@ ttml::autograd::TensorPtr Qwen3::operator()(
     for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
         auto& block = blocks[block_idx];
         if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(
-                *block, out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+            // Memory efficient mode does not support KV cache
+            auto block_impl = [&block, block_idx](
+                                  const ttml::autograd::TensorPtr& input, const ttml::autograd::TensorPtr& mask_arg) {
+                return (*block)(input, mask_arg, nullptr, static_cast<uint32_t>(block_idx), 0);
+            };
+            out = common::transformer::memory_efficient_runner(block_impl, out, mask);
         } else {
             out = (*block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
         }
