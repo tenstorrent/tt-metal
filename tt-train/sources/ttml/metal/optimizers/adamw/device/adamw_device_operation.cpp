@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include "adamw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
 
@@ -127,7 +128,11 @@ ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> AdamWDeviceOperation::invoke(
+}  // namespace ttml::metal::optimizers::adamw::device
+
+namespace ttnn::prim {
+
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t ttml_adamw(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -142,25 +147,28 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWDeviceOperation::invoke(
     float weight_decay,
     bool amsgrad,
     bool stochastic_rounding) {
-    return {
-        operation_attributes_t{
-            .lr = lr,
-            .beta1 = beta1,
-            .beta2 = beta2,
-            .beta1_pow = beta1_pow,
-            .beta2_pow = beta2_pow,
-            .epsilon = epsilon,
-            .weight_decay = weight_decay,
-            .amsgrad = amsgrad,
-            .stochastic_rounding = stochastic_rounding,
-        },
-        tensor_args_t{
-            .param = param,
-            .grad = grad,
-            .exp_avg = exp_avg,
-            .exp_avg_sq = exp_avg_sq,
-            .max_exp_avg_sq = max_exp_avg_sq,
-        }};
+    using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .lr = lr,
+        .beta1 = beta1,
+        .beta2 = beta2,
+        .beta1_pow = beta1_pow,
+        .beta2_pow = beta2_pow,
+        .epsilon = epsilon,
+        .weight_decay = weight_decay,
+        .amsgrad = amsgrad,
+        .stochastic_rounding = stochastic_rounding,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .exp_avg = exp_avg,
+        .exp_avg_sq = exp_avg_sq,
+        .max_exp_avg_sq = max_exp_avg_sq,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::optimizers::adamw::device
+}  // namespace ttnn::prim

@@ -30,29 +30,26 @@ struct AdamWDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& param,
-        const ttnn::Tensor& grad,
-        const ttnn::Tensor& exp_avg,
-        const ttnn::Tensor& exp_avg_sq,
-        const std::optional<ttnn::Tensor>& max_exp_avg_sq,
-        float lr,
-        float beta1,
-        float beta2,
-        float beta1_pow,
-        float beta2_pow,
-        float epsilon,
-        float weight_decay,
-        bool amsgrad,
-        bool stochastic_rounding);
 };
 
 }  // namespace ttml::metal::optimizers::adamw::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_adamw =
-    ttnn::register_operation<"ttnn::prim::ttml_adamw", ttml::metal::optimizers::adamw::device::AdamWDeviceOperation>();
+ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_value_t ttml_adamw(
+    const ttnn::Tensor& param,
+    const ttnn::Tensor& grad,
+    const ttnn::Tensor& exp_avg,
+    const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
+    float lr,
+    float beta1,
+    float beta2,
+    float beta1_pow,
+    float beta2_pow,
+    float epsilon,
+    float weight_decay,
+    bool amsgrad,
+    bool stochastic_rounding);
 
 }  // namespace ttnn::prim
