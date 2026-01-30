@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from transformers import AutoModel, AutoTokenizer
 import pytest
+import ttnn
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu, TTNNGelu
 from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm, TTNNRMSNorm
 from models.experimental.tt_symbiote.modules.attention import LlamaAttention
@@ -18,6 +20,103 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from tqdm import tqdm
 from torch.nn import functional as F
+
+
+class DeepseekOCRAttention(LlamaAttention):
+    @classmethod
+    def from_torch(cls, llama_attn: "LlamaAttention"):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = llama_attn
+        new_attn.num_key_value_groups = getattr(llama_attn, "num_key_value_groups", 1)
+        # Fuse Q/K/V for self-attention (zero-pad K bias)
+        new_attn.qkv_same_shape = (
+            llama_attn.q_proj.weight.shape == llama_attn.k_proj.weight.shape
+            and llama_attn.q_proj.weight.shape == llama_attn.v_proj.weight.shape
+        )
+        if new_attn.qkv_same_shape:
+            new_attn.init_fused_parameters(llama_attn.config.num_attention_heads, llama_attn.config.hidden_size)
+        else:
+            new_attn.init_parameters()
+        new_attn.scaling = llama_attn.head_dim**-0.5
+        return new_attn
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        output_attentions=False,
+        use_cache=False,
+        cache_position=None,
+        position_embeddings=None,  # will become mandatory in v4.46
+        **kwargs,
+    ):
+        if attention_mask is not None:
+            print(
+                "Warning: attention_mask is not None, but TTNN LlamaAttention does not support it yet."
+            )  # --- IGNORE ---
+        past_key_values = kwargs.get("past_key_value", past_key_values) if past_key_values is None else past_key_values
+        if self.qkv_same_shape:
+            query_states, key_states, value_states = self.qkv_proj(hidden_states)
+        else:
+            input_shape = list(hidden_states.shape)[:-1]
+            hidden_shape = (*input_shape, -1, self.torch_layer.head_dim)
+            query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        if position_embeddings is None:
+            print("Warning: position_embeddings is None, computing from position_ids.")  # --- IGNORE ---
+            cos, sin = self.torch_layer.rotary_emb(value_states.to_torch, TorchTTNNTensor(position_ids).to_torch)
+        else:
+            cos, sin = position_embeddings
+
+        query_states, key_states = self.rope(query_states, key_states, cos, sin)
+
+        if past_key_values is not None:
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_values.update(
+                key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
+            )
+
+        original_q_len = query_states.shape[2]
+        kv_len = key_states.shape[2]
+
+        if self.torch_layer.is_causal and original_q_len < kv_len:
+            # Pad query: [B, H, q_len, D] -> [B, H, kv_len, D]
+            pad_len = kv_len - original_q_len
+            # Create zero padding on device
+            pad_shape = (query_states.shape[0], query_states.shape[1], pad_len, query_states.shape[3])
+            zero_pad = ttnn.zeros(
+                pad_shape,
+                device=hidden_states.device(),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=hidden_states.dtype,
+            )
+            query_states = ttnn.concat([zero_pad, query_states.to_ttnn], dim=2)
+
+        attn_out = self.sdpa(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            None,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=self.torch_layer.is_causal,
+            transpose_output=False,
+        )
+        attn_out = ttnn.experimental.nlp_concat_heads(attn_out.to_ttnn)
+        attn_out = ttnn.squeeze(attn_out, 1)
+        # Slice output if query was padded
+        if self.torch_layer.is_causal and original_q_len < kv_len:
+            # Slice: [B, kv_len, D] -> [B, q_len, D]
+            attn_out = attn_out[:, -original_q_len:, :]
+
+        return self.o_proj(attn_out), None, past_key_values
 
 
 def get_abs_pos_sam(abs_pos, tgt_size):
@@ -121,7 +220,7 @@ def test_deepseek_ocr(device):
         nn.GELU: TTNNGelu,
         nn.LayerNorm: TTNNLayerNorm,
         nn.Conv2d: TTNNConv2dNHWC,
-        model.model.layers[0].self_attn.__class__: LlamaAttention,
+        model.model.layers[0].self_attn.__class__: DeepseekOCRAttention,
     }
 
     # prompt = "<image>\nFree OCR. "
