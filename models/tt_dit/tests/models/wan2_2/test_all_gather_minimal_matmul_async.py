@@ -278,10 +278,50 @@ def run_test_linear(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "M, K, N, core_grid_x, core_grid_y, num_workers_per_link, num_links, force_transpose",
-    [(4096, 4096, 4096, 4, 4, 4, 1, True)],
+    "mesh_device, device_params, topology, num_links, num_workers_per_link",
+    [
+        [(1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring, 1, 4],
+        [
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            1,
+            8,
+        ],
+        [
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            2,
+            4,
+        ],
+        [
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            4,
+            2,
+        ],
+    ],
+    ids=[
+        "1x8links1",
+        "8x4links1",
+        "8x4links2",
+        "8x4links4",
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, core_grid_x, core_grid_y, force_transpose",
+    [
+        (4096, 4096, 4096, 4, 4, True),
+        (4096, 4096, 4096, 8, 8, True),
+    ],
+    ids=[
+        "4K4K4Ksmallgrid",
+        "4K4K4Kfullgrid",
+    ],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
@@ -294,14 +334,6 @@ def run_test_linear(
         False,
     ],
     ids=["separate", "fused"],
-)
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-    ],
-    indirect=["device_params"],
-    ids=["fabric_ring"],
 )
 def test_linear(
     mesh_device,
