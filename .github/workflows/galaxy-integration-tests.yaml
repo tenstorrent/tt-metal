@@ -1,4 +1,4 @@
-name: "(Galaxy) frequent tests"
+name: "(Galaxy) integration tests"
 
 on:
   workflow_dispatch:
@@ -65,9 +65,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-  galaxy-frequent-tests:
+  galaxy-integration-tests:
     needs: build-artifact
-    uses: ./.github/workflows/galaxy-frequent-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

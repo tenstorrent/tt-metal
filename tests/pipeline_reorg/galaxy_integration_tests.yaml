@@ -1,4 +1,4 @@
-# This file defines the test matrix for the Galaxy frequent tests pipeline.
+# This file defines the test matrix for the Galaxy integration tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -11,16 +11,16 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# Wormhole Galaxy frequent tests
-# Llama3 (commented out; uncomment and add ttnn.frequent budget when enabling)
-# - name: Galaxy Llama3 frequent tests
+# Wormhole Galaxy integration tests
+# Llama3 (commented out; uncomment and add ttnn.integration budget when enabling)
+# - name: Galaxy Llama3 integration tests
 #   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model llama3
 #   model: llama3
 #   sku: wh_galaxy
 #   owner_id: U053W15B6JF # Djordje Ivanovic
 #   team: ttnn
 #   timeout: 70
-- name: Galaxy resnet50 frequent tests
+- name: Galaxy resnet50 integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model resnet50
   model: resnet50
   sku: wh_galaxy
@@ -28,7 +28,7 @@
   team: ttnn
   timeout: 50
 
-- name: Galaxy unit/distributed frequent tests
+- name: Galaxy unit/distributed integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model unit
   model: unit
   sku: wh_galaxy
@@ -36,7 +36,7 @@
   team: ttnn
   timeout: 50
 
-- name: Galaxy SD3.5 frequent tests
+- name: Galaxy SD3.5 integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model sd35
   model: sd35
   sku: wh_galaxy
@@ -44,7 +44,7 @@
   team: ttnn
   timeout: 50
 
-- name: Galaxy Wan2.2 frequent tests
+- name: Galaxy Wan2.2 integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model wan22
   model: wan22
   sku: wh_galaxy
@@ -52,7 +52,7 @@
   team: ttnn
   timeout: 40
 
-- name: Galaxy mochi frequent tests
+- name: Galaxy mochi integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model mochi
   model: mochi
   sku: wh_galaxy
@@ -60,7 +60,7 @@
   team: ttnn
   timeout: 80
 
-- name: Galaxy Flux.1 frequent tests
+- name: Galaxy Flux.1 integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model flux1
   model: flux1
   sku: wh_galaxy
@@ -68,7 +68,7 @@
   team: ttnn
   timeout: 50
 
-- name: Galaxy Motif frequent tests
+- name: Galaxy Motif integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model motif
   model: motif
   sku: wh_galaxy
@@ -76,7 +76,7 @@
   team: ttnn
   timeout: 10
 
-- name: Galaxy Qwen-Image frequent tests
+- name: Galaxy Qwen-Image integration tests
   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model qwenimage
   model: qwenimage
   sku: wh_galaxy

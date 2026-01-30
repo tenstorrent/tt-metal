@@ -1,4 +1,4 @@
-name: "[internal] Galaxy frequent tests impl"
+name: "[internal] Galaxy integration tests impl"
 
 on:
   workflow_call:
@@ -26,7 +26,7 @@ jobs:
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_frequent_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_integration_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "frequent"
+            "integration"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -69,7 +69,7 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-  galaxy-frequent-tests:
+  galaxy-integration-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false
