@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
@@ -19,27 +19,18 @@ from models.experimental.pi0.tt.ttnn_pi0_model import PI0ModelTTNN
 from models.experimental.pi0.common.configs import PI0ModelConfig, SigLIPConfig
 from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 from models.perf.perf_utils import prep_perf_report
-from models.tt_cnn.tt.pipeline import (
-    PipelineConfig,
-    create_pipeline_from_config,
-    get_memory_config_for_persistent_dram_tensor,
-)
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
 CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
-SEED = 42
-PCC_THRESHOLD = 0.93
 
 
 def create_pi0_pipeline_model(ttnn_model, device, inputs):
-    """Create a wrapper function for the pi0 model to use with pipeline"""
+    """Wrapper to adapt PI0 model inputsfor pipeline interface."""
 
-    def run(dummy_input):
+    def run(pipeline_input):
         with torch.no_grad():
             output_dict = ttnn_model.sample_actions(
                 images=inputs["images"],
@@ -54,7 +45,7 @@ def create_pi0_pipeline_model(ttnn_model, device, inputs):
 
 
 def create_config() -> PI0ModelConfig:
-    """Create PI0ModelConfig with correct dimensions."""
+    """Create PI0 model configuration."""
     config = PI0ModelConfig(
         action_dim=32,
         action_horizon=50,
@@ -77,67 +68,36 @@ def create_config() -> PI0ModelConfig:
 
 
 def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
-    """Create test inputs."""
+    """Create test inputs as TTNN device tensors."""
     image_size = config.siglip_config.image_size
 
-    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(2)]
-    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(2)]
+    images_torch = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(2)]
+    img_masks_torch = [torch.ones(batch_size, dtype=torch.bool) for _ in range(2)]
+    lang_tokens_torch = torch.randint(0, 256000, (batch_size, 32))
+    lang_masks_torch = torch.ones(batch_size, 32, dtype=torch.bool)
+    state_torch = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
 
-    lang_tokens = torch.randint(0, 256000, (batch_size, 32))
-    lang_masks = torch.ones(batch_size, 32, dtype=torch.bool)
+    images = [
+        ttnn.from_torch(
+            img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for img in images_torch
+    ]
 
-    state = torch.randn(batch_size, config.state_dim, dtype=torch.float32)
+    img_masks = [
+        ttnn.from_torch(
+            mask.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for mask in img_masks_torch
+    ]
 
-    images[0] = ttnn.from_torch(
-        images[0],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    images[1] = ttnn.from_torch(
-        images[1],
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    img_masks[0] = ttnn.from_torch(
-        img_masks[0].float(),  # (batch_size,)
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    img_masks[1] = ttnn.from_torch(
-        img_masks[1].float(),  # (batch_size,)
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    lang_tokens = ttnn.from_torch(
-        lang_tokens,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-    )
-
-    lang_masks = ttnn.from_torch(
-        lang_masks,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
-
-    state = ttnn.from_torch(
-        state,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-    )
+    lang_tokens = ttnn.from_torch(lang_tokens_torch, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    lang_masks = ttnn.from_torch(lang_masks_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    state = ttnn.from_torch(state_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return {
         "images": images,
@@ -148,9 +108,6 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     }
 
 
-# =============================================================================
-# PYTEST TEST FUNCTION
-# =============================================================================
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -182,30 +139,44 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
     # Initialize models
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
 
-    run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
+    image_shape = inputs["images"][0].shape
+    dram_grid_size = device.dram_grid_size()
 
-    # Create sharded DRAM memory config
-    dram_input_memory_config = get_memory_config_for_persistent_dram_tensor(
-        shape=(1, 1, 1, 32),
-        shard_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        dram_grid_size=device.dram_grid_size(),
+    # Calculate physical 2D dimensions for WIDTH_SHARDED layout
+    width = image_shape[-1]
+    volume = image_shape[0] * image_shape[1] * image_shape[2] * image_shape[3]
+    physical_height = volume // width
+    max_cores = dram_grid_size.x
+
+    # Find optimal cores ensuring tile-aligned shards (multiple of 32)
+    dram_cores = 1
+    for cores in range(max_cores, 0, -1):
+        if width % cores == 0 and (width // cores) % 32 == 0:
+            dram_cores = cores
+            break
+
+    # Create sharded memory configs for DRAM and L1
+    shard_width = width // dram_cores
+    dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
+        [physical_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    dram_input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
     )
 
-    # Create sharded L1 memory config
     l1_input_memory_config = ttnn.create_sharded_memory_config(
-        shape=(1, 32),  # Collapsed 2D shape
-        core_grid=ttnn.CoreGrid(y=1, x=1),  # Single core for this small tensor
+        shape=(physical_height, shard_width),
+        core_grid=ttnn.CoreGrid(y=1, x=dram_cores),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    tt_host_tensor = ttnn.from_torch(
-        torch.zeros(1, 1, 1, 32),
-        device=None,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        use_height_and_width_as_shard_shape=True,
     )
 
+    run_model = create_pi0_pipeline_model(model_ttnn, device, inputs)
+
+    # Create pipeline configuration with 2CQ + Trace enabled
     config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
@@ -215,10 +186,12 @@ def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time
         l1_input_memory_config=l1_input_memory_config,
     )
 
-    host_inputs = [tt_host_tensor] * num_iterations
+    # Pipeline API accepts single tensor; wrapper uses actual PI0 inputs from closure
+    image_host = inputs["images"][0].cpu()
+    host_inputs = [image_host] * num_iterations
 
     start = time.time()
-    pipeline.compile(tt_host_tensor)
+    pipeline.compile(image_host)
     end = time.time()
     compile_time = end - start
 
