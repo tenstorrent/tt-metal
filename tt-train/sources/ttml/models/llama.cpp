@@ -6,96 +6,18 @@
 
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/common/transformer_common.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "serialization/safetensors.hpp"
 
-namespace {
-
-static std::vector<float> pad_and_resize_flat(
-    const std::vector<float>& flat, int64_t rows, int64_t cols, int64_t target_rows, int64_t target_cols) {
-    // If dimensions match, return as is
-    if (rows == target_rows && cols == target_cols) {
-        return flat;
-    }
-
-    // Create output tensor with target dimensions
-    std::vector<float> out(static_cast<size_t>(target_rows * target_cols), 0.0f);
-
-    // Copy data from source to target, handling both row and column differences
-    int64_t copy_rows = std::min(rows, target_rows);
-    int64_t copy_cols = std::min(cols, target_cols);
-
-    for (int64_t r = 0; r < copy_rows; ++r) {
-        for (int64_t c = 0; c < copy_cols; ++c) {
-            out[r * target_cols + c] = flat[r * cols + c];
-        }
-    }
-
-    // Initialize random number generator once if we need to fill additional space
-    bool need_random_fill = (target_rows > rows) || (target_cols > cols);
-    std::mt19937 gen;
-    std::normal_distribution<float> dist(0.0f, 0.02f);  // Small random values
-
-    if (need_random_fill) {
-        std::random_device rd;
-        gen.seed(rd());
-    }
-
-    // For additional rows (if target_rows > rows), use small random initialization
-    // instead of zeros to avoid dead neurons
-    if (target_rows > rows) {
-        for (int64_t r = copy_rows; r < target_rows; ++r) {
-            for (int64_t c = 0; c < target_cols; ++c) {
-                out[r * target_cols + c] = dist(gen);
-            }
-        }
-    }
-
-    // For additional columns (if target_cols > cols), use small random initialization
-    if (target_cols > cols) {
-        for (int64_t r = 0; r < copy_rows; ++r) {
-            for (int64_t c = copy_cols; c < target_cols; ++c) {
-                out[r * target_cols + c] = dist(gen);
-            }
-        }
-    }
-
-    return out;
-}
-
-static std::vector<float> unpermute_proj_rows(
-    const std::vector<float>& w, int64_t rows, int64_t cols, int64_t n_heads) {
-    // Reorder rows within each head: [0..D/2-1, D/2..D-1] → interleave → [0, D/2, 1, D/2+1, ...]
-    if (rows % n_heads != 0) {
-        throw std::runtime_error(
-            fmt::format("unpermute_proj_rows: rows {} not divisible by n_heads {}", rows, n_heads));
-    }
-    const int64_t D = rows / n_heads;  // rows per head
-    if (D % 2 != 0) {
-        throw std::runtime_error(fmt::format("unpermute_proj_rows: rows per head {} must be even", D));
-    }
-
-    std::vector<float> out(w.size());
-    for (int64_t h = 0; h < n_heads; ++h) {
-        const int64_t head_row0 = h * D;
-        const int64_t half = D / 2;
-        for (int64_t i = 0; i < half; ++i) {
-            const int64_t src_even = head_row0 + i;
-            const int64_t src_odd = head_row0 + half + i;
-            const int64_t dst_even = head_row0 + (2 * i);
-            const int64_t dst_odd = head_row0 + (2 * i + 1);
-
-            std::memcpy(&out[dst_even * cols], &w[src_even * cols], sizeof(float) * cols);
-            std::memcpy(&out[dst_odd * cols], &w[src_odd * cols], sizeof(float) * cols);
-        }
-    }
-    return out;
-}
-
-}  // namespace
+// Import shared weight loading utilities
+using ttml::models::common::transformer::pad_and_resize_flat;
+using ttml::models::common::transformer::strict_copy_linear;
+using ttml::models::common::transformer::transpose_flat;
+using ttml::models::common::transformer::unpermute_proj_rows;
 
 namespace ttml::models::llama {
 
@@ -329,39 +251,7 @@ void load_model_from_safetensors(
     const std::filesystem::path& path, serialization::NamedParameters& parameters, const LlamaConfig& config) {
     // Keep your working setting
     const bool meta_style = false;
-
-    // --- helpers -------------------------------------------------------------
-    auto transpose_flat_ = [](const std::vector<float>& x, int64_t r, int64_t c) -> std::vector<float> {
-        std::vector<float> y(x.size());
-        for (int64_t i = 0; i < r; ++i)
-            for (int64_t j = 0; j < c; ++j) y[(size_t)j * r + i] = x[(size_t)i * c + j];
-        return y;
-    };
-
-    auto strict_copy_linear = [&](const std::vector<float>& src,
-                                  int64_t src_r,
-                                  int64_t src_c,
-                                  int64_t tgt_r,
-                                  int64_t tgt_c,
-                                  const std::string& dbg) -> std::vector<float> {
-        if (src_r == tgt_r && src_c == tgt_c) {
-            return src;  // as-is fits
-        }
-        if (src_c == tgt_r && src_r == tgt_c) {
-            fmt::print("[{}] transposing weights\n", dbg);
-            return transpose_flat_(src, src_r, src_c);  // transposed fits
-        }
-        throw std::runtime_error(fmt::format(
-            "[{}] shape mismatch: src=({}x{}), src^T=({}x{}), tgt=({}x{})",
-            dbg,
-            src_r,
-            src_c,
-            src_c,
-            src_r,
-            tgt_r,
-            tgt_c));
-    };
-    // ------------------------------------------------------------------------
+    const bool verbose = true;
 
     std::set<std::string> used_parameters;
     std::set<std::string> ignored_parameters;
@@ -398,8 +288,8 @@ void load_model_from_safetensors(
 
         // Try all four (K,V) orientation combos to match target exactly.
         auto try_orient = [&](bool kT, bool vT) -> bool {
-            std::vector<float> Kx = kT ? transpose_flat_(K, Ks[0], Ks[1]) : K;
-            std::vector<float> Vx = vT ? transpose_flat_(V, Vs[0], Vs[1]) : V;
+            std::vector<float> Kx = kT ? transpose_flat(K, Ks[0], Ks[1]) : K;
+            std::vector<float> Vx = vT ? transpose_flat(V, Vs[0], Vs[1]) : V;
             int64_t Kr = kT ? Ks[1] : Ks[0], Kc = kT ? Ks[0] : Ks[1];
             int64_t Vr = vT ? Vs[1] : Vs[0], Vc = vT ? Vs[0] : Vs[1];
             if (Kc != Vc)
@@ -544,7 +434,7 @@ void load_model_from_safetensors(
                     }
 
                     auto exact = strict_copy_linear(
-                        src, info.shape[0], info.shape[1], tr, tc, fmt::format("q_proj layer {}", i));
+                        src, info.shape[0], info.shape[1], tr, tc, fmt::format("q_proj layer {}", i), verbose);
 
                     out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
                     return true;
@@ -585,7 +475,7 @@ void load_model_from_safetensors(
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
-                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("o_proj layer {}", i));
+                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("o_proj layer {}", i), verbose);
                     out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
                     return true;
                 }
@@ -599,7 +489,7 @@ void load_model_from_safetensors(
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
-                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w1 layer {}", i));
+                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w1 layer {}", i), verbose);
                     out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
                     return true;
                 }
@@ -611,7 +501,7 @@ void load_model_from_safetensors(
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
-                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w3 layer {}", i));
+                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w3 layer {}", i), verbose);
                     out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
                     return true;
                 }
@@ -624,7 +514,7 @@ void load_model_from_safetensors(
                     const int64_t tr = tgt[-2], tc = tgt[-1];
 
                     auto exact = strict_copy_linear(
-                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w2 layer {}", i));
+                        float_vec, info.shape[0], info.shape[1], tr, tc, fmt::format("mlp.w2 layer {}", i), verbose);
                     out->set_value(core::from_vector(exact, tgt, out->get_value().device()));
                     return true;
                 }
