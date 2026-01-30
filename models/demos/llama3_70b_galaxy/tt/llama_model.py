@@ -468,7 +468,7 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill_logits(self, tt_out, last_token_idx):
+    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
         """
         Process prefill output to get logits tensor for on-device sampling.
         Returns logits in the same format as decode (before all-gather), suitable for sampling module.
@@ -530,7 +530,6 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
 
-            x_seq_len = x_split[i].shape[2] if hasattr(x_split[i], "shape") else "unknown"
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)

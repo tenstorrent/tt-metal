@@ -613,9 +613,6 @@ class Generator:
         if use_prefix_caching:
             num_cached_blocks = num_cached_tokens // block_size
         else:
-            # For non-prefix-caching, we still need block_size for trace key consistency
-            if block_size is None and kv_cache is not None:
-                block_size = get_block_size(kv_cache)
             num_cached_blocks = 0
         trace_key = f"{prefill_seq_len}_{batch_size}_{num_cached_blocks}"
 
@@ -1020,21 +1017,10 @@ class Generator:
         )
 
         if self.enable_split_sampling and not return_logits:
-            # CRITICAL: Synchronize after decode trace execution before sampling!
-            # The decode trace runs with blocking=False. During trace CAPTURE, the
-            # sampling compile takes long enough (~58s) for decode to complete.
-            # During trace REPLAY, sampling is fast (~22ms), so decode may not be done yet.
-            ttnn.synchronize_device(self.mesh_device)
-            # Start async copy of logits for decode token logging (prefill vs decode correctness)
-            logits_cpu, read_ev = self.model.process_output_decode(trace_tok_rm[0])
-            sample_result = self.model.sampling.sample(
+            return self.model.sampling.sample(
                 logits=trace_tok_rm[0],
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
-                enable_trace=True,
             )
-            # Sync so logits_cpu and sample_result are ready, then log token_id + logits stats
-            ttnn.synchronize_device(self.mesh_device)
-            return sample_result
 
         return trace_tok_rm
 
