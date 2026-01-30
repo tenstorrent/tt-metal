@@ -2464,7 +2464,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-        kernel_properties.max_num_rt_args = max_runtime_args_eth_;
+        kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
         this->create_kernel(program_, CoreType::ETH, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
@@ -2495,7 +2495,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
             // and the max kernel size to ensure that the kernel can fit in the ring buffer
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
-            kernel_properties.max_num_rt_args = max_runtime_args_eth_;
+            kernel_properties.max_num_rt_args = max_runtime_args_ / 4;
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program_, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;

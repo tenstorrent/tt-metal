@@ -43,30 +43,31 @@ namespace {
 // - 4096 - packet size in dispatch
 // - 3 - number of kernels per tensix
 // Internal constant - use get_max_runtime_args() for user-facing limit
-constexpr uint32_t max_runtime_args = 341;
+constexpr uint32_t max_runtime_args_tensix = 341;
 
 // Watcher reserved words: 1 for RTA count, 1 for CRTA count
 constexpr uint32_t watcher_reserved_words = 2;
 
 inline bool is_watcher_assert_enabled() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+    return MetalContext::instance().rtoptions().get_watcher_enabled() &&
+           !MetalContext::instance().rtoptions().watcher_assert_disabled();
 }
 }  // namespace
 
-uint32_t get_max_runtime_args() {
-    return (max_runtime_args - (is_watcher_assert_enabled() ? watcher_reserved_words : 0));
-}
-
-uint32_t get_max_runtime_args_for_ethernet(HalProgrammableCoreType eth_core_type) {
-    TT_ASSERT(
-        eth_core_type == HalProgrammableCoreType::ACTIVE_ETH || eth_core_type == HalProgrammableCoreType::IDLE_ETH,
-        "Expected ethernet core type");
+uint32_t get_max_runtime_args(HalProgrammableCoreType core_type) {
     const uint32_t watcher_overhead = is_watcher_assert_enabled() ? watcher_reserved_words : 0;
-    return (
-        (MetalContext::instance().hal().get_dev_size(eth_core_type, HalL1MemAddrType::KERNEL_CONFIG) /
-         sizeof(uint32_t)) -
-        watcher_overhead);
+    switch (core_type) {
+        case HalProgrammableCoreType::TENSIX: return max_runtime_args_tensix - watcher_overhead;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: {
+            const uint32_t total_words =
+                MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::KERNEL_CONFIG) /
+                sizeof(uint32_t);
+            TT_ASSERT(total_words >= watcher_overhead, "Config size too small for watcher overhead");
+            return total_words - watcher_overhead;
+        }
+        default: TT_THROW("Invalid programmable core type: {}", core_type);
+    }
 }
 
 namespace fs = std::filesystem;
@@ -147,7 +148,8 @@ Kernel::Kernel(
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
     watcher_assert_enabled_(is_watcher_assert_enabled()),
-    watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0) {
+    watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0),
+    max_runtime_args_(get_max_runtime_args(programmable_core_type)) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -441,24 +443,14 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    uint32_t expected_max_rt_args = 0;
 
-    switch (this->get_kernel_programmable_core_type()) {
-        case HalProgrammableCoreType::TENSIX: expected_max_rt_args = get_max_runtime_args(); break;
-        case HalProgrammableCoreType::ACTIVE_ETH:
-        case HalProgrammableCoreType::IDLE_ETH:
-            expected_max_rt_args = get_max_runtime_args_for_ethernet(this->get_kernel_programmable_core_type());
-            break;
-        default: TT_THROW("Invalid programmable core type: {}", this->get_kernel_programmable_core_type());
-    }
-
-    if (total_rt_args > expected_max_rt_args) {
+    if (total_rt_args > max_runtime_args_) {
         TT_THROW(
             "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
             total_rt_args,
             this->name(),
             logical_core.str(),
-            expected_max_rt_args);
+            max_runtime_args_);
     }
 }
 
