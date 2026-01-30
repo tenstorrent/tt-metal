@@ -1030,7 +1030,7 @@ ALWI void power_tile_to_cb(
     copy_tile(cb_x, 0, dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, p);
+    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1125,7 +1125,7 @@ ALWI void power_tile_with_abs_x_to_cb(
     abs_tile(dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, p);
+    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1220,7 +1220,7 @@ ALWI void power_and_recip_tile_to_cb(
     copy_tile(cb_x, 0, dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, p);
+    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
 
     if (p_is_negative) {
         recip_tile_init();
