@@ -279,9 +279,14 @@ def main():
         is_comprehensive = True
     else:
         # Fallback to schedule-based detection when no explicit sweep is selected
-        if schedule_expr == "0 3 * * *":
+        # Schedule expressions must match ttnn-run-sweeps.yaml:
+        #   - "0 2 * * *"  -> lead models (2 AM daily)
+        #   - "0 3 * * *"  -> model traced (3 AM daily)
+        #   - "0 4 * * 3,6" -> comprehensive (4 AM Wed/Sat)
+        #   - "30 4 * * 0,1,2,4,5" -> nightly (falls through to else)
+        if schedule_expr == "0 2 * * *":
             is_lead_models = True
-        elif schedule_expr == "0 4 * * *":
+        elif schedule_expr == "0 3 * * *":
             is_model_traced = True
         elif schedule_expr == "0 4 * * 3,6":
             is_comprehensive = True

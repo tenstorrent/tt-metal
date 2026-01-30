@@ -838,7 +838,7 @@ jobs:
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
-          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *' && github.event.schedule != '0 3 * * *') ||
+          ((github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
@@ -1271,6 +1271,7 @@ jobs:
           elif [[ "${{ github.event.schedule }}" == "0 2 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Lead Models)" ]]; then
             RUN_TYPE="lead_models"
           fi
+          echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
         uses: actions/upload-artifact@v4
@@ -1278,6 +1279,19 @@ jobs:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
+      - name: Push results to database (lead models only)
+        if: env.RUN_TYPE == 'lead_models'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_DATABASE_URL }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          pip install psycopg2-binary
+          python /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            /work/tests/sweep_framework/results_export/ \
+            "lead models"
   ttnn-upload-results:
     name: Upload sweep results to SFTP server
     needs:
