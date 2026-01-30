@@ -33,7 +33,7 @@ void bind_index_fill_operation(nb::module_& mod) {
             ttnn.Tensor: The output tensor.
 
         Note:
-            This operations supports tensors according to the following data types and layout:
+            This operation supports tensors according to the following data types and layouts:
 
             .. list-table:: input tensor
                 :header-rows: 1
