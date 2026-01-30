@@ -46,7 +46,7 @@ auto compute_slice_parameters(
         cluster_index,
         cluster_size);
 
-    auto input_shape = input_tensor.logical_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto partitioned_dim_size = input_shape[dim] / cluster_size;
