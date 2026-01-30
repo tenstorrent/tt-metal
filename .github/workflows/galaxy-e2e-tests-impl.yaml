@@ -31,10 +31,6 @@ jobs:
       - name: Install dependencies
         run: |
           pip3 install PyYAML
-          sudo apt-get update && sudo apt-get install -y jq
-          YQ_VERSION="v4.44.1"
-          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
       - name: Verify test timeouts against budget
         run: |
           set -e
@@ -46,74 +42,10 @@ jobs:
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
-          set -e
-
-          BASE_SKU_CONFIG='{
-            "wh_galaxy": {
-              "runs_on": ["arch-wormhole_b0", "pipeline-functional", "topology-6u", "in-service"]
-            },
-            "bh_galaxy": {
-              "runs_on": ["arch-blackhole", "pipeline-functional", "topology-6u", "in-service"]
-            }
-          }'
-
-          TESTS_YAML_PATH="${TESTS_YAML_PATH}"
-
-          if [ ! -f "$TESTS_YAML_PATH" ]; then
-            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
-            exit 1
-          fi
-
-          # Load tests YAML into JSON array
-          sanitized_yaml=$(sed 's/\r$//' "$TESTS_YAML_PATH")
-          full_tests=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
-          enabled_skus_str="${{ inputs.enabled-skus }}"
-          echo "SKUs to test: '$enabled_skus_str'"
-
-          # Turn comma-separated string into JSON array
-          # "" -> []
-          # "wh_galaxy" -> ["wh_galaxy"]
-          # "wh_galaxy,bh_galaxy" -> ["wh_galaxy","bh_galaxy"]
-          if [ -z "$enabled_skus_str" ]; then
-            enabled_skus_json='[]'
-          else
-            enabled_skus_json=$(printf '%s' "$enabled_skus_str" | \
-              awk -F',' '{
-                printf "[";
-                for (i=1; i<=NF; i++) {
-                  gsub(/^ +| +$/, "", $i);
-                  if (length($i) > 0) {
-                    printf "%s\"%s\"", (i>1?",":""), $i;
-                  }
-                }
-                print "]"
-              }')
-          fi
-
-          echo "Enabled SKUs JSON: $enabled_skus_json"
-
-          filtered=$(jq \
-            --argjson cfg "$BASE_SKU_CONFIG" \
-            --argjson enabled "$enabled_skus_json" '
-              [ .[]
-                | select(.sku != null and (.sku | tostring) as $s | $enabled | index($s) != null)
-                | . + { runs_on: ($cfg[.sku].runs_on // []) }
-              ]
-            ' <<< "$full_tests")
-          echo "Filtered test matrix:"
-          echo "$filtered"
-
-          # Fail if no tests selected
-          if [ "$filtered" = "[]" ]; then
-            echo "::error::No tests selected for enabled SKUs '$enabled_skus_str'. Failing pipeline."
-            exit 1
-          fi
-
-          {
-            echo 'matrix<<EOF'
-            echo "$filtered"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
 
   galaxy-e2e-tests:
     needs: load-test-matrix
