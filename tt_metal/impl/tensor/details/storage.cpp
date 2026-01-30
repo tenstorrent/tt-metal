@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 #include "tt-metalium/mesh_coord.hpp"
 
-#include "ttnn/tensor/storage.hpp"
+#include <tt-metalium/experimental/tensor/details/storage.hpp>
 
 namespace tt::tt_metal {
 
