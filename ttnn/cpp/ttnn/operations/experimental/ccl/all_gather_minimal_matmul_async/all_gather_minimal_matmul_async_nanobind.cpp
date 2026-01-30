@@ -56,7 +56,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
             after bias (if any) and before the tile is written out.
 
-        config : Optional[MinimalMatmulConfig], default: None
+        config : Optional[AllGatherMinimalMatmulAsyncConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
             sizes and kernel flags.
             Fields (all values are in tiles):
@@ -79,6 +79,12 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
               to 2x4 or 4x2 depending on aspect ratio and accumulation mode to balance NOC/dataflow.
             - The core grid defaults to the device compute-with-storage grid.
 
+        multi_device_global_semaphore: std::vector<GlobalSemaphore>,
+            A vector of 2 GlobalSemaphores used to synchronize communication between multiple devices during the all
+            gather phase of the operation.
+
+        topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring.
+
         memory_config : Optional[ttnn.MemoryConfig], default: None
             Memory configuration for the output tensor. If not provided, the output inherits the memory configuration
             of `input_tensor`. The output is produced in TILE layout.
@@ -90,6 +96,34 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`
             (e.g., MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
+
+        persistent_output_buffer : Optional[ttnn.Tensor], default: None
+            This is used to store the output of the all gather portion of the op.  This should have the dimensions of
+            M x (K x n), where n is the number of devices we are gathering over (the cluster axis dim).  Either this or
+            barrier_semaphore needs to be used.
+
+        num_links : int
+            Number of links to use for the all-gather operation. Defaults to `1`.
+
+        cluster_axis : Optional[int], default: None
+            Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+
+        barrier_semaphore: Optional[GlobalSemaphore], default : None
+            Used to guarantee correctness of the output of the all gather portion of the operation by ensuring that the
+            tensor for the all gather output is ready to be written.  Either this or persistent_output_buffer needs to be
+            used.
+
+        force_transpose : Optional[bool], default: true
+            Minimal matmul has better performance in transpose when M > N.  However, to alleviate noc congestion,
+            we want transpose to always be true.
+
+        num_workers_per_link : Optional[int], default: 1
+            The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
+            alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
+            per link begins to have diminished benefits.
+
+        num_buffers_per_channel : Optional[int], default: 1
+            The number of buffers per channel for the mux cores used for all gather.
 
         Returns
         -------
