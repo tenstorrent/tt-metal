@@ -18,7 +18,7 @@ sfpi_inline void calculate_unary_max_min_float_body() {
 
     if constexpr (IS_MAX_OP) {
         // L0 = max(L0, constant); this will only write to L0 since L12 is a constant register.
-        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9);
+        TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, 9); // mod1=9 means set VD=max and VC=min
     } else {
         // L0 = min(L0, constant); this will only write to L0 since L12 is a constant register.
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
@@ -53,13 +53,13 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
         if ((int)value >= 0) {
             // if msb(value) == 0, we can safely use SFPSWAP even though it expects sign-magnitude integers
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX); // mod1=9 means set VD=max and VC=min
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         } else {
             // if msb(value) == 1, we need to invert both values for SFPSWAP to work
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);
+            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9); // mod1=9 means set VD=max and VC=min
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         }

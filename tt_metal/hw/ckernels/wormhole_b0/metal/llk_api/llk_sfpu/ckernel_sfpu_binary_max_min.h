@@ -24,7 +24,7 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
         TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, dst_index_in1 * dst_tile_size);  // b
 
         // Swap and store maximum in lreg1, minimum in lreg0
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32) {
             // The values are two's complement signed integers, but SFPSWAP
