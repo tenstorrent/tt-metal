@@ -5,6 +5,7 @@
 #include "device/all_gather_minimal_matmul_async_device_operation.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -34,7 +35,7 @@ ttnn::Tensor ExecuteAllGatherMinimalMatmulAsync::invoke(
         input_tensor,
         weight_tensor,
         bias_tensor,
-        fused_activation,
+        std::move(fused_activation),
         config,
         multi_device_global_semaphore,
         topology,
