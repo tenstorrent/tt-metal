@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 import random
 from loguru import logger
@@ -26,6 +27,16 @@ def create_fabric_router_config(*, max_payload_size=None):
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
+
+
+@pytest.fixture
+def set_mesh_graph_descriptor_16x1():
+    """Set the mesh graph descriptor for 16x1 mesh configuration."""
+    os.environ[
+        "TT_MESH_GRAPH_DESC_PATH"
+    ] = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
+    yield
+    os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
 
 def gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape):
@@ -604,7 +615,77 @@ def run_all_to_all_dispatch_metadata_test(
         ), f"First failing index: {first_failed_tensor_index} token {first_failed_batch_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
-# Performance tests
+# Correctness test - single focused test case for pipeline validation
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+            "trace_region_size": 500000,
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device, cluster_axis",
+    [
+        pytest.param((16, 1), (16, 1), 0, id="16x1"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_correctness(
+    set_mesh_graph_descriptor_16x1,
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+):
+    batches_per_device = 32
+    experts = 2 * 16
+    select_experts_k = 8
+    hidden_size = 7168
+    seq_len = 1
+    num_iters = 20
+    warmup_iters = 5
+    num_links = 4
+    dtype = ttnn.bfloat16
+    congestion_scheme = "random_sequential_experts"
+    worker_mode = ttnn.WorkerMode.DIRECT
+    use_persistent_mode = False
+
+    dispatch_devices = mesh_shape[cluster_axis]
+    batch = batches_per_device * dispatch_devices
+    trace_mode = True
+
+    run_all_to_all_dispatch_metadata_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme=congestion_scheme,
+        dtype=dtype,
+        cluster_axis=cluster_axis,
+        worker_mode=worker_mode,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        use_persistent_mode=use_persistent_mode,
+    )
+
+
+# Performance sweep test - disabled by default (too resource intensive for pipelines)
+# Enable with: RUN_ALL_TO_ALL_PERF=1 pytest ...
+@pytest.mark.skipif(
+    os.environ.get("RUN_ALL_TO_ALL_PERF") != "1",
+    reason="Resource intensive sweep test - enable with RUN_ALL_TO_ALL_PERF=1",
+)
 @pytest.mark.parametrize(
     "device_params",
     [
