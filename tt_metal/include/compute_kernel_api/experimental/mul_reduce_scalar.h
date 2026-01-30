@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -89,12 +89,12 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t num_tile
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_SCALAR>()));
 
     // Step 6: Perform column reduction for each tile, accumulating into dest[0]
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        if (i != 0) {
-            // Move dest[i] to srcA for next iteration
-            MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
-        }
-        // Perform column reduction, accumulating into dest[0]
+    // First iteration (i=0) - no move needed
+    MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
+
+    // Remaining iterations - always move
+    for (uint32_t i = 1; i < num_tiles; i++) {
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
     }
 
