@@ -749,6 +749,12 @@ def get_timesteps(tt_scheduler, num_inference_steps, strength, denoising_start=N
         return timesteps, num_inference_steps
 
 
+def is_tt_scheduler(scheduler):
+    from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
+
+    return isinstance(scheduler, TtEulerDiscreteScheduler)
+
+
 def run_tt_iteration(
     tt_unet,
     tt_scheduler,
@@ -760,11 +766,61 @@ def run_tt_iteration(
 ):
     B, C, H, W = input_shape
 
-    input_tensor = tt_scheduler.scale_model_input(input_tensor, None)
+    if is_tt_scheduler(tt_scheduler):
+        logger.info("GGG run_tt_iteration: TT scheduler step")
+        input_tensor = tt_scheduler.scale_model_input(input_tensor, None)
+        timestep = tt_scheduler.tt_timestep
+
+        # ADD LOGGING HERE for TT scheduler
+        logger.info(f"GGG TT Scheduler timestep type: {type(timestep)}")
+        logger.info(f"GGG TT Scheduler timestep dtype: {timestep.dtype}")
+        logger.info(f"GGG TT Scheduler timestep layout: {timestep.layout}")
+        logger.info(f"GGG TT Scheduler timestep device: {timestep.device()}")
+        logger.info(f"GGG TT Scheduler timestep memory_config: {timestep.memory_config()}")
+        logger.info(f"GGG TT Scheduler timestep shape: {timestep.shape}")
+
+    else:
+        logger.info("GGG run_tt_iteration: Host scheduler step")
+        if not hasattr(tt_scheduler, "_step_index") or tt_scheduler._step_index is None:
+            logger.info("GGG run_tt_iteration: Step index is not set, setting to 0")
+            tt_scheduler._step_index = 0
+
+        input_device = input_tensor.device()
+        input_memory_config = input_tensor.memory_config()
+        input_dtype = input_tensor.dtype
+        input_layout = input_tensor.layout
+
+        host_latent = ttnn.to_torch(input_tensor, dtype=torch.float32)
+        host_latent = host_latent.reshape(B, H, W, C).permute(0, 3, 1, 2)  # BHWC -> BCHW
+
+        logger.info(f"GGG Step tt_scheduler _step_index: {tt_scheduler._step_index}")
+        scaled_latent = tt_scheduler.scale_model_input(host_latent, tt_scheduler.timesteps[tt_scheduler._step_index])
+
+        scaled_latent = scaled_latent.permute(0, 2, 3, 1).reshape(1, 1, H * W, C)  # BCHW -> BHWC
+        input_tensor = ttnn.from_torch(
+            scaled_latent,
+            dtype=input_dtype,
+            layout=input_layout,
+            device=input_device,
+            memory_config=input_memory_config,
+        )
+
+        timestep_value = tt_scheduler.timesteps[tt_scheduler._step_index].item()
+        logger.info(f"GGG timestep_value type: {type(timestep_value)}")
+        logger.info(f"GGG timestep_value value: {timestep_value}")
+
+        timestep = ttnn.from_torch(
+            torch.tensor([timestep_value]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=input_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     ttnn_noise_pred, output_shape = tt_unet.forward(
         input_tensor,
         [B, C, H, W],
-        timestep=tt_scheduler.tt_timestep,
+        timestep=timestep,
         encoder_hidden_states=ttnn_prompt_embeds,
         time_ids=time_ids,
         text_embeds=text_embeds,
@@ -875,10 +931,33 @@ def run_tt_image_gen(
             noise_pred_text = noise_pred_text_new
             noise_pred_text_orig = ttnn.clone(noise_pred_text)
 
-            # perform guidance
-            noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
-            noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)
+            if is_tt_scheduler(tt_scheduler):
+                # perform guidance
+                logger.info("GGG run_tt_iteration: Performing guidance on device")
+                noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
+                noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
+                noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)
+            else:
+                logger.info("GGG run_tt_iteration: Performing guidance on host")
+                noise_pred_uncond_torch = ttnn.to_torch(
+                    noise_pred_uncond, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0), dtype=torch.float32
+                )
+                noise_pred_text_torch = ttnn.to_torch(
+                    noise_pred_text, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0), dtype=torch.float32
+                )
+                guidance_scale_torch = ttnn.to_torch(guidance_scale, dtype=torch.float32)
+                guidance_result_torch = noise_pred_uncond_torch + guidance_scale_torch * (
+                    noise_pred_text_torch - noise_pred_uncond_torch
+                )
+
+                is_mesh_device = isinstance(ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
+                noise_pred = ttnn.from_torch(
+                    guidance_result_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=ttnn_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0) if is_mesh_device else None,
+                )
 
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
@@ -908,7 +987,43 @@ def run_tt_image_gen(
             ttnn.deallocate(noise_pred_text_orig)
             noise_pred = ttnn.move(noise_pred)
 
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
+            if is_tt_scheduler(tt_scheduler):
+                logger.info("GGG run_tt_image_gen: TT scheduler step")
+                tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[
+                    0
+                ]
+            else:
+                logger.info("GGG run_tt_image_gen: Host scheduler step")
+                B, C, H, W = input_shape
+
+                latents_device = tt_latents.device()
+                latents_memory_config = tt_latents.memory_config()
+                latents_dtype = tt_latents.dtype
+                latents_layout = tt_latents.layout
+
+                host_noise_pred = ttnn.to_torch(noise_pred, dtype=torch.float32)
+                ttnn.deallocate(noise_pred)
+                host_noise_pred = host_noise_pred.reshape(B, H, W, C).permute(0, 3, 1, 2)  # BHWC -> BCHW
+
+                host_latents = ttnn.to_torch(tt_latents, dtype=torch.float32)
+                host_latents = host_latents.reshape(B, H, W, C).permute(0, 3, 1, 2)  # BHWC -> BCHW
+
+                current_timestep = tt_scheduler.timesteps[tt_scheduler._step_index]
+
+                host_latents = tt_scheduler.step(
+                    host_noise_pred, current_timestep, host_latents, **tt_extra_step_kwargs, return_dict=False
+                )[0]
+
+                host_latents = host_latents.permute(0, 2, 3, 1).reshape(1, 1, H * W, C)  # BCHW -> BHWC
+                tt_latents = ttnn.from_torch(
+                    host_latents,
+                    dtype=latents_dtype,
+                    layout=latents_layout,
+                    device=latents_device,
+                    memory_config=latents_memory_config,
+                )
+
+                del host_noise_pred, host_latents
 
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
@@ -916,12 +1031,19 @@ def run_tt_image_gen(
             ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
 
         if i < (num_steps - 1):
-            tt_scheduler.inc_step_index()
+            if is_tt_scheduler(tt_scheduler):
+                tt_scheduler.inc_step_index()
+            else:
+                pass
 
     ttnn.synchronize_device(ttnn_device)
 
     # set_begin_index resets both begin and step index of the scheduler
-    tt_scheduler.set_begin_index(0)
+    if is_tt_scheduler(tt_scheduler):
+        tt_scheduler.set_begin_index(0)
+    else:
+        # Reset host scheduler
+        tt_scheduler._step_index = 0
 
     profiler.end("denoising_loop")
 

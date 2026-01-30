@@ -49,7 +49,11 @@ def run_demo_inference(
     guidance_rescale=0.0,
     timesteps=None,
     sigmas=None,
+    use_device_scheduler=True,
 ):
+    if use_refiner and use_device_scheduler == False:
+        pytest.skip("Skipping use_refiner=True with use_device_scheduler=False combination")
+
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
@@ -94,6 +98,7 @@ def run_demo_inference(
         vae_on_device=vae_on_device,
         encoders_on_device=encoders_on_device,
         capture_trace=capture_trace,
+        use_device_scheduler=use_device_scheduler,
         crop_coords_top_left=crop_coords_top_left,
         guidance_rescale=guidance_rescale,
         use_refiner=use_refiner,
@@ -182,7 +187,12 @@ def run_demo_inference(
             if is_ci_env:
                 logger.info(f"Image {len(images)}/{len(prompts)} generated successfully")
             else:
-                output_path = f"output/output{len(images) - 1 + start_from}.png"
+                out_folder = "output/"
+                out_folder = out_folder + ("__device_scheduler" if use_device_scheduler else "__host_scheduler")
+                out_folder = out_folder + ("__device_encoders" if encoders_on_device else "__host_encoders")
+                os.makedirs(out_folder, exist_ok=True)
+                output_filename = f"output{len(images) - 1 + start_from}.png"
+                output_path = f"{out_folder}/{output_filename}"
                 pil_img.save(output_path)
                 logger.info(f"Image saved to {output_path}")
 
@@ -258,6 +268,14 @@ def run_demo_inference(
     ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
+    "use_device_scheduler",
+    [
+        (True),
+        (False),
+    ],
+    ids=("use_device_scheduler", "use_host_scheduler"),
+)
+@pytest.mark.parametrize(
     "use_refiner",
     [
         (True),
@@ -293,6 +311,7 @@ def test_demo_base_and_refiner(
     vae_on_device,
     encoders_on_device,
     capture_trace,
+    use_device_scheduler,
     evaluation_range,
     guidance_scale,
     use_cfg_parallel,
@@ -334,4 +353,5 @@ def test_demo_base_and_refiner(
         guidance_rescale,
         timesteps,
         sigmas,
+        use_device_scheduler,
     )

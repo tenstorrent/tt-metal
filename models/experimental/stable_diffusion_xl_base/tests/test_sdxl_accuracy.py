@@ -83,6 +83,14 @@ test_demo_base_and_refiner.__test__ = False
     ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
+    "use_device_scheduler",
+    [
+        (True),
+        (False),
+    ],
+    ids=("use_device_scheduler", "use_host_scheduler"),
+)
+@pytest.mark.parametrize(
     "use_refiner",
     [
         (True),
@@ -113,6 +121,7 @@ def test_accuracy_sdxl(
     vae_on_device,
     capture_trace,
     encoders_on_device,
+    use_device_scheduler,
     captions_path,
     coco_statistics_path,
     evaluation_range,
@@ -125,6 +134,8 @@ def test_accuracy_sdxl(
     refiner_aesthetic_score,
     refiner_negative_aesthetic_score,
 ):
+    if use_refiner and use_device_scheduler == False:
+        pytest.skip("Skipping use_refiner=True with use_device_scheduler=False combination")
     start_from, num_prompts = evaluation_range
 
     prompts = sdxl_get_prompts(
@@ -145,6 +156,7 @@ def test_accuracy_sdxl(
         vae_on_device,
         encoders_on_device,
         capture_trace,
+        use_device_scheduler,
         evaluation_range,
         guidance_scale,
         use_cfg_parallel=use_cfg_parallel,

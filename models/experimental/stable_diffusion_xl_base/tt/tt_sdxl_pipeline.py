@@ -13,7 +13,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
-from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import (
     ModelOptimisations,
     RefinerModelOptimisations,
@@ -623,6 +622,12 @@ class TtSDXLPipeline(LightweightModule):
         # TODO: move encoder here
 
         profiler.start("load_tt_componenets")
+
+        # Check if scheduler is TT or torch
+        from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
+
+        is_tt_scheduler = isinstance(tt_scheduler, TtEulerDiscreteScheduler)
+
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
             self.tt_unet_model_config = (
@@ -649,9 +654,9 @@ class TtSDXLPipeline(LightweightModule):
                 if pipeline_config.vae_on_device
                 else None
             )
-            if tt_scheduler is not None:
+            if tt_scheduler is not None and is_tt_scheduler:
                 self.tt_scheduler = tt_scheduler
-            else:
+            elif tt_scheduler is None:
                 self.tt_scheduler = TtEulerDiscreteScheduler(
                     self.ttnn_device,
                     self.torch_pipeline.scheduler.config.num_train_timesteps,
@@ -672,6 +677,10 @@ class TtSDXLPipeline(LightweightModule):
                     self.torch_pipeline.scheduler.config.rescale_betas_zero_snr,
                     self.torch_pipeline.scheduler.config.final_sigmas_type,
                 )
+        if not is_tt_scheduler:
+            self.tt_scheduler = tt_scheduler
+            logger.info("GGG Host scheduler created")
+
         self.torch_pipeline.scheduler = self.tt_scheduler
 
         if pipeline_config.encoders_on_device:

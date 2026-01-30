@@ -38,6 +38,9 @@ class TtSDXLCombinedPipelineConfig:
     vae_on_device: bool
     encoders_on_device: bool
     capture_trace: bool
+
+    use_device_scheduler: bool = True
+
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
 
@@ -184,28 +187,34 @@ class TtSDXLCombinedPipeline:
         self.batch_size = list(ttnn_device.shape)[1] if config.use_cfg_parallel else ttnn_device.get_num_devices()
 
         logger.info("Creating shared scheduler...")
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-            self.shared_scheduler = TtEulerDiscreteScheduler(
-                ttnn_device,
-                torch_base_pipeline.scheduler.config.num_train_timesteps,
-                torch_base_pipeline.scheduler.config.beta_start,
-                torch_base_pipeline.scheduler.config.beta_end,
-                torch_base_pipeline.scheduler.config.beta_schedule,
-                torch_base_pipeline.scheduler.config.trained_betas,
-                torch_base_pipeline.scheduler.config.prediction_type,
-                torch_base_pipeline.scheduler.config.interpolation_type,
-                torch_base_pipeline.scheduler.config.use_karras_sigmas,
-                torch_base_pipeline.scheduler.config.use_exponential_sigmas,
-                torch_base_pipeline.scheduler.config.use_beta_sigmas,
-                torch_base_pipeline.scheduler.config.sigma_min,
-                torch_base_pipeline.scheduler.config.sigma_max,
-                torch_base_pipeline.scheduler.config.timestep_spacing,
-                torch_base_pipeline.scheduler.config.timestep_type,
-                torch_base_pipeline.scheduler.config.steps_offset,
-                torch_base_pipeline.scheduler.config.rescale_betas_zero_snr,
-                torch_base_pipeline.scheduler.config.final_sigmas_type,
-            )
-        logger.info("Shared scheduler created")
+        logger.info(f"GGG config.use_device_scheduler: {config.use_device_scheduler}")
+        if config.use_device_scheduler:
+            with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
+                self.shared_scheduler = TtEulerDiscreteScheduler(
+                    ttnn_device,
+                    torch_base_pipeline.scheduler.config.num_train_timesteps,
+                    torch_base_pipeline.scheduler.config.beta_start,
+                    torch_base_pipeline.scheduler.config.beta_end,
+                    torch_base_pipeline.scheduler.config.beta_schedule,
+                    torch_base_pipeline.scheduler.config.trained_betas,
+                    torch_base_pipeline.scheduler.config.prediction_type,
+                    torch_base_pipeline.scheduler.config.interpolation_type,
+                    torch_base_pipeline.scheduler.config.use_karras_sigmas,
+                    torch_base_pipeline.scheduler.config.use_exponential_sigmas,
+                    torch_base_pipeline.scheduler.config.use_beta_sigmas,
+                    torch_base_pipeline.scheduler.config.sigma_min,
+                    torch_base_pipeline.scheduler.config.sigma_max,
+                    torch_base_pipeline.scheduler.config.timestep_spacing,
+                    torch_base_pipeline.scheduler.config.timestep_type,
+                    torch_base_pipeline.scheduler.config.steps_offset,
+                    torch_base_pipeline.scheduler.config.rescale_betas_zero_snr,
+                    torch_base_pipeline.scheduler.config.final_sigmas_type,
+                )
+            logger.info("Shared scheduler created")
+            logger.info("Shared TT device scheduler created")
+        else:
+            self.shared_scheduler = torch_base_pipeline.scheduler
+            logger.info("GGG Host scheduler created")
 
         logger.info("Creating base pipeline config from unified config...")
         base_config = config.create_base_config()
