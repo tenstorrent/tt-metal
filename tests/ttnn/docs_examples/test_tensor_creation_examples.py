@@ -84,28 +84,26 @@ def test_from_buffer(device):
 
 def test_bernoulli(device):
     # Create a TT-NN tensor with random values from a Bernoulli distribution
-    input = ttnn.to_device(
-        ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), device=device
-    )
+    # Initialize with ttnn.full to create probability values (0.5 = 50% chance of 1)
+    input = ttnn.full([3, 3], fill_value=0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.bernoulli(input)
+    print(output)
     logger.info("TT-NN bernoulli tensor:", output)
 
 
 def test_complex_tensor(device):
-    # Create a TT-NN complex tensor from real and imaginary parts
-    real = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-    imag = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+    # Create a TT-NN complex tensor from real and imaginary parts using ttnn.Tensor constructor
+    real = ttnn.Tensor([1.0, 2.0], [2], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
+    imag = ttnn.Tensor([1.0, 2.0], [2], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
     complex_tensor = ttnn.complex_tensor(real, imag)
     logger.info("TT-NN complex tensor:", complex_tensor)
 
 
 def test_index_fill(device):
     # Create a TT-NN tensor with values filled at the specified indices along the specified dimension
-    torch_input = torch.rand([32, 32], dtype=torch.bfloat16)
-    torch_index = torch.tensor([0, 2])
+    tt_input = ttnn.rand([32, 32], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_index = ttnn.Tensor([0, 31], [2], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
 
-    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_index = ttnn.from_torch(torch_index, device=device)
     output = ttnn.index_fill(
         tt_input, 1, tt_index, 10.0
     )  # Need to ensure 10.0 is a float to match the bfloat16 dtype of the input tensor
@@ -114,8 +112,6 @@ def test_index_fill(device):
 
 def test_uniform(device):
     # Create a TT-NN tensor with random values uniformly distributed between 0.0 and 1.0
-    input = ttnn.to_device(
-        ttnn.from_torch(torch.ones(3, 3), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), device=device
-    )
+    input = ttnn.ones([3, 3], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.uniform(input)
     logger.info("TT-NN uniform tensor:", input)
