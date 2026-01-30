@@ -123,12 +123,7 @@ class TtBasicTransformerBlock(LightweightModule):
             program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
 
-        # Move residual to DRAM to free L1 space for GEGLU circular buffers
-        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        if "down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path:
-            hidden_states = ttnn.move(hidden_states)
-
-        attn_hidden_states = self.ff(attn_hidden_states)  # GEGLU stays in L1
+        attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         return hidden_states
