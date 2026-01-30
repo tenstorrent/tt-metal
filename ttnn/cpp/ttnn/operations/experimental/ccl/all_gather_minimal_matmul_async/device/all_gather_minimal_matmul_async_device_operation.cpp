@@ -147,7 +147,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             cfg.N_block_size,
             cfg.subblock_w);
 
-        // Grid must be at least 1x1
+        // Grid must be at least 2x2
         TT_FATAL(
             cfg.compute_with_storage_grid_size.x >= 2 && cfg.compute_with_storage_grid_size.y >= 2,
             "compute_with_storage_grid_size must be >= 2x2");

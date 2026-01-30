@@ -776,7 +776,7 @@ all_gather_minimal_matmul_async_factory_helper(
             device->worker_core_from_logical_core(termination_master_logical_core);
 
         // in0 backward sender
-        uint32_t mux_core_index_backward = (in1_core_order_index / num_workers_per_link) * num_workers_per_link + 1;
+        uint32_t mux_core_index_backward = ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + 1;
         if (mux_core_index_backward >= in1_core_order.size()) {
             mux_core_index_backward = mux_core_index_backward - in1_core_order.size();
         }
@@ -787,7 +787,7 @@ all_gather_minimal_matmul_async_factory_helper(
             (in0_core_order_index == 0) && !(in1_core_order_index % num_workers_per_link),
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             mux_virtual_core_backward,
-            in0_core_order_index * num_workers_per_link + worker_idx,
+            (in0_core_order_index * num_workers_per_link) + worker_idx,
             core,
             mux_kernel_config,
             program,
@@ -795,7 +795,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_args);
 
         // in0 forward sender
-        uint32_t mux_core_index_forward = (in1_core_order_index / num_workers_per_link) * num_workers_per_link + 2;
+        uint32_t mux_core_index_forward = ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + 2;
         if (mux_core_index_forward >= in1_core_order.size()) {
             mux_core_index_forward = mux_core_index_forward - in1_core_order.size();
         }
@@ -806,7 +806,7 @@ all_gather_minimal_matmul_async_factory_helper(
             (in0_core_order_index == 0) && !(in1_core_order_index % num_workers_per_link),
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             mux_virtual_core_forward,
-            in0_core_order_index * num_workers_per_link + worker_idx,
+            (in0_core_order_index * num_workers_per_link) + worker_idx,
             core,
             mux_kernel_config,
             program,

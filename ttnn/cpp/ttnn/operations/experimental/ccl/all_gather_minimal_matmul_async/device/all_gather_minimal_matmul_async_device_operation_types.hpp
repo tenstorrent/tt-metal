@@ -17,7 +17,7 @@ struct AllGatherMinimalMatmulAsyncConfig {
         uint32_t N_block_size_ = 1,
         uint32_t subblock_h_ = 1,
         uint32_t subblock_w_ = 1,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        CoreCoord compute_with_storage_grid_size_ = {2, 2}) :
         M_block_size(M_block_size_),
         K_block_size(K_block_size_),
         N_block_size(N_block_size_),
