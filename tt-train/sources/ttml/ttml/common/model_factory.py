@@ -104,7 +104,7 @@ class TransformerModelFactory:
 
         # Optional fields
         if self.transformer_config.intermediate_dim:
-            lcfg.set_intermediate_dim(int(self.transformer_config.intermediate_dim))
+            lcfg.intermediate_dim = int(self.transformer_config.intermediate_dim)
         if self.transformer_config.theta:
             lcfg.theta = self.transformer_config.theta
 
