@@ -32,13 +32,13 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
 TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], MeshId{0});
@@ -49,7 +49,7 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
 
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }

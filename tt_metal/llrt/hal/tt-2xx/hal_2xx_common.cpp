@@ -9,11 +9,10 @@ namespace tt::tt_metal::hal_2xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = tt::tt_metal::get_rtoptions();
     const auto& l1_cache_enable_processors =
         rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
-    auto processor_index = MetalContext::instance().hal().get_processor_index(
-        params.core_type, params.processor_class, params.processor_id);
+    auto processor_index = get_hal().get_processor_index(params.core_type, params.processor_class, params.processor_id);
     defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
         l1_cache_enable_processors.contains(params.core_type, processor_index)) {

@@ -23,7 +23,7 @@ namespace tt::tt_fabric {
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
     // Use FabricBuilder to coordinate the build phases
@@ -42,7 +42,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
 
     // Compile the program
     tt::tt_metal::detail::CompileProgram(
-        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+        device, *fabric_program_ptr, tt::tt_metal::get_rtoptions().get_fast_dispatch());
 
     return fabric_program_ptr;
 }
@@ -56,8 +56,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 }
 
 void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device->id());
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& fabric_context = control_plane.get_fabric_context();

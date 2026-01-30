@@ -16,7 +16,7 @@
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (tt::tt_metal::get_rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
@@ -25,7 +25,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 }
 
 void EventSynchronize(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!tt::tt_metal::get_rtoptions().get_fast_dispatch()) {
         return;
     }
     for (const auto& coord : event.device_range()) {
@@ -37,7 +37,7 @@ void EventSynchronize(const MeshEvent& event) {
 }
 
 bool EventQuery(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!tt::tt_metal::get_rtoptions().get_fast_dispatch()) {
         return true;
     }
     bool event_completed = true;

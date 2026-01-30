@@ -70,7 +70,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
     tt_metal::InterleavedBufferConfig l1_config {
         .device = device,
@@ -172,8 +172,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                     k_id_s = "";
                 }
                 std::string erisc1_s = "   X";
-                if (device->arch() == ARCH::BLACKHOLE &&
-                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                if (device->arch() == ARCH::BLACKHOLE && tt::tt_metal::get_rtoptions().get_enable_2_erisc_mode()) {
                     // There is a second erisc on Blackhole
                     erisc1_s = "   W";
                 }

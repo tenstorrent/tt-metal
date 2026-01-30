@@ -115,7 +115,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     // Launch program and record outputs
     if (test_config.read) {
         detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, subordinate_l1_address, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
 
         auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};
@@ -131,7 +131,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
             device, test_config.master_core_coord, master_l1_address, test_config.packet_size_bytes, packed_output);
     } else {
         detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_address, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
 
         auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};

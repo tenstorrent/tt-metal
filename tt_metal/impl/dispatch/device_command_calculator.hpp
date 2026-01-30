@@ -280,8 +280,7 @@ public:
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment = tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
 }  // namespace tt::tt_metal

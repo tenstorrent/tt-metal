@@ -974,7 +974,7 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         auto z_channels = std::unordered_set<uint8_t>{8, 9};
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
 
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {

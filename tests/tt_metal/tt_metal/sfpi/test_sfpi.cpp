@@ -51,7 +51,7 @@ bool runTest(
 
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
+    tt::tt_metal::get_cluster().l1_barrier(mesh_device->get_devices()[0]->id());
     auto noc_xy = mesh_device->worker_core_from_logical_core(coord);
     unsigned expected = 0;
     // If path ends in -[digits], extract the expected value
@@ -68,8 +68,8 @@ bool runTest(
         }
         expected |= 0x4000;
     }
-    std::vector<uint32_t> args = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
+    std::vector<uint32_t> args =
+        tt::tt_metal::get_cluster().read_core(mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
     unsigned result = args[0];
     bool pass = result == expected;
     if (pass) {
@@ -120,7 +120,7 @@ bool runTests(
 }
 
 bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const tt::tt_metal::CoreCoord coord) {
-    std::string path = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    std::string path = tt::tt_metal::get_rtoptions().get_root_dir();
     path += KernelDir;
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }

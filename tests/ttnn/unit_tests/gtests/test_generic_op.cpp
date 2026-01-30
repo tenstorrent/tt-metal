@@ -432,7 +432,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::BoardType::P150) {
+    if (tt::tt_metal::get_cluster().get_board_type(0) == tt::BoardType::P150) {
         GTEST_SKIP();
     }
     log_info(tt::LogTest, "Running ttnn matmul");
@@ -1392,7 +1392,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear;
     bool with_state = false;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     auto sender_device =

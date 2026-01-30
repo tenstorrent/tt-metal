@@ -57,7 +57,7 @@ struct MeshScopeTestParams {
 };
 
 const std::string kDualHostMeshDesc =
-    std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+    std::filesystem::path(::tt::tt_metal::get_rtoptions().get_root_dir()) /
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
 
 // Define eth_coord mappings for the dual host mesh descriptor
@@ -79,7 +79,7 @@ const std::vector<std::vector<EthCoord>> kDualHostMeshEthCoords = {
 
 // Helper function to get chip mapping from eth coords
 std::map<FabricNodeId, ChipId> get_dual_host_chip_mapping() {
-    const auto& cluster = ::tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = ::tt::tt_metal::get_cluster();
     std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < kDualHostMeshEthCoords.size(); mesh_id++) {
         for (std::uint32_t chip_id = 0; chip_id < kDualHostMeshEthCoords[mesh_id].size(); chip_id++) {
@@ -95,10 +95,8 @@ std::map<FabricNodeId, ChipId> get_dual_host_chip_mapping() {
 class ControlPlaneLocalMeshBinding : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-                ::tt::tt_metal::ClusterType::T3K and
-            ::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-                ::tt::tt_metal::ClusterType::N300_2x2) {
+        if (::tt::tt_metal::get_cluster().get_cluster_type() != ::tt::tt_metal::ClusterType::T3K and
+            ::tt::tt_metal::get_cluster().get_cluster_type() != ::tt::tt_metal::ClusterType::N300_2x2) {
             GTEST_SKIP() << "Skipping test for non-T3K or N300_2x2 cluster";
         }
     }

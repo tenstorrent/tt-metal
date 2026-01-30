@@ -139,8 +139,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
 
         construct_program(program, device, core);
 
-        uint32_t programmable_core_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        uint32_t programmable_core_index = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
         TT_FATAL(kernel_group != nullptr, "Error");
         std::shared_ptr<Kernel> compute_kernel = nullptr;
@@ -204,8 +203,8 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                 for (int j = 0; j < num_compiles; j++) {
                     auto mask = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
                     detail::CompileProgram(device, program);
-                    uint32_t programmable_core_index = MetalContext::instance().hal().get_programmable_core_type_index(
-                        HalProgrammableCoreType::TENSIX);
+                    uint32_t programmable_core_index =
+                        get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
                     const KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
                     std::shared_ptr<Kernel> compute_kernel = nullptr;
                     std::shared_ptr<Kernel> riscv0_kernel = nullptr;

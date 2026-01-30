@@ -50,7 +50,7 @@ SubDeviceManager::SubDeviceManager(
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
+    local_l1_size_(tt::align(local_l1_size, get_hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -207,8 +207,7 @@ void SubDeviceManager::validate_sub_devices() const {
         if (sub_device.impl()->has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
-            const auto& device_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_->id());
+            const auto& device_eth_cores = tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_->id());
             for (const auto& dev_eth_core : device_eth_cores) {
                 if (eth_cores.contains(dev_eth_core)) {
                     num_eth_cores++;

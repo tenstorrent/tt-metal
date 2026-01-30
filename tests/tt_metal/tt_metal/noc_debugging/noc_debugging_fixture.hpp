@@ -73,9 +73,8 @@ protected:
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
 
-        previous_debug_dump_enabled_ =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_device_debug_dump_enabled(true);
+        previous_debug_dump_enabled_ = tt::tt_metal::get_rtoptions().get_experimental_device_debug_dump_enabled();
+        tt::tt_metal::get_rtoptions().set_experimental_device_debug_dump_enabled(true);
 
         MeshDispatchFixture::SetUp();
 
@@ -91,8 +90,7 @@ protected:
             noc_debug_state->reset_state();
         }
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_device_debug_dump_enabled(
-            previous_debug_dump_enabled_);
+        tt::tt_metal::get_rtoptions().set_experimental_device_debug_dump_enabled(previous_debug_dump_enabled_);
     }
 };
 

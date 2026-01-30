@@ -389,8 +389,7 @@ void TestContext::set_code_profiling_enabled(bool enabled) {
 }
 
 void TestContext::setup_ci_artifacts() {
-    std::filesystem::path tt_metal_home =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir());
     std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
     if (!std::filesystem::exists(ci_artifacts_path)) {
         try {

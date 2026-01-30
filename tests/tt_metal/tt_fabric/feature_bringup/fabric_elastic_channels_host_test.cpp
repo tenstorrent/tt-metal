@@ -393,7 +393,7 @@ void run_test(
     std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
     const TestConfig& config) {
     auto rt_args = [&](bool send_channels_at_offset_0, DeviceTestResources& device_resources) -> std::vector<uint32_t> {
-        uint32_t base_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        uint32_t base_addr = static_cast<uint32_t>(tt::tt_metal::get_hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
 
         // Calculate buffer sizes and addresses
@@ -503,7 +503,7 @@ void run_test(
     //
     // Timing Stats Readback
     //
-    uint32_t handshake_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    uint32_t handshake_addr = static_cast<uint32_t>(tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
 
     //
@@ -689,7 +689,7 @@ int run_test_case(const TestConfig& config, N300TestDevice& test_fixture) {
         auto eth_sender_core_iter = active_eth_cores.begin();
         TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
         while (eth_sender_core_iter != active_eth_cores.end() and
-               not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+               not tt::tt_metal::get_cluster().is_ethernet_link_up(
                    device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
             eth_sender_core_iter++;
         }

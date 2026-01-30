@@ -38,7 +38,7 @@ inline uint64_t get_64b_result(const std::vector<uint32_t>& vec, uint32_t index)
 }
 
 inline tt::tt_metal::CoreCoord get_active_ethernet_core(tt::tt_metal::IDevice* device) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& device_active_eth_cores = device->get_active_ethernet_cores();
     auto eth_core_iter = device_active_eth_cores.begin();
     for (; eth_core_iter != device_active_eth_cores.end(); eth_core_iter++) {

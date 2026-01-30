@@ -85,15 +85,15 @@ MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& co
 
 // Implementation of public methods
 SystemMesh::Impl::Impl() :
-    mesh_id_(MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0]),
+    mesh_id_(get_control_plane().get_local_mesh_id_bindings()[0]),
     coordinate_translator_(
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        get_control_plane().get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::GLOBAL),
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        get_control_plane().get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::LOCAL),
-        MetalContext::instance().get_control_plane().get_local_mesh_offset()),
+        get_control_plane().get_local_mesh_offset()),
     system_mapped_devices_(initialize_mapped_devices(mesh_id_, coordinate_translator_.global_shape())) {
     log_debug(
         LogDistributed,

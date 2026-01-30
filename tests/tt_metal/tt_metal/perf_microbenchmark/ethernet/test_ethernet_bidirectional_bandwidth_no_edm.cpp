@@ -132,7 +132,7 @@ void run(
     std::size_t max_channels_per_direction) {
     auto rt_args = [&](bool send_channels_at_offset_0) -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            static_cast<uint32_t>(tt::tt_metal::get_hal().get_dev_addr(
                 tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)),
             static_cast<uint32_t>(num_samples),
             static_cast<uint32_t>(sample_page_size),
