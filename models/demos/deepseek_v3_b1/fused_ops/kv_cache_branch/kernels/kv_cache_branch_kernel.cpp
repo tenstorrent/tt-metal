@@ -56,13 +56,9 @@ void kernel_main() {
             "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
     };
 
-    using KV_RMSNormCTArgs =
-        deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("kv_rmsnorm_num_faces")>;
+    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     // kv cache rmsnorm reader args
-    deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{
-        get_named_compile_time_arg_val("kv_rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(512)) #TODO: fix id when used in pre sdpa
-    };
+    deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
@@ -134,11 +130,10 @@ void kernel_main() {
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_scalars_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_interm_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         get_arg_val<uint32_t>(0),  // epsilon
+        get_arg_val<float>(1),     // scalar (1/sqrt(512))
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt")>;
