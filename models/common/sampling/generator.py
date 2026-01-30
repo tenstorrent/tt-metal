@@ -211,6 +211,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+
         return slot["output"]
 
     def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
@@ -262,7 +263,6 @@ class SamplingGenerator:
                 self.tt_penalties.update_output_tokens(tt_out[0])
             else:
                 self.tt_penalties.update_output_tokens(tt_out)
-
         return tt_out
 
 
