@@ -92,7 +92,7 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        tt::tt_metal::MetalContext::instance().get_control_plane();
+        tt::tt_metal::get_control_plane();
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
     }

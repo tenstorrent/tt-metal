@@ -251,20 +251,17 @@ void RunTest(
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
         core,
         ComputeConfig{});
 

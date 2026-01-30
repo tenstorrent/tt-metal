@@ -161,7 +161,7 @@ void TelemetryManager::process_telemetry_for_golden() {
 
 void TelemetryManager::dump_raw_telemetry_csv(const TestConfig& config) {
     std::filesystem::path raw_telemetry_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         (std::string(OUTPUT_DIR) + std::string("/") + config.name + "_raw_telemetry.csv");
 
     if (!std::filesystem::exists(raw_telemetry_path)) {

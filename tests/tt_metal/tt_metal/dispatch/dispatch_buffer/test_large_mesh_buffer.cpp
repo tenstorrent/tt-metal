@@ -138,7 +138,7 @@ protected:
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
     const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr bank_offset = get_hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
 
     bool result{true};
     auto allocation_size_per_bank = (size + num_dram_channels - 1) / num_dram_channels;
@@ -242,7 +242,7 @@ bool validate_sharded_test_inputs(
     // Determine if required allocation per bank can fit
     const size_t num_dram_channels = mesh_device.num_dram_channels();
     const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr bank_offset = get_hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     uint32_t shard_height = tensor_shape.height() / grid_size.y;
     uint32_t shard_width = tensor_shape.width() / grid_size.x;
     size_t shard_sizeB = size_t(shard_height) * shard_width * element_sizeB;

@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
     // CQ capacity would be reduced by the commands and alignment padding.
     // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
-    const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const auto host_alignment = tt::tt_metal::get_hal().get_alignment(HalMemType::HOST);
     auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
                                 (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
                                 tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
@@ -40,7 +40,7 @@ void validate_core_read_write_bounds(
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
 
@@ -54,7 +54,7 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         address += soc_desc.get_address_offset(dram_channel);
     }
@@ -212,7 +212,7 @@ void read_core_data_from_completion_queue(
         const uint32_t num_bytes_to_copy = std::min(
             num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue - completion_queue_read_offset);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        tt::tt_metal::get_cluster().read_sysmem(
             (char*)(uint64_t(read_descriptor.dst) + num_bytes_read),
             num_bytes_to_copy,
             completion_q_read_ptr + completion_queue_read_offset,

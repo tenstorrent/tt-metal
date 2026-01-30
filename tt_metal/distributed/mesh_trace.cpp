@@ -126,7 +126,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(get_hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));

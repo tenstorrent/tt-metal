@@ -52,7 +52,7 @@ void validate_cb_address(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     auto& program = workload.get_programs().at(device_range);
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_cbs = get_hal().get_arch_num_circular_buffers();
 
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);

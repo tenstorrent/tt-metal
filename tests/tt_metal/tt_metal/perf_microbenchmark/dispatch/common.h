@@ -413,8 +413,7 @@ inline bool DeviceData::validate_one_core(
         tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
-        results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            device->id(), phys_core, result_addr, size_bytes);
+        results = tt::tt_metal::get_cluster().read_core(device->id(), phys_core, result_addr, size_bytes);
     }
 
     log_info(
@@ -985,7 +984,7 @@ protected:
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
 
         // Initialize common HW properties
-        host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        host_alignment_ = tt_metal::get_hal().get_alignment(tt_metal::HalMemType::HOST);
         max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     }
 

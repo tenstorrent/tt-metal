@@ -51,14 +51,14 @@ DispatchKernel::DispatchKernel(
         "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    uint16_t channel = get_cluster().get_assigned_channel_for_device(device_id);
 
     DispatchWorkerType type = DISPATCH;
     if (h_variant && d_variant) {
         this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
         type = DISPATCH_HD;
     } else if (h_variant) {
-        channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id);
+        channel = get_cluster().get_assigned_channel_for_device(servicing_device_id);
         this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
         type = DISPATCH_H;
     } else if (d_variant) {
@@ -72,7 +72,7 @@ DispatchKernel::DispatchKernel(
 }
 
 void DispatchKernel::GenerateStaticConfigs() {
-    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    uint16_t channel = get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
@@ -114,11 +114,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? MetalContext::instance().hal().get_dev_addr(
-                      HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher =
             MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
@@ -134,7 +133,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
     } else if (static_config_.is_h_variant.value()) {
         // DISPATCH_H services a remote chip, and so has a different channel
-        channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
+        channel = get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
@@ -198,11 +197,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? MetalContext::instance().hal().get_dev_addr(
-                      HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher =
             MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
@@ -222,7 +220,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
-        const auto& fabric_context = MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = get_control_plane().get_fabric_context();
         static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
@@ -259,8 +257,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
-                prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
+            dependent_config_.prefetch_h_noc_xy =
+                get_hal().noc_xy_encoding(prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }
@@ -308,7 +306,7 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(prefetch_h_kernel && prefetch_h_kernel->GetStaticConfig().is_h_variant.value());
                 TT_ASSERT(!found_prefetch_h, "DISPATCH_H has multiple downstream PREFETCH_H kernels.");
                 found_prefetch_h = true;
-                dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
+                dependent_config_.prefetch_h_noc_xy = get_hal().noc_xy_encoding(
                     prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
                 dependent_config_.prefetch_h_local_downstream_sem_addr =
                     prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -351,8 +349,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
-                prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
+            dependent_config_.prefetch_h_noc_xy =
+                get_hal().noc_xy_encoding(prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }

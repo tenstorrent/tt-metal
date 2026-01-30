@@ -35,8 +35,8 @@ bool balanced_physical_device_numa() {
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
-        for (auto device_id : MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-            auto numa_node_for_device = MetalContext::instance().get_cluster().get_numa_node_for_device(device_id);
+        for (auto device_id : get_cluster().user_exposed_chip_ids()) {
+            auto numa_node_for_device = get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }
         return numa_nodes_for_cluster.size() == num_nodes;
@@ -50,15 +50,14 @@ uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < MetalContext::instance().get_cluster().number_of_devices() &&
-        !tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    if (physical_device_id < get_cluster().number_of_devices() &&
+        !tt::tt_metal::get_rtoptions().get_simulator_enabled()) {
         // If the cluster uses all NUMA nodes, assign worker threads to CPU cores based
         // on the NUMA layout. If not, balance the worker threads across all NUMA Nodes/
         // CPU cores to minimize resource contention.
         static bool devices_balanced_across_numa_nodes = balanced_physical_device_numa();
-        numa_node = devices_balanced_across_numa_nodes
-                        ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
-                        : physical_device_id % 2;
+        numa_node = devices_balanced_across_numa_nodes ? get_cluster().get_numa_node_for_device(physical_device_id)
+                                                       : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.contains(numa_node)) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];

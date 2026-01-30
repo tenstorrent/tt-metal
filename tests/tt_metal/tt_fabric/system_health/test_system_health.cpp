@@ -38,7 +38,7 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
 }
 
 ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType /*cluster_type*/) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& driver = cluster.get_driver();
     TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto arch = cluster.arch();
@@ -116,7 +116,7 @@ ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t ch
 }
 
 bool is_chip_on_edge_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
@@ -132,7 +132,7 @@ bool is_chip_on_edge_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterType 
 }
 
 bool is_chip_on_corner_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
@@ -150,7 +150,7 @@ bool is_chip_on_corner_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterTyp
 }
 
 std::string get_ubb_id_str(ChipId chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& driver = cluster.get_driver();
     TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
@@ -158,7 +158,7 @@ std::string get_ubb_id_str(ChipId chip_id) {
 }
 
 std::string get_pcie_device_id_str(ChipId chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& chips_with_mmio = cluster.get_chips_with_mmio();
     auto it = chips_with_mmio.find(chip_id);
     if (it != chips_with_mmio.end()) {
@@ -168,7 +168,7 @@ std::string get_pcie_device_id_str(ChipId chip_id) {
 }
 
 std::string get_physical_slot_str(ChipId chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     auto physical_slot = cluster.get_physical_slot(chip_id);
     auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
     if (physical_slot.has_value()) {
@@ -207,7 +207,7 @@ std::string get_connector_str(ChipId chip_id, CoreCoord eth_core, uint32_t chann
 }
 
 TEST(Cluster, ReportIntermeshLinks) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     auto all_intermesh_links = cluster.get_ethernet_connections_to_remote_devices();
     // Check if cluster supports intermesh links
     if (all_intermesh_links.empty()) {
@@ -254,19 +254,19 @@ TEST(Cluster, ReportIntermeshLinks) {
 TEST(Cluster, ReportSystemHealth) {
     // Despite potential error messages, this test will not fail
     // It is a report of system health
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
 
-    auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+    auto unique_chip_ids = tt::tt_metal::get_cluster().get_unique_chip_ids();
     std::stringstream ss;
     std::vector<std::uint32_t> read_vec;
-    auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto retrain_count_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
-    auto crc_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto crc_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
-    auto corr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto corr_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
-    auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto uncorr_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
     if (unique_chip_ids.empty()) {
         // Temporary patch to workaround unique chip ids not being set for non-6U systems
@@ -360,7 +360,7 @@ TEST(Cluster, ReportSystemHealth) {
 }
 
 TEST(Cluster, TestMeshFullConnectivity) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
     std::uint32_t num_expected_chips = 0;
     std::uint32_t num_connections_per_side = 0;

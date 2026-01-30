@@ -108,7 +108,7 @@ void issue_trace_commands(
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
-            MetalContext::instance().hal().make_go_msg_u32(
+            get_hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
@@ -167,7 +167,7 @@ void issue_trace_commands(
 }
 
 uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t go_signals_cmd_size =
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;

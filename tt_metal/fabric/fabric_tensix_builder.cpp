@@ -25,9 +25,8 @@ namespace tt::tt_fabric {
 
 namespace {
 bool device_has_dispatch_tunnel(ChipId device_id) {
-    auto mmio_device_id = tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    auto tunnels_from_mmio =
-        tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    auto mmio_device_id = tt_metal::get_cluster().get_associated_mmio_device(device_id);
+    auto tunnels_from_mmio = tt_metal::get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
     // results are inclusive of the mmio_device_id so they will never be zero
     TT_FATAL(!tunnels_from_mmio.empty(), "must have at least one mmio device");
     return (tunnels_from_mmio.size() - 1) > 0;
@@ -43,7 +42,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
     num_non_dispatch_routing_planes_ = 0;
 
     auto device_id = all_active_devices.front()->id();
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
@@ -107,7 +106,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
 void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     const auto& fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // Create per-device channel mappings using real ethernet channel IDs
@@ -150,7 +149,7 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
 
 void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
 
     // Build the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
     // for each fabric node and routing plane (link index)
@@ -191,7 +190,7 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     const FabricNodeId& fabric_node_id,
     const std::set<std::pair<chan_id_t, eth_chan_directions>>& active_channels,
     size_t& channel_index) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     ChipId dev_id = device->id();
 
     // Collect all active (routing_plane_id, direction) pairs from active_channels
@@ -286,8 +285,7 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
 
 bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
-    const bool is_TG =
-        (tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt_metal::ClusterType::TG);
+    const bool is_TG = (tt_metal::get_cluster().get_cluster_type() == tt_metal::ClusterType::TG);
     TT_FATAL(!is_TG, "Fabric with tensix extension is not supported for TG");
 
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
@@ -385,7 +383,7 @@ std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt_m
 
 // UDM mode helper: gets unique tensix cores for worker assignment
 std::vector<CoreCoord> FabricTensixDatamoverConfig::get_tensix_cores_for_workers(tt_metal::IDevice* device) const {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
 
     const auto& node_map = fabric_tensix_noc_coords_map_.at(fabric_node_id);
@@ -477,7 +475,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
     } else {
         // Legacy MUX mode: use topology-based channel count
         // Legacy has ROUTER_CHANNEL and WORKER_CHANNEL
-        const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = tt_metal::get_control_plane().get_fabric_context();
         bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
         // Router channel count: 1 for 1D topologies, 3 for 2D topologies
@@ -489,8 +487,8 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& hal = tt_metal::get_hal();
+    const auto& fabric_context = tt_metal::get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
 
     // Get buffer size from fabric context
@@ -912,7 +910,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     uint32_t ethernet_channel_id,
     eth_chan_directions direction,
     std::vector<bool>&& sender_channel_injection_flags) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
@@ -982,7 +980,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_dir
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     routing_plane_id_t routing_plane_id,
     eth_chan_directions direction) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt_metal::get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();

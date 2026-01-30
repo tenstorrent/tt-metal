@@ -25,7 +25,7 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape
         shape,
         shape,
         distributed::MeshCoordinate::zero_coordinate(shape.dims()),
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_host_local_context());
+        tt::tt_metal::get_control_plane().get_host_local_context());
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(
@@ -55,8 +55,7 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
     std::vector<distributed::MaybeRemote<Shard>> shards(
         mesh_device_view.shape().mesh_size(), distributed::MaybeRemote<Shard>::remote());
 
-    auto distributed_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
+    auto distributed_context = tt::tt_metal::get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
 
     int shard_index = 0;
     for (auto maybe_device : mesh_device_view) {

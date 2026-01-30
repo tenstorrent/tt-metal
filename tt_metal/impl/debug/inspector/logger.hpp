@@ -9,17 +9,17 @@
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
-#define TT_INSPECTOR_THROW(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
-        TT_THROW(__VA_ARGS__); \
-    } else { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
-        return; \
+#define TT_INSPECTOR_THROW(...)                                                      \
+    if (tt::tt_metal::get_rtoptions().get_inspector_initialization_is_important()) { \
+        TT_THROW(__VA_ARGS__);                                                       \
+    } else {                                                                         \
+        log_warning(tt::LogInspector, __VA_ARGS__);                                  \
+        return;                                                                      \
     }
 
-#define TT_INSPECTOR_LOG(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
+#define TT_INSPECTOR_LOG(...)                                                     \
+    if (tt::tt_metal::get_rtoptions().get_inspector_warn_on_write_exceptions()) { \
+        log_warning(tt::LogInspector, __VA_ARGS__);                               \
     }
 
 namespace tt::tt_metal::inspector {

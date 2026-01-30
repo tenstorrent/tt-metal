@@ -97,8 +97,7 @@ void LatencyTestManager::create_latency_kernels_for_device(
 std::ofstream LatencyTestManager::init_diff_csv_file(
     std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     std::ostringstream diff_oss;
     auto arch_name = tt::tt_metal::hal::get_arch_name();
     diff_oss << test_type << "_diff_" << arch_name << ".csv";
@@ -498,8 +497,7 @@ void LatencyTestManager::report_latency_results(
 
 void LatencyTestManager::initialize_latency_results_csv_file() {
     // Create output directory
-    std::filesystem::path tt_metal_home =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir());
     std::filesystem::path latency_results_path = tt_metal_home / std::string(OUTPUT_DIR);
 
     if (!std::filesystem::exists(latency_results_path)) {
@@ -570,7 +568,7 @@ void LatencyTestManager::generate_latency_results_csv() {
 
 std::string LatencyTestManager::get_golden_latency_csv_filename() {
     auto arch_name = tt::tt_metal::hal::get_arch_name();
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
 
     // Convert cluster type enum to lowercase string
     std::string cluster_name = std::string(enchantum::to_string(cluster_type));
@@ -584,9 +582,8 @@ bool LatencyTestManager::load_golden_latency_csv() {
     golden_latency_entries_.clear();
 
     std::string golden_filename = get_golden_latency_csv_filename();
-    std::filesystem::path golden_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
+    std::filesystem::path golden_path = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
+                                        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
 
     if (!std::filesystem::exists(golden_path)) {
         log_warning(tt::LogTest, "Golden latency CSV file not found: {}", golden_path.string());
@@ -832,8 +829,7 @@ void LatencyTestManager::generate_latency_summary() {
 }
 
 void LatencyTestManager::setup_ci_artifacts() {
-    std::filesystem::path tt_metal_home =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir());
     std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
     if (!std::filesystem::exists(ci_artifacts_path)) {
         try {

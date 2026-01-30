@@ -25,11 +25,11 @@ namespace tt::tt_metal {
 using namespace tt;
 
 bool is_galaxy_device(const ChipId device_id) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::GALAXY;
+    return tt::tt_metal::get_cluster().get_board_type(device_id) == BoardType::GALAXY;
 }
 
 bool is_n150_device(const ChipId device_id) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::N150;
+    return tt::tt_metal::get_cluster().get_board_type(device_id) == BoardType::N150;
 }
 
 /*
@@ -44,14 +44,13 @@ is updated with this option, we can call that over this function.
 std::unordered_set<ChipId> get_ethernet_connected_device_ids(const ChipId device_id) {
     std::unordered_set<ChipId> connected_device_ids;
     const std::unordered_set<CoreCoord>& active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+        tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id);
     for (const CoreCoord& ethernet_core : active_ethernet_cores) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_id, ethernet_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(device_id, ethernet_core)) {
             continue;
         }
         const auto& [connected_device_id, _] =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
-                {device_id, ethernet_core});
+            tt::tt_metal::get_cluster().get_connected_ethernet_core({device_id, ethernet_core});
         connected_device_ids.insert(connected_device_id);
     }
     return connected_device_ids;
@@ -76,15 +75,13 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
         if (is_galaxy_device(device_id)) {
             std::unordered_map<ChipId, uint32_t> connected_devices_to_num_links_found;
             const std::unordered_set<CoreCoord>& active_ethernet_cores =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+                tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id);
             for (const CoreCoord& ethernet_core : active_ethernet_cores) {
-                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                        device_id, ethernet_core)) {
+                if (not tt::tt_metal::get_cluster().is_ethernet_link_up(device_id, ethernet_core)) {
                     continue;
                 }
                 const auto& [connected_device_id, _] =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
-                        {device_id, ethernet_core});
+                    tt::tt_metal::get_cluster().get_connected_ethernet_core({device_id, ethernet_core});
 
                 if (!is_galaxy_device(connected_device_id)) {
                     continue;
@@ -147,8 +144,7 @@ TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
         auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
-            const uint32_t harvest_mask =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
+            const uint32_t harvest_mask = tt::tt_metal::get_cluster().get_harvesting_mask(device_id);
             ASSERT_TRUE(harvest_mask == 0)
                 << "Harvest mask for chip " << device_id << ": " << harvest_mask << std::endl;
         }
@@ -162,7 +158,7 @@ TEST_F(GalaxyFixture, DISABLED_ValidateAllMMIOChipsHaveSingleRowHarvested) {
         const ChipId device_id = device->id();
         if (!is_galaxy_device(device_id)) {
             uint32_t num_rows_harvested = 0;
-            uint32_t harvest_mask = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
+            uint32_t harvest_mask = tt::tt_metal::get_cluster().get_harvesting_mask(device_id);
             while (harvest_mask) {
                 if (harvest_mask & 1) {
                     num_rows_harvested++;
@@ -176,12 +172,12 @@ TEST_F(GalaxyFixture, DISABLED_ValidateAllMMIOChipsHaveSingleRowHarvested) {
 }
 
 TEST_F(TGFixture, ValidateNumMMIOChips) {
-    const size_t num_mmio_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const size_t num_mmio_chips = tt::tt_metal::get_cluster().number_of_pci_devices();
     ASSERT_TRUE(num_mmio_chips == 4) << "Detected " << num_mmio_chips << " MMIO chips" << std::endl;
 }
 
 TEST_F(TGFixture, ValidateNumGalaxyChips) {
-    const size_t num_galaxy_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
+    const size_t num_galaxy_chips = tt::tt_metal::get_cluster().number_of_user_devices();
     ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
 }
 

@@ -16,12 +16,9 @@
 
 namespace tt::tt_metal::inspector {
 
-
-Data::Data()
-    : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
-
+Data::Data() : logger(tt::tt_metal::get_rtoptions().get_inspector_log_path()) {
     // Initialize RPC server if enabled
-    const auto& rtoptions = MetalContext::instance().rtoptions();
+    const auto& rtoptions = tt::tt_metal::get_rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             auto address = rtoptions.get_inspector_rpc_server_address();
@@ -237,7 +234,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
-    if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!tt_metal::get_rtoptions().get_fast_dispatch()) {
         // Fast dispatch is not enabled, no dispatch core info to return
         results.initCoresByCategory(0);
         return;
@@ -286,7 +283,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 
 void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
     // Get cluster descriptor from MetalContext
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = get_cluster();
     const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();
 
     // Populate RPC response

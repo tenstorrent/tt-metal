@@ -134,7 +134,7 @@ bool run_atomic_semaphore_test(
         device, test_config.receiver_core_coord, l1_base_address + test_config.semaphore_addr_offset, zero_semaphore);
 
     // Barrier to ensure initialization is complete
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     // Launch the program using mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();

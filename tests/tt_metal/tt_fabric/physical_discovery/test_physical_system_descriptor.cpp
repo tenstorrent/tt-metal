@@ -27,16 +27,12 @@ namespace tt::tt_fabric::physical_discovery {
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& cluster = tt::tt_metal::get_cluster();
+    const auto& rtoptions = tt::tt_metal::get_rtoptions();
     constexpr bool run_discovery = true;
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(),
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        rtoptions,
-        run_discovery);
+        cluster.get_driver(), distributed_context, &tt::tt_metal::get_hal(), rtoptions, run_discovery);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();
@@ -147,11 +143,11 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
 TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& cluster = tt::tt_metal::get_cluster();
+    const auto& rtoptions = tt::tt_metal::get_rtoptions();
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+        cluster.get_driver(), distributed_context, &tt::tt_metal::get_hal(), rtoptions, true);
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
 
     // Generate a YAML File with the tray to pcie device mapping

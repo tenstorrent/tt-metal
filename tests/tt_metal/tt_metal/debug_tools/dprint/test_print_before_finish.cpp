@@ -53,7 +53,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {

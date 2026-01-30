@@ -181,7 +181,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
     std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
     std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_cbs = get_hal().get_arch_num_circular_buffers();
     // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
     constexpr uint32_t l1_cb_test_budget = 1024 * 32;
     uint32_t page_size = l1_cb_test_budget / max_cbs;

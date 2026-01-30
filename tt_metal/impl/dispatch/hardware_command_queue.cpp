@@ -82,7 +82,7 @@ HWCommandQueue::HWCommandQueue(
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
     device_(device),
-    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_dram_aligned_block_size_(get_hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
@@ -94,14 +94,10 @@ HWCommandQueue::HWCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
 
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    this->size_B_ =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
-        device_->num_hw_cqs();
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_->id());
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_->id());
+    this->size_B_ = tt::tt_metal::get_cluster().get_host_channel_size(mmio_device_id, channel) / device_->num_hw_cqs();
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster()) {
         // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
         this->size_B_ = this->size_B_ / 4;
     }
@@ -228,10 +224,8 @@ void HWCommandQueue::enqueue_record_event(
 }
 
 void HWCommandQueue::read_completion_queue() {
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(this->device_->id());
     while (true) {
         uint32_t num_events_to_read = 0;
         {
@@ -320,7 +314,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
 
 // Allocate space for program binaries and other data in the worker config ring buffer.
 void HWCommandQueue::allocate_trace_programs() {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     uint32_t expected_workers_completed = 0;
     for (auto& node : this->trace_nodes_) {
         auto& program = *node.program;
@@ -470,7 +464,7 @@ void HWCommandQueue::record_end() {
     trace_data = std::move(this->manager_.get_bypass_data());
 
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(get_hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

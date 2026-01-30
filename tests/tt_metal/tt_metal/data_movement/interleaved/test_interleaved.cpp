@@ -157,13 +157,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     if (test_config.read_kernel) {
         detail::WriteToBuffer(input_buffer, packed_input);
         if (test_config.is_dram) {
-            MetalContext::instance().get_cluster().dram_barrier(device->id());
+            get_cluster().dram_barrier(device->id());
         } else {
-            MetalContext::instance().get_cluster().l1_barrier(device->id());
+            get_cluster().l1_barrier(device->id());
         }
     } else {
         detail::WriteToDeviceL1(device, corerange_to_cores(test_config.cores)[0], l1_addr, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
     }
 
     auto mesh_workload = distributed::MeshWorkload();
