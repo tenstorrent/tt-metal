@@ -209,12 +209,6 @@ def run_wq_kv_a_sequence_with_trace(
     profiler.end("wq-kv-a-sequence")
     signpost("stop")
 
-    time_taken = profiler.get_duration("wq-kv-a-sequence") - profiler.get_duration("wq-kv-a-sequence-warmup")
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_q, tt_kv_nope, tt_kv_rope
 
 

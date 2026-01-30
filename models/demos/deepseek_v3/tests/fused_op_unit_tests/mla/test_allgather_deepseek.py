@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 
 
 def run_allgather_deepseek_with_trace(
@@ -90,12 +90,6 @@ def run_allgather_deepseek_with_trace(
     profiler.end("all-gather-trace")
     signpost("stop")
 
-    time_taken = profiler.get_duration("all-gather-trace") - profiler.get_duration("all-gather-trace-warmup")
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_out_tensor
 
 
@@ -130,7 +124,7 @@ def run_allgather_deepseek_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 876544,
+            "trace_region_size": 901200,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
@@ -268,10 +262,7 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
                 logger.info(f"Checking for device {t.device().id()}")
 
-                if input_dtype == ttnn.bfloat16:
-                    eq, output = comp_equal(tt_output_tensor, output_tensor)
-                else:
-                    eq, output = comp_pcc(tt_output_tensor, output_tensor)
+                eq, output = comp_equal(tt_output_tensor, output_tensor)
                 if not eq:
                     logger.error(f"output mismatch for tensor {i}")
                     passed = False

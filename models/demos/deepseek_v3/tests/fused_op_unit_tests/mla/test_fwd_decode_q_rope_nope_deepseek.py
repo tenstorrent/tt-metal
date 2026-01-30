@@ -283,14 +283,6 @@ def run_fwd_decode_q_rope_nope_with_trace(
     profiler.end("fwd-decode-q-rope-nope")
     signpost("stop")
 
-    time_taken = profiler.get_duration("fwd-decode-q-rope-nope") - profiler.get_duration(
-        "fwd-decode-q-rope-nope-warmup"
-    )
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_q
 
 

@@ -282,14 +282,6 @@ def run_norm_and_rope_sequence_with_trace(
     profiler.end("norm-and-rope-sequence")
     signpost("stop")
 
-    time_taken = profiler.get_duration("norm-and-rope-sequence") - profiler.get_duration(
-        "norm-and-rope-sequence-warmup"
-    )
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_q_out, tt_kvpe
 
 

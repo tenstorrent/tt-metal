@@ -285,15 +285,6 @@ def test_deepseek_v3_mla_to_memory_config_trace_mode(
     signpost("stop")
     ttnn.synchronize_device(device)
 
-    # Calculate performance metrics
-    warmup_time_ms = profiler.get_duration("warmup") * 1000
-    main_time_ms = profiler.get_duration("main") * 1000
-    avg_time_per_iter_us = (main_time_ms / num_iters) * 1000
-
-    logger.info(f"Warmup time: {warmup_time_ms:.2f} ms ({warmup_iters} iterations)")
-    logger.info(f"Main trace time: {main_time_ms:.2f} ms ({num_iters} iterations)")
-    logger.info(f"Average time per iteration: {avg_time_per_iter_us:.2f} µs")
-
     # Verify correctness
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     torch_output_from_tt = ttnn.to_torch(tt_output_tensor)

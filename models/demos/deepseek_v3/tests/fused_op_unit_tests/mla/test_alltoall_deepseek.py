@@ -95,12 +95,6 @@ def run_alltoall_deepseek_with_trace(
     profiler.end("all-to-all-trace")
     signpost("stop")
 
-    time_taken = profiler.get_duration("all-to-all-trace") - profiler.get_duration("all-to-all-trace-warmup")
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_out_tensor
 
 

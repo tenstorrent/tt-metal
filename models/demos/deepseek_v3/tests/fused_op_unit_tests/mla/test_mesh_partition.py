@@ -143,18 +143,9 @@ def test_deepseek_v3_mla_mesh_partition_trace_mode(
     signpost("stop")
     ttnn.synchronize_device(mesh_device)
 
-    # Calculate performance metrics
-    warmup_time_ms = profiler.get_duration("warmup") * 1000
-    main_time_ms = profiler.get_duration("main") * 1000
-    avg_time_per_iter_us = (main_time_ms / num_iters) * 1000
-
     # Verify the input and output shapes
     assert tt_input_tensor.shape == input_shape, f"Input shape mismatch: {tt_input_tensor.shape} != {input_shape}"
     assert tt_output_tensor.shape == output_shape, f"Output shape mismatch: {tt_output_tensor.shape} != {output_shape}"
-
-    logger.info(f"Warmup time: {warmup_time_ms:.2f} ms ({warmup_iters} iterations)")
-    logger.info(f"Main trace time: {main_time_ms:.2f} ms ({num_iters} iterations)")
-    logger.info(f"Average time per iteration: {avg_time_per_iter_us:.2f} µs")
 
     # Verify correctness
     tt_output_tensor = ttnn.from_device(tt_output_tensor)

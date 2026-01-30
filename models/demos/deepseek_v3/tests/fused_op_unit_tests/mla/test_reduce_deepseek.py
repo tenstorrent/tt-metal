@@ -146,15 +146,6 @@ def test_deepseek_v3_mla_wq_kv_a_fast_reduce_nc_trace_mode(
         signpost("stop")
         ttnn.synchronize_device(mesh_device)
 
-        # Calculate performance metrics
-        warmup_time_ms = profiler.get_duration("warmup") * 1000
-        main_time_ms = profiler.get_duration("main") * 1000
-        avg_time_per_iter_us = (main_time_ms / num_iters) * 1000
-
-        logger.info(f"Warmup time: {warmup_time_ms:.2f} ms ({warmup_iters} iterations)")
-        logger.info(f"Main trace time: {main_time_ms:.2f} ms ({num_iters} iterations)")
-        logger.info(f"Average time per iteration: {avg_time_per_iter_us:.2f} µs")
-
         # Verify correctness
         # Since the output is replicated across all devices, we need to extract from individual devices
         logger.info("Verifying correctness")

@@ -103,12 +103,6 @@ def run_wkv_b2_sequence_with_trace(
     profiler.end("wkv-b2-sequence")
     signpost("stop")
 
-    time_taken = profiler.get_duration("wkv-b2-sequence") - profiler.get_duration("wkv-b2-sequence-warmup")
-    effective_iter = num_iter - warmup_iters
-    logger.info(f"Time taken e2e: {time_taken} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
     return tt_v_out_permuted
 
 
