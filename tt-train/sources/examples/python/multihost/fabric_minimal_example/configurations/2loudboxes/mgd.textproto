@@ -1,9 +1,9 @@
 # --- Meshes ---------------------------------------------------------------
 
 mesh_descriptors {
-  name: "LBOX"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 1, 8 ] }
+  name: "GALAXY"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 32 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
 }
@@ -14,8 +14,8 @@ mesh_descriptors {
 graph_descriptors {
   name: "SUPERPOD"
   type: "FABRIC"
-  instances { mesh { mesh_descriptor: "LBOX" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "GALAXY" mesh_id: 1 } }
   graph_topology: { layout_type: ALL_TO_ALL channels: { count: 2 policy: STRICT } }
 }
 
