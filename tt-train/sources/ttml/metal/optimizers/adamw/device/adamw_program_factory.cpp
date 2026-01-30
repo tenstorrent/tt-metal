@@ -119,18 +119,17 @@ void assign_per_core_runtime_args(
         }
     }
 
-    // Compute runtime args (same for all cores)
-    auto make_compute_args = [&](uint32_t seed) {
-        return std::vector<uint32_t>{
-            std::bit_cast<uint32_t>(attrs.beta1),
-            std::bit_cast<uint32_t>(attrs.beta2),
-            std::bit_cast<uint32_t>(attrs.epsilon),
-            std::bit_cast<uint32_t>(step_size),
-            std::bit_cast<uint32_t>(inv_sqrt_bc2),
-            std::bit_cast<uint32_t>(one_minus_beta1),
-            std::bit_cast<uint32_t>(one_minus_beta2),
-            std::bit_cast<uint32_t>(decay_factor),
-            seed};
+    // Compute runtime args (same for all cores except seed)
+    std::vector<uint32_t> compute_args{
+        std::bit_cast<uint32_t>(attrs.beta1),
+        std::bit_cast<uint32_t>(attrs.beta2),
+        std::bit_cast<uint32_t>(attrs.epsilon),
+        std::bit_cast<uint32_t>(step_size),
+        std::bit_cast<uint32_t>(inv_sqrt_bc2),
+        std::bit_cast<uint32_t>(one_minus_beta1),
+        std::bit_cast<uint32_t>(one_minus_beta2),
+        std::bit_cast<uint32_t>(decay_factor),
+        0U  // seed placeholder, updated per-core
     };
 
     // Update:
@@ -163,10 +162,11 @@ void assign_per_core_runtime_args(
              num_tiles_written});
 
         // Compute kernel
+        compute_args[kComputeSeedIdx] = seeds[i];
         if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_1, core, make_compute_args(seeds[i]));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, compute_args);
         } else if (core_group_2.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, make_compute_args(seeds[i]));
+            SetRuntimeArgs(program, kernels.compute_group_2, core, compute_args);
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
