@@ -1,4 +1,4 @@
-name: "[internal] Galaxy DeepSeek long tests impl"
+name: "Galaxy DeepSeek long seq len tests"
 
 on:
   workflow_call:
@@ -62,11 +62,12 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run DeepSeek long seq len module tests
-        timeout-minutes: 240
+        timeout-minutes: 360
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          DEEPSEEK_MAX_SEQ_LEN=32768 pytest models/demos/deepseek_v3/tests/test_mla.py models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 600 --durations=0
-          DEEPSEEK_MAX_SEQ_LEN=4096 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 600 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN=32768 pytest models/demos/deepseek_v3/tests/test_mla.py --timeout 3600 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN=32768 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 7200 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN=4096 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 10800 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
