@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/transpose_wh.h"
+
+namespace NAMESPACE {
+void MAIN {
+    uint32_t n_tiles = get_arg_val<uint32_t>(0);
+
+    for (uint32_t i = 0; i < n_tiles; i++) {
+        tile_regs_acquire();
+        cb_wait_front(tt::CBIndex::c_0, 1);
+        transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        // Wait for result to be done and data stored back to the circular buffer
+        tile_regs_commit();
+        tile_regs_wait();
+        // Wait for space in the circular buffer to be available for us to write
+        cb_reserve_back(tt::CBIndex::c_16, 1);
+        pack_tile(0, tt::CBIndex::c_16);  // copy tile 0 from the registers to the CB
+        // We don't need the input tile anymore, mark it as consumed
+        cb_pop_front(tt::CBIndex::c_0, 1);
+        // Done with the registers, we can release them for the next SFPU operation
+        tile_regs_release();
+        // Mark the tile as ready for the writer kernel to write to DRAM
+        cb_push_back(tt::CBIndex::c_16, 1);
+    }
+}
+}  // namespace NAMESPACE
