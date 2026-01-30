@@ -1,1 +1,1 @@
-../../../../../../../../models/demos/wormhole/mamba/tests/test_benchmarks.py
+../../../../../../../../models/demos/nlp/llms/mamba/tests/test_benchmarks.py

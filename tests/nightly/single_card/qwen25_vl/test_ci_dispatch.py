@@ -1,1 +1,1 @@
-../../../../models/demos/qwen25_vl/tests/test_ci_dispatch.py
+../../../../models/demos/nlp/llms/qwen25_vl/tests/test_ci_dispatch.py
