@@ -99,12 +99,12 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     return dense_metadata_buffer, dense_metadata_len, dense_token_maps, active_token_counts
 
 
-def _active_token_core_split_counts(token_parallel_block_size, active_token_counts, num_token_parallel_cores):
+def _active_token_core_split_counts(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
     split_token_end_indexes = []
     for act in active_token_counts.tolist():
-        end_index = [act // num_token_parallel_cores for _ in range(num_token_parallel_cores)]
+        end_index = [act // token_parallel_core_dim for _ in range(token_parallel_core_dim)]
 
-        for rem in range(act % num_token_parallel_cores):
+        for rem in range(act % token_parallel_core_dim):
             end_index[rem] += 1
 
         split_token_end_indexes.append(list(reversed(end_index)))
@@ -122,7 +122,7 @@ def gen_dense_input_contribs(
     dense_metadata_tensor,
     dense_metadata_len,
     active_token_counts,
-    num_token_parallel_cores,
+    token_parallel_core_dim,
     mesh_shape,
     cluster_axis,
 ):
@@ -131,13 +131,10 @@ def gen_dense_input_contribs(
     seq = sparse_contribs_tensor.shape[-2]
 
     dense_input_contribs_tensor = torch.zeros([experts, batch * seq, hidden_size]).bfloat16()
-    token_parallel_block_size = batch // num_token_parallel_cores
+    token_parallel_block_size = batch // token_parallel_core_dim
     block_counts = _active_token_core_split_counts(
-        token_parallel_block_size, active_token_counts, num_token_parallel_cores
+        token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
-
-    # print(f"{block_counts=}")
-    # print(f"{token_parallel_block_size=}")
 
     assert len(block_counts) == experts
 
@@ -187,7 +184,7 @@ def gen_output_ref(
     dense_metadata_tensor,
     dense_metadata_len,
     active_token_counts,
-    num_token_parallel_cores,
+    token_parallel_core_dim,
     mesh_shape,
     cluster_axis,
     local_reduce=False,
@@ -199,9 +196,9 @@ def gen_output_ref(
     output_ref_tensor = torch.zeros(batch * seq * cluster_factor, experts, hidden_size).bfloat16()
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
 
-    token_parallel_block_size = batch // num_token_parallel_cores
+    token_parallel_block_size = batch // token_parallel_core_dim
     block_counts = _active_token_core_split_counts(
-        token_parallel_block_size, active_token_counts, num_token_parallel_cores
+        token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
 
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
@@ -261,7 +258,7 @@ def gen_tensors(
     mesh_shape,
     cluster_axis,
     devices,
-    num_token_parallel_cores,
+    token_parallel_core_dim,
     scheme="random",
     local_reduce=False,
 ):
@@ -278,10 +275,6 @@ def gen_tensors(
         local_reduce=False,
     )
 
-    # print(f"{expert_mapping=}")
-    # print(f"{metadata_tensor=}")
-    # print(f"{input_sparse_contribs_tensor=}")
-
     dense_metadata_tensor, dense_metadata_len, dense_token_maps, active_token_counts = gen_dense_metadata(
         batch, seq, experts, select_experts_k, mesh_shape, cluster_axis, metadata_tensor, expert_mapping
     )
@@ -295,7 +288,7 @@ def gen_tensors(
         dense_metadata_tensor,
         dense_metadata_len,
         active_token_counts,
-        num_token_parallel_cores,
+        token_parallel_core_dim,
         mesh_shape,
         cluster_axis,
     )
@@ -309,15 +302,11 @@ def gen_tensors(
         dense_metadata_tensor,
         dense_metadata_len,
         active_token_counts,
-        num_token_parallel_cores,
+        token_parallel_core_dim,
         mesh_shape,
         cluster_axis,
         local_reduce,
     )
-
-    # print(f"{active_token_counts=}")
-
-    # print(f"{output_ref=}")
 
     return (
         dense_metadata_tensor,
@@ -329,26 +318,28 @@ def gen_tensors(
     )
 
 
-NUM_DEVICES = 8
-
-
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("batch", [64])
-@pytest.mark.parametrize("experts", [16])
+@pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
+@pytest.mark.parametrize("batch", [512])
+@pytest.mark.parametrize("experts", [32])
 @pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [16])
+@pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("devices", [NUM_DEVICES])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 0))])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
 @pytest.mark.parametrize("mux_core_range", [((0, 1), (0, 2))])
-@pytest.mark.parametrize("num_token_parallel_cores", [4])
-@pytest.mark.parametrize("num_data_parallel_cores", [1])
+@pytest.mark.parametrize("token_parallel_core_dim", [4])
+@pytest.mark.parametrize("data_parallel_core_dim", [4])
 def test_gen_tensors(
     mesh_device,
     batch,
@@ -357,13 +348,13 @@ def test_gen_tensors(
     hidden_size,
     seq,
     cluster_axis,
-    devices,
     worker_core_range,
     mux_core_range,
-    num_token_parallel_cores,
-    num_data_parallel_cores,
+    token_parallel_core_dim,
+    data_parallel_core_dim,
 ):
     mesh_shape = tuple(mesh_device.shape)
+    devices = math.prod(mesh_shape)
 
     (
         dense_metadata_tensor,
@@ -381,7 +372,7 @@ def test_gen_tensors(
         mesh_shape,
         cluster_axis,
         devices,
-        num_token_parallel_cores,
+        token_parallel_core_dim,
         scheme="sequential",
     )
 
@@ -390,8 +381,8 @@ def test_gen_tensors(
     _get_tt_sharded_dense_input(
         dense_contribs_tensor,
         worker_cores,
-        num_token_parallel_cores,
-        num_data_parallel_cores,
+        token_parallel_core_dim,
+        data_parallel_core_dim,
         mesh_device,
         cluster_axis,
     )
@@ -403,7 +394,7 @@ FABRIC_PACKET_SIZE_BYTES = 4096
 
 
 def get_sharded_dense_input(
-    dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
+    dense_contribs_tensor, core_range, token_parallel_core_dim, data_parallel_core_dim, device, cluster_axis
 ):
     hidden0 = dense_contribs_tensor.shape[-1]
 
@@ -428,22 +419,22 @@ def get_sharded_dense_input(
     num_tokens = shape0[1]
     hidden = shape0[2]
 
-    assert shape0[2] % num_data_parallel_cores == 0
+    assert shape0[2] % data_parallel_core_dim == 0
 
-    # want [num_data_parallel_cores, num_token_parallel_cores, local_experts, num_tokens//num_token_parallel_cores, hidden//num_data_parallel_cores]
+    # want [data_parallel_core_dim, token_parallel_core_dim, local_experts, num_tokens//token_parallel_core_dim, hidden//data_parallel_core_dim]
 
     shape1 = [
         local_experts,
-        num_token_parallel_cores,
-        num_tokens // num_token_parallel_cores,
-        num_data_parallel_cores,
-        hidden // num_data_parallel_cores,
+        token_parallel_core_dim,
+        num_tokens // token_parallel_core_dim,
+        data_parallel_core_dim,
+        hidden // data_parallel_core_dim,
     ]
 
     tt_dense_contribs = ttnn.reshape(tt_dense_contribs, shape1)
     tt_dense_contribs = ttnn.permute(tt_dense_contribs, [3, 1, 0, 2, 4])
 
-    shard_shape = (local_experts * num_tokens // num_token_parallel_cores, hidden // num_data_parallel_cores)
+    shard_shape = (local_experts * num_tokens // token_parallel_core_dim, hidden // data_parallel_core_dim)
     shard_spec = ttnn.ShardSpec(core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -451,10 +442,10 @@ def get_sharded_dense_input(
 
 
 def _get_tt_sharded_dense_input(
-    dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
+    dense_contribs_tensor, core_range, token_parallel_core_dim, data_parallel_core_dim, device, cluster_axis
 ):
     tt_dense_contribs, mem_config = get_sharded_dense_input(
-        dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
+        dense_contribs_tensor, core_range, token_parallel_core_dim, data_parallel_core_dim, device, cluster_axis
     )
     return ttnn.interleaved_to_sharded(tt_dense_contribs, mem_config)
 
@@ -496,8 +487,6 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
 
     else:
         tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
-    # print(f"{tt_out_agg=}")
 
     assert tt_out_agg.shape == output_ref.shape
     for t in range(tt_out_agg.shape[0]):
@@ -561,8 +550,8 @@ def _run_test(
     seq,
     cluster_axis,
     worker_cores,
-    num_data_parallel_cores,
-    num_token_parallel_cores,
+    data_parallel_core_dim,
+    token_parallel_core_dim,
     num_links,
     mux_cores,
     mesh_device,
@@ -592,15 +581,15 @@ def _run_test(
         mesh_shape,
         cluster_axis,
         devices,
-        num_token_parallel_cores,
+        token_parallel_core_dim,
         scheme=scheme,
     )
 
     tt_dense_contribs = _get_tt_sharded_dense_input(
         dense_contribs_tensor,
         worker_cores,
-        num_token_parallel_cores,
-        num_data_parallel_cores,
+        token_parallel_core_dim,
+        data_parallel_core_dim,
         mesh_device,
         cluster_axis,
     )
@@ -628,7 +617,7 @@ def _run_test(
 
     def _run_op(num_iters):
         for _ in range(num_iters):
-            tt_out = ttnn.selective_reduce_combine(
+            tt_out = ttnn.experimental.selective_reduce_combine(
                 tt_dense_contribs,
                 tt_dense_metadata,
                 tt_dense_token_maps,
@@ -641,8 +630,8 @@ def _run_test(
                 cluster_axis,
                 topology=ttnn.Topology.Ring,
                 num_links=num_links,
-                num_token_parallel_cores=num_token_parallel_cores,
-                num_data_parallel_cores=num_data_parallel_cores,
+                token_parallel_core_dim=token_parallel_core_dim,
+                data_parallel_core_dim=data_parallel_core_dim,
                 worker_core_range_set=worker_cores,
                 mux_core_range_set=mux_cores,
                 output_tensor=tt_output_tensor,
@@ -660,20 +649,30 @@ def _run_test(
     _check_ref(tt_out, output_ref, output_data_map, mesh_device, cluster_axis)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("batch", [64])
-@pytest.mark.parametrize("experts", [16])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
+@pytest.mark.parametrize("batch", [512])
+@pytest.mark.parametrize("experts", [32])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (1, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [2])
-@pytest.mark.parametrize("num_data_parallel_cores", [4])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("mux_core_range", [((4, 0), (4, 3))])
-@pytest.mark.parametrize("num_test_iters", [1])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
+@pytest.mark.parametrize("token_parallel_core_dim", [4])
+@pytest.mark.parametrize("data_parallel_core_dim", [4])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
+@pytest.mark.parametrize("num_test_iters", [3])
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
     mesh_device,
@@ -684,8 +683,8 @@ def test_decode(
     seq,
     cluster_axis,
     worker_core_range,
-    num_token_parallel_cores,
-    num_data_parallel_cores,
+    token_parallel_core_dim,
+    data_parallel_core_dim,
     num_links,
     mux_core_range,
     num_test_iters,
@@ -696,7 +695,7 @@ def test_decode(
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
-    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
+    assert worker_cores.num_cores() == token_parallel_core_dim * data_parallel_core_dim
 
     for i in range(num_test_iters):
         _run_test(
@@ -707,75 +706,14 @@ def test_decode(
             seq,
             cluster_axis,
             worker_cores,
-            num_data_parallel_cores,
-            num_token_parallel_cores,
+            data_parallel_core_dim,
+            token_parallel_core_dim,
             num_links,
             mux_cores,
             mesh_device,
             num_inner_iters,
             False,
             scheme="random",
-        )
-        logger.info(f"Decode iter: {i} success")
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
-)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("batch", [8])
-@pytest.mark.parametrize("experts", [16])
-@pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize("seq", [1])
-@pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [4])
-@pytest.mark.parametrize("num_data_parallel_cores", [4])
-@pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize("mux_core_range", [((4, 0), (4, 3))])
-@pytest.mark.parametrize("num_outer_test_iters", [1])
-@pytest.mark.parametrize("num_test_iters", [4])
-def test_decode_trace(
-    mesh_device,
-    batch,
-    experts,
-    select_experts_k,
-    hidden_size,
-    seq,
-    cluster_axis,
-    worker_core_range,
-    num_token_parallel_cores,
-    num_data_parallel_cores,
-    num_links,
-    mux_core_range,
-    num_outer_test_iters,
-    num_test_iters,
-):
-    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
-    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
-
-    assert worker_cores.num_cores() == num_token_parallel_cores * num_data_parallel_cores
-
-    profiler = BenchmarkProfiler()
-
-    for i in range(num_outer_test_iters):
-        _run_test(
-            batch,
-            experts,
-            select_experts_k,
-            hidden_size,
-            seq,
-            cluster_axis,
-            worker_cores,
-            num_data_parallel_cores,
-            num_token_parallel_cores,
-            num_links,
-            mux_cores,
-            mesh_device,
-            num_test_iters,
-            trace_mode=True,
-            profiler=profiler,
         )
         logger.info(f"Decode iter: {i} success")
 
@@ -800,8 +738,8 @@ def test_decode_trace(
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
-@pytest.mark.parametrize("num_token_parallel_cores", [4])
-@pytest.mark.parametrize("num_data_parallel_cores", [4])
+@pytest.mark.parametrize("token_parallel_core_dim", [4])
+@pytest.mark.parametrize("data_parallel_core_dim", [4])
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
 @pytest.mark.parametrize("num_outer_test_iters", [1])
@@ -815,8 +753,8 @@ def test_deepseek_perf(
     seq,
     cluster_axis,
     worker_core_range,
-    num_token_parallel_cores,
-    num_data_parallel_cores,
+    token_parallel_core_dim,
+    data_parallel_core_dim,
     num_links,
     mux_core_range,
     num_outer_test_iters,
@@ -825,7 +763,7 @@ def test_deepseek_perf(
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
-    assert worker_cores.num_cores() >= num_token_parallel_cores * num_data_parallel_cores
+    assert worker_cores.num_cores() >= token_parallel_core_dim * data_parallel_core_dim
     assert mux_cores.num_cores() >= num_links * 2
 
     profiler = BenchmarkProfiler()
@@ -839,8 +777,8 @@ def test_deepseek_perf(
             seq,
             cluster_axis,
             worker_cores,
-            num_data_parallel_cores,
-            num_token_parallel_cores,
+            data_parallel_core_dim,
+            token_parallel_core_dim,
             num_links,
             mux_cores,
             mesh_device,
