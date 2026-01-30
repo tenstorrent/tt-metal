@@ -1038,7 +1038,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     // Test configuration - use multiple pages per core and multiple cores to test coalescing
     DeviceLocalShardedBufferTestConfig test_config{
         .num_pages_per_core = {2, 3},
-        .num_cores = {std::min(3u, core_grid_size.x), std::min(3u, core_grid_size.y)},
+        .num_cores = {std::min(std::size_t(3), core_grid_size.x), std::min(std::size_t(3), core_grid_size.y)},
         .page_shape = {1, 2048},  // 2048 bytes per page, L1-aligned
         .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
     
@@ -1084,13 +1084,15 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
             
             // Write using pinned memory
             auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-            distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+            std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
+            distributed_host_buffer.emplace_shard(coord, produce_buffer);
             mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true);
             
             // Read back and verify
             std::vector<uint32_t> dst_vec = {};
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
-            EXPECT_EQ(dst_vec, *src);
+            ASSERT_EQ(dst_vec.size(), src->size());
+            EXPECT_TRUE(std::equal(dst_vec.begin(), dst_vec.end(), src->begin()));
         }
     }
 }
