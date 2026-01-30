@@ -188,6 +188,7 @@ enum class EnvVarID {
     // FABRIC CONFIGURATION
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
+    TT_METAL_DISABLE_FABRIC_VC1,             // Disable VC1 for multi-mesh (single VC mode)
 
     // ========================================
     // JIT BUILD CONFIGURATION
@@ -1254,6 +1255,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
             }
             break;
+        // TT_METAL_DISABLE_FABRIC_VC1
+        // Disable VC1 even for multi-mesh systems (single VC mode)
+        // Use this to run multi-mesh topology with a single virtual channel
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_FABRIC_VC1=1
+        case EnvVarID::TT_METAL_DISABLE_FABRIC_VC1: this->disable_fabric_vc1 = is_env_enabled(value); break;
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false

@@ -189,6 +189,7 @@ void FabricBuilderContext::initialize_tensix_config() {
 }
 
 IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
+    return IntermeshVCConfig::disabled();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
@@ -198,6 +199,13 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     if (mesh_ids.size() <= single_mesh_count) {
         return IntermeshVCConfig::disabled();
     }
+
+    // Check for VC1 disable override (single VC mode for multi-mesh)
+    // if (tt::tt_metal::MetalContext::instance().rtoptions().get_disable_fabric_vc1()) {
+    //     log_info(
+    //         tt::LogMetal,
+    //         "VC1 disabled via TT_METAL_DISABLE_FABRIC_VC1 override - running multi-mesh with single VC");
+    // }
 
     // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
     const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();

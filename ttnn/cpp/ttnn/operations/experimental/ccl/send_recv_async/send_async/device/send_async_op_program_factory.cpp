@@ -92,6 +92,11 @@ SendAsyncMeshWorkloadFactory::create_at(
         (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
     uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
 
+    std::cout << "NUm whole packets: " << num_whole_packets << std::endl;
+    std::cout << "Partial packet size: " << partial_packet_size << std::endl;
+    std::cout << "Num whole packets link 0: " << num_whole_packets_link_0 << std::endl;
+    std::cout << "Num whole packets link 1: " << num_whole_packets_link_1 << std::endl;
+
     uint32_t socket_block_size = socket_aligned_page_size;
     uint32_t socket_fifo_size_in_pages =
         mesh_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;

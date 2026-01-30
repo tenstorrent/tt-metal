@@ -106,6 +106,8 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 std::vector<LogicalPipelineStageConfig> build_pipeline(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
         {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
@@ -177,6 +179,15 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
             .stage_index = stage_index,
             .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
             .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
+
+        if (*distributed_context->rank() == (stage_index % num_procs)) {
+            // std::cout << "Stage " << stage_index << ": Entry node coord = " << stage.entry_node_coord << ", Exit node
+            // coord = " << stage.exit_node_coord << std::endl;
+            std::cout << "Entry node fabric node id = "
+                      << control_plane.get_fabric_node_id_from_asic_id(*entry_node_asic_id)
+                      << ", Exit node fabric node id = "
+                      << control_plane.get_fabric_node_id_from_asic_id(*exit_node_asic_id) << std::endl;
+        }
     }
     return logical_pipeline_stage_configs;
 }
@@ -222,7 +233,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - This value corresponds to amount of time the receiver spent waiting for data + time spent on the forwarding kernel.
 // - During steady state, this represents the average pipeline stage throughput.
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
-    constexpr uint32_t XFER_SIZE = 14 * 1024;
+    constexpr uint32_t XFER_SIZE = 7 * 1024;
     // constexpr uint32_t NUM_ITERS = 1000000;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();

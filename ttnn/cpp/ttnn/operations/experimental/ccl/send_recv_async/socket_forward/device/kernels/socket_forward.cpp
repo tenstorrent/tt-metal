@@ -108,37 +108,25 @@ void kernel_main() {
         uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
 
         // Forward data to downstream
-        for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection,
-                downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection_2,
-                downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                aligned_partial_packet_size);
-        }
+        write_data_to_remote_core_with_ack(
+            downstream_fabric_connection,
+            downstream_data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+        write_data_to_remote_core_with_ack(
+            downstream_fabric_connection_2,
+            downstream_data_packet_header_addr_2,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);

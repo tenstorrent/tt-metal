@@ -2095,6 +2095,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+            static_assert(false, "VC0 crossover to VC1 is not supported");
             // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
             // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
             rx_progress |= run_receiver_channel_step<
@@ -2173,6 +2174,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_fabric_telemetry);
                 }
 #if defined(FABRIC_2D_VC1_SERVICED)
+                static_assert(false, "VC1 is not supported");
                 tx_progress |= run_sender_channel_step<
                     VC1_RECEIVER_CHANNEL,
                     ACTUAL_VC0_SENDER_CHANNELS,

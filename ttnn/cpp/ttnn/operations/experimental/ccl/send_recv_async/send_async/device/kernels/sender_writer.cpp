@@ -124,54 +124,44 @@ void kernel_main() {
     }
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
     uint32_t measurement_addr = credit_address;
-    auto l1_read_addr = get_read_ptr(data_cb_id);
     for (uint32_t i = 0; i < 100; ++i) {
+        auto l1_read_addr = get_read_ptr(data_cb_id);
+
         uint64_t start_timestamp = get_timestamp();
         socket_reserve_pages(sender_socket, 1);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-        for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection,
-                data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
 
-        for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            dst_addr += whole_packet_size;
-            l1_read_addr += whole_packet_size;
-        }
-        if constexpr (aligned_partial_packet_size) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection_2,
-                data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                aligned_partial_packet_size);
-        }
+        write_data_to_remote_core_with_ack(
+            fabric_connection,
+            data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+
+        write_data_to_remote_core_with_ack(
+            fabric_connection_2,
+            data_packet_header_addr_2,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        dst_addr += whole_packet_size;
+        l1_read_addr += whole_packet_size;
+
         socket_push_pages(sender_socket, 1);
 
         socket_wait_for_pages(receiver_socket, 1);
-        // uint32_t socket_read_addr = receiver_socket.read_ptr;
-        // uint32_t val = 0;
-        // for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
-        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
-        //         while (true);
-        //     }
-        //     val++;
-        // }
+        uint32_t socket_read_addr = receiver_socket.read_ptr;
+        uint32_t val = 0;
+        for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
+                while (true);
+            }
+            val++;
+        }
         socket_pop_pages(receiver_socket, 1);
         if ((i & 7) == 0) {
             fabric_socket_notify_sender_stateful(

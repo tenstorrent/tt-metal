@@ -302,8 +302,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 4 policy: RELAXED }
-    assign_z_direction: true
+    channels { count: 2 policy: RELAXED }
   }
 }
 # --- Instantiation ----------------------------------------------------------

@@ -2458,6 +2458,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
+    auto my_host_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
     const auto& neighbor_binding = this->global_logical_bindings_.at(
         tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
     const auto neighbor_mesh_id = neighbor_binding.first;
@@ -2470,6 +2471,14 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
+        if (my_host_rank == 0 and neighbor_host_rank == 47) {
+            if (exit_node_fabric_node_id.chip_id != 1) {
+                continue;
+            } else {
+                std::cout << "Connecting Loopback meshes with exit node: " << exit_node_fabric_node_id.chip_id
+                          << std::endl;
+            }
+        }
 
         TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "Exit node is not on my mesh");
         if (strict_binding) {

@@ -294,6 +294,9 @@ class RunTimeOptions {
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
 
+    // Force disable VC1 even for multi-mesh systems (single VC mode)
+    bool disable_fabric_vc1 = false;
+
     // Disable XIP dump
     bool disable_xip_dump = false;
 
@@ -670,6 +673,10 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
+
+    // Returns true if VC1 should be forcibly disabled even for multi-mesh systems
+    bool get_disable_fabric_vc1() const { return disable_fabric_vc1; }
+    void set_disable_fabric_vc1(bool disable) { disable_fabric_vc1 = disable; }
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
