@@ -765,6 +765,8 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
         state_dict=state_dict,
         weight_cache_path=topology_aware_cache_path(dtype),
         layer_num=0,
+        dtype=dtype,
+        model_config=model_config,
     )
 
     # Create input

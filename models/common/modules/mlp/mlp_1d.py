@@ -422,9 +422,27 @@ class MLP1D(LightweightModule):
         state_dict,
         weight_cache_path,
         layer_num: int,
+        dtype=None,
+        model_config=None,
         state_dict_prefix: Optional[str] = None,
     ):
-        """Factory method for backward compatibility with ModelArgs."""
+        """Factory method for backward compatibility with ModelArgs.
+
+        Args:
+            mesh_device: The mesh device to use.
+            tt_ccl: The TT CCL instance.
+            args: Model arguments (ModelArgs instance).
+            state_dict: The state dictionary containing weights.
+            weight_cache_path: Path for weight caching.
+            layer_num: The layer number.
+            dtype: Optional data type for weights (for signature compatibility with TTTv1 MLP).
+            model_config: Optional model config dict. If None, calls args.get_model_config().
+            state_dict_prefix: Optional prefix for state dict keys.
+
+        Note:
+            The `dtype` parameter is accepted for signature compatibility with TTTv1 MLP
+            but is not used directly - dtype is determined by the DecodersPrecision config.
+        """
         if args.is_galaxy:
             raise ValueError("MLP1D cannot be used for Galaxy devices.")
 
@@ -432,8 +450,9 @@ class MLP1D(LightweightModule):
 
         from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
-        # Get model_config for overrides
-        model_config = args.get_model_config()
+        # Get model_config for overrides - use passed model_config if provided
+        if model_config is None:
+            model_config = args.get_model_config()
         decoders_opt = model_config.get("DECODERS_OPTIMIZATIONS")
         effective_layer_num = max(layer_num, 0)
 
@@ -555,6 +574,8 @@ class MLP1D(LightweightModule):
             activation_dtype=activation_dtype,
             ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
+            # Use prefill_len_cutoff from args to match original MLP behavior
+            prefill_len_cutoff=args.prefill_len_cutoff,
         )
         return cls.from_config(config)
 
