@@ -128,6 +128,7 @@ struct Matmul {
                 // Process in blocks of 8 tiles (half-DST with SyncHalf mode)
                 constexpr uint32_t dst_tiles = 8;  // Half-DST for reliable blocking
                 constexpr uint32_t num_blocks = (out_w + dst_tiles - 1) / dst_tiles;
+
                 for (uint32_t block = 0; block < num_blocks; block++) {
                     uint32_t block_start = block * dst_tiles;
                     uint32_t tiles_in_block = ((block_start + dst_tiles) < out_w) ? dst_tiles : (out_w - block_start);
