@@ -35,7 +35,7 @@ def _initialize_module_on_device(module: "TTNNModule", device, device_init=Devic
         module.set_device_state(device_init.init_state(device))
 
 
-def set_device(obj, device, register_forward_hook=True, device_init=DeviceInit):
+def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
     from models.experimental.tt_symbiote.core.module import TTNNModule
 
@@ -50,7 +50,7 @@ def set_device(obj, device, register_forward_hook=True, device_init=DeviceInit):
             name = module_names.get(current_obj, module_name or "")
 
             # Register forward hook for this module
-            if register_forward_hook:
+            if kwargs.get("register_forward_hook", True):
 
                 def timed_call(original_call, module_name, module_class):
                     def new_call(*args, **kwargs):

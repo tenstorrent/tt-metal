@@ -9,8 +9,21 @@ from typing import Optional
 import torch
 
 from models.experimental.tt_symbiote.core.run_config import get_tensor_run_implementation, DistributedConfig
+from torch.utils._pytree import tree_map
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
+
+
+def set_distributed_config(distribute_config: DistributedConfig):
+    def _set_distributed_config(e):
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        res = e
+        if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+            res.set_distributed_config(distribute_config)
+        return res
+
+    return _set_distributed_config
 
 
 class TTNNModule:
@@ -119,14 +132,13 @@ class TTNNModule:
             self.torch_layer.train(mode)
         return self
 
-    def set_output_tensor_config(self, output):
+    def set_output_tensors_config(self, output_tensors):
         """Set output tensor configuration based on device state."""
         assert self.device_state is not None
-        return self.set_output_tensor_config_impl(output)
+        return self.set_output_tensors_config_impl(output_tensors)
 
-    def set_output_tensor_config_impl(self, output):
-        """Implementation-specific output tensor configuration."""
-        return output
+    def set_output_tensors_config_impl(self, output_tensors):
+        return tree_map(set_distributed_config(self.device_state.tensor_config), output_tensors)
 
     @property
     def module_name(self):

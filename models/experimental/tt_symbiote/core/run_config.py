@@ -27,8 +27,8 @@ class CCLManagerConfig:
     """Configuration for CCLManager."""
 
     mesh_device: Any
-    num_links: Optional[int]
-    topology: Optional[Any]
+    num_links: Optional[int] = None
+    topology: Optional[Any] = None
 
     def __post_init__(self):
         if self.num_links is None:
@@ -38,13 +38,11 @@ class CCLManagerConfig:
 
 
 class CCLManager:
-    """Abstract ca;ss"""
-
     def __init__(
         self,
-        ccl_config: CCLManagerConfig,
+        ccl_manager: CCLManagerConfig,
     ):
-        self.ccl_config = ccl_config
+        self.ccl_manager = ccl_manager
 
 
 @dataclass
@@ -60,13 +58,13 @@ class DistributedConfig:
 
     mesh_device: Any
     tensor_config: Optional[DistributedTensorConfig] = None
-    ccl_config: Optional[Any] = None
+    ccl_manager: Optional[Any] = None
 
     def __post_init__(self):
         if self.tensor_config is None:
             self.tensor_config = DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device))
-        if self.ccl_config is None:
-            self.ccl_config = CCLManager(CCLManagerConfig(mesh_device=self.mesh_device))
+        if self.ccl_manager is None:
+            self.ccl_manager = CCLManager(CCLManagerConfig(mesh_device=self.mesh_device))
 
 
 @contextlib.contextmanager
@@ -360,7 +358,7 @@ def compose_transforms(*transforms):
 def post_process_ttnn_module_output(self, result):
     result = tree_map(wrap_to_torch_ttnn_tensor, result)
     if self.device_state is not None:
-        result = self.set_output_tensor_config(result)
+        result = self.set_output_tensors_config(result)
     return result
 
 
@@ -501,9 +499,7 @@ class NormalRun:
         # convert elem to ttnn tensor here
         is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
         if self.ttnn_distributed_config is None and is_mesh_device:
-            self.__dict__["distributed_config"] = DistributedTensorConfig(
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
-            )
+            self.set_distributed_config(DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)))
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
@@ -595,9 +591,7 @@ class LightweightRun(NormalRun):
         # convert elem to ttnn tensor here
         is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
         if self.ttnn_distributed_config is None and is_mesh_device:
-            self.__dict__["distributed_config"] = DistributedTensorConfig(
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
-            )
+            self.set_distributed_config(DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)))
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."

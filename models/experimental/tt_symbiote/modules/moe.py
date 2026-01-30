@@ -7,18 +7,20 @@
 
 import torch
 from torch import nn
-from transformers import PreTrainedConfig
+from transformers.configuration_utils import PretrainedConfig
 from torch.nn import functional as F
+from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
 
-class Glm4MoeConfig(PreTrainedConfig):
+class Glm4MoeConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`Glm4MoeModel`]. It is used to instantiate a
     Glm4Moe model according to the specified arguments, defining the model architecture. Instantiating a configuration
     with the defaults will yield a similar configuration to that of [THUDM/GLM-4-100B-A10B](https://huggingface.co/THUDM/GLM-4-100B-A10B).
 
-    Configuration objects inherit from [`PreTrainedConfig`] and can be used to control the model outputs. Read the
-    documentation from [`PreTrainedConfig`] for more information.
+    Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
+    documentation from [`PretrainedConfig`] for more information.
 
 
     Args:
@@ -207,6 +209,8 @@ class Glm4MoeNaiveMoe(nn.Module):
         self.gate_up_proj = nn.Parameter(torch.empty(self.num_experts, 2 * self.intermediate_dim, self.hidden_dim))
         self.down_proj = nn.Parameter(torch.empty(self.num_experts, self.hidden_dim, self.intermediate_dim))
         self.act_fn = nn.SiLU()
+        torch.nn.init.normal_(self.gate_up_proj, mean=0.0, std=config.initializer_range)
+        torch.nn.init.normal_(self.down_proj, mean=0.0, std=config.initializer_range)
 
     def forward(
         self,
@@ -248,6 +252,8 @@ class Glm4MoeTopkRouter(nn.Module):
 
         self.weight = nn.Parameter(torch.empty((self.n_routed_experts, config.hidden_size)))
         self.register_buffer("e_score_correction_bias", torch.zeros((self.n_routed_experts), dtype=torch.float32))
+        torch.nn.init.normal_(self.weight, mean=0.0, std=self.config.initializer_range)
+        torch.nn.init.zeros_(self.e_score_correction_bias)
 
     def forward(self, hidden_states):
         hidden_states = hidden_states.view(-1, self.config.hidden_size)
@@ -325,3 +331,29 @@ class Glm4MoeMoE(torch.nn.Module):
         hidden_states = self.experts(hidden_states, topk_indices, topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states
+
+
+class TTNNGlm4MoeNaiveMoe(TTNNModule):
+    pass
+
+
+class TTNNGlm4MoeTopkRouter(TTNNModule):
+    pass
+
+
+class TTNNGlm4MoeMLP(TTNNModule):
+    pass
+
+
+class TTNNGlm4MoeMoE(TTNNModule):
+    @classmethod
+    def from_torch(cls, torch_module: Glm4MoeMoE) -> "TTNNGlm4MoeMoE":
+        ttnn_module = cls()
+        ttnn_module._fallback_torch_layer = torch_module
+        ttnn_module.experts = TTNNGlm4MoeNaiveMoe.from_torch(torch_module.experts)
+        ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_torch(torch_module.gate)
+        ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts)
+        return ttnn_module
+
+    def forward(self, hidden_states):
+        return self.torch_layer.forward(TorchTTNNTensor(hidden_states)).to_ttnn
