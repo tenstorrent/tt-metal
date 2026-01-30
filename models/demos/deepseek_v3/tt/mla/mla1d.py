@@ -60,7 +60,6 @@ class MLA1D(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        print("Converting MLA1D weights...")
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 

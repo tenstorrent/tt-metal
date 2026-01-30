@@ -222,10 +222,6 @@ class MLA2D(MLA1D):
         )
         ttnn.deallocate(x_next)
 
-        x_out = ttnn.experimental.all_gather_async(
-            x_out, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_2_prefill"])
-        )
-
         x_rs = (
             ttnn.experimental.reduce_scatter_minimal_async(
                 x_out, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
