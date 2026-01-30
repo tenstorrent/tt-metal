@@ -22,6 +22,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
 from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -61,22 +62,19 @@ class MoE(SharedStateAddOn, AbstractModule):
         }
 
     @classmethod
-    def create_state(
+    def create_shared_state(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        ccl: CCL,
     ) -> ModelState:
-        """Create model state containing CCL-related communication configurations.
+        """Create shared model state containing tensors that are constant across all instances.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL instance for communication configuration
         Returns:
-            ModelState containing CCL configurations
+            ModelState containing shared tensors
         """
-
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
@@ -102,10 +100,30 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        # Store CCL object for runtime semaphore initialization
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
             "remap_topk_mask": remap_topk_mask,
+            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+        }
+
+    @classmethod
+    def create_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        ccl: CCL,
+    ) -> ModelState:
+        """Create model state containing CCL-related communication configurations.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL instance for communication configuration
+        Returns:
+            ModelState containing CCL configurations
+        """
+        # Store CCL object for runtime semaphore initialization
+        return {
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "num_links": 1,
