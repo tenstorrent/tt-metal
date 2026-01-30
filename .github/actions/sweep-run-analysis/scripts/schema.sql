@@ -1,5 +1,4 @@
 -- TTNN Sweeps Slack Notification Database Schema
--- Run this on metal-pgsql.yyz2.tenstorrent.com to initialize the database
 
 -- Table 1: Run metadata
 CREATE TABLE IF NOT EXISTS sweep_run (
