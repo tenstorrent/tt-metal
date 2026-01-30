@@ -13,8 +13,8 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteMoE {
-    static ttnn::Tensor invoke(
+struct ExecuteMoECompute {
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& tilize_input_tensor,
         const ttnn::Tensor& tilize_expert_indices_tensor,
         const ttnn::Tensor& tilize_expert_scores_tensor,
@@ -29,8 +29,8 @@ struct ExecuteMoE {
 
 namespace experimental {
 
-constexpr auto moe =
-    ttnn::register_operation<"ttnn::experimental::moe", ttnn::operations::experimental::ccl::ExecuteMoE>();
+constexpr auto moe_compute = ttnn::
+    register_operation<"ttnn::experimental::moe_compute", ttnn::operations::experimental::ccl::ExecuteMoECompute>();
 
 }  // namespace experimental
 }  // namespace ttnn

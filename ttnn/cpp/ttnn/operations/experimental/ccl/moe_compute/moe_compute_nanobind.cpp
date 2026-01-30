@@ -8,8 +8,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "moe_nanobind.hpp"
-#include "moe.hpp"
+#include "moe_compute_nanobind.hpp"
+#include "moe_compute.hpp"
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace {
 
 template <typename ccl_operation_t>
-void bind_moe(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -57,10 +57,10 @@ void bind_moe(nb::module_& mod, const ccl_operation_t& operation, const char* do
 
 }  // namespace
 
-void bind_moe(nb::module_& mod) {
-    bind_moe(
+void bind_moe_compute(nb::module_& mod) {
+    bind_moe_compute(
         mod,
-        ttnn::experimental::moe,
+        ttnn::experimental::moe_compute,
         R"doc(
         Experimental, high-performance MoE operation for DeepSeek.
 
