@@ -108,6 +108,9 @@ struct ReduceScatterFusedOpSignaler {
 
     bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
+    bool is_minimal_matmul = false;
+    uint32_t M_block_size;
+    tt::tt_metal::CoreCoord grid_size;
 
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
@@ -122,8 +125,9 @@ struct ReduceScatterFusedOpSignaler {
         "num_fused_op_cores_to_signal",
         "fused_op_receiver_cores_noc",
         "fused_op_receiver_signal_semaphores",
-        "fused_op_signaler_mode");
-
+        "fused_op_signaler_mode",
+        "M_block_size",
+        "grid_size");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->num_fused_op_cores_to_signal),

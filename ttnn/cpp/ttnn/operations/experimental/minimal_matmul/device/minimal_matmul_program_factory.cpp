@@ -320,6 +320,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
     log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
     log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
+    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
+    log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
     log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
     log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
     log_debug(tt::LogOp, "in0_tile_size: {}", in0_tile_size);

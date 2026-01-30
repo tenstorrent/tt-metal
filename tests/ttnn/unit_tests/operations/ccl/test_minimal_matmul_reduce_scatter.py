@@ -171,6 +171,7 @@ def run_reduce_scatter_impl(
     for i in range(num_iters):
         mm_input_shape = [rs_input_shape[0], 1, rs_input_shape[2], mm_weights_shape[2]]
         mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
+        print("mm input shape = ", mm_input_tensor.shape)
         input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
         torch_input_tensor_list.append(input_tensors)
 
@@ -187,7 +188,7 @@ def run_reduce_scatter_impl(
                 ),
             ),
         )
-
+        print(input_tensor_mesh.shape)
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
     ##### Perform torch ops #####

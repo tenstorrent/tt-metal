@@ -80,7 +80,9 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> reduce_scatter_fused_op_signaler =
         ttnn::experimental::ccl::ReduceScatterFusedOpSignaler();
     reduce_scatter_fused_op_signaler->init_fused_op();
-
+    reduce_scatter_fused_op_signaler->is_minimal_matmul = true;
+    reduce_scatter_fused_op_signaler->grid_size = args.matmul_struct.config->compute_with_storage_grid_size;
+    reduce_scatter_fused_op_signaler->M_block_size = args.matmul_struct.config->M_block_size;
     // Reduce Scatter - use the new artifacts-based helper
     auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
