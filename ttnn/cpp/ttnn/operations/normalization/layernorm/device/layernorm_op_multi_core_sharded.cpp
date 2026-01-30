@@ -768,8 +768,19 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     // but the table size has to be a compile-time argument, so we use
     // the max value that it'll be.
     uint32_t per_core_recip_lut_size = block_w;
-    auto [recip_tensor, reciprocal_CB_size_bytes] =
-        create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    uint32_t reciprocal_CB_size_bytes = 0;
+    if (use_welford) {
+        if (tensor_args.recip_tensor.has_value()) {
+            // Use the passed-in reciprocal tensor
+            recip_tensor = tensor_args.recip_tensor;
+            reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        } else {
+            // Create reciprocal tensor internally (legacy path)
+            std::tie(recip_tensor, reciprocal_CB_size_bytes) =
+                create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
+        }
+    }
 
     // compute kernel compile time args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
@@ -1883,6 +1894,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         sender_cores = {
             {sender_cores.start_coord.x + start_core.x, sender_cores.start_coord.y + start_core.y},
             {sender_cores.end_coord.x + start_core.x, sender_cores.end_coord.y + start_core.y}};
+        all_cores = applyStartOffset(all_cores, grid_offset.value());
         all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
         all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
         not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
@@ -2099,8 +2111,19 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     // Reciprocal LUT
     uint32_t per_core_recip_lut_size = block_w;
-    auto [recip_tensor, reciprocal_CB_size_bytes] =
-        create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    uint32_t reciprocal_CB_size_bytes = 0;
+    if (use_welford) {
+        if (tensor_args.recip_tensor.has_value()) {
+            // Use the passed-in reciprocal tensor
+            recip_tensor = tensor_args.recip_tensor;
+            reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        } else {
+            // Create reciprocal tensor internally (legacy path)
+            std::tie(recip_tensor, reciprocal_CB_size_bytes) =
+                create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
+        }
+    }
 
     // compute kernel compile time args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
