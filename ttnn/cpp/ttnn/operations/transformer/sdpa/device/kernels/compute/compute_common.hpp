@@ -1798,6 +1798,7 @@ void sdpa_inner_loop(
  *                          SDPA WRAPPER FUNCTIONS                            *
  ******************************************************************************/
 
+#ifdef SDPA_KERNEL_TYPE_STANDARD
 /**
  * Standard SDPA with optional causal masking, attention sink, and sliding window.
  */
@@ -1925,7 +1926,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out);
 }
+#endif  // SDPA_KERNEL_TYPE_STANDARD
 
+#ifdef SDPA_KERNEL_TYPE_JOINT
 /**
  * Joint SDPA for multi-modal attention.
  */
@@ -2045,7 +2048,9 @@ void sdpa_joint(
         0,  // cb_prev_out (not used)
         cb_out);
 }
+#endif  // SDPA_KERNEL_TYPE_JOINT
 
+#ifdef SDPA_KERNEL_TYPE_RING
 /**
  * Ring SDPA for distributed multi-device attention.
  */
@@ -2177,7 +2182,9 @@ void sdpa_ring(
         cb_prev_out,
         cb_out);
 }
+#endif  // SDPA_KERNEL_TYPE_RING
 
+#ifdef SDPA_KERNEL_TYPE_WINDOWED
 /**
  * Windowed SDPA with user-provided mask.
  */
@@ -2293,3 +2300,4 @@ void sdpa_windowed(
         0,  // cb_prev_out (not used)
         cb_out);
 }
+#endif  // SDPA_KERNEL_TYPE_WINDOWED
