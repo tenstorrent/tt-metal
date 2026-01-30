@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
-from models.common.utility_functions import comp_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, skip_for_blackhole, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -398,7 +398,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("Deepseek tests target Wormhole")
 @pytest.mark.parametrize(
     "test_case",
     [
@@ -409,10 +408,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
             "n": 96,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 6,
-            "in0_core_grid_y": 2,
-            "out_core_grid_x": 6,
-            "out_core_grid_y": 2,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
@@ -424,42 +419,41 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
             "n": 64,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 4,
-            "in0_core_grid_y": 3,
-            "out_core_grid_x": 4,
-            "out_core_grid_y": 3,
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.9997,
+        },
+        {
+            "batch": 7,
+            "m": 32,
+            "k": 32,
+            "n": 32,
+            "tile_h": 32,
+            "tile_w": 32,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
         },
         # wkv_b1 takes roughly 19us. Compute bound, could be 15us
         {
-            "batch": 16,  # Pads to 24
+            "batch": 16,  # Pads to 24 (Wormhole) or 21 (Blackhole)
             "m": 32,
             "k": 128,
             "n": 512,
             "tile_h": 32,
             "tile_w": 32,
-            "in0_core_grid_x": 3,
-            "in0_core_grid_y": 4,
-            "out_core_grid_x": 3,
-            "out_core_grid_y": 4,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
         },
         # wkv_b2 takes roughly 63us. Compute bound, could be 45us.
         {
-            "batch": 128,  # Pads to 132
+            "batch": 128,  # Pads to 132 (Wormhole) or 133 (Blackhole)
             "m": 4,
             "k": 512,
             "n": 128,
             "tile_h": 4,  # Tiny tile needed to avoid padding
             "tile_w": 32,
-            "in0_core_grid_x": 3,
-            "in0_core_grid_y": 4,
-            "out_core_grid_x": 3,
-            "out_core_grid_y": 4,
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "expected_pcc": 0.9997,
@@ -467,12 +461,12 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     ],
     ids=[
         "batch48_m64_n96_k32",
-        "batch12_m32_n32_k64",
+        "wh_sanity",
+        "bh_sanity",
         "wkv_b1",
         "wkv_b2",
     ],
 )
-@skip_for_blackhole("Deepseek tests target Wormhole")
 def test_matmul_batched_dram_sharded(device, test_case):
     """
     Test for Batch-Sharded DRAM Matmul.
@@ -495,16 +489,17 @@ def test_matmul_batched_dram_sharded(device, test_case):
     n = test_case["n"]  # output cols (cols of B)
     tile_h = test_case["tile_h"]
     tile_w = test_case["tile_w"]
-    in0_core_grid_x = test_case["in0_core_grid_x"]
-    in0_core_grid_y = test_case["in0_core_grid_y"]
-    out_core_grid_x = test_case["out_core_grid_x"]
-    out_core_grid_y = test_case["out_core_grid_y"]
     in0_dtype = test_case["in0_dtype"]
     in1_dtype = test_case["in1_dtype"]
     expected_pcc = test_case["expected_pcc"]
 
-    # Dimensions for batched matmul
-    num_dram_banks = 12  # Wormhole has 12 DRAM banks
+    # Get the optimal DRAM bank-to-worker core assignment from the device.
+    # The factory uses this same assignment to map workers to DRAM banks.
+    optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+
+    num_dram_banks = len(optimal_worker_cores)
+    num_in0_cores = num_dram_banks
+    num_out_cores = num_dram_banks
 
     # Pad batch to be divisible by num_dram_banks (required for even sharding)
     batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
@@ -514,24 +509,13 @@ def test_matmul_batched_dram_sharded(device, test_case):
     k_padded = pad_to_tile(k, tile_w)
     n_padded = pad_to_tile(n, tile_w)
 
-    num_in0_cores = in0_core_grid_x * in0_core_grid_y
-    num_out_cores = out_core_grid_x * out_core_grid_y
-
-    # Core grids must equal num_dram_banks for 1:1 worker mapping
-    assert (
-        num_in0_cores == num_dram_banks
-    ), f"in0 core grid ({num_in0_cores}) must equal num_dram_banks ({num_dram_banks})"
-    assert (
-        num_out_cores == num_dram_banks
-    ), f"out core grid ({num_out_cores}) must equal num_dram_banks ({num_dram_banks})"
-
     batches_per_core_in0 = batch_padded // num_in0_cores
     batches_per_core_out = batch_padded // num_out_cores
 
     # Shapes with padded dimensions: [1, B_padded, M_padded, K_padded] x [1, B_padded, K_padded, N_padded] = [1, B_padded, M_padded, N_padded]
     in0_shape_padded = [1, batch_padded, m_padded, k_padded]
     in1_shape_padded = [1, batch_padded, k_padded, n_padded]
-    out_shape_padded = [1, batch_padded, m_padded, n_padded]
+    # out_shape_padded = [1, batch_padded, m_padded, n_padded]
 
     # Create random input data at original size
     in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
@@ -543,14 +527,15 @@ def test_matmul_batched_dram_sharded(device, test_case):
     in1 = torch.zeros(in1_shape_padded, dtype=torch.bfloat16)
     in1[:, :batch, :k, :n] = in1_orig
 
-    # in0 L1 shard grid
+    # Use optimal worker cores for L1 shard grids - this ensures the shard ordering
+    # matches the factory's worker ordering (critical for correct data routing!)
     in0_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(in0_core_grid_x - 1, in0_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # Output L1 shard grid
+    # Output L1 shard grid - same cores as input
     out_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(out_core_grid_x - 1, out_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
     # DRAM shard grid: 12 DRAM banks (1D grid from 0 to 11)
@@ -633,7 +618,57 @@ def test_matmul_batched_dram_sharded(device, test_case):
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(f"Batch-sharded DRAM matmul test: {pcc_message}")
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+    if not pcc_passed:
+        logger.info("=" * 80)
+        logger.info("PCC FAILED - Tensor comparison:")
+        logger.info("=" * 80)
+        logger.info(f"pt_out shape: {pt_out.shape}")
+        logger.info(f"output_tensor shape: {output_tensor.shape}")
+        logger.info("")
+
+        # Compute absolute differences
+        diff = (pt_out.float() - output_tensor.float()).abs()
+
+        # Find top 20 biggest discrepancies
+        logger.info("TOP 20 BIGGEST DISCREPANCIES:")
+        logger.info("-" * 80)
+        diff_flat = diff.flatten()
+        pt_flat = pt_out.float().flatten()
+        out_flat = output_tensor.float().flatten()
+
+        # Get indices of top 20 largest differences
+        top_k = min(20, diff_flat.numel())
+        top_values, top_indices = torch.topk(diff_flat, top_k)
+
+        for rank, (idx, diff_val) in enumerate(zip(top_indices.tolist(), top_values.tolist())):
+            # Convert flat index to multi-dimensional index
+            n_dim = pt_out.shape[3]
+            m_dim = pt_out.shape[2]
+            b_dim = pt_out.shape[1]
+
+            n_idx = idx % n_dim
+            idx //= n_dim
+            m_idx = idx % m_dim
+            idx //= m_dim
+            b_idx = idx % b_dim
+
+            pt_val = pt_flat[top_indices[rank]].item()
+            out_val = out_flat[top_indices[rank]].item()
+            logger.info(
+                f"  #{rank+1:2d}: [batch={b_idx}, m={m_idx}, n={n_idx}] pt_out={pt_val:10.4f}, output={out_val:10.4f}, diff={diff_val:10.4f}"
+            )
+
+        logger.info("")
+        logger.info("STATISTICS:")
+        logger.info(f"  Max diff: {diff.max().item():.6f}")
+        logger.info(f"  Mean diff: {diff.mean().item():.6f}")
+        logger.info(f"  Median diff: {diff.median().item():.6f}")
+        logger.info(f"  Num elements with diff > 0.1: {(diff > 0.1).sum().item()}")
+        logger.info(f"  Num elements with diff > 1.0: {(diff > 1.0).sum().item()}")
+        logger.info("")
+
+    assert pcc_passed
 
 
 @skip_for_blackhole("Deepseek tests target Wormhole")
