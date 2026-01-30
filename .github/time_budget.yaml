@@ -73,6 +73,9 @@ ttnn:
     wh_llmbox: 90
     wh_galaxy: 40
     bh_galaxy: 40
+  frequent:
+    wh_galaxy: 350
+    bh_galaxy: 0
   integration:
     wh_llmbox: 30
 

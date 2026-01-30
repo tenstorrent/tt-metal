@@ -1,4 +1,4 @@
-name: "[internal] Galaxy frequent tests"
+name: "[internal] Galaxy frequent tests impl"
 
 on:
   workflow_call:
@@ -12,114 +12,71 @@ on:
       build-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: true
+        type: string
       model:
         required: false
         type: string
         default: "all"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "topology-6u"
 
 jobs:
-  generate-matrix:
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.apply-model-filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_frequent_tests.yaml
     steps:
-      - name: Generate Matrix
-        id: set-matrix
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
         run: |
-          # Create full matrix with jq for readability
-          FULL_MATRIX=$(jq -n '[
-            # {
-            #   "name": "Galaxy Llama3 frequent tests",
-            #   "arch": "wormhole_b0",
-            #   "model": "llama3",
-            #   "timeout": 70,
-            #   "owner_id": "U053W15B6JF"
-            # }, # Djordje Ivanovic
-            {
-              "name": "Galaxy resnet50 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "resnet50",
-              "timeout": 50,
-              "owner_id": "U052J2QDDKQ"
-            }, # Pavle Josipovic
-            {
-              "name": "Galaxy unit/distributed frequent tests",
-              "arch": "wormhole_b0",
-              "model": "unit",
-              "timeout": 50,
-              "owner_id": "UBHPP2NDP"
-            }, # Joseph Chu
-            {
-              "name": "Galaxy SD3.5 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "sd35",
-              "timeout": 50,
-              "owner_id": "U03FJB5TM5Y"
-            }, # Colman Glagovich
-            {
-              "name": "Galaxy Wan2.2 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "wan22",
-              "timeout": 40,
-              "owner_id": "U03FJB5TM5Y"
-            }, # Colman Glagovich
-            {
-              "name": "Galaxy mochi frequent tests",
-              "arch": "wormhole_b0",
-              "model": "mochi",
-              "timeout": 80,
-              "owner_id": "U09ELB03XRU"
-            }, # Stephen Osborne
-            {
-              "name": "Galaxy Flux.1 frequent tests",
-              "arch": "wormhole_b0",
-              "model": "flux1",
-              "timeout": 50,
-              "owner_id": "U08TED0JM9D"
-            }, # Samuel Adesoye
-            {
-              "name": "Galaxy Motif frequent tests",
-              "arch": "wormhole_b0",
-              "model": "motif",
-              "timeout": 10,
-              "owner_id": "U08TED0JM9D"
-            }, # Samuel Adesoye
-            {
-              "name": "Galaxy Qwen-Image frequent tests",
-              "arch": "wormhole_b0",
-              "model": "qwenimage",
-              "timeout": 10,
-              "owner_id": "U08TED0JM9D"
-            } # Samuel Adesoye
-          ]' --compact-output)
-
-          # Filter matrix based on model selection
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "frequent"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Apply model filter
+        id: apply-model-filter
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           if [ "${{ inputs.model }}" = "all" ]; then
-            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
-            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for model '${{ inputs.model }}'"
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
 
   galaxy-frequent-tests:
-    needs: generate-matrix
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -127,33 +84,35 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
-        GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run frequent regression tests
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          echo "${{ matrix.test-group.cmd }}"
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

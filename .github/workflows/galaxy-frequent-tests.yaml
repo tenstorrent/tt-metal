@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
@@ -19,6 +19,14 @@ on:
           - flux1
           - motif
           - qwenimage
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        required: false
+        type: boolean
+        default: false
       platform:
         required: false
         type: choice
@@ -44,7 +52,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 3 * * *"  # Every day at 3:00 UTC
+    - cron: "0 3 * * *" # Every day at 3:00 UTC
 
 jobs:
   build-artifact:
@@ -54,16 +62,35 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      build-wheel: true
   galaxy-frequent-tests:
     needs: build-artifact
-    secrets: inherit
     uses: ./.github/workflows/galaxy-frequent-tests-impl.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # For scheduled runs: hardcode the full list of SKUs you want active.
+      # For workflow_dispatch: derive from checkboxes.
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_galaxy,bh_galaxy'
+            || (
+              inputs.wormhole && inputs.blackhole
+                && 'wh_galaxy,bh_galaxy'
+                || (
+                  inputs.wormhole
+                    && 'wh_galaxy'
+                    || (
+                      inputs.blackhole
+                        && 'bh_galaxy'
+                        || ''
+                    )
+                )
+            )
+        }}
       model: ${{ inputs.model || 'all' }}
-      topology: topology-6u
