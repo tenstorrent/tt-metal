@@ -632,32 +632,7 @@ def assert_hidden_dim_pcc(
 
     passing, pcc = comp_pcc(tt_output_torch, reference_output, pcc_required)
     logger.info(f"PCC: {pcc}")
-    if not passing:
-        debug_chunk_size_str = os.getenv("DEEPSEEK_V3_PCC_DEBUG_CHUNK_SIZE", "2048")
-        try:
-            debug_chunk_size = max(1, int(debug_chunk_size_str))
-        except ValueError:
-            logger.warning(
-                f"Invalid DEEPSEEK_V3_PCC_DEBUG_CHUNK_SIZE={debug_chunk_size_str!r}; " "skipping PCC debug chunking."
-            )
-            debug_chunk_size = 0
 
-        if debug_chunk_size and seq_len_or_batch_size > debug_chunk_size:
-            num_chunks = (seq_len_or_batch_size + debug_chunk_size - 1) // debug_chunk_size
-            logger.error(
-                f"PCC debug: chunk_size={debug_chunk_size} num_chunks={num_chunks} "
-                f"seq_len_or_batch_size={seq_len_or_batch_size}"
-            )
-            for chunk_idx in range(num_chunks):
-                start_idx = chunk_idx * debug_chunk_size
-                end_idx = min(start_idx + debug_chunk_size, seq_len_or_batch_size)
-                tt_chunk = tt_output_torch[..., start_idx:end_idx, :]
-                ref_chunk = reference_output[..., start_idx:end_idx, :]
-                chunk_passing, chunk_pcc = comp_pcc(tt_chunk, ref_chunk, pcc_required)
-                logger.error(
-                    f"PCC debug chunk {chunk_idx + 1}/{num_chunks}: pcc={chunk_pcc} "
-                    f"passing={chunk_passing} seq_range=[{start_idx}:{end_idx}]"
-                )
     assert passing, f"Pearson Correlation Coefficient {pcc} is below required {pcc_required}."
     return pcc
 
