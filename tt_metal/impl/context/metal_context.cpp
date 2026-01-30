@@ -429,7 +429,7 @@ void MetalContext::teardown() {
 }
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
-MetalContext* g_instance;
+std::atomic<MetalContext*> g_instance{nullptr};
 // Use a recursive mutex because the instance destructor calls into MetalContext::instance.
 std::recursive_mutex g_instance_mutex;
 bool registered_atexit = false;
