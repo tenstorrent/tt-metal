@@ -106,9 +106,12 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
-// Float32 binary comparison for eq operation
+// Float32 binary comparison
+// TODO: Add support for ne, gt, lt, ge, le operations
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -118,14 +121,12 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
         sfpi::vFloat result = 0.0f;
 
         if constexpr (RELATIONAL_OP == SfpuType::eq) {
-            // Get bit representations for infinity check
             sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
             sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
 
             // Standard float comparison (handles normal values and NaN correctly)
             v_if(in0 == in1) { result = 1.0f; }
-            // Special handling for infinity (SFPI float == doesn't work for inf == inf)
-            // Use bitwise AND to clear sign bit and check for infinity pattern
+            // Special handling for infinity
             v_elseif((in0_bits == in1_bits) && ((in0_bits & 0x7FFFFFFF) == 0x7F800000)) { result = 1.0f; }
             v_endif;
         }
