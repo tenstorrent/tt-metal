@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
