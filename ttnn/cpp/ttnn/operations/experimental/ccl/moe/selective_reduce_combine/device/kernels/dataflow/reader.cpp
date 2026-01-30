@@ -5,17 +5,6 @@
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 
-inline void print_u32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << (uint32_t)*ptr << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
 namespace detail {
 
 template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
@@ -40,7 +29,7 @@ void token_work_split(
         }
     }
 }
-}//namespace detail
+}  // namespace detail
 void kernel_main() {
     constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
     constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
@@ -74,8 +63,6 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(token_counts_cb_id, 1);
 
-    print_u32_pages(token_counts_l1_addr, num_local_experts, 1);
-
     // read dense token maps
     cb_reserve_back(dense_token_maps_cb_id, 1);
     const uint32_t dense_token_maps_l1_addr = get_read_ptr(dense_token_maps_cb_id);
@@ -90,8 +77,6 @@ void kernel_main() {
 
     // stash the work split counts, offsets at the end of the token counts
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
-    DPRINT << "OFFSETS: " << token_split_offsets[0] << " " << token_split_offsets[1] << " token_split_counts "
-           << token_split_counts[0] << " " << token_split_counts[1] << "\n";
 
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         dense_token_maps_l1_ptr[num_local_experts * global_num_tokens + e] = token_split_offsets[e];

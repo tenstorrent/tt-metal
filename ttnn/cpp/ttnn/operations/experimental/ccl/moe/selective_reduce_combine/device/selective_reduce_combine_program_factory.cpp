@@ -7,7 +7,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -16,7 +16,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl::moe {
-namespace detail{
+namespace detail {
 
 std::vector<uint32_t> data_parallel_split(
     uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
@@ -28,7 +28,7 @@ std::vector<uint32_t> data_parallel_split(
     for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
         const uint32_t token_increment = std::min(token_size_bytes, max_segment_size_bytes);
         data_parallel_sizes_bytes.push_back(token_increment);
-        token_size_bytes-=token_increment;
+        token_size_bytes -= token_increment;
 
         if (token_size_bytes == 0) {
             break;
@@ -74,14 +74,14 @@ auto launch_mux_workers(
             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-    std::vector<std::map<ttnn::MeshCoordinate,CoreCoord>> mux_neigbor_core_maps;
+    std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
 
     const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
     auto mux_core_iter = mux_cores.begin();
     for (uint32_t link = 0; link < num_links; ++link) {
-        std::map<ttnn::MeshCoordinate,CoreCoord> mux_neigbor_core_map;
-        for (const auto & neighbor_coord : neighbors){
+        std::map<ttnn::MeshCoordinate, CoreCoord> mux_neigbor_core_map;
+        for (const auto& neighbor_coord : neighbors) {
             auto mux_logical_core = *(mux_core_iter++);
             const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
 
@@ -122,7 +122,7 @@ struct Header {
 uint32_t metadata_entry_size(const uint32_t num_local_experts) { return 2 * num_local_experts + 1; }
 constexpr auto metadata_entry_bytes = 4;
 
-} // namespace detail
+}  // namespace detail
 SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::cached_mesh_workload_t
 SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -182,7 +182,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto select_experts_k = operation_attributes.select_experts_k;
     const auto hidden_size = operation_attributes.hidden_size;
 
-    const auto total_tokens = batch_size*seq_size;
+    const auto total_tokens = batch_size * seq_size;
     // TODO map number of experts to device
     const auto experts = operation_attributes.experts;
 
@@ -198,7 +198,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    //const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
+    // const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
     const uint32_t num_devices = mesh_view.num_devices();
 
@@ -221,13 +221,13 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // in validate, assert that worker_core_range_set.size() == num_token_parallel_cores*num_data_parallel_cores;
     const auto num_token_parallel_cores = operation_attributes.num_token_parallel_cores;
     auto num_data_parallel_cores = operation_attributes.num_data_parallel_cores;
-    const auto & worker_core_range_set= operation_attributes.worker_core_range_set;
+    const auto& worker_core_range_set = operation_attributes.worker_core_range_set;
 
     // in validate mux_core_range_set.size() == 2(directions) * num_links
-    const auto & mux_core_range_set= operation_attributes.mux_core_range_set;
+    const auto& mux_core_range_set = operation_attributes.mux_core_range_set;
 
-    const auto data_parallel_sizes_bytes = detail::data_parallel_split(
-        token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
+    const auto data_parallel_sizes_bytes =
+        detail::data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
 
     num_data_parallel_cores = data_parallel_sizes_bytes.size();
     const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
@@ -320,7 +320,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     KernelHandle ternary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
         needed_worker_core_range_set,
         reader_config);
 
@@ -386,7 +386,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
         needed_worker_core_range_set,
         writer_config);
 
@@ -469,8 +469,12 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto & coord = range.start_coord();
-        TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -494,4 +498,4 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
     }
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::ccl::moe

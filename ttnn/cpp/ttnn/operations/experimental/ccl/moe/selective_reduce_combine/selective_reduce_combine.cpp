@@ -12,7 +12,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl::moe {
+namespace ttnn::operations::experimental::ccl::moe {
 
 ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     const ttnn::Tensor& dense_input_tensor,
@@ -27,8 +27,8 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     const std::optional<uint32_t>& axis,
     tt::tt_fabric::Topology topology,
     const uint32_t num_links,
-    const uint32_t num_token_parallel_cores,
-    const uint32_t num_data_parallel_cores,
+    const uint32_t token_parallel_core_dim,
+    const uint32_t data_parallel_core_dim,
     const CoreRangeSet worker_core_range_set,
     const CoreRangeSet mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -49,8 +49,8 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
         axis,
         topology,
         num_links,
-        num_token_parallel_cores,
-        num_data_parallel_cores,
+        token_parallel_core_dim,
+        data_parallel_core_dim,
         worker_core_range_set,
         mux_core_range_set,
         input_memory_config,
@@ -58,4 +58,4 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
         optional_cross_device_semaphore);
 }
 
-}  // namespace ttnn::operations::ccl::moe
+}  // namespace ttnn::operations::experimental::ccl::moe
