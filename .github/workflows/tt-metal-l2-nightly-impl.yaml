@@ -587,20 +587,21 @@ jobs:
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     strategy:
       matrix:
-        test_type: [conv, pool, group_norm]
+        # oft removed due to issue 36807 (https://github.com/tenstorrent/tt-metal/issues/36807)
+        test_type: [conv, pool]  # Removed group_norm (was OFT-only)
         include:
           - test_type: conv
             test_path: tests/ttnn/nightly/unit_tests/operations/conv
-            test_filter: "panoptic or _oft"
+            test_filter: "panoptic"  # Removed _oft from filter
             owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: pool
             test_path: tests/ttnn/nightly/unit_tests/operations/pool
-            test_filter: "panoptic or _oft"
+            test_filter: "panoptic"  # Removed _oft from filter
             owner: U052J2QDDKQ # Pavle Josipovic
-          - test_type: group_norm
-            test_path: tests/ttnn/unit_tests/operations/fused
-            test_filter: "_oft"
-            owner: U06Q7ESTFEV # Borys Bradel
+          # - test_type: group_norm
+          #   test_path: tests/ttnn/unit_tests/operations/fused
+          #   test_filter: "_oft"
+          #   owner: U06Q7ESTFEV # Borys Bradel
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
