@@ -75,7 +75,7 @@ namespace tt::tt_metal {
 enum NOC : uint8_t;
 }  // namespace tt::tt_metal
 
-#define LOG_TRACY_LAZY(logger_type, ...)                                                     \
+#define LOG_TRACE_LAZY(logger_type, ...)                                                     \
     if (tt::LoggerRegistry::instance().get(logger_type)->should_log(spdlog::level::trace)) { \
         log_trace(logger_type, __VA_ARGS__);                                                 \
     }
@@ -758,7 +758,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     const auto& core_range = std::get<CoreRange>(transfer_info.cores);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
-                    LOG_TRACY_LAZY(
+                    LOG_TRACE_LAZY(
                         tt::LogDispatch,
                         "Common RTA (MCAST via kernel_group): core_range={}, noc_xy=0x{:x}, "
                         "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
@@ -819,7 +819,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
-                            LOG_TRACY_LAZY(
+                            LOG_TRACE_LAZY(
                                 tt::LogDispatch,
                                 "Unique RTA (UNICAST): logical_core={}, virtual_core={}, noc_xy=0x{:x}, "
                                 "rta_size={} bytes",
@@ -907,7 +907,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         auto& unicast_sub_cmd =
                             std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
-                        LOG_TRACY_LAZY(
+                        LOG_TRACE_LAZY(
                             tt::LogDispatch,
                             "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
                             kernel->logical_cores().size(),
@@ -917,7 +917,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             // can make a vector of unicast encodings here
                             CoreCoord virtual_core_coords =
                                 device->virtual_core_from_logical_core(core_coord, core_type);
-                            LOG_TRACY_LAZY(
+                            LOG_TRACE_LAZY(
                                 tt::LogDispatch,
                                 "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
                                 core_coord,
@@ -935,7 +935,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         auto& multicast_sub_cmd =
                             std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
                         multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
-                        LOG_TRACY_LAZY(
+                        LOG_TRACE_LAZY(
                             tt::LogDispatch,
                             "Common RTA (MCAST per-kernel): num_ranges={}, L1_addr=0x{:x}, crta_size={} bytes",
                             dst_noc_multicast_info.size(),
@@ -944,7 +944,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
                             const auto& core_range = std::get<CoreRange>(mcast_dests.cores);
                             auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, core_range);
-                            LOG_TRACY_LAZY(
+                            LOG_TRACE_LAZY(
                                 tt::LogDispatch,
                                 "  core_range={}, noc_xy=0x{:x}, num_dests={}",
                                 core_range,
@@ -1037,7 +1037,7 @@ public:
                     const auto& core_range = std::get<CoreRange>(dst_noc_info.cores);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
-                    LOG_TRACY_LAZY(
+                    LOG_TRACE_LAZY(
                         tt::LogDispatch,
                         "Semaphore (MCAST/WORKER): core_range={}, noc_xy=0x{:x}, num_dests={}, "
                         "L1_addr=0x{:x}, initial_value={}",
@@ -1059,7 +1059,7 @@ public:
                 // TODO: we only fast dispatch to active eth...
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
-                LOG_TRACY_LAZY(
+                LOG_TRACE_LAZY(
                     tt::LogDispatch,
                     "Semaphore (UNICAST/ETH): num_cores={}, L1_offset=0x{:x}, initial_value={}",
                     dst_noc_unicast_info.size(),
@@ -1068,7 +1068,7 @@ public:
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
                     const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
                     auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
-                    LOG_TRACY_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
+                    LOG_TRACE_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
                 }
@@ -1179,7 +1179,7 @@ public:
                 CoreRange virtual_range(virtual_start, virtual_end);
                 auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
                 uint32_t start_addr = program.get_program_config(index).cb_offset;
-                LOG_TRACY_LAZY(
+                LOG_TRACE_LAZY(
                     tt::LogDispatch,
                     "Circular Buffers (MCAST): logical_range={}, virtual_range={}, "
                     "noc_xy=0x{:x}, num_dests={}, L1_addr=0x{:x}, config_size={} bytes",
@@ -1730,7 +1730,7 @@ public:
 
                         CoreRange virtual_range(virtual_start, virtual_end);
                         auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
-                        LOG_TRACY_LAZY(
+                        LOG_TRACE_LAZY(
                             tt::LogDispatch,
                             "Launch Message (MCAST): logical_range={}, "
                             "virtual_range={}, noc_xy=0x{:x}, num_dests={}, msg_size={} bytes",
@@ -1747,7 +1747,7 @@ public:
                     }
                 } else {
                     // Need to unicast to each core in the kernel group
-                    LOG_TRACY_LAZY(
+                    LOG_TRACE_LAZY(
                         tt::LogDispatch,
                         "Launch Message (UNICAST): num_cores={}, msg_size={} bytes",
                         kernel_group->core_ranges.num_cores(),
@@ -1759,7 +1759,7 @@ public:
                                 CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                                     logical_coord, kernel_group->get_core_type());
                                 auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
-                                LOG_TRACY_LAZY(
+                                LOG_TRACE_LAZY(
                                     tt::LogDispatch,
                                     "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
                                     logical_coord,
@@ -1969,7 +1969,7 @@ public:
             noc_data_start_idx,
             dispatcher_for_go_signal);
 
-        LOG_TRACY_LAZY(
+        LOG_TRACE_LAZY(
             tt::LogDispatch,
             "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, "
             "stream_idx={}",
@@ -1995,10 +1995,10 @@ void assemble_device_commands(
     IDevice* device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
-    LOG_TRACY_LAZY(tt::LogDispatch, "");
-    LOG_TRACY_LAZY(
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
+    LOG_TRACE_LAZY(
         tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
-    LOG_TRACY_LAZY(
+    LOG_TRACE_LAZY(
         tt::LogDispatch,
         "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
         device->id(),
@@ -2587,10 +2587,10 @@ void write_program_command_sequence(
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
-    LOG_TRACY_LAZY(tt::LogDispatch, "");
-    LOG_TRACY_LAZY(
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
+    LOG_TRACE_LAZY(
         tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
-    LOG_TRACY_LAZY(
+    LOG_TRACE_LAZY(
         tt::LogDispatch,
         "Stall First: {}, Stall Before Program: {}, Send Binary: {}",
         stall_first,
@@ -2603,7 +2603,7 @@ void write_program_command_sequence(
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
 
-    LOG_TRACY_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
+    LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
         manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
     }
@@ -2686,8 +2686,8 @@ void write_program_command_sequence(
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
 
-    LOG_TRACY_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
-    LOG_TRACY_LAZY(tt::LogDispatch, "");
+    LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
+    LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
