@@ -64,20 +64,20 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 1024)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
-#define MEM_NCRISC_FIRMWARE_SIZE 1536
-#define MEM_TRISC0_FIRMWARE_SIZE 1536
-#define MEM_TRISC1_FIRMWARE_SIZE 1536
-#define MEM_TRISC2_FIRMWARE_SIZE 1536
+#define MEM_NCRISC_FIRMWARE_SIZE 2560
+#define MEM_TRISC0_FIRMWARE_SIZE 2560
+#define MEM_TRISC1_FIRMWARE_SIZE 2560
+#define MEM_TRISC2_FIRMWARE_SIZE 2560
 
 // Blackhole Architecture - No IRAM constraints
 // Per-kernel limits set to maximum available L1
 // These are enforced by the ELF loader in tt_elffile.cpp
 // The real constraint is the kernel_config_buffer aggregate limit, configurable via
 // worker_l1_size in MeshDevice::create_unit_meshes
-// 1503 KB = 1536 KB (L1 total) - 33 KB (MEM_MAP_END system reserved)
-#define MEM_MAX_KERNEL_SIZE (1503 * 1024)
+// Max kernel size = 1536 KB (L1 total) - MEM_MAP_END (system reserved)
+#define MEM_MAX_KERNEL_SIZE (1497 * 1024)
 
 #define MEM_BRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
 #define MEM_NCRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12768
+#define MEM_MAILBOX_SIZE 12896
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 

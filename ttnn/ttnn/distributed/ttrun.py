@@ -19,7 +19,6 @@ from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_CACHE_DIR_PATTERN = "{home}/.cache/{hostname}_rank{rank}"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
@@ -119,8 +118,8 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         # Use default pattern when TT_METAL_CACHE is not set
         base_path = f"{Path.home()}/.cache"
 
-    # Apply consistent rank suffix pattern to both user-provided and default paths
-    cache_path = f"{base_path}_{hostname}_rank{binding.rank}"
+    # Apply consistent suffix pattern to both user-provided and default paths
+    cache_path = f"{base_path}_{hostname}"
 
     env = {
         "TT_METAL_CACHE": cache_path,

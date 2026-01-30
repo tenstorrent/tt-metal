@@ -95,6 +95,7 @@ jobs:
       matrix:
         test-group: [
             { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
+            { model: bevformer, owner_id: U08E1JCMAJF, cmd: pytest models/experimental/bevformer/tests/pcc/ }, # Marko Bezulj
           ]
     name: Nightly P150 110 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights

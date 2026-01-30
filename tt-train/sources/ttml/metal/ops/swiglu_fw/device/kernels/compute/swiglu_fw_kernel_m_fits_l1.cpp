@@ -254,7 +254,7 @@ inline void compute_M_for_r() {
 
             // Apply SiLU activation to compute SiLU(XW1)
             copy_dest_values_init();
-            copy_dest_values(silu_reg, xw1_reg);
+            copy_dest_values(xw1_reg, silu_reg);
             sigmoid_tile_init();
             sigmoid_tile(silu_reg);
             // Multiply XW1 * sigmoid(XW1) to get SiLU(XW1)

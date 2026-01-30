@@ -69,7 +69,7 @@ void kernel_main() {
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
             tanh_tile_init();
             tanh_tile(1);
-            copy_dest_values(4, 1);  // save tanh to tile[7]
+            copy_dest_values(1, 4);  // save tanh to tile[4]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
             fill_tile(3, 1.0f);
@@ -81,7 +81,7 @@ void kernel_main() {
             square_tile(4);
             fill_tile(3, 1.0f);
             sub_binary_tile(3, 4, 3);
-            copy_dest_values(4, 3);
+            copy_dest_values(3, 4);
 
             // tile[2] = (1 + 0.134145 * x**2)
             fill_tile(3, kKappa * 3.0f);
@@ -96,7 +96,7 @@ void kernel_main() {
             mul_binary_tile(2, 3, 2);
 
             // tile[2] = x * pdf tern
-            copy_dest_values(3, 8);
+            copy_dest_values(8, 3);
             mul_binary_tile(2, 3, 2);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)
