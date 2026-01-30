@@ -914,7 +914,24 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_N_block_wt_val = mm_N_block_wt.value_or(slice_Wt);
     uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(2);
 
-    uint32_t M_blocks_per_core = slice_Ht / mm_cores_y_val / mm_block_ht_val;
+    // Introduce checks for current assumptions
+    TT_FATAL(
+        slice_Ht % mm_cores_y_val == 0,
+        "slice_Ht ({}) must be divisible by mm_cores_y_val ({})",
+        slice_Ht,
+        mm_cores_y_val);
+    uint32_t slice_Ht_per_core = slice_Ht / mm_cores_y_val;
+    TT_FATAL(
+        slice_Ht_per_core % mm_block_ht_val == 0,
+        "slice_Ht_per_core ({}) must be divisible by mm_block_ht_val ({})",
+        slice_Ht_per_core,
+        mm_block_ht_val);
+    uint32_t M_blocks_per_core = slice_Ht_per_core / mm_block_ht_val;
+    TT_FATAL(
+        slice_Wt % mm_N_block_wt_val == 0,
+        "slice_Wt ({}) must be divisible by mm_N_block_wt_val ({})",
+        slice_Wt,
+        mm_N_block_wt_val);
     uint32_t mm_N_blocks_per_slice = slice_Wt / mm_N_block_wt_val;
 
     TT_FATAL(
