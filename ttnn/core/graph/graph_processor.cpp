@@ -57,7 +57,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture_impl(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -422,7 +422,7 @@ void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
     }
 }
 
-void GraphProcessor::begin_capture(RunMode mode) {
+void GraphProcessor::begin_capture_impl(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
     graph.clear();
     buffer_id_to_counter.clear();
@@ -436,6 +436,10 @@ void GraphProcessor::begin_capture(RunMode mode) {
         hook->set_block(mode == RunMode::NO_DISPATCH);
     }
     current_op_id.push(0);
+}
+
+void GraphProcessor::begin_capture(RunMode mode) {
+    begin_capture_impl(mode);
 }
 nlohmann::json GraphProcessor::end_capture() {
     const std::lock_guard<std::mutex> lock(mutex);
