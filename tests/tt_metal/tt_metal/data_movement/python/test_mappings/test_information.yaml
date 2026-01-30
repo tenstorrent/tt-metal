@@ -564,6 +564,18 @@ tests:
   320:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
 
+  321:
+    name: "Single source Multicast Atomic Increment"
+
+  322:
+    name: "Multi source Multicast Atomic Increment"
+
+  323:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  324:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
     comment: |
