@@ -1981,19 +1981,29 @@ class ModelArgs:
 
             model_cls = self.get_hf_model_cls()
 
+            from_config_exc = None
             try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # Avoid loading checkpoint weights when dummy_weights is set.
+                try:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                except TypeError:
+                    model = model_cls.from_config(config)
+            except Exception as exc:
+                from_config_exc = exc
+                logger.info("Error loading dummy weights using .from_config. Error: {}", exc)
+                if hasattr(model_cls, "_from_config"):
+                    try:
+                        try:
+                            model = model_cls._from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                        except TypeError:
+                            model = model_cls._from_config(config)
+                    except Exception as fallback_exc:
+                        logger.info("Error loading dummy weights using ._from_config. Error: {}", fallback_exc)
+                        if from_config_exc is not None:
+                            raise fallback_exc from from_config_exc
+                        raise
+                else:
+                    raise
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
