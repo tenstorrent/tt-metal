@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
     }
 
     TT_FATAL(
-        mesh_rows > 0 && mesh_cols > 0 && mesh_rows * mesh_cols == 32,
+        mesh_rows * mesh_cols == 32,
         "mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy).");
 
     // - DP groups (data parallelism) along mesh dimension 0

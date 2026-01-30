@@ -289,9 +289,9 @@ def main():
         print(f"Error: invalid --mesh_shape '{args.mesh_shape}', expected RxC like 8x4")
         return 1
 
-    if mesh_rows <= 0 or mesh_cols <= 0 or mesh_rows * mesh_cols != 32:
+    if mesh_rows * mesh_cols != 32:
         print(
-            f"Error: mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy)."
+            f"Error: mesh_rows and mesh_cols must be their product must be 32 (whole galaxy)."
         )
         return 1
 
@@ -325,7 +325,6 @@ def main():
 
     # Get parallelism parameters from context
     pctx = autograd_ctx.get_parallelism_context()
-    dp_axis = pctx.get_ddp_axis()
     tp_axis = pctx.get_tp_axis()
     dp_size = pctx.get_ddp_size()
     tp_size = pctx.get_tp_size()
