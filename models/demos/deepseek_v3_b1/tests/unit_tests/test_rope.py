@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
     [
         (1, 1, 32, 5, (1, 1)),  # Minimal single-core test
         (1, 1, 64, 5, (1, 2)),  # Multicore test
-        (1, 2, 64, 5, (1, 1)),  # DeepSeek V3 Q rope (multiple heads)
+        (1, 4, 64, 5, (1, 2)),  # DeepSeek V3 Q rope (multiple heads)
     ],
     ids=["minimal", "multicore", "q_rope"],
 )

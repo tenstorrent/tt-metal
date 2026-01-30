@@ -331,7 +331,7 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
     };
 
-    // Qrope CTArgs type alias (Wt and Ht are compile-time for TRISC)
+    // Qrope CTArgs type alias
     using QRopeCTArgs = deepseek_b1_ops::Rope::
         ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
 

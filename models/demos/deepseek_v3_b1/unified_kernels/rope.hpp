@@ -100,6 +100,7 @@ struct Rope {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;
+            DPRINT << "Ht = " << Ht << ", Wt = " << Wt << ENDL();
 
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
