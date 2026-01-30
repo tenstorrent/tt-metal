@@ -669,7 +669,7 @@ concurrency:
 jobs:
   test-database-connection:
     name: 🔍 Test Database Connection
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-small-stable
     steps:
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
