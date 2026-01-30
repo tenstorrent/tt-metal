@@ -15,9 +15,6 @@
 #
 # === Evaluated ===
 #
-# bugprone-branch-clone:
-#   Attempted, no fixit, lots of violations.
-#
 # bugprone-unchecked-optional-access:
 #   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
 #

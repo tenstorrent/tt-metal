@@ -43,7 +43,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": false,
               "timeout": 50,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
+              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
             }, # Pavle Josipovic
             {
               "name": "Galaxy Llama 70B model perf tests",

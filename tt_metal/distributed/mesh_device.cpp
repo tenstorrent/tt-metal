@@ -169,7 +169,18 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
+        // Catch any exceptions during device close - destructors must not throw.
+        // This can happen when a device is hung and times out during close.
+        try {
+            tt_metal::MetalContext::instance().device_manager()->close_devices(
+                devices_to_close, /*skip_synchronize=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "Exception during device close in ScopedDevices destructor: {}. "
+                "The device may be in an unrecoverable state and require a reset.",
+                e.what());
+        }
     }
 }
 
@@ -375,6 +386,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    TT_FATAL(
+        !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
     const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;

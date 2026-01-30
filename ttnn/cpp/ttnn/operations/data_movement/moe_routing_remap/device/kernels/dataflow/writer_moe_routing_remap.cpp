@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using namespace tt::data_movement::common;
 

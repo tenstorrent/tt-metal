@@ -1067,7 +1067,14 @@ def reset_tensix(tt_open_devices=None):
         logger.info(f"Running reset for pci devices: {tt_open_devices_str}")
         smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
 
-    logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
+    if smi_reset_result.returncode != 0:
+        logger.warning(
+            f"tt-smi reset failed with status {smi_reset_result.returncode}. "
+            "The device may be in an inconsistent state. This can happen if device handles "
+            "are still open (e.g., UMD connection held by the process). Subsequent tests may fail."
+        )
+    else:
+        logger.info("tt-smi reset completed successfully")
 
 
 @pytest.fixture(scope="function", autouse=True)
