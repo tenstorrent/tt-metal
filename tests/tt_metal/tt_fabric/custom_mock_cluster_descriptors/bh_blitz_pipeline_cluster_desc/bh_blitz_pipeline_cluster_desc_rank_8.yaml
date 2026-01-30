@@ -1,0 +1,449 @@
+arch:
+  0: blackhole
+  1: blackhole
+  2: blackhole
+  3: blackhole
+  4: blackhole
+  5: blackhole
+  6: blackhole
+  7: blackhole
+chips:
+  {}
+chip_unique_ids:
+  7: 4940957888807637657
+  6: 1316772005928213923
+  5: 12546837450656722284
+  4: 15230295758484287666
+  3: 3841612461917036993
+  2: 7830623694002473925
+  1: 1790268702040388330
+  0: 3371414299746441410
+ethernet_connections:
+  -
+    - chip: 0
+      chan: 4
+    - chip: 1
+      chan: 2
+  -
+    - chip: 0
+      chan: 5
+    - chip: 1
+      chan: 3
+  -
+    - chip: 4
+      chan: 4
+    - chip: 5
+      chan: 2
+  -
+    - chip: 4
+      chan: 5
+    - chip: 5
+      chan: 3
+ethernet_connections_to_remote_devices:
+  -
+    - chip: 4
+      chan: 7
+    - remote_chip_id: 8421753656434672484
+      chan: 7
+  -
+    - chip: 4
+      chan: 6
+    - remote_chip_id: 8421753656434672484
+      chan: 6
+  -
+    - chip: 4
+      chan: 3
+    - remote_chip_id: 4864024171382154771
+      chan: 3
+  -
+    - chip: 4
+      chan: 2
+    - remote_chip_id: 4864024171382154771
+      chan: 2
+  -
+    - chip: 4
+      chan: 1
+    - remote_chip_id: 7582399015508169023
+      chan: 7
+  -
+    - chip: 4
+      chan: 0
+    - remote_chip_id: 7582399015508169023
+      chan: 6
+  -
+    - chip: 5
+      chan: 7
+    - remote_chip_id: 17303878229876237513
+      chan: 7
+  -
+    - chip: 5
+      chan: 6
+    - remote_chip_id: 17303878229876237513
+      chan: 6
+  -
+    - chip: 5
+      chan: 5
+    - remote_chip_id: 14427583256616748711
+      chan: 3
+  -
+    - chip: 5
+      chan: 4
+    - remote_chip_id: 14427583256616748711
+      chan: 2
+  -
+    - chip: 5
+      chan: 1
+    - remote_chip_id: 17184132379278075247
+      chan: 7
+  -
+    - chip: 5
+      chan: 0
+    - remote_chip_id: 17184132379278075247
+      chan: 6
+  -
+    - chip: 2
+      chan: 7
+    - remote_chip_id: 4626142204601111602
+      chan: 7
+  -
+    - chip: 2
+      chan: 6
+    - remote_chip_id: 4626142204601111602
+      chan: 6
+  -
+    - chip: 2
+      chan: 5
+    - remote_chip_id: 14764770483778850194
+      chan: 3
+  -
+    - chip: 2
+      chan: 4
+    - remote_chip_id: 14764770483778850194
+      chan: 2
+  -
+    - chip: 2
+      chan: 3
+    - remote_chip_id: 13567352836474075276
+      chan: 5
+  -
+    - chip: 2
+      chan: 2
+    - remote_chip_id: 13567352836474075276
+      chan: 4
+  -
+    - chip: 2
+      chan: 1
+    - remote_chip_id: 6051024940858745138
+      chan: 7
+  -
+    - chip: 2
+      chan: 0
+    - remote_chip_id: 6051024940858745138
+      chan: 6
+  -
+    - chip: 7
+      chan: 7
+    - remote_chip_id: 5060645188502771228
+      chan: 7
+  -
+    - chip: 7
+      chan: 6
+    - remote_chip_id: 5060645188502771228
+      chan: 6
+  -
+    - chip: 7
+      chan: 5
+    - remote_chip_id: 4050361119573817869
+      chan: 3
+  -
+    - chip: 7
+      chan: 4
+    - remote_chip_id: 4050361119573817869
+      chan: 2
+  -
+    - chip: 7
+      chan: 3
+    - remote_chip_id: 759674371012042681
+      chan: 3
+  -
+    - chip: 7
+      chan: 2
+    - remote_chip_id: 759674371012042681
+      chan: 2
+  -
+    - chip: 7
+      chan: 1
+    - remote_chip_id: 10054623275765501911
+      chan: 7
+  -
+    - chip: 7
+      chan: 0
+    - remote_chip_id: 10054623275765501911
+      chan: 6
+  -
+    - chip: 3
+      chan: 7
+    - remote_chip_id: 14427583256616748711
+      chan: 1
+  -
+    - chip: 3
+      chan: 6
+    - remote_chip_id: 14427583256616748711
+      chan: 0
+  -
+    - chip: 3
+      chan: 5
+    - remote_chip_id: 17659935727681795003
+      chan: 3
+  -
+    - chip: 3
+      chan: 4
+    - remote_chip_id: 17659935727681795003
+      chan: 2
+  -
+    - chip: 3
+      chan: 3
+    - remote_chip_id: 17184132379278075247
+      chan: 5
+  -
+    - chip: 3
+      chan: 2
+    - remote_chip_id: 17184132379278075247
+      chan: 4
+  -
+    - chip: 3
+      chan: 1
+    - remote_chip_id: 14966567221657730258
+      chan: 1
+  -
+    - chip: 3
+      chan: 0
+    - remote_chip_id: 14966567221657730258
+      chan: 0
+  -
+    - chip: 0
+      chan: 9
+    - remote_chip_id: 16167906551793054304
+      chan: 9
+  -
+    - chip: 0
+      chan: 8
+    - remote_chip_id: 16167906551793054304
+      chan: 8
+  -
+    - chip: 0
+      chan: 7
+    - remote_chip_id: 5060645188502771228
+      chan: 1
+  -
+    - chip: 0
+      chan: 6
+    - remote_chip_id: 5060645188502771228
+      chan: 0
+  -
+    - chip: 0
+      chan: 3
+    - remote_chip_id: 10815534592467708593
+      chan: 3
+  -
+    - chip: 0
+      chan: 2
+    - remote_chip_id: 10815534592467708593
+      chan: 2
+  -
+    - chip: 0
+      chan: 1
+    - remote_chip_id: 14157380878147747328
+      chan: 1
+  -
+    - chip: 0
+      chan: 0
+    - remote_chip_id: 14157380878147747328
+      chan: 0
+  -
+    - chip: 1
+      chan: 9
+    - remote_chip_id: 7953567718801385030
+      chan: 9
+  -
+    - chip: 1
+      chan: 8
+    - remote_chip_id: 7953567718801385030
+      chan: 8
+  -
+    - chip: 1
+      chan: 7
+    - remote_chip_id: 13567352836474075276
+      chan: 1
+  -
+    - chip: 1
+      chan: 6
+    - remote_chip_id: 13567352836474075276
+      chan: 0
+  -
+    - chip: 1
+      chan: 5
+    - remote_chip_id: 6051024940858745138
+      chan: 3
+  -
+    - chip: 1
+      chan: 4
+    - remote_chip_id: 6051024940858745138
+      chan: 2
+  -
+    - chip: 1
+      chan: 1
+    - remote_chip_id: 16830661331005093014
+      chan: 1
+  -
+    - chip: 1
+      chan: 0
+    - remote_chip_id: 16830661331005093014
+      chan: 0
+  -
+    - chip: 6
+      chan: 7
+    - remote_chip_id: 14427583256616748711
+      chan: 7
+  -
+    - chip: 6
+      chan: 6
+    - remote_chip_id: 14427583256616748711
+      chan: 6
+  -
+    - chip: 6
+      chan: 5
+    - remote_chip_id: 7410929570732062722
+      chan: 3
+  -
+    - chip: 6
+      chan: 4
+    - remote_chip_id: 7410929570732062722
+      chan: 2
+  -
+    - chip: 6
+      chan: 3
+    - remote_chip_id: 17303878229876237513
+      chan: 5
+  -
+    - chip: 6
+      chan: 2
+    - remote_chip_id: 17303878229876237513
+      chan: 4
+  -
+    - chip: 6
+      chan: 1
+    - remote_chip_id: 18242298208287120962
+      chan: 7
+  -
+    - chip: 6
+      chan: 0
+    - remote_chip_id: 18242298208287120962
+      chan: 6
+chips_with_mmio:
+  - 0: 6
+  - 1: 24
+  - 2: 25
+  - 3: 29
+  - 4: 8
+  - 5: 3
+  - 6: 19
+  - 7: 10
+io_device_type: PCIe
+harvesting:
+  0:
+    noc_translation: true
+    harvest_mask: 128
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  1:
+    noc_translation: true
+    harvest_mask: 256
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  2:
+    noc_translation: true
+    harvest_mask: 8
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 320
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  3:
+    noc_translation: true
+    harvest_mask: 16
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  4:
+    noc_translation: true
+    harvest_mask: 8
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  5:
+    noc_translation: true
+    harvest_mask: 1
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  6:
+    noc_translation: true
+    harvest_mask: 64
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  7:
+    noc_translation: true
+    harvest_mask: 512
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+chip_to_boardtype:
+  0: ubb_blackhole
+  1: ubb_blackhole
+  2: ubb_blackhole
+  3: ubb_blackhole
+  4: ubb_blackhole
+  5: ubb_blackhole
+  6: ubb_blackhole
+  7: ubb_blackhole
+chip_to_bus_id:
+  0: 0x0001
+  1: 0x0002
+  2: 0x0007
+  3: 0x0043
+  4: 0x0045
+  5: 0x0046
+  6: 0x0087
+  7: 0x00c5
+boards:
+  -
+    - board_id: 4884208488465
+    - board_type: ubb_blackhole
+    - chips:
+        - 4
+        - 5
+        - 2
+        - 7
+        - 3
+        - 0
+        - 1
+        - 6
+asic_locations:
+  0: 1
+  1: 2
+  2: 7
+  3: 3
+  4: 5
+  5: 6
+  6: 7
+  7: 5
