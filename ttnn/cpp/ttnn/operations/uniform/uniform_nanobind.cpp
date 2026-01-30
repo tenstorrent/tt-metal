@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,10 +31,26 @@ void bind_uniform_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The `input` tensor with updated values drawn from the specified uniform distribution.
 
-        Example:
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.ones(3, 3), dtype=torch.bfloat16)), device=device)
-            >>> ttnn.uniform(input)
+        Note:
+            This operations supports tensors according to the following data types and layout:
 
+            .. list-table:: input tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, FLOAT32
+                    - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  The input tensor must be in TILE layout and have a datatype of Bfloat16 or Float32.
+                -  The input tensor must be on the device.
+                -  The `from` and `to` parameters must be floats.
+                -  The `from` parameter must be less than the `to` parameter.
         )doc";
 
     bind_registered_operation(

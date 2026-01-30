@@ -35,7 +35,7 @@ void bind_index_fill_operation(nb::module_& mod) {
         Note:
             This operations supports tensors according to the following data types and layout:
 
-            .. list-table:: input_tensor
+            .. list-table:: input tensor
                 :header-rows: 1
 
                 * - dtype

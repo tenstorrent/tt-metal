@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -45,6 +45,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.bernoulli": tensor_creation.test_bernoulli,
     "ttnn.complex_tensor": tensor_creation.test_complex_tensor,
     "ttnn.index_fill": tensor_creation.test_index_fill,
+    "ttnn.uniform": tensor_creation.test_uniform,
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,

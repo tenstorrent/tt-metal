@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -110,3 +110,12 @@ def test_index_fill(device):
         tt_input, 1, tt_index, 10.0
     )  # Need to ensure 10.0 is a float to match the bfloat16 dtype of the input tensor
     logger.info("TT-NN index_fill tensor:", output)
+
+
+def test_uniform(device):
+    # Create a TT-NN tensor with random values uniformly distributed between 0.0 and 1.0
+    input = ttnn.to_device(
+        ttnn.from_torch(torch.ones(3, 3), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), device=device
+    )
+    ttnn.uniform(input)
+    logger.info("TT-NN uniform tensor:", input)
