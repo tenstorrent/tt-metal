@@ -1027,5 +1027,73 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
     }
 }
 
+TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    
+    // Test configuration - use multiple pages per core and multiple cores to test coalescing
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 3},
+        .num_cores = {std::min(3u, core_grid_size.x), std::min(3u, core_grid_size.y)},
+        .page_shape = {1, 2048},  // 2048 bytes per page, L1-aligned
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+    
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+
+    uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+
+    auto buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+    
+    // Prepare write source buffer and pin it
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        buf_size / sizeof(uint32_t), 0);
+    std::iota(src->begin(), src->end(), 0);
+    
+    // Create HostBuffer on top of src
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), buf_size / sizeof(uint32_t)), MemoryPin(src));
+    
+    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(coord_range),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned_unique);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+    tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
+    
+    for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+        for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+            log_info(tt::LogTest, "Testing writing from pinned memory to sharded buffer at coord ({}, {})", logical_y, logical_x);
+            MeshCoordinate coord(logical_y, logical_x);
+            
+            // Write using pinned memory
+            auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+            distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+            mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true);
+            
+            // Read back and verify
+            std::vector<uint32_t> dst_vec = {};
+            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+            EXPECT_EQ(dst_vec, *src);
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
