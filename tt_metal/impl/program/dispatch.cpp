@@ -75,9 +75,9 @@ namespace tt::tt_metal {
 enum NOC : uint8_t;
 }  // namespace tt::tt_metal
 
-#define LOG_TRACY_LAZY(logger_type, ...) \
+#define LOG_TRACY_LAZY(logger_type, ...)                                                     \
     if (tt::LoggerRegistry::instance().get(logger_type)->should_log(spdlog::level::trace)) { \
-        log_trace(logger_type, __VA_ARGS__); \
+        log_trace(logger_type, __VA_ARGS__);                                                 \
     }
 
 namespace tt::tt_metal {
@@ -1068,11 +1068,7 @@ public:
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
                     const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
                     auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
-                    LOG_TRACY_LAZY(
-                        tt::LogDispatch,
-                        "  virtual_core={}, noc_xy=0x{:x}",
-                        virtual_core,
-                        noc_xy);
+                    LOG_TRACY_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
                 }
@@ -2000,7 +1996,8 @@ void assemble_device_commands(
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
     LOG_TRACY_LAZY(tt::LogDispatch, "");
-    LOG_TRACY_LAZY(tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
+    LOG_TRACY_LAZY(
+        tt::LogDispatch, "========== Assembling Device Commands for Program ID {} ==========", program.get_id());
     LOG_TRACY_LAZY(
         tt::LogDispatch,
         "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
@@ -2591,7 +2588,8 @@ void write_program_command_sequence(
     bool stall_before_program,
     bool send_binary) {
     LOG_TRACY_LAZY(tt::LogDispatch, "");
-    LOG_TRACY_LAZY(tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
+    LOG_TRACY_LAZY(
+        tt::LogDispatch, "========== Writing Program Command Sequence to CQ {} ==========", command_queue_id);
     LOG_TRACY_LAZY(
         tt::LogDispatch,
         "Stall First: {}, Stall Before Program: {}, Send Binary: {}",
