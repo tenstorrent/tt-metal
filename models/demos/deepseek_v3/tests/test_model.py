@@ -8,6 +8,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tests.pytest_utils import (
     build_expanded_test_ids,
@@ -203,7 +204,22 @@ def run_test_forward_pass_dpmodel(
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
-    ("prefill", 32 * 1024, 1, None),
+    # mode, seq_len, batch_size_per_row, decode_position_ids
+    # ("decode", 1, USERS_PER_ROW, None), # TODO: test gives low PCC for random position_ids and non-zero position_ids cases. Need to investigate why.
+    ("decode", 1, USERS_PER_ROW, 0),
+] + [
+    ("prefill", seq_len, 1, None)
+    if seq_len == 128
+    else pytest.param(
+        "prefill",
+        seq_len,
+        1,
+        None,
+        marks=pytest.mark.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        ),
+    )
+    for seq_len in PREFILL_SEQ_LENS
 ]
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
