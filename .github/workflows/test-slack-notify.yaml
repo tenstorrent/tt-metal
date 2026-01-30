@@ -1,0 +1,26 @@
+name: "TEST - Slack Notification Action"
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_run_id:
+        description: "Run ID to test with"
+        required: true
+        type: string
+
+jobs:
+  test-action:
+    name: Test sweep analysis action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test sweep-run-analysis action
+        uses: ./.github/actions/sweep-run-analysis
+        with:
+          github-run-id: ${{ inputs.test_run_id }}
+          run-type: lead_models
+          conclusion: success
+          slack-webhook-url: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_WEBHOOK_URL }}
+          database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
