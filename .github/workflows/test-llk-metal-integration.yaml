@@ -57,9 +57,10 @@ on:
         description: 'Result of Device perf regressions (status:url format)'
         value: ${{ jobs.setup-and-test.outputs.perf-device-models-result }}
 
-concurrency:
-  group: llk-integration-${{ inputs.mirrored_branch }}
-  cancel-in-progress: true
+# NOTE: Concurrency is intentionally NOT set here.
+# When called via workflow_call, the caller (tt-llk) manages concurrency.
+# This workflow's proactive cancellation step handles cleanup of spawned workflows.
+# Setting concurrency here would conflict with the caller's concurrency settings.
 
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
@@ -108,6 +109,62 @@ jobs:
         run: |
           git config --global user.name "LLK Integration Tester [bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Cancel any previous spawned workflows
+        env:
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+        run: |
+          echo "🔍 Proactively cancelling any previous spawned workflows for this branch..."
+          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
+          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml")
+          STATUSES=("queued" "in_progress")
+
+          for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
+            for status in "${STATUSES[@]}"; do
+              echo "🔍 Checking for $status instances of $workflow..."
+              # Get all runs and filter by branch pattern (test-llk-<mirrored_branch>-*)
+              run_data=$(gh run list \
+                --workflow "$workflow" \
+                --status "$status" \
+                --limit 100 \
+                --json databaseId,headBranch \
+                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "[]")
+
+              # Filter runs matching our branch pattern and extract IDs
+              run_ids=$(echo "$run_data" | jq -r --arg pattern "test-llk-$MIRRORED_BRANCH-" \
+                '.[] | select(.headBranch | startswith($pattern)) | .databaseId')
+
+              if [ -n "$run_ids" ]; then
+                for run_id in $run_ids; do
+                  echo "🛑 Cancelling previous spawned workflow run $run_id ($workflow)..."
+                  if gh run cancel "$run_id" --repo "${{ env.METAL_REPO }}"; then
+                    echo "✅ Successfully cancelled run $run_id"
+                  else
+                    echo "⚠️ Failed to cancel run $run_id (may have already completed)"
+                  fi
+                done
+              else
+                echo "ℹ️ No $status instances of $workflow found for branch pattern test-llk-$MIRRORED_BRANCH-*"
+              fi
+            done
+          done
+
+          # Also clean up old parent branches from previous runs to avoid git conflicts
+          echo "🧹 Cleaning up old parent branches..."
+          OLD_BRANCHES=$(gh api "repos/${{ env.METAL_REPO }}/branches" --paginate --jq \
+            --arg pattern "test-llk-$MIRRORED_BRANCH-" \
+            '.[] | select(.name | startswith($pattern)) | .name' 2>/dev/null || echo "")
+
+          if [ -n "$OLD_BRANCHES" ]; then
+            for branch in $OLD_BRANCHES; do
+              echo "🗑️ Deleting old parent branch: $branch"
+              gh api --method DELETE "repos/${{ env.METAL_REPO }}/git/refs/heads/$branch" 2>/dev/null || \
+                echo "⚠️ Failed to delete branch $branch (may not exist)"
+            done
+          else
+            echo "ℹ️ No old parent branches found"
+          fi
+
+          echo "✅ Proactive cleanup completed"
       - name: Setup test branch and parent repository
         id: check-branch
         run: |
@@ -293,11 +350,18 @@ jobs:
           TT_METAL_L2_NIGHTLY_RUN_ID: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
           PERF_DEVICE_MODELS_RUN_ID: ${{ steps.trigger-workflows.outputs.perf-device-models-run-id }}
         run: |
+          # Create temporary directory for workflow results to avoid race conditions
+          # when multiple background processes write outputs simultaneously
+          TEMP_OUTPUT_DIR=$(mktemp -d)
+          trap "rm -rf $TEMP_OUTPUT_DIR" EXIT
+
           # Helper function for workflow monitoring
+          # Writes results to temp files instead of $GITHUB_OUTPUT to avoid race conditions
           monitor_workflow() {
             local run_id="$1"
             local workflow_name="$2"
             local output_var="$3"
+            local temp_file="$TEMP_OUTPUT_DIR/${output_var}.txt"
 
             if [ -z "$run_id" ] || [ "$run_id" = "" ]; then
               echo "⚪ Skipping $workflow_name - not triggered"
@@ -318,12 +382,12 @@ jobs:
                 if [ "$run_status" = "completed" ]; then
                   if [ "$conclusion" = "success" ]; then
                     echo "🎯 $workflow_name passed: $run_url"
-                    echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
+                    echo "$output_var=success:$run_url" > "$temp_file"
                     return 0
                   else
                     echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url/attempts/$(($retries + 1))"
                     if [ $retries -ge $((MAX_RETRIES - 1)) ]; then
-                      echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                      echo "$output_var=failure:$run_url" > "$temp_file"
                       return 1
                     fi
                     break
@@ -335,7 +399,7 @@ jobs:
               # Handle timeout
               if [ $elapsed -ge $timeout_seconds ]; then
                 echo "⏰ $workflow_name timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
-                echo "$output_var=timeout:$run_url" >> $GITHUB_OUTPUT
+                echo "$output_var=timeout:$run_url" > "$temp_file"
                 return 1
               fi
               # Retry logic
@@ -347,12 +411,12 @@ jobs:
                   elapsed=0 # Reset timer for retry
                 else
                   echo "🛑 Failed to trigger retry for $workflow_name"
-                  echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+                  echo "$output_var=failure:$run_url" > "$temp_file"
                   return 1
                 fi
               fi
             done
-            echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
+            echo "$output_var=failure:$run_url" > "$temp_file"
             return 1
           }
 
@@ -363,15 +427,48 @@ jobs:
           workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
           workflow_configs["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$PERF_DEVICE_MODELS_RUN_ID:perf-device-models-result"
           exit_code=0
+
+          echo "📊 Starting parallel monitoring of all triggered workflows..."
+          # Start monitoring all workflows in parallel
+          declare -a pids=()
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
 
             if [ "$enabled" = "true" ]; then
-              if ! monitor_workflow "$run_id" "$workflow_file" "$output_var"; then
-                exit_code=1
-              fi
+              # Run monitor_workflow in background
+              monitor_workflow "$run_id" "$workflow_file" "$output_var" &
+              pids+=("$!")
             fi
           done
+
+          # If no workflows were enabled, exit early with a log message
+          if [ ${#pids[@]} -eq 0 ]; then
+            echo "ℹ️ No workflows to monitor"
+            exit 0
+          fi
+          # Wait for all background processes to complete and collect exit codes
+          echo "⏳ Waiting for all workflows to complete..."
+          exit_code=0
+          for pid in "${pids[@]}"; do
+            if ! wait "$pid"; then
+              exit_code=1
+            fi
+          done
+
+          # Consolidate results from temp files into $GITHUB_OUTPUT
+          # This happens after all parallel processes complete, avoiding race conditions
+          echo "📝 Consolidating workflow results..."
+          for temp_file in "$TEMP_OUTPUT_DIR"/*.txt; do
+            if [ -f "$temp_file" ]; then
+              cat "$temp_file" >> $GITHUB_OUTPUT
+            fi
+          done
+
+          if [ "$exit_code" -eq 0 ]; then
+            echo "✅ All workflows completed successfully"
+          else
+            echo "❌ One or more workflows failed"
+          fi
           exit $exit_code
       - name: Terminate spawned workflows on cancellation
         if: cancelled()
@@ -450,14 +547,8 @@ jobs:
             # Display detailed test results with links
             echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
 
-            # Display test results using data-driven approach
-            declare -A test_configs
-            test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
-            test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
-            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
-            test_configs["Device Perf Regressions"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.perf-device-models-result }}"
-
             # Function to display test result
+            # Args: test_name, enabled (true/false), result (format: status:url or empty)
             display_test_result() {
               local test_name="$1"
               local enabled="$2"
@@ -465,6 +556,8 @@ jobs:
 
               if [ "$enabled" = "true" ]; then
                 if [ -n "$result" ]; then
+                  # Result format is "status:url" where url contains "https://"
+                  # Use cut to extract status (field 1) and url (fields 2 onwards)
                   local status=$(echo "$result" | cut -d: -f1)
                   local url=$(echo "$result" | cut -d: -f2-)
                   case "$status" in
@@ -481,11 +574,11 @@ jobs:
               fi
             }
 
-            # Display results for all test types
-            for test_name in "${!test_configs[@]}"; do
-              IFS=':' read -r enabled result <<< "${test_configs[$test_name]}"
-              display_test_result "$test_name" "$enabled" "$result"
-            done
+            # Display results for each test type directly (avoids IFS parsing issues)
+            display_test_result "All Post-Commit Tests" "${{ inputs.run_all_post_commit }}" "${{ needs.setup-and-test.outputs.all-post-commit-result }}"
+            display_test_result "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.blackhole-result }}"
+            display_test_result "TT-Metal L2 Nightly APC Tests" "${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
+            display_test_result "Device Perf Regressions" "${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}" "${{ needs.setup-and-test.outputs.perf-device-models-result }}"
 
             echo "" >> $GITHUB_STEP_SUMMARY
 
