@@ -16,7 +16,7 @@ run_dual_galaxy_unit_tests() {
 
   # tt-run --tcp-interface handles the extra mpi_run args
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local mpi_run_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpi_run_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local tcp_interface="cnx1"
   local mpi_args="--host g10glx03,g10glx04 $mpi_args_base"
   local mpi_run_args="--host g10glx03,g10glx04 $mpi_run_args_base"
