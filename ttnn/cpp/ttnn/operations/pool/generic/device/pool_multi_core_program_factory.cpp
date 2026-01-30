@@ -401,9 +401,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
     if (return_indices || params.is_wide_reduction) {
-        // for return indices we use 1 whole tile per reduction to simplify logic
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
         in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
     } else {
         in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
@@ -467,11 +465,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             up_left_wrap_inc_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
 
-        compute_tmp_idx_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(
-            compute_tmp_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1);
-
         // compute increments for index tile population
         right_inc = stride_w;
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
@@ -480,6 +473,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
         // edit incs for large kernels
         if (params.is_large_kernel) {
+            compute_tmp_idx_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                compute_tmp_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+            log_debug(
+                tt::LogOp, "CB {} :: PS = {}, NP = {}", compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1);
+
             intra_kernel_right_inc_cb_id = next_cb_index++;
             tt::tt_metal::create_cb(
                 intra_kernel_right_inc_cb_id,
@@ -729,10 +728,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
-    std::string reader_kernel_fname = return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-                                                       "reader_mpwi.cpp"
-                                                     : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-                                                       "reader_pool_2d.cpp";
+    std::string reader_kernel_fname = (return_indices && params.is_large_kernel)
+                                          ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+                                            "reader_mpwi.cpp"
+                                          : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+                                            "reader_pool_2d.cpp";
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -815,8 +815,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .defines = get_defines(pool_type)};
 
     std::string compute_kernel_fname =
-        return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_mpwi.cpp"
-                       : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
+        (return_indices && params.is_large_kernel)
+            ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_mpwi.cpp"
+            : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 

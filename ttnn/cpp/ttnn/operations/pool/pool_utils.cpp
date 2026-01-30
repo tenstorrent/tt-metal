@@ -233,8 +233,7 @@ uint32_t calculate_L1_usage(
 
     uint32_t in_cb_sz = 0;
     if (return_indices || params.is_wide_reduction) {
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     } else {
         in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
@@ -256,11 +255,12 @@ uint32_t calculate_L1_usage(
         uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
         uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
         // 1 data sized tile (pack_tmp_cb) and 6 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
-        // up_left_wrap_inc, compute_idx_tmp)
-        total_mpwi_cb_size = (6 * idx_tile_size) + data_tile_size;
+        // up_left_wrap_inc)
+        total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
         if (params.is_large_kernel) {
-            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
-            total_mpwi_cb_size += 2 * idx_tile_size;
+            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc,
+            // compute_idx_tmp)
+            total_mpwi_cb_size += 3 * idx_tile_size;
         }
     }
 
