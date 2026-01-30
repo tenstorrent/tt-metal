@@ -122,7 +122,7 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch_size, expected_compile_time, expected_throughput_fps",
-    [(1, 30.0, 3)],
+    [(1, 2, 3)],
 )
 def test_perf_pi0_ttnn(device, num_iterations, batch_size, expected_compile_time, expected_throughput_fps):
     checkpoint_path = Path(CHECKPOINT_PATH)
