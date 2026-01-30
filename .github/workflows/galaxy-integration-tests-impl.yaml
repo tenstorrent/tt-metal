@@ -61,7 +61,7 @@ jobs:
           else
             FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for model '${{ inputs.model }}'"
+              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
