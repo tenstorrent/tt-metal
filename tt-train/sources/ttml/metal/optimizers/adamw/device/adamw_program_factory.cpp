@@ -265,21 +265,34 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     [[maybe_unused]] auto cb_exp_avg_sq_out = create_circular_buffer(
         program, all_cores, kExpAvgSqOutCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
 
-    [[maybe_unused]] auto cb_max_exp_avg_sq_in = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqInCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles);
+    // AMSGrad-specific CBs - only create if amsgrad is enabled
+    if (operation_attributes.amsgrad) {
+        [[maybe_unused]] auto cb_max_exp_avg_sq_in = create_circular_buffer(
+            program,
+            all_cores,
+            kMaxExpAvgSqInCbIndex,
+            param_data_format,
+            param_single_tile_size_bytes,
+            num_input_tiles);
 
-    [[maybe_unused]] auto cb_max_exp_avg_sq_out = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqOutCbIndex, param_data_format, param_single_tile_size_bytes, num_output_tiles);
+        [[maybe_unused]] auto cb_max_exp_avg_sq_out = create_circular_buffer(
+            program,
+            all_cores,
+            kMaxExpAvgSqOutCbIndex,
+            param_data_format,
+            param_single_tile_size_bytes,
+            num_output_tiles);
+
+        [[maybe_unused]] auto cb_max_exp_avg_sq = create_circular_buffer(
+            program,
+            all_cores,
+            kMaxExpAvgSqCbIndex,
+            intermediate_data_format,
+            float32_single_tile_size_bytes,
+            num_output_tiles);
+    }
 
     // Intermediate CBs are always fp32
-    [[maybe_unused]] auto cb_max_exp_avg_sq = create_circular_buffer(
-        program,
-        all_cores,
-        kMaxExpAvgSqCbIndex,
-        intermediate_data_format,
-        float32_single_tile_size_bytes,
-        num_output_tiles);
-
     [[maybe_unused]] auto cb_momentum = create_circular_buffer(
         program,
         all_cores,
