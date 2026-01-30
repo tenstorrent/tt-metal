@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::ccl {
 void bind_deepseek_b1_reduce_to_one(nb::module_& module) {
     const auto* doc =
         R"doc(
-        Performs a sum reduction across all devices in a 2x4 mesh, with the final result on the root device.
+        Performs a sum reduction across all devices in a 4x2 mesh (4 rows x 2 columns), with the final result on the root device.
 
         The reduction follows a 3-level tree structure:
         - Level 1: Within each column, leaf nodes (rows 0, 3) send to intermediate nodes (rows 1, 2)
