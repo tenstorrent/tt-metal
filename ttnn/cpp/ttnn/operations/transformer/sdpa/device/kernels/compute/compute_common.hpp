@@ -663,8 +663,8 @@ void calculate_exponential_polynomial() {
     constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
     constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
-    if (!USE_SFPARECIP_INSTR) {
-        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+    if constexpr (!USE_SFPARECIP_INSTR) {
+        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
         // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
@@ -682,25 +682,24 @@ void calculate_exponential_polynomial() {
                                                 : 0.16792157982882225102649214918047336097544632172075f;
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        switch (POLY_DEGREE) {
-            case 4:
-                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
-                [[fallthrough]];
-            case 3:
-                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
-                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-                [[fallthrough]];
-            case 2:
-                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
-                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-                [[fallthrough]];
-            case 1:
-                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
-            default: break;
+        // Load polynomial coefficients. Use if constexpr to only compile the needed loads.
+        if constexpr (POLY_DEGREE >= 4) {
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+        }
+        if constexpr (POLY_DEGREE >= 3) {
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+        }
+        if constexpr (POLY_DEGREE >= 2) {
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+        }
+        if constexpr (POLY_DEGREE >= 1) {
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
         }
     }
 
