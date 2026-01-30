@@ -11,10 +11,10 @@ source ../setup_metal.sh && pytest /proj_sw/user_dev/jrock/tt-metal/models/demos
 ```
 Change the module test command based on the module that the new fused op is contained in.
 
-Follow these steps to add a new fused op unit test:
+## Steps to add a new fused op unit test
 0. Check if the unit test already exists! If a unit test for the given op/ sequence of ops already exists, use the following list as a checklist to verify that all steps have been completed successfully. Look up artifacts in tests/fused_op_unit_tests/MODULE/test_results to verify
   1. Compare the OP_NAME_results.csv to the README.md's row corresponding to the unit test. If they match, continue. If they don't match, update the README.md based on the OP_NAME_results.csv.
-  2. Compare the unit test code with the OP_NAME_results.csv and verify if the OP_NAME_results.csv was generated from the current status of the unit tests. If it matches, use the following list as a checklist for what a unit test requires and only complete the missing steps/features. If there is any mismatch, use the following list as a checklist for what a unit test requires and complete *all verification steps*.
+  2. Compare the unit test code with the OP_NAME_results.csv and verify if the OP_NAME_results.csv was generated from the current status of the unit tests. If the function calls and parameter conbinations match, continue. If they don't match, run the tests and generate a _results.csv file. See section "Generating results csv"
 1. Find the corresponding module test of the module containing the fused op. Look for the test in models/demos/deepseek_v3/tests/test_*.py. Run the provided module test command to capture the baseline accuracy and verify that the test is working.
 2. Identify the ttnn operations that will be fused into a new operation, this should be provided by the user / by the function the user provided
     1. Finde the sequence of ops in the module for decode; if it's unclear which ones should be fused, let the user know immediately.
@@ -30,8 +30,8 @@ Follow these steps to add a new fused op unit test:
       - Use pytest parameters for expected_pcc, expected_perf, mode+seqlen(add decode with seqlen 1, prefill with seqlen 128/1024/8k/32k/128k)
     2. Runs 100 iterations and checks/asserts PCC and ATOL (on the last iteration)
     3. Add a pytest parameter option to use real model weights/random weights
-	4. Tests the NEW_FUSED_OP_ttnn using the reference code in NEW_FUSED_OP_reference
-    5. Contains a performance measurement wrapper, so that we measure device performance. See following notes on performance measurements.
+	  4. Tests the NEW_FUSED_OP_ttnn using the reference code in NEW_FUSED_OP_reference
+    5. Contains a performance measurement wrapper, so that we measure device performance. Only measure for decode-1 and prefill-128. See following notes on performance measurements.
     6. Supports trace mode; add a pytest parameter to turn tracing on/off
       - If it fails due to trace_region_size being too small, set the trace_region_size pytest parameter (see example test) based on the required size as printed in the log.
     7. Contains a pytest parameter to turn program_caching on/off, this is only done when trace if off, with trace mode program_cache must be enabled too; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
@@ -52,14 +52,17 @@ Follow these steps to add a new fused op unit test:
     5. Run the single device test and verify that both the PCC and the perf are the same as for the multi device test.
 9. Add a single device test for device performance.
 10. If single device tests are not skipped, *verify* the single device tests by running the single device - device perf test that generated the csv file and compare it to the multi device perf csv. All shapes must match, create a helper script to verify that. Add all artifacts to "tests/fused_op_unit_tests/MODULE/test_results/FUSED_OP/verification".
-11. Do one final run of all tests in the test file and create a csv summary of results in "tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv", where MODULE is the module and OP_NAME is the op name. Use the following structure for the csv: test_name,status (pass/fail),pcc,atol,e2e perf [us],device perf (kernel/op to op)  [us],failure_reason (optional),comment (optional), link, timestamp. Add one line per concrete test (parameter combination) with all details filled in. In "comment" column add any comments for potential fixes if the test is failing or any other comments of interest. Copy the log file for the final run into tests/fused_op_unit_tests/MODULE/test_results/logs/ and add a link to the log file to the "link" column in the results csv.
-12. Add a row in the table in models/demos/deepseek_v3/tests/fused_op_unit_tests/README.md (or update if already existing) for the fused op unit test and fill in the cells; read the instructions in the readme for interpretation of the features.
-13. Add Skips on CI (os.getenv("CI") == "true") to all tests except for {decode/prefill-128} + program_cache + tracing + real_weights + {normal version (accuracy check) / device perf}
+11. Add skips on CI (os.getenv("CI") == "true") to all tests except for {decode/prefill-128} + program_cache + tracing + real_weights + {normal version (accuracy check) / device perf}
+12. Update the results, see section 'Update resutls' for instructions.
 14. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work and print an overall summary of the restuls/links to the readme and the restuls file.
 
-Notes on performance measurements:
+## Update resutls
+Path results csv: 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv', where MODULE is the module and OP_NAME is the op name
+Remove any previous results csv file for this op if existing, and remove all logs in the 'logs' subfolder for this op. Test all test funcitons and parameter configurations for the op. Since some tests take very long (especially the long sequence lengths), test each parameter combination separately; use CI=false. Create a csv summary of results in 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv', where MODULE is the module and OP_NAME is the op name. Before each run, reset the machine using 'tt-smi -glx_reset'. Set a 20 mins timeout, if you need a longer timeout update the timeout in AGENTS_GUIDE_ADD_TEST.md with the new timeout, look at the output log before killing the run, leave it running if the log changed within the last 10 mins. Use the following structure for the csv: test_name,status,pcc,e2e perf, device perf,failure_reason (optional),comment (optional), link, timestamp. Add one line per concrete test (parameter combination) with all details filled in. In 'comment' column add any comments for potential fixes if the test is failing or any other comments of interest. Copy the log file for each test configuration into the logs sub-folder and add a link to the log file to the 'link' column in the results csv. Update the README.md with the new status of the test, or create a new row if it did not exist before; see Update instructions in the README.md for more details.
+
+## Performance measurements:
 - Performance measurements use three metrics: e2e_duration, kernel_duration, op_to_op_latency
-- e2e_duration: average duration of the whole fused op (sequence of ops), end to end. This is measured using profiler.start and profiler.end calls, use 10 warumup iterations and 100 measurement iterations.
+- e2e_duration: average duration of the whole fused op (sequence of ops) end to end. This is measured using profiler.start and profiler.end calls, use 10 warumup iterations and 100 measurement iterations.
 - Device performance metrics: kernel_duration, op_to_op_latency
     - Both device performance metrics require tracy profiler to run device performance and post processing of the resulting performance table; uses run_device_profiler helper to run the test function with profiler and subsequent post processing of the results; averages each op's metrics over all iterations
     - Warumup and measurement iterations
@@ -71,19 +74,19 @@ Notes on performance measurements:
     - Both total_kernel_duration and total_op_to_op_latency are printed, asserted and uploaded via benchmark_data.add_measurement
 - Decode uses trace mode for perf measurements, prefill uses non_trace mode for perf measurements
 
-Notes for skipping tests:
+## Skipping tests
 - Make sure to skip the test by using marks=pytest.mark.skip(...); skipping inside the unit test takes very long due to device init/teardown and should be avoided
 - All skips for long sequence lengths should only be skipped on CI, not on local execution or when testing the new test file and updating the README.md
-- For tests that are not applicable (e.g. single device tests for ops containing a CCL) do not skip, instead just write a comment about the test nor being applicable for that op including the reason
+- For tests that are not applicable (e.g. single device tests for ops containing a CCL) do not skip, instead just write a comment about the test not being applicable for that op including the reason
 
-Notes on using TT hardware:
+## Using TT hardware
 - Before running check if the following env variables are set: MESH_DEVICE, DEEPSEEK_V3_CACHE, DEEPSEEK_V3_HF_MODEL; if not set run `source ../setup_metal.sh` and check again. Only if you still don't have the env variables set, stop and ask the user for details.
 - If running tests, set a timeout of 15 minutes.
 - If there's a machine issue, you'll need to reset the machine using "tt-smi -glx_reset"
 - Important: Running the test may take a few minutes, if you kill it the device might need a reset. In general, if there is no log output for more than 5 minutes the test likely hangs and needs to be killed + device reset, but if there's log output keep it running.
 - Run each job with piping the output to a log file, i.e. add " 2>&1 | tee $TT_METAL_HOME/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log" to each command
 
-Short summary of fused uni test features:
+## Summary of fused uni test features
   - Accuracy: compares ttnn vs reference with PCC and ATOL checks, asserts on both.
   - Iterations: runs 100 iterations; accuracy checks are asserted on the last iteration.
   - Modes/seqlen coverage: parameters for decode (seqlen 1) and prefill (128/1024/8k/32k/128k) when applicable.
