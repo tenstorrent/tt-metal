@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused Broadcast + RMSNorm unified kernel
-// - NCRISC: Broadcast reader only
-// - BRISC: Broadcast writer + RMSNorm reader
+// - NCRISC: Broadcast reader + RMSNorm reader
+// - BRISC: Broadcast writer
 // - TRISC: RMSNorm compute
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
@@ -16,6 +16,8 @@
 #endif
 
 void kernel_main() {
+    constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
+
 // -----------------------
 // NCRISC: Broadcast reader + RMSNorm reader
 // -----------------------
@@ -31,26 +33,29 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_secondary_sender"),
         get_named_compile_time_arg_val("is_active_broadcaster")>;
 
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
-        get_arg_val<uint32_t>(1),  // tensor_address0
-        get_arg_val<uint32_t>(2),  // tile_id_start
-        get_arg_val<uint32_t>(3),  // tile_id_end
-    };
+    // Only read broadcast runtime args if CCL is enabled
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    if constexpr (!skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_arg_val<uint32_t>(1),  // tensor_address0
+            get_arg_val<uint32_t>(2),  // tile_id_start
+            get_arg_val<uint32_t>(3),  // tile_id_end
+        };
+    }
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
 
-    // RMSNorm reader runtime args
+    // RMSNorm reader runtime args - scalar is always arg 0
     deepseek_b1_ops::RMSNorm::ReaderArgs rms_args{
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(7168))
+        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(num_elements))
     };
 
-    // -----------------------
-    // BRISC: Broadcast writer
-    // -----------------------
-
+// -----------------------
+// BRISC: Broadcast writer
+// -----------------------
 #elif defined(COMPILE_FOR_BRISC)
-    // Instantiate WriterCTArgs with named compile-time args
+
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -69,24 +74,26 @@ void kernel_main() {
         get_named_compile_time_arg_val("range_hops_backward"),
         get_named_compile_time_arg_val("using_persistent_buffers")>;
 
-    // Writer runtime args correspond to WriterArgs struct in broadcast.hpp
-    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{
-        get_arg_val<uint32_t>(0),   // tensor_address0
-        get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-        get_arg_val<uint32_t>(2),   // tile_id_start
-        get_arg_val<uint32_t>(3),   // tile_id_end
-        get_arg_val<uint32_t>(4),   // wait_output_semaphore
-        get_arg_val<uint32_t>(5),   // reset_global_semaphore
-        get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-        get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-        get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-        get_arg_val<uint32_t>(9),   // barrier_sem
-        get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-        get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-        get_arg_val<uint32_t>(12),  // ring_index
-        get_arg_val<uint32_t>(13),  // secondary_sync_sem
-        get_arg_val<uint32_t>(14),  // num_connections
-    };
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    if constexpr (!skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_arg_val<uint32_t>(0),   // tensor_address0
+            get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_arg_val<uint32_t>(2),   // tile_id_start
+            get_arg_val<uint32_t>(3),   // tile_id_end
+            get_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_arg_val<uint32_t>(9),   // barrier_sem
+            get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_arg_val<uint32_t>(12),  // ring_index
+            get_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_arg_val<uint32_t>(14),  // num_connections
+        };
+    }
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     deepseek_b1_ops::RMSNorm::WriterArgs rms_args{};
@@ -95,6 +102,7 @@ void kernel_main() {
 // TRISC: RMSNorm compute
 // -----------------------
 #elif defined(COMPILE_FOR_TRISC)
+
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
@@ -110,24 +118,41 @@ void kernel_main() {
     };
 
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
-
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+
 #endif
+
     // CCL Broadcast
-    deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
-    bcast(bcast_args);
+    if constexpr (!skip_ccl) {
+        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
+        bcast(bcast_args);
+    }
+
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (skip_ccl) {
+        // Single-device: setup sharded buffer for input
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+    }
+#endif
 
 #if defined(COMPILE_FOR_BRISC)
-    // reserve and push back data for the RMSNorm
     constexpr uint32_t intermediate_cb = get_named_compile_time_arg_val("intermediate_cb");
     constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("gamma_cb");
     constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
 
-    cb_reserve_back(intermediate_cb, num_tiles);
-    cb_push_back(intermediate_cb, num_tiles);
-    cb_reserve_back(gamma_cb, num_tiles);
-    cb_push_back(gamma_cb, num_tiles);
-
+    if constexpr (skip_ccl) {
+        // Single-device: only setup gamma buffer
+        cb_reserve_back(gamma_cb, num_tiles);
+        cb_push_back(gamma_cb, num_tiles);
+    } else {
+        // Multi-device: setup intermediate (broadcast output) and gamma buffers
+        cb_reserve_back(intermediate_cb, num_tiles);
+        cb_push_back(intermediate_cb, num_tiles);
+        cb_reserve_back(gamma_cb, num_tiles);
+        cb_push_back(gamma_cb, num_tiles);
+    }
 #endif
 
     // RMSNorm op
