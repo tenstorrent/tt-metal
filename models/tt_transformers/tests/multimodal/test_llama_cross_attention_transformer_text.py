@@ -22,7 +22,7 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
-def two_layers_of90B(partial_state_dict):
+def two_layers_of_90B(partial_state_dict):
     """Prune weights for 90B model to only keep layers 0 and 3 for testing in CI environment.
     Also keep embed_tokens, lm_head, and norm weights and rename layer.0 to layer.1 and layer.3 to layer.0
     to match the expected keys in the model defined by the configurations used in the test starting at line 105."""
@@ -136,7 +136,7 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict.update(lm_head_weights)
 
     if model_args.is_90b and is_ci_env:
-        partial_state_dict = two_layers_of90B(partial_state_dict)
+        partial_state_dict = two_layers_of_90B(partial_state_dict)
 
     if model_dtype_hf == torch.float32:
         for k, v in partial_state_dict.items():
