@@ -734,7 +734,7 @@ jobs:
 
       - name: Generate JSON from database
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_DATABASE_URL }}
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           # Use the centralized reconstruction script
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
@@ -943,7 +943,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ github.event.inputs.use_database == 'true' && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -1085,7 +1085,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
