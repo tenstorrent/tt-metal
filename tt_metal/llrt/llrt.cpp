@@ -329,6 +329,7 @@ void wait_until_cores_done(
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 for (const auto& core : not_done_phys_cores) {
+                    // only prints if the core is an active ethernet core
                     print_aerisc_training_status(device_id, core);
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
