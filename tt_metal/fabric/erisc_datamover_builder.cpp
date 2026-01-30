@@ -1247,7 +1247,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 //  * fabric_erisc_router.cpp
 //  * edm_fabric_worker_adapters.hpp
 //  * fabric_erisc_datamover_channels.hpp
-//        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[0]),
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[0]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[1]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[2]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[3]),

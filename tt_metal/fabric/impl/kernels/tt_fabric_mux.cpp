@@ -26,8 +26,8 @@ constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
 constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
 // header only buffer slot size is the same as the edm packet header size
 
-//constexpr size_t status_address = get_compile_time_arg_val(5);
-constexpr uint32_t status_address = OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
+constexpr size_t status_address = get_compile_time_arg_val(5);
+//constexpr uint32_t status_address = OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
 constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
 constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
@@ -141,9 +141,9 @@ void kernel_main() {
     set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
-    //volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
-    volatile uint32_t& status_ptr = *(reinterpret_cast<volatile uint32_t*>(status_address));
-    status_ptr = tt::tt_fabric::FabricMuxStatus::STARTED;
+    volatile tt_reg_ptr uint32_t* status_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(status_address);
+    //volatile uint32_t& status_ptr = *(reinterpret_cast<volatile uint32_t*>(status_address));
+    *status_ptr = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -238,7 +238,7 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    status_ptr = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+    *status_ptr = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
@@ -292,6 +292,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    status_ptr = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    *status_ptr = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
 }

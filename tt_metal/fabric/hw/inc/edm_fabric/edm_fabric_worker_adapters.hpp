@@ -95,9 +95,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
-            //edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
-            edm_connection_handshake_l1_addr =
-                OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
+            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
@@ -115,9 +113,8 @@ struct WorkerToFabricEdmSenderImpl {
             num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
             //edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-            edm_connection_handshake_l1_addr =
-                OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
-            //arg_idx++;
+            edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO);
+            arg_idx++;
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
             buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -192,9 +189,8 @@ struct WorkerToFabricEdmSenderImpl {
                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
                       get_stream_reg_write_addr(this->worker_credits_stream_id));
 
-        //this->edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO);
-        this->edm_connection_handshake_l1_addr =
-                    OverlayRegisterFile::get_register_address<OVERLAY_REGISTER_ZERO>();
+        this->edm_connection_handshake_l1_addr = get_stream_scratch_register_address(OVERLAY_REGISTER_ZERO); //edm_connection_handshake_l1_id;
+
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address
         this->edm_copy_of_wr_counter_addr =

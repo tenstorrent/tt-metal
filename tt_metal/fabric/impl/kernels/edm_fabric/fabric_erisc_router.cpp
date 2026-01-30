@@ -2660,10 +2660,10 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
-    //volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
-    //    reinterpret_cast<volatile tt_reg_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
-    volatile tt::tt_fabric::EDMStatus* edm_status_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    volatile tt_reg_ptr tt::tt_fabric::EDMStatus* edm_status_ptr =
+        reinterpret_cast<volatile tt_reg_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    //volatile tt::tt_fabric::EDMStatus* edm_status_ptr =    
+    //    reinterpret_cast<volatile tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 
     
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
@@ -2676,7 +2676,8 @@ void kernel_main() {
     ///////////////////////
     // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
-    local_sender_channel_connection_semaphore_addrs[0UL] = get_stream_scratch_register_address<OVERLAY_REGISTER_ZERO>();
+    local_sender_channel_connection_semaphore_addrs[0UL] = get_stream_scratch_register_address(0);
+    arg_idx++;  // Skip first arg since it's from stream scratch register (file: erisc_datamover_builder.cpp, line 1250)
     for (size_t i = 1UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
