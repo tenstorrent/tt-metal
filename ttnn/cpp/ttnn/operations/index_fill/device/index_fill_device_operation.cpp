@@ -26,9 +26,20 @@ void IndexFillOperation::validate(
     TT_FATAL(
         operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
-    TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
+
+    // Validate index tensor properties expected by the kernel.
+    TT_FATAL(index.storage_type() == StorageType::DEVICE, "Index fill: Index tensor must be on device");
+    TT_FATAL(index.buffer() != nullptr, "Index fill: Index tensor must be allocated in buffer on device");
+    TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D");
+    TT_FATAL(
+        index.dtype() == DataType::UINT32,
+        "Index fill: Index tensor must have UINT32 dtype; got {}",
+        index.dtype());
+    TT_FATAL(
+        index.device() == input.device(),
+        "Index fill: Index tensor must be on the same device as input");
+
     TT_FATAL(dim < input.logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
-    TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
 
     // Check that value variant type matches input tensor dtype
     const auto& value = operation_attributes.value;
