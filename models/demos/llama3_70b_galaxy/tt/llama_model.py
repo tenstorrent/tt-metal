@@ -469,7 +469,7 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0, _trace_key=None):
+    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
@@ -478,9 +478,7 @@ class TtTransformer(LightweightModule):
         For batch_size=1, only the user's column has valid KV cache data.
         Mesh is 8x4 (8 rows for heads, 4 columns for data parallel).
         user_id 0-7 → column 0, user_id 8-15 → column 1, etc.
-        _trace_key: optional trace key for hang-debug logs (e.g. "2048_1_0").
         """
-        key = _trace_key or "?"
         # Determine which device to read output from based on user_id
         # Device index for row 0 of each column: col 0 → dev 0, col 1 → dev 1, etc.
         output_device_idx = user_id // 8  # 0, 1, 2, or 3
@@ -500,7 +498,6 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
 
-            x_seq_len = x_split[i].shape[2] if hasattr(x_split[i], "shape") else "unknown"
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
             tt_logits = self.lm_head(x, None, mode="prefill")
 
