@@ -124,42 +124,56 @@ class PytorchLinearActivation(nn.Module):
         return hidden_states
 
 
-class TTNNLinearGelu(TTNNModule):
-    """ViT Intermediate module with TTNN acceleration."""
+class TTNNLinearActivation(TTNNModule):
+    """Linear layer with activation using TTNN."""
+
+    @classmethod
+    def from_parameters(cls, weight, linear_class, ttnn_act_fn, nn_act_fn, bias=None):
+        new_linear = cls()
+        new_linear.dense = linear_class.from_parameters(weight=weight, bias=bias)
+        new_linear.activation = ttnn_act_fn
+        return new_linear
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear, ttnn_act_fn, nn_act_fn):
+        new_linear = cls()
+        new_linear._fallback_torch_layer = PytorchLinearActivation(dense=linear, act_fn=nn_act_fn)
+        new_linear.dense = TTNNLinear.from_torch(linear)
+        new_linear.activation = ttnn_act_fn
+        return new_linear
+
+    def forward(self, hidden_states):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.activation(hidden_states.to_ttnn)
+        return hidden_states
+
+
+class TTNNLinearGelu:
+    """Linear layer with GELU activation using TTNN."""
 
     @classmethod
     def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
-        new_linear = cls()
-        new_linear.dense = linear_class.from_parameters(weight=weight, bias=bias)
+        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.gelu, nn.GELU(), bias)
         return new_linear
 
     @classmethod
     def from_torch(cls, linear: nn.Linear):
-        new_linear = cls()
-        new_linear._fallback_torch_layer = PytorchLinearActivation(dense=linear, act_fn=nn.GELU())
-        new_linear.dense = TTNNLinear.from_torch(linear)
+        new_linear = TTNNLinearActivation.from_torch(linear, ttnn.gelu, nn.GELU())
         return new_linear
 
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = ttnn.gelu(hidden_states.to_ttnn)
-        return hidden_states
 
+class TTNNLinearSilu:
+    """SiLU activated Linear module with TTNN acceleration."""
 
-class TTNNLinearSilu(TTNNLinearGelu):
-    """ViT Intermediate module with TTNN acceleration."""
+    @classmethod
+    def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
+        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.silu, nn.SiLU(), bias)
+        return new_linear
 
     @classmethod
     def from_torch(cls, linear: nn.Linear):
-        new_linear = cls()
-        new_linear._fallback_torch_layer = PytorchLinearActivation(dense=linear, act_fn=nn.SiLU())
-        new_linear.dense = TTNNLinear.from_torch(linear)
+        new_linear = TTNNLinearActivation.from_torch(linear, ttnn.silu, nn.SiLU())
         return new_linear
-
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = ttnn.silu(hidden_states.to_ttnn)
-        return hidden_states
 
 
 class TTNNViTIntermediate(TTNNLinearGelu):

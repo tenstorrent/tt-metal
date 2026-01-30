@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-""" Mixture of Experts implementations for TTNN. """
+"""Mixture of Experts implementations for TTNN."""
 
 
 import torch
@@ -14,6 +14,18 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearSilu
+
+
+TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
+SPARSITY_BLOCK_SIZE = 32
+
+
+# Helper math functions
+def even_int_div(a: int, b: int) -> int:
+    """Integer division that raises an error if b does not divide a without a remainder."""
+    assert a % b == 0
+    return a // b
 
 
 class Glm4MoeConfig(PretrainedConfig):
@@ -179,7 +191,6 @@ class Glm4MoeConfig(PretrainedConfig):
         self.use_cache = use_cache
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
-        self.rope_parameters = rope_parameters
         kwargs.setdefault("partial_rotary_factor", 0.5)  # assign default for BC
 
         # MoE arguments
@@ -201,11 +212,58 @@ class Glm4MoeConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
+class Glm4MoeRouteTokenToExperts(nn.Module):
+    def __init__(
+        self,
+        e_score_correction_bias,
+        n_routed_experts,
+        n_group,
+        topk_group,
+        top_k,
+        norm_topk_prob,
+        routed_scaling_factor,
+    ):
+        super().__init__()
+        self.e_score_correction_bias = e_score_correction_bias
+        self.n_routed_experts = n_routed_experts
+        self.n_group = n_group
+        self.topk_group = topk_group
+        self.top_k = top_k
+        self.norm_topk_prob = norm_topk_prob
+        self.routed_scaling_factor = routed_scaling_factor
+
+    def forward(self, router_logits):
+        router_logits = router_logits.sigmoid()
+        router_logits_for_choice = router_logits + self.e_score_correction_bias
+        group_scores = (
+            router_logits_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
+            .topk(2, dim=-1)[0]
+            .sum(dim=-1)
+        )
+        group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
+        group_mask = torch.zeros_like(group_scores)
+        group_mask.scatter_(1, group_idx, 1)
+        score_mask = (
+            group_mask.unsqueeze(-1)
+            .expand(-1, self.n_group, self.n_routed_experts // self.n_group)
+            .reshape(-1, self.n_routed_experts)
+        )
+        scores_for_choice = router_logits_for_choice.masked_fill(~score_mask.bool(), 0.0)
+        topk_indices = torch.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
+        topk_weights = router_logits.gather(1, topk_indices)
+        if self.norm_topk_prob:
+            denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weights /= denominator
+        topk_weights = topk_weights * self.routed_scaling_factor
+        return topk_indices, topk_weights
+
+
 class Glm4MoeNaiveMoe(nn.Module):
     """Collection of expert weights stored as 3D tensors."""
 
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.num_experts = config.num_local_experts
         self.hidden_dim = config.hidden_size
         self.intermediate_dim = config.moe_intermediate_size
@@ -260,7 +318,7 @@ class Glm4MoeTopkRouter(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = hidden_states.view(-1, self.config.hidden_size)
-        router_logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32))
+        router_logits = F.linear(hidden_states, self.weight)
         return router_logits
 
 
@@ -367,7 +425,183 @@ class Glm4MoeMoE(torch.nn.Module):
 
 
 class TTNNGlm4MoeNaiveMoe(TTNNModule):
-    pass
+    def preprocess_weights_impl(self):
+        self.tt_gate_up_proj = preprocess_linear_weight(
+            self.torch_layer.gate_up_proj, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        self.tt_down_proj = preprocess_linear_weight(
+            self.torch_layer.down_proj, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    def move_weights_to_device_impl(self):
+        self.tt_gate_up_proj = ttnn.to_device(self.tt_gate_up_proj, self.device)
+        self.tt_down_proj = ttnn.to_device(self.tt_down_proj, self.device)
+        self.num_experts_per_device = even_int_div(self.torch_layer.num_experts, self.device.get_num_devices())
+        self.expert_mapping_tensors = ttnn.from_torch(
+            torch.eye(self.device.get_num_devices(), dtype=torch.int32)
+            .repeat_interleave(self.num_experts_per_device, dim=0)
+            .unsqueeze(0)
+            .unsqueeze(0),
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.remap_topk_mask = ttnn.from_torch(
+            torch.ones((1, self.device.shape[0], 1, self.torch_layer.num_experts), dtype=torch.bfloat16),
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    def forward(self, x, topk_experts_indices, topk_experts_weights):
+        if self.device_state is None:
+            return self.torch_layer(
+                TorchTTNNTensor(x),
+                TorchTTNNTensor(topk_experts_indices, dtype=torch.int64),
+                TorchTTNNTensor(topk_experts_weights),
+            ).to_ttnn
+        return self.forward_mesh(x, topk_experts_indices, topk_experts_weights)
+
+    def forward_mesh(self, x, topk_experts_indices, topk_experts_weights):
+        ccl = self.device_state.ccl_manager
+        hidden_size = self.torch_layer.hidden_dim
+        moe_intermediate_size = self.torch_layer.intermediate_dim
+        x = ttnn.experimental.all_gather_async(
+            x,
+            **ccl.populate_all_gather_runtime_args(
+                {
+                    "mesh_device": self.device,
+                    "dim": -1,  # Last dimension
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "cluster_axis": 1,
+                    "topology": ttnn.Topology.Linear,
+                }
+            ),
+        )
+
+        seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
+        batch_size_per_device = x.shape[
+            -2
+        ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
+        batch_size = batch_size_per_device * self.device.shape[0]  # Global batch size
+
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
+
+        topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices_rm = ttnn.reshape(
+            topk_experts_indices_rm,
+            shape=(batch_size_per_device, 1, seq_len, self.torch_layer.config.num_experts_per_tok),
+        )
+        all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+            x_rm, topk_experts_indices_rm, self.expert_mapping_tensors, num_links=1
+        )
+        post_all_to_all_dispatch_output = ttnn.reshape(
+            all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, hidden_size)
+        )
+        post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
+        # repeat remap_topk_mask for the num_tokens known at runtime
+        remap_topk_mask = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            remap_topk_mask,
+            self.expert_mapping_tensors,
+            all_to_all_dispatch_metadata_tensors,
+            reduction_size=SPARSITY_BLOCK_SIZE,
+        )
+
+        ### START Expert computation
+        _, _, num_tokens, hidden_size = post_all_to_all_dispatch_output.shape
+        num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
+        post_all_to_all_dispatch_output = ttnn.reshape(
+            post_all_to_all_dispatch_output, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size)
+        )
+
+        # Gate and up projections
+        w1_out = ttnn.sparse_matmul(
+            post_all_to_all_dispatch_output,
+            sparsity=sparsity_t,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            # output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+        )
+        w3_out = ttnn.sparse_matmul(
+            post_all_to_all_dispatch_output,
+            sparsity=sparsity_t,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+        )
+
+        # Apply activation and multiply
+        activated = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+        )
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+
+        # Reshape for down projection
+        # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
+        activated = ttnn.squeeze(activated, 0)
+        activated = ttnn.squeeze(activated, 1)
+
+        # Down projection
+        output = ttnn.sparse_matmul(
+            activated,
+            sparsity=sparsity_t,
+            is_input_a_sparse=True,
+            is_input_b_sparse=False,
+        )
+        ttnn.deallocate(activated)
+
+        # Reshape for output
+        output = ttnn.permute(output, (1, 0, 2, 3))
+        experts_output = ttnn.reshape(output, shape=(1, self.num_experts_per_device, num_tokens, hidden_size))
+
+        ### END Expert computation
+
+        ttnn.deallocate(post_all_to_all_dispatch_output)
+        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+        experts_output = ttnn.reshape(
+            experts_output, shape=(self.num_experts_per_device, batch_size, seq_len, hidden_size)
+        )
+        all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+            experts_output,
+            all_to_all_dispatch_metadata_tensors,
+            self.expert_mapping_tensors,
+            num_links=1,
+        )
+        post_combine_output_tensor = ttnn.reshape(
+            all_to_all_combine_output_tensors,
+            shape=(self.torch_layer.config.num_experts_per_tok, 1, batch_size_per_device * seq_len, hidden_size),
+        )
+        post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, ttnn.Shape((hidden_size, 1, 1, 1)))
+        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(topk_experts_weights_rm)
+        post_combine_output_tensor = ttnn.mul(
+            post_combine_output_tensor,
+            topk_experts_weights,
+        )
+        post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            post_combine_output_tensor,
+            **ccl.populate_reduce_scatter_runtime_args(
+                {
+                    "dim": 3,  # Last dimension
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "cluster_axis": 1,
+                    "topology": ttnn.Topology.Linear,
+                }
+            ),
+        )
+        return post_combine_output_tensor
 
 
 class TTNNGlm4MoeTopkRouter(TTNNModule):
@@ -403,13 +637,33 @@ class TTNNGlm4MoeTopkRouter(TTNNModule):
 
 
 class TTNNGlm4MoeMLP(TTNNModule):
-    pass
+    @classmethod
+    def from_torch(cls, torch_layer: Glm4MoeMLP):
+        """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
+        tt_module = cls()
+        tt_module._fallback_torch_layer = torch_layer
+        tt_module.gate_proj = TTNNLinearSilu.from_torch(torch_layer.gate_proj)
+        tt_module.up_proj = TTNNLinear.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = TTNNLinear.from_torch(torch_layer.down_proj)
+        return tt_module
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x_gate = self.gate_proj(x)
+        x_up = self.up_proj(x)
+        x = ttnn.mul(
+            x_gate.to_ttnn,
+            x_up.to_ttnn,
+        )
+        ttnn.deallocate(x_gate.to_ttnn)
+        ttnn.deallocate(x_up.to_ttnn)
+        x = self.down_proj(x)
+        return x
 
 
 class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
     def preprocess_weights_impl(self):
         self.e_score_correction_bias = ttnn.from_torch(
-            self.torch_layer.e_score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+            self.torch_layer.e_score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
         )
         self.e_score_correction_bias = ttnn.to_layout(
             self.e_score_correction_bias,
@@ -418,14 +672,17 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         )
 
         # scatter input mask: (1,1,1,n_group) filled with -inf
-        self.scatter_input = ttnn.from_torch(torch.full((1, 1, 1, self.torch_layer.n_group), -float("inf")))
+        self.scatter_input = ttnn.from_torch(
+            torch.full((1, 1, 1, self.torch_layer.n_group), -float("inf")).to(torch.bfloat16)
+        )
 
         # scatter src: (1,1,1,topk_group) filled with ones
-        self.scatter_src = ttnn.from_torch(torch.ones((1, 1, 1, self.torch_layer.topk_group)))
+        self.scatter_src = ttnn.from_torch(torch.ones((1, 1, 1, self.torch_layer.topk_group), dtype=torch.bfloat16))
 
         # expert scale: (1,1,1,top_k)
         self.expert_scale = ttnn.from_torch(
             torch.tensor([self.torch_layer.routed_scaling_factor])
+            .to(torch.bfloat16)
             .repeat(1, self.torch_layer.top_k)
             .unsqueeze(0)
             .unsqueeze(0)
@@ -438,6 +695,12 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         self.expert_scale = ttnn.to_device(self.expert_scale, self.device)
 
     def forward(self, router_logits: ttnn.Tensor):
+        if router_logits.layout != ttnn.TILE_LAYOUT:
+            router_logits = ttnn.to_layout(
+                router_logits,
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         router_logits = ttnn.reshape(router_logits, ttnn.Shape((1, 1, router_logits.shape[0], router_logits.shape[1])))
         scores = ttnn.sigmoid(router_logits)
         ttnn.deallocate(router_logits)
@@ -489,7 +752,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         ttnn.deallocate(topk_group_idx)
 
         # reshape: (1,T,n_group,1)
-        active_groups_mask = ttnn.reshape(active_groups_mask, ttnn.Shape((1, T, self.n_group, 1)))
+        active_groups_mask = ttnn.reshape(active_groups_mask, ttnn.Shape((1, T, self.torch_layer.n_group, 1)))
 
         # ------------------------------------------------------------
         # Expand group mask → expert mask
@@ -509,7 +772,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         # ------------------------------------------------------------
         # Top-k experts from active experts
         # ------------------------------------------------------------
-        _, topk_expert_idx = ttnn.topk(masked_scores, k=self.top_k, dim=3)
+        _, topk_expert_idx = ttnn.topk(masked_scores, k=self.torch_layer.top_k, dim=3)
         ttnn.deallocate(masked_scores)
 
         # ------------------------------------------------------------
@@ -533,7 +796,11 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
 
         topk_weights = ttnn.mul(topk_weights, scale)
         ttnn.deallocate(scale)
+        T = topk_weights.shape[2]
 
+        topk_expert_idx = ttnn.reshape(topk_expert_idx, ttnn.Shape((T, self.torch_layer.top_k)))
+
+        topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, self.torch_layer.top_k)))
         return topk_expert_idx, topk_weights
 
 
@@ -563,8 +830,8 @@ class TTNNGlm4MoeMoE(TTNNModule):
         residuals = hidden_states
         orig_shape = hidden_states.shape
         router_logits = self.gate(hidden_states)
-        topk_indices, topk_weights = self.route_tokens_to_experts(router_logits)
+        topk_indices, topk_weights = self.torch_layer.route_tokens_to_experts(router_logits)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = self.torch_layer.experts(hidden_states, topk_indices, topk_weights).view(*orig_shape)
-        hidden_states = hidden_states + self.torch_layer.shared_experts(residuals)
+        hidden_states = self.experts(hidden_states, topk_indices.to(dtype=torch.int64), topk_weights).view(*orig_shape)
+        hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states.to_ttnn
