@@ -528,7 +528,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     }
 
     // Drain core is always the first tilize core (index 0)
-    CoreCoord drain_core_physical = tilize_cores_physical.at(0);
+    CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
 
     std::unordered_map<std::string, uint32_t> tilize_named_compile_time_args = {
         // CBs
@@ -592,9 +592,9 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)args.cluster_axis.value()},
 
-        // Multicast coordinates for drain tilize to non-drain tilize synchronization
-        {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
-        {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
+        // Coordinates for non-drain-sync to drain-sync synchronization
+        {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
+        {"drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
 
         // T multicast coordinates
         {"tilize_mcast_start_x", (uint32_t)t_mcast_start_physical.x},
@@ -762,9 +762,16 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     }
 
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
-        {"num_experts", args.num_experts},
+        {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},
+        {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
+        {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
+        {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
+        {"per_expert_total_tokens_cb_id", per_expert_total_tokens_cb_id},
+        {"tokens_per_chunk", tokens_per_chunk},
+        {"tilize_drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
+        {"tilize_drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
     };
 
     // Create kernels for the program

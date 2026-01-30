@@ -43,7 +43,6 @@ std::vector<Tensor> moe(
     const ttnn::Tensor& tilize_expert_mapping_tensor,
     const ttnn::Tensor& matmul_w0_w1_tensor,
     const ttnn::Tensor& matmul_w2_tensor,
-    const uint32_t num_experts,
     const uint32_t layer_id,
     const std::optional<uint32_t> cluster_axis);
 

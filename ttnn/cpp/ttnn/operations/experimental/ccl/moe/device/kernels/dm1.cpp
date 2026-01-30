@@ -12,6 +12,15 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
+    // For synchronization with tilize cores
+    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_available_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_available_semaphore_id");
+    constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    constexpr uint32_t tilize_drain_core_noc_x = get_named_compile_time_arg_val("tilize_drain_core_noc_x");
+    constexpr uint32_t tilize_drain_core_noc_y = get_named_compile_time_arg_val("tilize_drain_core_noc_y");
+
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
@@ -98,57 +107,58 @@ void kernel_main() {
     // Set state for the writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
-    // TODO: (GR) read num experts per token
-    uint32_t metadata_ready_semaphore_id =       /* CT arg */
-        uint32_t per_expert_total_tokens_cb_id = /* CT arg */
-
-        uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
+    // Receive number of tokens per expert from the tilize cores
+    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+    uint32_t* num_tokens_per_expert = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-    uint32_t experts_per_device = /* CT arg */
-        uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+    // Tilize core we signal to that tilize cores can send another chunk of tiles
+    uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
+        tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        for (chunks_per_exert) {  // TODO: (GR)
-        }
+        uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
+        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Wait for compute core to tell us that all mm01 data is ready
+            cb_wait_front(cb_c2w_rdy, 1);
 
-        // Wait for compute core to tell us that all mm01 data is ready
-        cb_wait_front(cb_c2w_rdy, 1);
+            cb_pop_front(cb_c2w_rdy, 1);
 
-        cb_pop_front(cb_c2w_rdy, 1);
+            // Signal to tilize cores that they can send another chunk of tiles
+            noc_semaphore_inc(matmul_chunk_available_semaphore_noc_addr, 1);
 
-        // TODO: (GR) signal that input is free
+            // Take the data in cb_s2c_in2 and send it to the next core in the ring
+            // Ring synchronization: all cores participate regardless of whether they had CB work
+            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+            for (uint32_t i = 0; i < num_a2a_iters; ++i) {
+                for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+                    // Wait for current data to be ready in cb_s2c_in2
+                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
 
-        // Take the data in cb_s2c_in2 and send it to the next core in the ring
-        // Ring synchronization: all cores participate regardless of whether they had CB work
-        // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
-        for (uint32_t i = 0; i < num_a2a_iters; ++i) {
-            for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                // Wait for current data to be ready in cb_s2c_in2
-                noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+                    // Signal to compute core that data is ready
+                    cb_reserve_back(cb_w2c_rdy, 1);
+                    cb_push_back(cb_w2c_rdy, 1);
 
-                // Signal to compute core that data is ready
-                cb_reserve_back(cb_w2c_rdy, 1);
-                cb_push_back(cb_w2c_rdy, 1);
+                    // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                    // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
 
-                // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-                // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                    noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
+                    noc_async_write_one_packet_with_state</*posted=*/true>(
+                        local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                noc_async_write_one_packet_with_state</*posted=*/true>(
-                    local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+                    // Signal neighbor that data is ready (increment their semaphore)
+                    noc_semaphore_inc</*posted=*/true>(
+                        neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
-                // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(
-                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
-
-                // Ensure write and semaphore have left the core before continuing
-                noc_async_posted_atomic_barrier();
+                    // Ensure write and semaphore have left the core before continuing
+                    noc_async_posted_atomic_barrier();
+                }
             }
         }
     }

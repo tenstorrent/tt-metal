@@ -32,7 +32,6 @@ void bind_moe(nb::module_& mod, const ccl_operation_t& operation, const char* do
                const ttnn::Tensor& tilize_expert_mapping_tensor,
                const ttnn::Tensor& matmul_w0_w1_tensor,
                const ttnn::Tensor& matmul_w2_tensor,
-               const uint32_t num_experts,
                const uint32_t layer_id,
                const std::optional<uint32_t> cluster_axis) {
                 return self(
@@ -42,7 +41,6 @@ void bind_moe(nb::module_& mod, const ccl_operation_t& operation, const char* do
                     tilize_expert_mapping_tensor,
                     matmul_w0_w1_tensor,
                     matmul_w2_tensor,
-                    num_experts,
                     layer_id,
                     cluster_axis);
             },
@@ -53,7 +51,6 @@ void bind_moe(nb::module_& mod, const ccl_operation_t& operation, const char* do
             nb::arg("matmul_w0_w1_tensor").noconvert(),
             nb::arg("matmul_w2_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("num_experts"),
             nb::arg("layer_id"),
             nb::arg("cluster_axis") = nb::none()});
 }

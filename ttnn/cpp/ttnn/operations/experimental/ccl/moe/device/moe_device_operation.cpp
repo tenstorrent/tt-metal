@@ -19,9 +19,7 @@ void MoEDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(args.num_experts >= 1, "Number of experts must be at least 1, got {}", args.num_experts);
-
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Tilize
     TT_FATAL(
         tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -133,14 +131,12 @@ std::vector<ttnn::Tensor> moe(
     const ttnn::Tensor& tilize_expert_mapping_tensor,
     const ttnn::Tensor& matmul_w0_w1_tensor,
     const ttnn::Tensor& matmul_w2_tensor,
-    const uint32_t num_experts,
     const uint32_t layer_id,
     const std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::experimental::prim::MoEDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .num_experts = num_experts, .layer_id = layer_id, .cluster_axis = cluster_axis},
+        OperationType::operation_attributes_t{.layer_id = layer_id, .cluster_axis = cluster_axis},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
