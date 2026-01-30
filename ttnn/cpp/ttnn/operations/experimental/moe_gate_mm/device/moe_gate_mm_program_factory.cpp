@@ -29,13 +29,6 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
-    // Pick the first core as the reduce core
-    constexpr uint32_t reduce_core_id = 0;
-    const auto reduce_core =
-        tensor_args.input_tensor.device()->worker_core_from_logical_core(dram_bank2core_coords[reduce_core_id]);
-    const auto reduce_core_physical_x = static_cast<uint32_t>(reduce_core.x);
-    const auto reduce_core_physical_y = static_cast<uint32_t>(reduce_core.y);
-
     // CBs used in the MoE Gate MM operation
     /*
         ------------------------------------------------------------------------------------
@@ -44,8 +37,8 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         | cb_r2c_w       | CBIndex::c_0  | Float16_b  | true  |    32*3  |      196608     |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
-        | cb_w2c_in2     | CBIndex::c_3  | Float32    | true  |    8*12  |      196608     |
-        | cb_s2c_out     | CBIndex::c_4  | Float16_b  | true  |    8     |      16384      |
+        | cb_w2c_in2     | CBIndex::c_3  | Float32    | true  |    1     |      2048       |
+        | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    1     |      2048       |
         ------------------------------------------------------------------------------------
     */
 
@@ -53,11 +46,8 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
-        {"cb_w2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float32, true, 8 * 12},
+        {"cb_w2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float32, true, 1},
     };
-
-    // Create a semaphore in the reduce core for all cores to signal that they have sent their data
-    const auto reduce_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
 
@@ -75,7 +65,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
         sharded_cb_specs = {
             {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 224, tensor_args.input_tensor.buffer()},
-            {"cb_s2c_out", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 8, tensor_args.output_tensor.buffer()}};
+            {"cb_s2c_out", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 1, tensor_args.output_tensor.buffer()}};
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
@@ -97,9 +87,6 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
-        {"reduce_core_id", reduce_core_id},
-        {"reduce_core_physical_x", reduce_core_physical_x},
-        {"reduce_core_physical_y", reduce_core_physical_y},
     };
 
     // Create kernels for the program
@@ -136,14 +123,62 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    // Create semaphores to wait for the partial to arrive from the other core
+    // There will be 8 cores, each waiting for partial to come from 4 other cores.
+    // The 4 cores will send partial to two cores each.
+    const uint32_t partial_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    // Create optimal ring ordering for NOC1 to minimize traffic conflicts
+    // NOC1 routes: decreasing y (top) first, then decreasing x (left)
+    // Sort cores by (descending y, descending x) to create a ring that flows naturally
+    std::vector<uint32_t> ring_pos2bank_id(num_cores);
+    std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
+    auto device = tensor_args.input_tensor.device();
+
+    std::sort(
+        ring_pos2bank_id.begin(),
+        ring_pos2bank_id.end(),
+        [device, &dram_bank2core_coords](uint32_t bank_id_a, uint32_t bank_id_b) {
+            const auto& pa = device->worker_core_from_logical_core(dram_bank2core_coords[bank_id_a]);
+            const auto& pb = device->worker_core_from_logical_core(dram_bank2core_coords[bank_id_b]);
+            if (pa.y != pb.y) {
+                return pa.y > pb.y;  // Descending y
+            }
+            return pa.x > pb.x;  // Descending x
+        });
+
+    // For every third core, figure out the physical coords of the two cores after it.
+    std::unordered_map<uint32_t, std::array<uint32_t, 5>> dram_bank2neighbors;
+    for (uint32_t ring_pos = 0; ring_pos < num_cores; ring_pos += 3) {
+        auto bank_id = ring_pos2bank_id[ring_pos];
+        auto bank_id_next1 = ring_pos2bank_id[ring_pos + 1];
+        auto bank_id_next2 = ring_pos2bank_id[ring_pos + 2];
+
+        const auto& core_next1 = device->worker_core_from_logical_core(dram_bank2core_coords[bank_id_next1]);
+        const auto& core_next2 = device->worker_core_from_logical_core(dram_bank2core_coords[bank_id_next2]);
+
+        dram_bank2neighbors[bank_id] = {1, core_next1.x, core_next1.y, core_next2.x, core_next2.y};
+
+        log_warning(
+            tt::LogOp, "bank_id: {}, bank_id_next1: {}, bank_id_next2: {}", bank_id, bank_id_next1, bank_id_next2);
+    }
+
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
+
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
-    runtime_args.push_back(reduce_semaphore);
+
+    // Add placeholders for neighbor physical coords and semaphore
+    runtime_args.push_back(partial_semaphore_id);
+    runtime_args.push_back(0);  // If this is a sender core
+    runtime_args.push_back(0);  // Neighbor1 physical x
+    runtime_args.push_back(0);  // Neighbor1 physical y
+    runtime_args.push_back(0);  // Neighbor2 physical x
+    runtime_args.push_back(0);  // Neighbor2 physical y
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -165,13 +200,30 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         }
         vchannels.push_back(vchannel);
 
-        runtime_args[0] = dram_bank++;
+        runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
         // runtime_args[2-4] are already set to tensor addresses
+        // runtime_args[5] is already set to reduce_semaphore
+        // Do this only if the key exists in the map.
+        if (dram_bank2neighbors.contains(dram_bank)) {
+            runtime_args[6] = dram_bank2neighbors[dram_bank][0];
+            runtime_args[7] = dram_bank2neighbors[dram_bank][1];
+            runtime_args[8] = dram_bank2neighbors[dram_bank][2];
+            runtime_args[9] = dram_bank2neighbors[dram_bank][3];
+            runtime_args[10] = dram_bank2neighbors[dram_bank][4];
+        } else {
+            runtime_args[6] = 0;
+            runtime_args[7] = 0;
+            runtime_args[8] = 0;
+            runtime_args[9] = 0;
+            runtime_args[10] = 0;
+        }
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+
+        dram_bank++;
     }
 
     return cached_program_t{

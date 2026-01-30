@@ -26,9 +26,6 @@ void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
-    constexpr uint32_t reduce_core_id = get_named_compile_time_arg_val("reduce_core_id");
-    constexpr uint32_t reduce_core_physical_x = get_named_compile_time_arg_val("reduce_core_physical_x");
-    constexpr uint32_t reduce_core_physical_y = get_named_compile_time_arg_val("reduce_core_physical_y");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -41,12 +38,18 @@ void kernel_main() {
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    const auto partial_semaphore = get_arg_val<uint32_t>(argidx++);
+    const auto send_core = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor1_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor1_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_w2c_in2 = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
     // Tile sizes
@@ -58,8 +61,8 @@ void kernel_main() {
     constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    constexpr uint32_t num_w_tiles_h = 20;
-    constexpr uint32_t num_w_tiles_w = 8;
+    const uint32_t num_w_tiles_h = send_core ? 2 * 72 : 2 * 76;
+    constexpr uint32_t num_w_tiles_w = 1;
 
     //-------------------------------------------------------------------------
     // W reading constants
@@ -67,7 +70,9 @@ void kernel_main() {
     constexpr uint32_t w_txns_per_block = 8;
     constexpr uint32_t w_tiles_per_txn = noc_packet_size / w_tile_size;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    constexpr uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
+    const uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
+    const uint32_t w_last_block_txns = ((num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block) / w_tiles_per_txn;
+    const uint32_t w_tiles_per_block_last = w_last_block_txns * w_tiles_per_txn;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -143,12 +148,21 @@ void kernel_main() {
         txns_in_flight = true;
     }
 
-    // Drain the pipeline - the last txn in flight
+    // Issue txns for the last block
+    noc_async_read_set_trid(trid_to_issue);
+    for (uint32_t txn_id = 0; txn_id < w_last_block_txns; ++txn_id) {
+        noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+            dram_noc_addr, w_dram_read_offset, slot_addr[slot_to_issue][txn_id], trid_to_issue);
+        w_dram_read_offset += w_bytes_per_txn;
+    }
+
     noc_async_read_barrier_with_trid(trid_to_wait);
     cb_push_back(cb_r2c_w, w_tiles_per_block);
 
-    // We have one extra slot reserved, which we won't use.
-    // For CB hygiene, we can push it back.
+    ADVANCE_TRID(trid_to_wait);
+
+    // Drain the pipeline - the last txn in flight
+    noc_async_read_barrier_with_trid(trid_to_wait);
     cb_push_back(cb_r2c_w, w_tiles_per_block);
 }
 

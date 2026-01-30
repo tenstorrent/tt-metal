@@ -19,6 +19,10 @@ from tracy.process_model_log import (
 PCC_THRESHOLD = 0.998
 
 
+SEND_CORES = (0, 3, 6, 9)
+RECV_CORES = (1, 2, 4, 5, 7, 8, 10, 11)
+
+
 def create_torch_input(L, in0_num_cores, M, K):
     """
     Create torch input tensor with unique integer values per layer/expert.
@@ -32,8 +36,8 @@ def create_torch_input(L, in0_num_cores, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, M, K)
     """
-    torch_input = torch.rand((L, M, K), dtype=torch.bfloat16) - 0.5
-    torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1)
+    torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
+    torch_input = torch_input.repeat(1, in0_num_cores, 1, 1)
     return torch_input
 
 
@@ -53,7 +57,7 @@ def create_torch_w(L, K, N):
     return torch_w
 
 
-def prepare_w_tensor(torch_w, L, K, N):
+def prepare_w_tensor(torch_w, L, K, N, ring2cores):
     """
     Prepare the w tensor by padding and reordering tiles.
 
@@ -62,30 +66,66 @@ def prepare_w_tensor(torch_w, L, K, N):
         L: Number of layers
         K: Input dimension
         N: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, send_flag)
 
     Returns:
         torch_w: Tensor of shape (L, K, N)
     """
-    # Each bank gets all of N, and 18/20 tiles of K.
-    w_tile_view = torch_w.view(L, -1, ttnn.TILE_SIZE, N)
+    Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
+    # 8 cores get 2/3rd of K tiles and 1 N tile -> Type 1 (send flag is 0)
+    # 4 cores get 1/3rd of K tiles and 2 N tiles -> Type 2 (send flag is 1)
+    # Every third core is of type 2.
+    w_tile_view = torch_w.view(L, Kt, ttnn.TILE_SIZE, Nt, ttnn.TILE_SIZE)
 
     each_shard = []
 
-    start_tile = 0
-    for bank_id in range(8):
-        num_tiles = 18 if bank_id < 8 else 20
-        each_shard.append(w_tile_view[:, start_tile : start_tile + num_tiles, :, :])
-        start_tile += num_tiles
+    current_N_tile = 0
+    for ring_pos in range(len(ring2cores)):
+        _, _, send_flag = ring2cores[ring_pos]
 
-        if num_tiles < 20:
-            each_shard.append(torch.zeros(L, 2, ttnn.TILE_SIZE, N, dtype=torch_w.dtype))
+        if send_flag:
+            # Type 2: Last 72 K tiles for 2 N tiles
+            first_chunk = w_tile_view[:, -72:, :, current_N_tile, :]
+            second_chunk = w_tile_view[:, -72:, :, current_N_tile + 1, :]
 
-    torch_w_reordered = torch.cat(each_shard, dim=1).view(L, 8, -1, ttnn.TILE_SIZE, N)
-    return torch_w_reordered.permute(1, 0, 2, 3, 4)
+            # Interleave the two chunks, one tile each on width dimension.
+            interleaved = torch.stack([first_chunk, second_chunk], dim=3)
+
+            # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
+            # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
+            interleaved_chunks = interleaved.view(L, 72, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
+
+            padding = torch.zeros(L, 4, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE, dtype=torch_w.dtype)
+            torch_w_with_padding = torch.cat([interleaved_chunks, padding], dim=1)
+            each_shard.append(torch_w_with_padding)
+        else:
+            # Type 1: First 2 * 76 K tiles for 1 N tile
+            all_tiles = w_tile_view[:, : 2 * 76, :, current_N_tile, :]
+
+            # Separate the even and odd tiles.
+            even_tiles = all_tiles[:, ::2, :, :]
+            odd_tiles = all_tiles[:, 1::2, :, :]
+            interleaved = torch.cat([even_tiles, odd_tiles], dim=-1)
+
+            # Put one each of even and odd tiles in width dimension.
+            each_shard.append(interleaved.view(L, 76, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE))
+            current_N_tile += 1
+
+    torch_w_all_banks = torch.stack(each_shard, dim=0)
+    return torch_w_all_banks
 
 
-def prepare_output_tensor(tt_output, in0_num_cores, M, N):
-    return tt_output[0]
+def prepare_output_tensor(tt_output, ring2cores):
+    # Pick only from the cores that RECV
+
+    each_shard = []
+    current_column = 0
+    for ring_pos in range(len(ring2cores)):
+        _, _, send_flag = ring2cores[ring_pos]
+        if not send_flag:
+            each_shard.append(tt_output[:, current_column : current_column + ttnn.TILE_SIZE])
+        current_column += ttnn.TILE_SIZE
+    return torch.cat(each_shard, dim=1)
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -117,7 +157,15 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
     in0_num_cores = len(in0_core_coords)
 
-    in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords]
+    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        # key: ring_pos, value: (core_coord, dram_bank_id, send_flag)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in SEND_CORES else 0)
+
+    in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
     in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
 
     # --------------------------------------------------------------------------
@@ -127,7 +175,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     w_dtype = ttnn.bfloat16
     num_dram_banks = len(in0_core_coords)
 
-    dram_core_coords = [ttnn.CoreCoord(core2dram[in0_core_coord], 0) for in0_core_coord in in0_core_coords]
+    dram_core_coords = [ttnn.CoreCoord(core2dram[in0_core_coord], 0) for in0_core_coord in in0_core_coords_sorted]
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
@@ -152,8 +200,8 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
     # Create DRAM shard spec for w
     # Tensor shape: (L, K, N) -> Sharded across N cores
     # ------------------------------------------------------------------------
-    w_shard_height = L * 2 * math.ceil(K / ttnn.TILE_SIZE / num_dram_banks / 2) * ttnn.TILE_SIZE
-    w_shard_width = N
+    w_shard_height = 76 * ttnn.TILE_SIZE
+    w_shard_width = 2 * ttnn.TILE_SIZE
 
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
 
@@ -161,16 +209,16 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for output
-    # Tensor shape: (M, N) -> Sharded across N cores
+    # Tensor shape: (M, N) -> Sharded across 8 cores
     # ------------------------------------------------------------------------
-    output_shard_height = in0_num_cores * M
-    output_shard_width = N
+    output_shard_height = M
+    output_shard_width = ttnn.TILE_SIZE
     output_shard_spec = ttnn.ShardSpec(
         in0_core_range_set, (output_shard_height, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR
     )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     tt_output = ttnn.empty(
-        (in0_num_cores, M, N),
+        (M, in0_num_cores * ttnn.TILE_SIZE),
         dtype=in0_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -186,7 +234,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
         # ------------------------------------------------------------------------
         # Prepare w tensor (padded, and reordered)
-        torch_w_reordered = prepare_w_tensor(torch_w, L, K, N)
+        torch_w_reordered = prepare_w_tensor(torch_w, L, K, N, ring2cores)
         # Create tt_w tensor with DRAM sharding
         tt_w = ttnn.from_torch(
             torch_w_reordered,
@@ -204,7 +252,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
             memory_config=input_sharded_mem_config,
         )
         tt_w = ttnn.empty(
-            (L, K, N),
+            (num_dram_banks, L, w_shard_height, w_shard_width),
             dtype=w_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
@@ -255,10 +303,9 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
         for layer_id in range(L):
             torch_layer_output = torch_w_output_ref[layer_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, :, :]
-            tt_output = prepare_output_tensor(tt_layer_output, in0_num_cores, M, N)
+            tt_output = prepare_output_tensor(tt_layer_output, ring2cores)
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_output)
             all_accuracy_metrics[layer_id] = layer_metrics
-            breakpoint()
 
     if dump_outputs:
         torch.set_printoptions(profile="full")
@@ -275,7 +322,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 256, 1): 25.0,
+    (32, 7168, 256, 1): 18.0,
 }
 
 
@@ -339,7 +386,7 @@ def test_moe_mm_performance(M, K, N, L, check_accuracy, dump_outputs):
     num_cores = 12
 
     Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
-    w_tiles_per_core = 2 * math.ceil(Kt / num_cores / 2) * Nt
+    w_tiles_per_core = 2 * 76
 
     total_bytes_transferred = L * num_cores * w_tiles_per_core * bytes_per_tile
     realized_bandwidth = int(total_bytes_transferred / (duration_us * 1000))
