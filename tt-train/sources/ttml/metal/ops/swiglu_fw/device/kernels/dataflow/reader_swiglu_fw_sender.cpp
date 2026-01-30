@@ -35,13 +35,14 @@ void kernel_main() {
     const uint32_t max_rows_for_sync = get_arg_val<uint32_t>(ra++);    // Sync iterations (for multicast)
     const uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
-    // Shared multicast runtime args (same topology and semaphores for W1/W2/W3)
-    // W1, W3, W2 execute sequentially so they can safely reuse the same semaphores
+    // SINGLE-SENDER MULTICAST: This core (0,0) reads from DRAM and multicasts to ALL cores.
+    // The bounding box covers all active cores as a rectangle.
+    // Since sender is also a receiver, we use loopback multicast functions.
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(ra++);
-    const uint32_t mcast_num_dests = get_arg_val<uint32_t>(ra++);
+    const uint32_t num_receivers_excluding_self = get_arg_val<uint32_t>(ra++);
     const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
     const uint32_t mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
 
@@ -70,36 +71,27 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
 
-    // ================== Loop structure with W1/W2/W3 multicast (flash-attention) ==================
+    // ================== SINGLE-SENDER MULTICAST with loopback (flash-attention) ==================
+    // This core (0,0) reads weights from DRAM ONCE and multicasts to ALL cores including itself.
+    // This is much more efficient than per-row multicast - reduces DRAM reads by factor of num_cores.
+    //
     // Flash-attention optimization: for r in rows:
     //     # Phase A: Compute XW1[r, :] and XW3[r, :] - read X[r, p_block] only once!
-    //     for p_block in p_blocks:                    # OUTER LOOP - read X once per p_block
+    //     for p_block in p_blocks:
     //        read X[r, p_block]
-    //        for k_block in k_blocks:                 # INNER LOOP - accumulate across full hidden dimension
-    //          # First process W1 for all p in p_block (compute processes W1 first)
-    //          for p in p_block:
-    //            [SENDER] read W1[p, k_block] from DRAM
-    //            [SENDER] wait for all receivers ready
-    //            [SENDER] multicast W1[p, k_block] to receivers
-    //            [SENDER] signal data ready to receivers
-    //          # Then process W3 for all p in p_block (compute processes W3 second)
-    //          for p in p_block:
-    //            [SENDER] read W3[p, k_block] from DRAM
-    //            [SENDER] wait for all receivers ready
-    //            [SENDER] multicast W3[p, k_block] to receivers
-    //            [SENDER] signal data ready to receivers
+    //        for k_block in k_blocks:
+    //          [SENDER] read W1[p_block, k_block] from DRAM
+    //          [SENDER] multicast W1 to ALL cores (including self via loopback)
+    //          [SENDER] read W3[p_block, k_block] from DRAM
+    //          [SENDER] multicast W3 to ALL cores (including self via loopback)
     //
-    //     # Phase B: Compute M[r,:] once
-    //     [no reading required to compute M[r, :]]
+    //     # Phase B: Compute M[r,:] once (no reading required)
     //
     //     # Phase C: Use M[r, :] for all c-blocks to compute Y[r, :]
     //     for c_block in c_blocks:
     //        for k_block in k_blocks:
-    //          for c in c_block:
-    //            [SENDER] read W2[k_block, c] from DRAM
-    //            [SENDER] wait for all receivers ready
-    //            [SENDER] multicast W2[k_block, c] to receivers
-    //            [SENDER] signal data ready to receivers
+    //          [SENDER] read W2[k_block, c_block] from DRAM
+    //          [SENDER] multicast W2 to ALL cores (including self via loopback)
     // ============================================================================
     for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         // ---- Phase A: Compute XW1[r,:] and XW3[r,:] with flash-attention optimization ----
@@ -113,14 +105,14 @@ void kernel_main() {
             read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
 
             // Stream W1 and W3 data organized by k_blocks to match compute kernel expectations
-            // Always use batched mcast with padding for unaligned edge blocks
+            // Use LOOPBACK multicast since sender (0,0) is also a receiver
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                // Batched mcast W1: read block_size rows × block_size tiles, padding edge blocks
+                // Batched mcast W1 with LOOPBACK: read block_size rows × block_size tiles
                 const uint32_t w1_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
-                mcast_sender_read_batched_rows_and_send(
+                mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w1_idx,
                     w1_address_generator,
                     w1_first_row_tile_start,
@@ -137,11 +129,11 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    mcast_num_dests);
+                    num_receivers_excluding_self);
 
-                // Batched mcast W3: read block_size rows × block_size tiles, padding edge blocks
+                // Batched mcast W3 with LOOPBACK: read block_size rows × block_size tiles
                 const uint32_t w3_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
-                mcast_sender_read_batched_rows_and_send(
+                mcast_sender_read_batched_rows_and_send_loopback(
                     cb_w3_idx,
                     w3_address_generator,
                     w3_first_row_tile_start,
@@ -158,7 +150,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    mcast_num_dests);
+                    num_receivers_excluding_self);
             }
         }
 
@@ -166,19 +158,17 @@ void kernel_main() {
         // No reading required to compute M[r, :]
 
         // ---- Phase C: Use M[r, :] for all c_blocks ----
-        // Batched W2 multicast: read block_size columns × block_size rows at once
-        // This reduces mcast sync overhead from 4× per k_block to 1× per k_block
+        // Batched W2 multicast with LOOPBACK: read block_size columns × block_size rows at once
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                // Batched mcast W2: read block_size columns × block_size rows, padding edge blocks
+                // Batched mcast W2 with LOOPBACK: read block_size columns × block_size rows
                 // W2 is [K, C] = [hidden_Wt, Wt] tiles, stored row-major
-                // We need columns c_block_start..c_block_start+block_size, rows k_block_start..k_block_start+block_size
                 const uint32_t w2_first_col_start = k_block_start * Wt + c_block_start;
-                mcast_sender_read_batched_cols_and_send(
+                mcast_sender_read_batched_cols_and_send_loopback(
                     cb_w2_idx,
                     w2_address_generator,
                     w2_first_col_start,
@@ -195,7 +185,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    mcast_num_dests);
+                    num_receivers_excluding_self);
             }
         }
     }
