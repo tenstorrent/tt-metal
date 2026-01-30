@@ -97,7 +97,7 @@ struct KernelGroup {
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
-        uint32_t local_cb_mask,
+        uint64_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
@@ -202,6 +202,11 @@ public:
     ProgramImpl& operator=(ProgramImpl&& other) = default;
 
     ~ProgramImpl() noexcept;
+
+    // CB mask width derived from kernel_config_msg_t::local_cb_mask type
+    using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
+        FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
+    static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
 
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
@@ -364,6 +369,7 @@ private:
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
     uint32_t programmable_core_count_;
+    uint32_t max_cbs_;  // Architecture-specific max CBs
     uint64_t id;  // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
