@@ -377,14 +377,9 @@ void kernel_main() {
         // Set local mcast semaphore to valid (will be multicast per chunk)
         noc_semaphore_set(mcast_semaphore_ptr, 1);  // MCAST_VALID = 1
 
-        // Get NOC address of sync semaphore for signaling back to NCRISC
-        const uint64_t ncrisc_brisc_sync_noc_addr = get_noc_addr(ncrisc_brisc_sync_addr);
-
         // Multicast loop
-        // Semaphore counting: for each chunk, NCRISC sends k_num_pages (or 1) signals, BRISC sends 1 ack
-        // Chunk N starts at semaphore value N * (k_num_pages + 1) for sharded, N * 2 for interleaved
+        // Semaphore pattern: NCRISC increments (1..N pages or 1), BRISC waits then resets to 0
         uint32_t chunk_count = 0;
-        DPRINT << "starting multicast loop" << ENDL();
         for (uint32_t cur_head = cur_head_group * num_heads_per_core;
              cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
              ++cur_head) {
@@ -393,12 +388,10 @@ void kernel_main() {
 
                 if constexpr (kv_is_sharded) {
                     // Sharded: page-level pipelining - multicast each page as it arrives
-                    // Base semaphore value for this chunk
-                    uint32_t chunk_base = chunk_count * (k_num_pages + 1);
+                    // NCRISC increments from 0 for each page, resets to 0 after chunk
                     for (uint32_t page = 0; page < k_num_pages; ++page) {
-                        // Wait for NCRISC to signal this page is ready
-                        uint32_t expected = chunk_base + page + 1;
-                        noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, expected);
+                        // Wait for NCRISC to signal this page is ready (semaphore >= page+1)
+                        noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, page + 1);
 
                         // Calculate page address directly - addresses increment in lockstep
                         uint32_t page_addr = k_write_ptr + page * k_page_size;
@@ -410,22 +403,22 @@ void kernel_main() {
                     }
                 } else {
                     // Interleaved: chunk-level - wait for entire chunk, then multicast
-                    uint32_t expected = chunk_count * 2 + 1;
-                    noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, expected);
+                    // NCRISC sets to 1 when chunk is ready
+                    noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, 1);
 
                     // Multicast entire chunk from base address
                     uint64_t mcast_dest_addr = mcast_noc_addr | k_write_ptr;
                     noc_async_write_multicast(
                         k_write_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, false, MCAST_NOC);
                 }
-                DPRINT << "done mcast" << ENDL();
 
                 // After all data for this chunk: barrier and signal receivers
                 noc_async_write_barrier();
                 noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests, false, MCAST_NOC);
 
                 // Signal NCRISC that multicast is done - safe to reuse buffer
-                noc_semaphore_inc(ncrisc_brisc_sync_noc_addr, 1);
+                // Reset to 0 so NCRISC can wait for 0 before next chunk
+                *ncrisc_brisc_sync_ptr = 0;
                 chunk_count++;
             }
         }
@@ -435,7 +428,6 @@ void kernel_main() {
     // DEBUG: Skip worker/reducer to isolate DRAM streaming + multicast
     return;
 #endif
-    DPRINT << "done multicast loop" << ENDL();
 
     if (is_worker) {
         DeviceZoneScopedN("writer-worker");
@@ -506,5 +498,4 @@ void kernel_main() {
         // Output is already in the sharded CB, nothing to do
         noc_async_writes_flushed();
     }
-    DPRINT << "done writer-reducer-loop" << ENDL();
 }

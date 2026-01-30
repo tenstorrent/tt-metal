@@ -194,17 +194,16 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_semaphore_addr);
 
-    // Set up NCRISC<->BRISC sync semaphore (bidirectional)
+    // Set up NCRISC<->BRISC sync semaphore (bidirectional, same-core)
     // NCRISC signals BRISC when DRAM read is done, BRISC signals NCRISC when multicast is done
+    // Use direct L1 pointer for same-core sync (faster than NOC atomic operations)
     const uint32_t ncrisc_brisc_sync_l1_addr = get_semaphore(ncrisc_brisc_sync_semaphore_id);
-    const uint64_t ncrisc_brisc_sync_noc_addr = get_noc_addr(ncrisc_brisc_sync_l1_addr);
     volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr);
 
-    // Sync counter for bidirectional semaphore:
-    // For sharded: NCRISC sends k_num_pages, BRISC sends 1 ack per chunk
-    // For interleaved: NCRISC sends 1, BRISC sends 1 ack per chunk
-    uint32_t mcast_done_count = 0;
+    // Bidirectional semaphore pattern:
+    // NCRISC increments for each page/chunk ready, BRISC waits then resets to 0
+    // NCRISC waits for 0 before pushing to CB (safe to reuse buffer)
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
@@ -265,10 +264,9 @@ void kernel_main() {
                         while (pages_completed < k_num_pages) {
                             // Wait for oldest read to complete
                             noc_async_read_barrier_with_trid(wait_trid);
-                            DPRINT << "Processed pages:" << pages_completed << ENDL();
 
-                            // Signal BRISC that this page is ready (BRISC calculates address)
-                            noc_semaphore_inc(ncrisc_brisc_sync_noc_addr, 1);
+                            // Signal BRISC that this page is ready (direct L1 write for same-core sync)
+                            *ncrisc_brisc_sync_ptr += 1;
                             pages_completed++;
 
                             // Issue next read if more pages remain
@@ -298,21 +296,13 @@ void kernel_main() {
                         }
                         noc_async_read_barrier();
 
-                        // For interleaved: signal once after all tiles (BRISC knows k_write_ptr)
-                        noc_semaphore_inc(ncrisc_brisc_sync_noc_addr, 1);
+                        // For interleaved: signal chunk ready (set to 1, BRISC resets to 0)
+                        *ncrisc_brisc_sync_ptr = 1;
                     }
 
                     // Wait for BRISC to finish multicasting before pushing to CB
-                    // This prevents overwriting the buffer while BRISC is still reading from it
-                    // Semaphore value after BRISC ack = pages_sent + acks_received
-                    ++mcast_done_count;
-                    uint32_t expected_sem_value;
-                    if constexpr (k_args.is_sharded) {
-                        expected_sem_value = mcast_done_count * (k_num_pages + 1);
-                    } else {
-                        expected_sem_value = mcast_done_count * 2;  // 1 signal + 1 ack per chunk
-                    }
-                    noc_semaphore_wait(ncrisc_brisc_sync_ptr, expected_sem_value);
+                    // BRISC resets semaphore to 0 when done - wait for that
+                    noc_semaphore_wait(ncrisc_brisc_sync_ptr, 0);
 
                     // Push K to CB (for both sharded and interleaved)
                     cb_push_back(cb_k_in, k_chunk_tiles);
@@ -345,6 +335,5 @@ void kernel_main() {
                 cb_push_back(cb_v_in, v_chunk_tiles);
             }
         }
-        DPRINT << "READER DONE" << ENDL();
     }
 }

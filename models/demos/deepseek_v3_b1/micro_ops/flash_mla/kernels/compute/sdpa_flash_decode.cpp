@@ -329,7 +329,6 @@ void MAIN {
                     add_mask_fusion,
                     mask_cb_to_use,
                     cb_zero_in);
-                DPRINT << "done qk-matmul" << ENDL();
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {

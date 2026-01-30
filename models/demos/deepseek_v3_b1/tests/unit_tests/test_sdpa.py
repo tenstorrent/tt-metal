@@ -52,8 +52,8 @@ def test_flash_mla_decode(device, batch_size, decode_position, max_seq_len, kv_s
     tiny_tile = ttnn.Tile((num_q_heads_per_core, 32))
 
     # Q cores must match S1 output cores - use BLOCKS definition from op.py
-    # BLOCKS order: S5, S6, S7, S8, S1, S2, S3, S4 - so S1 is at index 4
-    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[4]
+    # BLOCKS order: S1, S2, S3, S4, S5, S6, S7, S8 - so S1 is at index 0
+    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
     q_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores])
     q_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
