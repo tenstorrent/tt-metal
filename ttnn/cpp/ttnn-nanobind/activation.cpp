@@ -56,7 +56,7 @@ void py_module(nb::module_& mod) {
                 return fmt::format("UnaryWithParam(op_type={})", param.op_type);
             }                 return fmt::format(
                     "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
-           
+
         });
 
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
