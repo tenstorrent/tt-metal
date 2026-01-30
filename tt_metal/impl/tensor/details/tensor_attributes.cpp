@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_buffer.hpp>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+#include <tt-metalium/experimental/tensor/details/storage.hpp>
+#include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 
