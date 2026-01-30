@@ -90,6 +90,7 @@ inline CoresInfo build_cores_info(const std::vector<CoreCoord>& all_coord_cores,
 
     // Map each x coordinate to a column index (0, 1, 2, ...)
     std::vector<uint32_t> sorted_x_coords;
+    sorted_x_coords.reserve(info.column_to_bottom_core.size());
     for (const auto& [x_coord, _] : info.column_to_bottom_core) {
         sorted_x_coords.push_back(x_coord);
     }
@@ -457,6 +458,7 @@ deepseek_b1_reduce_to_one_program_factory(
     // Fabric core waits on each of the local semaphores
     // worker_sems[worker_idx] = semaphore ID (same ID used on all fabric cores)
     std::vector<uint32_t> worker_sems;
+    worker_sems.reserve(num_worker_slots);
     for (uint32_t worker_idx = 0; worker_idx < num_worker_slots; worker_idx++) {
         worker_sems.push_back(CreateSemaphore(program, fabric_cores_set, 0));
     }
@@ -498,6 +500,7 @@ deepseek_b1_reduce_to_one_program_factory(
     // Set runtime args for dedicated fabric cores
     for (const auto& fc : fabric_writer_cores) {
         std::vector<uint32_t> fabric_rt_args;
+        fabric_rt_args.reserve(num_worker_slots);
 
         // Append worker semaphore IDs (fabric kernel will convert to addresses)
         for (uint32_t worker_idx = 0; worker_idx < num_worker_slots; worker_idx++) {
