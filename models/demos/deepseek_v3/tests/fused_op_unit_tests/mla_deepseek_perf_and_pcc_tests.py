@@ -34,10 +34,10 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("wq_kv_a", 10, 28.76),
-        ("wq_b", 10, 57.11),
-        ("wkv_b1", 10, 35.62),
-        ("wkv_b2", 10, 141.68),
+        ("wq_kv_a", 10, 31.5),
+        ("wq_b", 10, 62.5),
+        ("wkv_b1", 10, 39.3),
+        ("wkv_b2", 10, 190.7),
         ("wo", 10, 259.56),
     ],
 )

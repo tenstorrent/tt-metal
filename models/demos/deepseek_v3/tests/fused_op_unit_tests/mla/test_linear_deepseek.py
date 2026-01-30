@@ -83,7 +83,9 @@ def test_deepseek_v3_mla_linear_trace_mode(
     Linear operations tested:
     1. wq_kv_a (line 1104): [1, 1, 32, 896] x [896, 2112] - WIDTH_SHARDED input/output
     2. wq_b (line 1225): [1, 1, 32, 1536] x [1536, 3072] - WIDTH_SHARDED input, interleaved output
+    TODO: need to port to batch 16 in future pr
     3. wkv_b1 (line 1240): [1, 16, 32, 192] x [192, 512] - Interleaved input/output
+    TODO: need to port to batch 128 in future pr
     4. wkv_b2 (line 1306): [1, 128, 4, 512] x [512, 128] - Interleaved input/output
     5. wo (line 1334): [1, 1, 32, 16384] x [16384, 896] - Interleaved input, WIDTH_SHARDED output
 
@@ -113,7 +115,7 @@ def test_deepseek_v3_mla_linear_trace_mode(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Setup input memory config based on specification
@@ -140,6 +142,8 @@ def test_deepseek_v3_mla_linear_trace_mode(
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))})
         shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    elif output_memory_config == "dram_interleaved":
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
     else:  # interleaved
         output_mem_config = ttnn.L1_MEMORY_CONFIG
 
