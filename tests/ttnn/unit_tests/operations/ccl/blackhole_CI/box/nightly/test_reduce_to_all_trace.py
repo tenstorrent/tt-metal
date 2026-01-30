@@ -92,10 +92,10 @@ def compute_reference_reduce_to_all(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 548880}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 548880}),
     ],
     indirect=["device_params"],
-    ids=["fabric_1d_ring_trace"],
+    ids=["fabric_2d_trace"],
 )
 @pytest.mark.parametrize("use_barrier", [False, True], ids=["no_barrier", "with_barrier"])
 def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
@@ -118,9 +118,11 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     intermediate_shape = [batch_size, 192 * num_cores]
 
     scale_value = 1.0
-    topology = ttnn.Topology.Ring
+    topology = ttnn.Topology.Torus
 
     # Create submesh device
+    # Mesh topology parameter uses 2D fabric routing (configured by FABRIC_2D)
+    # but logical device arrangement can be 1D [4,1] for reduce_to_all's neighbor exchange pattern
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
@@ -269,11 +271,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
     # Total shard width: 768 + 128 = 896 columns
     aggregator_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(mux_cores[0], mux_cores[1])})
-    aggregator_shard_spec = ttnn.ShardSpec(aggregator_shard_grid, [8, 192 * 4 + 128], ttnn.ShardOrientation.ROW_MAJOR)
+    aggregator_shard_spec = ttnn.ShardSpec(
+        aggregator_shard_grid, [8, 192 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR
+    )
     aggregator_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, aggregator_shard_spec
     )
-    aggregator_scratch_shape = [8, (192 * 4 + 128) * 2]  # shard_width * 2 cores
+    aggregator_scratch_shape = [8, (192 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
     aggregator_scratch_tensor = ttnn.from_torch(
         torch.zeros(aggregator_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,
@@ -341,13 +345,12 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             barrier_tensor,
             dim=0,
             multi_device_global_semaphore=barrier_semaphores,
-            topology=topology,
+            topology=ttnn.Topology.Mesh,
         )
     ttnn.synchronize_device(submesh_device)
 
     # Warmup iterations with trace
     logger.info("Capturing warmup trace")
-    print("Warmup iterations...")
     num_warmup_iters = 15
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_warmup_iters):
@@ -359,7 +362,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 barrier_tensor,
                 dim=0,
                 multi_device_global_semaphore=barrier_semaphores,
-                topology=topology,
+                topology=ttnn.Topology.Mesh,
             )
         out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
@@ -380,14 +383,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 barrier_tensor,
                 dim=0,
                 multi_device_global_semaphore=barrier_semaphores,
-                topology=topology,
+                topology=ttnn.Topology.Mesh,
             )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Capture main trace for perf measurement
     logger.info("Capturing main trace")
-    print("Capturing trace for perf measurement...")
     num_perf_iters = 50
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_perf_iters):
@@ -397,7 +399,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 barrier_tensor,
                 dim=0,
                 multi_device_global_semaphore=barrier_semaphores,
-                topology=topology,
+                topology=ttnn.Topology.Mesh,
             )
         out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
@@ -418,7 +420,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 barrier_tensor,
                 dim=0,
                 multi_device_global_semaphore=barrier_semaphores,
-                topology=topology,
+                topology=ttnn.Topology.Mesh,
             )
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh_device)

@@ -41,13 +41,15 @@ using tt::data_movement::common::tt_memmove;
  * No data dependency - can be called before payload data is ready.
  */
 template <uint32_t l1_alignment, uint32_t total_payload_size>
-FORCE_INLINE void prepare_header(uint32_t header_addr, uint64_t dst_noc, uint64_t sem_noc) {
+FORCE_INLINE void prepare_header(
+    uint32_t header_addr, uint32_t dst_mesh_id, uint32_t dst_chip_id, uint64_t dst_noc, uint64_t sem_noc) {
     auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
-    constexpr uint8_t num_hops = 1;
+    constexpr uint32_t ATOMIC_INC_VAL = 1;
+    constexpr bool FLUSH_WRITES = false;
 
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)header, num_hops);
+    (void)fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
     header->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, 1, false},
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
         align(total_payload_size, l1_alignment));
 }
 
@@ -119,10 +121,14 @@ void kernel_main() {
     const uint32_t src_addr_m = get_arg_val<uint32_t>(arg_idx++);  // Local M source
 
     // R1 destination - intermediate tensor address on neighbor device
+    const uint32_t r1_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t r1_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
     // R2 destination - intermediate tensor address on neighbor device
+    const uint32_t r2_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t r2_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
@@ -162,7 +168,8 @@ void kernel_main() {
         cb_reserve_back(cb_packet_slot, 1);
         uint32_t slot_addr = get_write_ptr(cb_packet_slot);
 
-        prepare_header<l1_alignment, total_payload_size>(slot_addr, r1_dst_noc, r1_sem_noc);
+        prepare_header<l1_alignment, total_payload_size>(
+            slot_addr, r1_dst_mesh_id, r1_dst_chip_id, r1_dst_noc, r1_sem_noc);
         pack_payload<payload_size_bytes, aligned_page_size>(slot_addr, src_addr_l, src_addr_s, src_addr_m);
         forward_packet<slot_size>(slot_addr, r1_agg_slot_noc, r1_agg_sem_noc, r1_slot_idx);
 
@@ -179,7 +186,8 @@ void kernel_main() {
         cb_reserve_back(cb_packet_slot, 1);
         r2_slot_addr = get_write_ptr(cb_packet_slot);
 
-        prepare_header<l1_alignment, total_payload_size>(r2_slot_addr, r2_dst_noc, r2_sem_noc);
+        prepare_header<l1_alignment, total_payload_size>(
+            r2_slot_addr, r2_dst_mesh_id, r2_dst_chip_id, r2_dst_noc, r2_sem_noc);
     }
 
     // ==========================================================================

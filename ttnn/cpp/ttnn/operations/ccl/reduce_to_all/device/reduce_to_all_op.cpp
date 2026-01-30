@@ -183,7 +183,7 @@ ReduceToAllOp::ReduceToAll::cached_mesh_workload_t ReduceToAllOp::ReduceToAll::c
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_all op done");
 
     const auto& coords = tensor_coords.coords();
-    auto topology = tt::tt_fabric::Topology::Ring;
+    const auto& topology = operation_attributes.topology;
     for (const auto& coord : coords) {
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor_l, coord, 1, topology, std::nullopt);
@@ -191,11 +191,12 @@ ReduceToAllOp::ReduceToAll::cached_mesh_workload_t ReduceToAllOp::ReduceToAll::c
         std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor_l, coord, -1, topology, std::nullopt);
 
-        if (topology == tt::tt_fabric::Topology::Ring) {
+        if (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) {
             if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
                 TT_FATAL(
                     false,
-                    "In ring topology, all devices must have both forward and backward neighbors in reduce_to_all op");
+                    "In ring/torus topology, all devices must have both forward and backward neighbors in "
+                    "reduce_to_all op");
             }
         }
         auto cached_workload = create_at(

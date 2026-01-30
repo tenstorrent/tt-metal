@@ -1179,18 +1179,25 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
                 reader_runtime_args[2] = intermediate_tensors[0].buffer()->address();  // R1 recv buffer
                 reader_runtime_args[3] = intermediate_tensors[1].buffer()->address();  // R2 recv buffer
 
-                // Simplified writer runtime args:
-                // 0-2: input L/S/M, 3-4: R1 dest+sem, 5-6: R2 dest+sem
+                // Simplified writer runtime args layout (from reduce_to_all_simplified_program.cpp):
+                // 0: input L, 1: input S, 2: input M
+                // 3: R1 mesh_id (static), 4: R1 chip_id (static)
+                // 5: R1 dest addr, 6: R1 sem addr
+                // 7: R2 mesh_id (static), 8: R2 chip_id (static)
+                // 9: R2 dest addr, 10: R2 sem addr
+                // 11-20: aggregator args (static)
                 auto& writer_runtime_args_by_core =
                     tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel1);
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
                 writer_runtime_args[0] = input_tensor_l.buffer()->address();
                 writer_runtime_args[1] = input_tensor_s.buffer()->address();
                 writer_runtime_args[2] = input_tensor_m.buffer()->address();
-                writer_runtime_args[3] = intermediate_tensors[0].buffer()->address();  // R1 dest
-                writer_runtime_args[4] = shared_variables.semaphores[0].address();     // R1 sem
-                writer_runtime_args[5] = intermediate_tensors[1].buffer()->address();  // R2 dest
-                writer_runtime_args[6] = shared_variables.semaphores[1].address();     // R2 sem
+                // Indices 3-4 (mesh_id, chip_id) are static - don't update
+                writer_runtime_args[5] = intermediate_tensors[0].buffer()->address();  // R1 dest
+                writer_runtime_args[6] = shared_variables.semaphores[0].address();     // R1 sem
+                // Indices 7-8 (mesh_id, chip_id) are static - don't update
+                writer_runtime_args[9] = intermediate_tensors[1].buffer()->address();  // R2 dest
+                writer_runtime_args[10] = shared_variables.semaphores[1].address();    // R2 sem
             }
             continue;  // Skip original program logic
         }

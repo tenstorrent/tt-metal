@@ -602,6 +602,12 @@ reduce_to_all_simplified_program_factory(
     auto r1_recv_sem = semaphores[0];
     auto r2_recv_sem = semaphores[1];
 
+    TT_FATAL(forward_coord.has_value(), "Forward coordinate must be provided for ReduceToAll operation");
+    TT_FATAL(backward_coord.has_value(), "Backward coordinate must be provided for ReduceToAll operation");
+
+    const auto forward_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+    const auto backward_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+
     // Split shard cores per link
     const uint32_t cores_per_link = num_shard_cores / num_links;
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
@@ -626,7 +632,8 @@ reduce_to_all_simplified_program_factory(
         };
         // Append fabric connection args (direction implicit in src→dst)
         if (forward_coord.has_value()) {
-            const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            const auto dst_node_id = forward_node_id;
+            log_info(tt::LogTest, "src_node_id={}, fwd dst_node_id={}", src_node_id, dst_node_id);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link_idx, program, agg_core, brisc_rt_args);
         }
@@ -641,7 +648,8 @@ reduce_to_all_simplified_program_factory(
         };
         // Append fabric connection args (direction implicit in src→dst)
         if (backward_coord.has_value()) {
-            const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            const auto dst_node_id = backward_node_id;
+            log_info(tt::LogTest, "src_node_id={}, bwd dst_node_id={}", src_node_id, dst_node_id);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_node_id, dst_node_id, link_idx, program, agg_core, ncrisc_rt_args);
         }
@@ -681,6 +689,8 @@ reduce_to_all_simplified_program_factory(
             uint32_t r2_slot_idx;
             uint32_t r1_agg_sem;
             uint32_t r2_agg_sem;
+            auto r1_dst_node_id = forward_node_id;   // Default to forward
+            auto r2_dst_node_id = backward_node_id;  // Default to backward
 
             if (is_type_a) {
                 // Type A: R1=FWD, R2=BWD
@@ -688,12 +698,16 @@ reduce_to_all_simplified_program_factory(
                 r2_slot_idx = packets_per_round + bwd_r2_slot_idx++;
                 r1_agg_sem = fwd_sem;
                 r2_agg_sem = bwd_sem;
+                r1_dst_node_id = forward_node_id;
+                r2_dst_node_id = backward_node_id;
             } else {
                 // Type B: R1=BWD, R2=FWD
                 r1_slot_idx = bwd_r1_slot_idx++;
                 r2_slot_idx = packets_per_round + fwd_r2_slot_idx++;
                 r1_agg_sem = bwd_sem;
                 r2_agg_sem = fwd_sem;
+                r1_dst_node_id = backward_node_id;
+                r2_dst_node_id = forward_node_id;
             }
 
             // Calculate aggregator slot addresses based on direction
@@ -722,21 +736,25 @@ reduce_to_all_simplified_program_factory(
                 input_tensor_l.buffer()->address(),  // 0: Local L source address
                 input_tensor_s.buffer()->address(),  // 1: Local S source address
                 input_tensor_m.buffer()->address(),  // 2: Local M source address
-                r1_recv_tensor.buffer()->address(),  // 3: R1 neighbor destination
-                r1_recv_sem.address(),               // 4: R1 neighbor semaphore
-                r2_recv_tensor.buffer()->address(),  // 5: R2 neighbor destination
-                r2_recv_sem.address(),               // 6: R2 neighbor semaphore
-                core_noc.x,                          // 7: current_core_x
-                core_noc.y,                          // 8: current_core_y
+                *r1_dst_node_id.mesh_id,             // 3: R1 neighbor destination mesh ID
+                r1_dst_node_id.chip_id,              // 4: R1 neighbor destination chip ID
+                r1_recv_tensor.buffer()->address(),  // 5: R1 neighbor destination
+                r1_recv_sem.address(),               // 6: R1 neighbor semaphore
+                *r2_dst_node_id.mesh_id,             // 7: R2 neighbor destination mesh ID
+                r2_dst_node_id.chip_id,              // 8: R2 neighbor destination chip ID
+                r2_recv_tensor.buffer()->address(),  // 9: R2 neighbor destination
+                r2_recv_sem.address(),               // 10: R2 neighbor semaphore
+                core_noc.x,                          // 11: current_core_x
+                core_noc.y,                          // 12: current_core_y
                 // Aggregator-specific args
-                agg_core_noc.x,  // 9: aggregator_core_x
-                agg_core_noc.y,  // 10: aggregator_core_y
-                r1_slot_addr,    // 11: R1 aggregator slot address
-                r1_agg_sem,      // 12: R1 aggregator semaphore
-                r1_slot_idx,     // 13: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
-                r2_slot_addr,    // 14: R2 aggregator slot address
-                r2_agg_sem,      // 15: R2 aggregator semaphore
-                r2_slot_idx,     // 16: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
+                agg_core_noc.x,  // 13: aggregator_core_x
+                agg_core_noc.y,  // 14: aggregator_core_y
+                r1_slot_addr,    // 15: R1 aggregator slot address
+                r1_agg_sem,      // 16: R1 aggregator semaphore
+                r1_slot_idx,     // 17: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
+                r2_slot_addr,    // 18: R2 aggregator slot address
+                r2_agg_sem,      // 19: R2 aggregator semaphore
+                r2_slot_idx,     // 20: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
