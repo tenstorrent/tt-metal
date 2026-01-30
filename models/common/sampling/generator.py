@@ -2,16 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
 import torch
-from loguru import logger
 
 import ttnn
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,7 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on)
 
+        logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(
             logits,
             penalties_on=penalties_on,
@@ -196,6 +199,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+
         return slot["output"]
 
     def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
@@ -247,7 +251,6 @@ class SamplingGenerator:
                 self.tt_penalties.update_output_tokens(tt_out[0])
             else:
                 self.tt_penalties.update_output_tokens(tt_out)
-
         return tt_out
 
     def reset_seed(self, seed):
