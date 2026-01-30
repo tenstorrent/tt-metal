@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
 import torch
@@ -37,43 +36,6 @@ class MoE(SharedStateAddOn, AbstractModule):
     """MoE module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
-
-    @classmethod
-    def _maybe_log_tensor_stats(
-        cls, name: str, tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, tokens: int
-    ) -> None:
-        if os.getenv("DEEPSEEK_V3_DEBUG_MOE") != "1" or tokens <= 8192:
-            return
-        try:
-            mesh_device = cfg["mesh_device"]
-            mesh_shape = mesh_device.shape
-            try:
-                tensor_torch = ttnn.to_torch(
-                    tensor,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_shape),
-                )
-            except Exception:
-                # Fallback to local shard if concat fails for this tensor layout
-                tensor_torch = ttnn.to_torch(tensor)
-            if tensor_torch.ndim >= 3 and tensor_torch.shape[-2] >= 2:
-                split_idx = min(8192, tensor_torch.shape[-2])
-                first_half = tensor_torch[..., :split_idx, :]
-                second_half = tensor_torch[..., split_idx:, :]
-                logger.info(
-                    f"DEBUG moe {name}: shape={tensor_torch.shape}, "
-                    f"first_half: mean={first_half.mean():.4f}, std={first_half.std():.4f}, "
-                    f"max={first_half.abs().max():.4f}; "
-                    f"second_half: mean={second_half.mean():.4f}, std={second_half.std():.4f}, "
-                    f"max={second_half.abs().max():.4f}"
-                )
-            else:
-                logger.info(
-                    f"DEBUG moe {name}: shape={tensor_torch.shape}, "
-                    f"mean={tensor_torch.mean():.4f}, std={tensor_torch.std():.4f}, "
-                    f"max={tensor_torch.abs().max():.4f}"
-                )
-        except Exception as exc:
-            logger.warning(f"DEBUG moe {name}: failed to extract stats: {exc}")
 
     @classmethod
     def convert_weights(
@@ -308,8 +270,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         tp_size = cfg["mesh_device"].shape[1]
         x_dim = x.shape[-1]
 
-        cls._maybe_log_tensor_stats("x (before all_gather)", x, cfg, batch_size)
-
         if x_dim == hidden_size:
             # Already full hidden size; skip all_gather
             pass
@@ -322,18 +282,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             x = cls._fwd_all_gather(x, cfg)
 
-        cls._maybe_log_tensor_stats("x (after all_gather)", x, cfg, batch_size)
-
         # MoE Gate
 
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
-        cls._maybe_log_tensor_stats("topk_experts_weights (raw)", topk_experts_weights, cfg, batch_size)
-        cls._maybe_log_tensor_stats("topk_experts_indices (raw)", topk_experts_indices, cfg, batch_size)
 
         # Repeat + Permute Expert weights
 
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
-        cls._maybe_log_tensor_stats("topk_experts_weights (repeated)", topk_experts_weights, cfg, batch_size)
 
         # MOE
 
@@ -346,16 +301,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             batch_size,
             seq_len,
         )
-        cls._maybe_log_tensor_stats(
-            "post_combine_output (before reduce_scatter)", post_combine_output_tensor, cfg, batch_size
-        )
 
         # Reduce Scatter
 
         post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
-        cls._maybe_log_tensor_stats(
-            "post_combine_output (after reduce_scatter)", post_combine_output_tensor, cfg, batch_size
-        )
 
         return post_combine_output_tensor
 
@@ -441,12 +390,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
             dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-            cls._maybe_log_tensor_stats("post_all_to_all_dispatch_output", dispatch_chunk, cfg, tokens)
             ttnn.deallocate(all_to_all_dispatch_output_tensors)
 
             experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
             ttnn.deallocate(dispatch_chunk)
-            cls._maybe_log_tensor_stats("experts_output", experts_output, cfg, tokens)
 
             experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
             experts_output = ttnn.reshape(
@@ -464,7 +411,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 cfg["expert_mapping_tensors"],
                 **cfg["all_to_all_combine"],
             )
-            cls._maybe_log_tensor_stats("all_to_all_combine_output", all_to_all_combine_output_tensors, cfg, tokens)
             ttnn.deallocate(experts_output)
             ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
 
@@ -473,17 +419,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
             )
             post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
-            cls._maybe_log_tensor_stats("post_combine_output (before mul)", post_combine_output_tensor, cfg, tokens)
 
             topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
             post_combine_output_tensor = ttnn.mul(
                 post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
             )
             ttnn.deallocate(topk_weights_chunk)
-            cls._maybe_log_tensor_stats("post_combine_output (after mul)", post_combine_output_tensor, cfg, tokens)
 
             post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-            cls._maybe_log_tensor_stats("post_combine_output (after sum)", post_combine_output_tensor, cfg, tokens)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
