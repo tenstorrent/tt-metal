@@ -408,8 +408,8 @@ jobs:
 
   # Job 3: Terminate spawned workflows if parent is cancelled
   cancel-on-failure:
-    needs: [setup, run-tests]
-    if: cancelled()
+    needs: [setup]
+    if: always() && cancelled() && needs.setup.outputs.branch-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Terminate spawned workflows
