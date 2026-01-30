@@ -38,17 +38,6 @@ on:
         required: false
         type: string
         default: ""
-      enable-copilot-fix:
-        description: >-
-          Enable Copilot to automatically fix ClangSA issues and create a PR
-        required: false
-        type: boolean
-        default: false
-      copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 1)"
-        required: false
-        type: string
-        default: ""
       build-type:
         required: false
         type: string
@@ -74,17 +63,6 @@ on:
         description: >-
           Analyze only specific file(s) for fast debugging
           (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
-        required: false
-        type: string
-        default: ""
-      enable-copilot-fix:
-        description: >-
-          Enable Copilot to automatically fix ClangSA issues and create a PR
-        required: false
-        type: boolean
-        default: false
-      copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -446,134 +424,6 @@ jobs:
           name: CodeChecker-HTML-Report
           path: /work/.build/codechecker_html
 
-  copilot-fix-clangsa-issue:
-    name: 🤖 Copilot Fix ClangSA Issue
-    needs: [ clang-static-analyzer ]
-    if: |
-      always() &&
-      (inputs.enable-copilot-fix == true || github.event_name == 'schedule') &&
-      needs.clang-static-analyzer.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      pr-url: ${{ steps.copilot-fix.outputs.pr-url }}
-      pr-created: ${{ steps.copilot-fix.outputs.pr-created }}
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download CodeChecker JSON report
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-JSON-Report
-          path: /tmp
-
-      - name: Check for issues and run Copilot fix
-        id: copilot-fix
-        timeout-minutes: 30
-        env:
-          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # Authenticate first (required for all gh commands)
-          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
-            echo "::error::COPILOT_OAUTH_TOKEN secret not set."
-            echo "Run 'gh auth login' locally, then 'gh auth token' and add as secret."
-            exit 1
-          fi
-          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
-
-          # Check for issues
-          if [ ! -f "/tmp/codechecker_issues.json" ]; then
-            echo "No issues found"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          ISSUE_COUNT=$(jq '.reports | length' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
-          if [ "$ISSUE_COUNT" = "0" ]; then
-            echo "No issues found"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Found $ISSUE_COUNT issues"
-          echo "has-issues=true" >> "$GITHUB_OUTPUT"
-
-          # Check for existing open Copilot PRs to avoid duplicates
-          OPEN_COPILOT_PRS=$(gh pr list --repo "${{ github.repository }}" \
-            --state open --label "copilot-autofix" \
-            --json number --jq 'length' 2>/dev/null || echo "0")
-          if [ "$OPEN_COPILOT_PRS" -gt 0 ]; then
-            echo "⏭️ Skipping: $OPEN_COPILOT_PRS open Copilot PR(s) already exist"
-            echo "Review and merge existing PRs before creating new ones."
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Build prompt - default to 1 issue for focused, quality fixes
-          LIMIT="${{ inputs.copilot-max-fixes }}"
-          LIMIT="${LIMIT:-1}"  # Default: 1 issue per run
-
-          {
-            echo "Fix these Clang Static Analyzer issues:"
-            echo ""
-            jq -r --argjson limit "$LIMIT" \
-              '.reports[:$limit][] |
-               "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"' \
-              /tmp/codechecker_issues.json
-            echo ""
-            echo "For each: verify it's real, apply minimal fix, follow coding standards."
-          } > /tmp/prompt.txt
-
-          cat /tmp/prompt.txt
-
-          # Run Copilot
-          BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
-
-          gh agent-task create -F /tmp/prompt.txt \
-            --base "$BASE_BRANCH" \
-            --repo "${{ github.repository }}" \
-            --follow
-
-          # Get the PR that was created
-          PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
-
-          if [ -n "$PR_NUMBER" ]; then
-            PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
-            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-            echo "pr-created=true" >> "$GITHUB_OUTPUT"
-            # Add label to track Copilot PRs and prevent duplicates
-            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" \
-              --add-label "copilot-autofix" || true
-            # Mark PR as ready for review (not draft) so CI runs automatically
-            gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
-            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" \
-              --body "/codeowners ping" || true
-          else
-            echo "pr-created=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Output job summary
-        if: always()
-        run: |
-          echo "## 🤖 Copilot Auto-Fix" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.copilot-fix.outputs.has-issues }}" != "true" ]; then
-            echo "No issues found." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            PR_URL="${{ steps.copilot-fix.outputs.pr-url }}"
-            echo "✅ **PR Created:** $PR_URL" >> "$GITHUB_STEP_SUMMARY"
-          else
-            REPO="${{ github.repository }}"
-            DASHBOARD_URL="https://github.com/${REPO}/copilot"
-            echo "⚠️ No PR created. Check [Copilot dashboard](${DASHBOARD_URL})." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
     needs: [ clang-static-analyzer ]
@@ -588,6 +438,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: CodeChecker-HTML-Report
+          path: site
+
+      - name: Download CodeChecker JSON report
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-JSON-Report
           path: site
 
       - name: Add .nojekyll

@@ -132,24 +132,26 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def decode_forward(self, *args, **kwargs):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
-        page_table = kwargs.get("page_table", None)
+        page_tables = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        enable_trace = kwargs.get("enable_trace", False)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
+
         return_value = (
-            self._decode_step(
-                tokens_step=tokens_step,
+            super()
+            .decode_forward(
+                tokens=tokens_step,
                 positions=kwargs["start_pos"],
                 batch_size_per_row=USERS_PER_ROW,
-                page_table=page_table,
+                enable_trace=enable_trace,
+                page_tables=page_tables,
             )
-            .squeeze(0)
-            .squeeze(0)
             .unsqueeze(1)
-        )  # [1,1,B,V] -> [B, 1, V]
+        )  # [B, V] -> [B, 1, V]
         return return_value
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
