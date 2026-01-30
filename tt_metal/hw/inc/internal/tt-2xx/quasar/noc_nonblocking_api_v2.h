@@ -224,37 +224,37 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     uint64_t my_xy = NOC_XY_COORD(my_x, my_y);
 
-    // ToDo change to use builtin function once they are available
-    // __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
-    // __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_RD_CMD_BUF);
-    // __builtin_riscv_ttrocc_scmdbuf_reset();
-
-    // Reset all command buffers
-    CMDBUF_RESET(OVERLAY_WR_CMD_BUF);
-    CMDBUF_RESET(OVERLAY_RD_CMD_BUF);
-    SCMDBUF_RESET();
+    // Reset all command buffers using builtin functions
+    __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
+    __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_RD_CMD_BUF);
+    __builtin_riscv_ttrocc_scmdbuf_reset();
 
     // =========================================================================
     // Write command buffer setup (CMDBUF_0)
     // =========================================================================
-    CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, CMD_BUF_MISC_WRITE);
+    // __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+    //     0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_WRITE);
     // Set local source coordinate (data comes from local memory)
-    CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET, my_xy);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
 
     // =========================================================================
     // Read command buffer setup (CMDBUF_1)
     // =========================================================================
-    CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, CMD_BUF_MISC_READ);
+    // __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+    // OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
     // Set local destination coordinate (data returns to local memory)
-    CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, my_xy);
+    // __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+    // OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, my_xy);
 
     // =========================================================================
     // Atomic command buffer setup (SCMDBUF / Simple CMD Buffer)
     // =========================================================================
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, CMD_BUF_MISC_ATOMIC);
-    // Set atomic return address where result will be written
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, atomic_ret_val);
-    SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, my_xy);
+    // __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8,
+    // CMD_BUF_MISC_READ); Set atomic return address where result will be written
+    // __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+    //     TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, atomic_ret_val);
+    // __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET >> 8, my_xy);
 }
 
 // set noc local memory state for a single kernel from the global state
