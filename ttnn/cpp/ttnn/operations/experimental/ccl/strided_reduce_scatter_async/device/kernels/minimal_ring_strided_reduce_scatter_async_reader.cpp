@@ -40,6 +40,7 @@ constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
+constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(21);
 
 void kernel_main() {
     ///////////////////////////////////////////////////

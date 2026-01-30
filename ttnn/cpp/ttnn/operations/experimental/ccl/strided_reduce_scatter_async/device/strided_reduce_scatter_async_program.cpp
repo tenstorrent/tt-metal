@@ -1054,7 +1054,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_block_ht_val,
             mm_cores_y_val,
             mm_M_block_ht_val,
-            2);  // chunk_width_in_mm_blocks
+            chunk_width_in_mm_blocks_val);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
