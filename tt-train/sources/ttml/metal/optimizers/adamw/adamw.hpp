@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal {
@@ -21,6 +22,6 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    bool stochastic_rounding = false);
+    StochasticRounding stochastic_rounding = StochasticRounding::Disabled);
 
 }  // namespace ttml::metal

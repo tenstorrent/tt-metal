@@ -80,9 +80,9 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
 
     // Stochastic rounding is only valid for half precision (bf16) mode
     TT_FATAL(
-        !args.stochastic_rounding || is_half_precision,
+        args.stochastic_rounding == StochasticRounding::Disabled || is_half_precision,
         "Stochastic rounding is only supported with BFLOAT16 parameters. "
-        "Got stochastic_rounding=true with parameter dtype '{}'",
+        "Got stochastic_rounding=Enabled with parameter dtype '{}'",
         enchantum::to_string(param_dtype));
 
     // Validate all tensors
@@ -146,7 +146,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    bool stochastic_rounding) {
+    ttml::metal::StochasticRounding stochastic_rounding) {
     using OperationType = ttml::metal::optimizers::adamw::device::AdamWDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{

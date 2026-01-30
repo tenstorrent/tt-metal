@@ -110,7 +110,7 @@ void assign_per_core_runtime_args(
 
     // Generate seeds for stochastic rounding (0 if disabled)
     std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding) {
+    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
@@ -322,7 +322,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
-    defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding ? "1" : "0";
+    defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding == StochasticRounding::Enabled ? "1" : "0";
 
     AdamWKernels kernels{};
 
@@ -452,7 +452,7 @@ void AdamWProgramFactory::override_runtime_arguments(
 
     // Generate seeds for stochastic rounding (0 if disabled)
     std::vector<uint32_t> seeds(num_cores, 0);
-    if (attrs.stochastic_rounding) {
+    if (attrs.stochastic_rounding == StochasticRounding::Enabled) {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
