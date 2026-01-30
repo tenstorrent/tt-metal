@@ -121,7 +121,8 @@ ALWI void untilize(uint32_t num_blocks) {
         (init_uninit_mode == InitUninitMode::InitAndUninit || init_uninit_mode == InitUninitMode::UninitOnly);
 
     // For wide tensors: use standard untilize only for formats that support it (not integer/FP32)
-    if constexpr (block_width_tiles > dest_limit && !should_pack_untilize) {
+    // IMPORTANT: WaitUpfront mode always uses standard untilize for compatibility
+    if constexpr (wait_mode == WaitMode::WaitUpfront || (block_width_tiles > dest_limit && !should_pack_untilize)) {
         // =================================================================
         // STANDARD UNTILIZE PATH
         // Used for wide tensors with formats that support standard untilize (e.g., bfloat16)
