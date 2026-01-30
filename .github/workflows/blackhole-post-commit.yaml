@@ -250,6 +250,32 @@ jobs:
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+  metalium-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-metalium
+  ttnn-basic-tests:
+    needs: [build-artifact, generate-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-nn
   ttnn-smoke-tests:
     needs: [build-artifact, generate-matrix]
     strategy:
