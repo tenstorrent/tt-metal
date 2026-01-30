@@ -138,6 +138,8 @@ def test_pcc_pi0_ttnn(device):
 
     # Initialize models
     model_torch = PI0ModelTorch(config, weight_loader)
+
+    torch.manual_seed(SEED)
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
 
     # Run PyTorch
@@ -152,7 +154,6 @@ def test_pcc_pi0_ttnn(device):
         )
 
     # Run TTNN
-    torch.manual_seed(SEED)
     with torch.no_grad():
         # Convert images to TTNN tensors
         images_ttnn = [
@@ -254,6 +255,7 @@ def main():
         model_torch = PI0ModelTorch(config, weight_loader)
         print("   ✅ PyTorch model initialized (reference/)")
 
+        torch.manual_seed(SEED)
         model_ttnn = PI0ModelTTNN(config, weight_loader, device)
         print("   ✅ TTNN model initialized (tt/)")
 
@@ -280,7 +282,6 @@ def main():
         print(f"   PyTorch: {torch_actions.shape}, {torch_time:.2f}ms")
 
         # TTNN
-        torch.manual_seed(SEED)
         start = time.time()
         with torch.no_grad():
             ttnn_actions = model_ttnn.sample_actions(

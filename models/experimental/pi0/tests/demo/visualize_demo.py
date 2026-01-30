@@ -152,6 +152,8 @@ def main():
     torch_model = PI0ModelTorch(config, weight_loader)
 
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
+
+    torch.manual_seed(SEED)
     ttnn_model = PI0ModelTTNN(config, weight_loader, device)
 
     # Run inference
@@ -167,7 +169,7 @@ def main():
             state=state,
         )
 
-    torch.manual_seed(SEED)
+    # TTNN
     with torch.no_grad():
         # Convert images to TTNN tensors
         images_ttnn = [
