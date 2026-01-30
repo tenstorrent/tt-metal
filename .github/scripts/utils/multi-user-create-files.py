@@ -40,6 +40,11 @@ def multi_user_containers(
                 tray_id = i + 1  # Tray IDs are 1-indexed
                 if str(tray_id) in tray_mapping["device_mapping"]:
                     device_ids = tray_mapping["device_mapping"][str(tray_id)]
+                    if len(device_ids) < chips_per_container:
+                        raise ValueError(
+                            f"Tray {tray_id} has {len(device_ids)} devices, "
+                            f"but {chips_per_container} chips per container were requested"
+                        )
                     for dev_id in device_ids[:chips_per_container]:
                         devices.append(f"/dev/tenstorrent/{dev_id}:/dev/tenstorrent/{dev_id}")
                 else:
