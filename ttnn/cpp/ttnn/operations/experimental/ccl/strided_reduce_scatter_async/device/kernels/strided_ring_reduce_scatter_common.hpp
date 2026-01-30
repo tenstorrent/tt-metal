@@ -20,33 +20,31 @@ FORCE_INLINE void get_next_tile_coordinates(
     uint32_t chunk_piece_size,
     uint32_t chunk_width_in_tiles,
     uint32_t mm_block_unit_ht) {
-    // Optimized to avoid divisions when advance_by_tiles < chunk_width_in_tiles.
-    // Uses subtraction instead of modulo where overflow is bounded to 1x.
+    // Optimized to avoid modulo operations.
+    // Note: chunk_piece_size == mm_block_unit_ht * chunk_width_in_tiles
 
-    // 1. Check for "Piece" Jump - SKIPS EXPENSIVE MATH when advance is small
+    // 1. Handle Piece Jumps
+    if (advance_by_tiles >= chunk_piece_size) [[unlikely]] {
+        uint32_t move_by_pieces = advance_by_tiles / chunk_piece_size;
+        advance_by_tiles -= move_by_pieces * chunk_piece_size;
+        mm_core_idx += move_by_pieces;
+    }
+
+    // 2. Handle Row Jumps
     if (advance_by_tiles >= chunk_width_in_tiles) {
-        if (advance_by_tiles >= chunk_piece_size) {
-            uint32_t move_by_pieces = advance_by_tiles / chunk_piece_size;
-            advance_by_tiles -= move_by_pieces * chunk_piece_size;
-            mm_core_idx += move_by_pieces;
-        }
+        uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
+        uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
+        advance_by_tiles -= move_by_rows * chunk_width_in_tiles;
 
-        // 2. Check for "Row" Jump
-        if (advance_by_tiles >= chunk_width_in_tiles) {
-            uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
-            uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
-            advance_by_tiles -= move_by_rows * chunk_width_in_tiles;
-
-            if (new_row >= mm_block_unit_ht) {
-                mm_core_idx += 1;
-                tile_row_in_mm_M_block = new_row - mm_block_unit_ht;
-            } else {
-                tile_row_in_mm_M_block = new_row;
-            }
+        if (new_row >= mm_block_unit_ht) {
+            mm_core_idx += 1;
+            tile_row_in_mm_M_block = new_row - mm_block_unit_ht;
+        } else {
+            tile_row_in_mm_M_block = new_row;
         }
     }
 
-    // 3. Handle Remaining Columns - FAST ADDITION
+    // 3. Handle Remaining Columns
     uint32_t new_col = chunk_col_in_tiles + advance_by_tiles;
 
     if (new_col >= chunk_width_in_tiles) {
