@@ -7,6 +7,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "hostdevcommon/kernel_structs.h"
 
+#include "ckernel.h"
+#include "ckernel_structs.h"
+
 using std::uint32_t;
 
 /**
@@ -54,18 +57,61 @@ void kernel_main() {
         for (uint32_t nt = 0; nt < Nt; ++nt) {
             // Make sure registers can be used for the output tile. This also sets the registers to zero.
             tile_regs_acquire();
+
+            // THIS CAUSES ISSUES WHEN RUN IN A NESTED LOOP !!!! OBVIOUSLY
+            // This is not needed if the firmware is initializing it to the correct max value.
+            // The firmware must initialize the initial value to 0, otherwise PACK thread can race ahead
+            // MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 15));
+
             for (uint32_t kt = 0; kt < Kt; kt++) {
                 // Wait for the input tiles to be available in the input circular buffers.
                 cb_wait_front(cb_in0, 1);
                 cb_wait_front(cb_in1, 1);
 
+                if (!mt && !nt) {
+                    MATH(
+                        // For handling values above 15, we need a sync mechanism, where we wait for
+                        // the SFPU to finish and we reinitialize the semaphore. There is a chance it
+                        // might work for values above 15, but we need to verify with tensix team.
+                        // If semaphore is incremented by MMIO then all increment requests above max value
+                        // will be ignored. They once said if we are doing it using tensix instructions
+                        // like we are doing it here, it is supposed to work. Anyways for this example
+                        // I am not testing the claim.
+                        if (kt < 15) {
+                            // I added STALL_SYNC to the list given the warning by Peter Cawley in the ISA doc
+                            // that if there are subsequent stallwait/semwaits, they might make the waitgaate
+                            // forget the previous condition.
+                            t6_semaphore_wait_on_max<ckernel::p_stall::STALL_MATH | ckernel::p_stall::STALL_SYNC>(
+                                ckernel::semaphore::FPU_SFPU);
+                        })
+                }
+
                 // Perform the matrix multiplication for the current tile.
                 // NOTE: This function also accumulates the result into the destination tile.
                 matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
+                // Only trying out for first iteration (avoiding bank flipping)
+                if (!mt && !nt) {
+                    MATH(if (kt < 15) { t6_semaphore_post<ckernel::p_stall::MATH>(ckernel::semaphore::FPU_SFPU); })
+                }
+
                 // Mark the input tiles as used by popping them from the front of the circular buffers.
                 cb_pop_front(cb_in0, 1);
                 cb_pop_front(cb_in1, 1);
+            }
+
+            // Only trying out for first iteration (avoiding bank flipping)
+            if (!mt && !nt) {
+                for (uint32_t i = 0; i < 15; i++) {
+                    PACK(t6_semaphore_wait_on_zero < ckernel::p_stall::STALL_SFPU |
+                             ckernel::p_stall::STALL_SYNC > (semaphore::FPU_SFPU);)
+                    PACK(DPRINT << i << " Packer waiting for maths semaphore posts, allowed to work now " << ENDL();
+
+                         // THE SFPNOP as symbolic SFPU work.
+                         TTI_SFPNOP;)
+
+                    PACK(t6_semaphore_get<ckernel::p_stall::WAIT_SFPU>(ckernel::semaphore::FPU_SFPU);)
+                }
             }
 
             // Commit and wait for the registers are populated with the results from the FPU
