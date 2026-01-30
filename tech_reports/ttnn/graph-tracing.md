@@ -170,7 +170,6 @@ Usually specifies function\_start of a function where given tensor is passed as 
 ## Operation Dispatching
 When run in `NO_DISPATCH` run mode, real allocations do not happen, so trace collection does not have side effects on the allocator state.
 You can pass unrealistically big tensors in this mode and unless an operation does upper limit validation, you still can collect the trace.
-In this mode trace collection is faster because ops are not dispatched to the device.
 
 **Important: Program caching is disabled during `NO_DISPATCH` mode.** In this mode, buffer allocations are mocked with `address=0`, which means compiled programs contain invalid buffer addresses. If these programs were cached, subsequent runs in `NORMAL` mode would reuse programs with invalid addresses, causing device hangs. By disabling program caching during graph capture, we ensure that `NORMAL` mode always creates fresh programs with valid buffer addresses.
 
