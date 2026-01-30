@@ -209,8 +209,9 @@ void kernel_main() {
                     }
 
                     if (chunk_count % chunks_per_sync == 0) {
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // noc_semaphore_wait_min(
+                        //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                     }
                     chunk_count++;
 
@@ -265,8 +266,9 @@ void kernel_main() {
             while (tiles_read < tiles_to_read) {
                 // Wait for FWD writer to signal that it has done its final reduction
                 if (detail::do_accumulate_output(is_forward)) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // noc_semaphore_wait_min(
+                    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
                 }
 
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -284,7 +286,9 @@ void kernel_main() {
                 }
 
                 if (chunk_count % chunks_per_sync == 0) {
-                    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem),
+                    // ++sem_target);
                 }
                 chunk_count++;
 
@@ -309,5 +313,6 @@ void kernel_main() {
     }
 
     // Reset my output ready semaphore
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

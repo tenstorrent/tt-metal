@@ -26,7 +26,8 @@ inline void dispatch_metadata_local_device(
     // send metadata to local device output buffer
     noc_async_write(token_indices_address, metadata_write_addr, metadata_page_size);
     noc_async_write_barrier();
-    noc_semaphore_inc(global_noc_semaphore_address, 1);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_inc(global_noc_semaphore_address, 1);
     noc_async_atomic_barrier();
 }
 
@@ -174,8 +175,10 @@ void kernel_main() {
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
@@ -368,7 +371,8 @@ void kernel_main() {
         }
         // Need to wait for the local flushed metadata write.
         noc_async_write_barrier();
-        noc_semaphore_inc(global_noc_semaphore_address, 1);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_inc(global_noc_semaphore_address, 1);
         noc_async_atomic_barrier();
     }
 

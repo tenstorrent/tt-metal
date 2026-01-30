@@ -193,13 +193,16 @@ void kernel_main() {
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
         ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &mux_connection_handle,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        //     &mux_connection_handle,
+        //     pkt_hdr_mcastseminc,
+        //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
     fabric_unicast_noc_scatter_write_set_state<
@@ -280,21 +283,23 @@ void kernel_main() {
 
                                 auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                     intermediate_addrgen, intermediate_tile_two_id, 0);
-                                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                                    &mux_connection_handle,
-                                    pkt_scatter_hdr,
-                                    l1_read_addr,
-                                    NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                                // DEBUG: Commented out to test if CCL communication causes hangs
+                                // fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                //     &mux_connection_handle,
+                                //     pkt_scatter_hdr,
+                                //     l1_read_addr,
+                                //     NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                                 l1_read_addr += page_size * 2;
                                 break;
                             }
                             case 1:
                             default: {
-                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                    &mux_connection_handle,
-                                    pkt_unicast_hdr,
-                                    l1_read_addr,
-                                    NocUnicastCommandHeader{noc_address0});
+                                // DEBUG: Commented out to test if CCL communication causes hangs
+                                // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                //     &mux_connection_handle,
+                                //     pkt_unicast_hdr,
+                                //     l1_read_addr,
+                                //     NocUnicastCommandHeader{noc_address0});
                                 l1_read_addr += page_size;
                                 break;
                             }
@@ -320,10 +325,11 @@ void kernel_main() {
                         // 2. unicast output ready semaphore
                         uint64_t out_ready_sem_noc_addr_in_pkt =
                             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            &mux_connection_handle,
-                            pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        //     &mux_connection_handle,
+                        //     pkt_hdr_seminc,
+                        //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                     }
                 }
                 intermediate_tile_id_start += batch_num_pages;
@@ -333,10 +339,11 @@ void kernel_main() {
                 // 2. unicast output ready semaphore
                 uint64_t out_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    &mux_connection_handle,
-                    pkt_hdr_seminc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     &mux_connection_handle,
+                //     pkt_hdr_seminc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
             noc_async_writes_flushed();
         } else {
@@ -398,15 +405,18 @@ void kernel_main() {
 
     uint64_t batch_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        &mux_connection_handle,
-        pkt_hdr_mcastseminc,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+    //     &mux_connection_handle,
+    //     pkt_hdr_mcastseminc,
+    //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
     noc_async_writes_flushed();
 
     // Reset the global semaphore
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
@@ -414,12 +424,14 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(dest_addr, 1);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
 

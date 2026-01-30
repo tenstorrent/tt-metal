@@ -122,8 +122,9 @@ void kernel_main() {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                 if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // noc_semaphore_wait_min(
+                    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                     sem_target++;
                 }
                 chunk_count++;
@@ -187,7 +188,8 @@ void kernel_main() {
         }
 
         if (do_reduce && (i == (ring_size - 1))) {
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
             sem_target = 0;
         }
     }

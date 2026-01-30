@@ -225,18 +225,20 @@ void kernel_main() {
             // device going in the same direction
             uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                mux_connection_handle,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            //     mux_connection_handle,
+            //     pkt_hdr_seminc,
+            //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
 
             // device going in the opposite direction
             uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                mux_connection_handle,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            //     mux_connection_handle,
+            //     pkt_hdr_seminc,
+            //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
@@ -322,11 +324,12 @@ void kernel_main() {
                         }
 
                         if (num_pages_to_write == 1) {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                mux_connection_handle,
-                                pkt_unicast_hdr,
-                                l1_read_addr,
-                                NocUnicastCommandHeader{noc_address0});
+                            // DEBUG: Commented out to test if CCL communication causes hangs
+                            // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            //     mux_connection_handle,
+                            //     pkt_unicast_hdr,
+                            //     l1_read_addr,
+                            //     NocUnicastCommandHeader{noc_address0});
                             l1_read_addr += page_size;
                         } else if (num_pages_to_write == 2) {
                             uint32_t second_intermediate_tile_id =
@@ -340,11 +343,12 @@ void kernel_main() {
 
                             auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                 intermediate_addrgen, second_intermediate_tile_id, 0);
-                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                                mux_connection_handle,
-                                pkt_scatter_hdr,
-                                l1_read_addr,
-                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                            // DEBUG: Commented out to test if CCL communication causes hangs
+                            // fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                            //     mux_connection_handle,
+                            //     pkt_scatter_hdr,
+                            //     l1_read_addr,
+                            //     NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                             l1_read_addr += page_size * 2;
                         } else {
                             ASSERT(false);
@@ -357,10 +361,11 @@ void kernel_main() {
                     chunk_count++;
                     if (chunk_count % chunks_per_sync == 0) {
                         // 2. unicast output ready semaphore
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        //     mux_connection_handle,
+                        //     pkt_hdr_seminc,
+                        //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                     }
                 }
                 intermediate_tile_id_start += input_channel_num_pages;
@@ -368,10 +373,11 @@ void kernel_main() {
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_seminc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_seminc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
 
             // Next slice idx
@@ -414,7 +420,8 @@ void kernel_main() {
                         // Tell local backwards reader that it can proceed
                         uint64_t fwd_bwd_sem_noc_addr =
                             safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
-                        noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
                     }
                 }
                 output_tile_id_start += output_channel_num_pages;
@@ -436,7 +443,8 @@ void kernel_main() {
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            noc_semaphore_inc(dest_addr, 1);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_inc(dest_addr, 1);
             noc_async_atomic_barrier();
         }
     }

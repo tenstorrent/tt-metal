@@ -226,33 +226,38 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_sem_inc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_sem_inc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt,
+                //     0});
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
                 uint64_t barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_sem_inc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
             } else {
                 ASSERT(false);
             }
         }
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        // DEBUG: Commented out to test if CCL communication causes hangs
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
     uint32_t slice_writes = 0;
@@ -337,20 +342,22 @@ void kernel_main() {
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_scatter_write_with_state<
+                        //     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                        //     UnicastScatterWriteUpdateMask::PayloadSize>(
+                        //     mux_connection_handle,
+                        //     pkt_scatter_hdr,
+                        //     l1_read_addr,
+                        //     NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                        //     page_size * tiles_to_put_in_current_packet);
                     } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                        //     mux_connection_handle,
+                        //     pkt_unicast_hdr,
+                        //     l1_read_addr,
+                        //     NocUnicastCommandHeader{noc_addrs[0]});
                     }
                 }
 
@@ -362,20 +369,22 @@ void kernel_main() {
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_scatter_write_with_state<
+                        //     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                        //     UnicastScatterWriteUpdateMask::PayloadSize>(
+                        //     mux_connection_handle,
+                        //     pkt_scatter_hdr,
+                        //     l1_read_addr,
+                        //     NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                        //     page_size * tiles_to_put_in_current_packet);
                     } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                        // DEBUG: Commented out to test if CCL communication causes hangs
+                        // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                        //     mux_connection_handle,
+                        //     pkt_unicast_hdr,
+                        //     l1_read_addr,
+                        //     NocUnicastCommandHeader{noc_addrs[0]});
                     }
                 }
             }
@@ -389,10 +398,11 @@ void kernel_main() {
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
                 if (detail::valid_targets(direction)) {
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        mux_connection_handle,
-                        pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    //     mux_connection_handle,
+                    //     pkt_hdr_sem_inc,
+                    //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
             }
             noc_async_writes_flushed();
@@ -401,10 +411,11 @@ void kernel_main() {
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
             if (detail::valid_targets(direction)) {
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_sem_inc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
         }
 
@@ -432,7 +443,8 @@ void kernel_main() {
             op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
             uint64_t self_write_done_semaphore_noc_addr =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, self_write_done_semaphore_addr, 0);
-            noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_inc(self_write_done_semaphore_noc_addr, 1);
         }
     }
 
@@ -516,17 +528,19 @@ void kernel_main() {
                 }
 
                 if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                        mux_connection_handle,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                        page_size * tiles_to_put_in_current_packet);
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // fabric_unicast_noc_scatter_write_with_state<
+                    //     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                    //     UnicastScatterWriteUpdateMask::PayloadSize>(
+                    //     mux_connection_handle,
+                    //     pkt_scatter_hdr,
+                    //     l1_read_addr,
+                    //     NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                    //     page_size * tiles_to_put_in_current_packet);
                 } else {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    //     mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
                 }
 
                 tiles_read += tiles_to_put_in_current_packet;
@@ -538,20 +552,22 @@ void kernel_main() {
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
                     // 2. unicast output ready semaphore
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        mux_connection_handle,
-                        pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    // DEBUG: Commented out to test if CCL communication causes hangs
+                    // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    //     mux_connection_handle,
+                    //     pkt_hdr_sem_inc,
+                    //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
                 noc_async_writes_flushed();
             }
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                // DEBUG: Commented out to test if CCL communication causes hangs
+                // fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                //     mux_connection_handle,
+                //     pkt_hdr_sem_inc,
+                //     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
 
             num_channels_processed_in_current_batch++;
@@ -581,12 +597,14 @@ void kernel_main() {
 
         if (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            noc_semaphore_inc(dest_addr, 1);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_inc(dest_addr, 1);
             noc_async_atomic_barrier();
         }
     }

@@ -131,8 +131,10 @@ void kernel_main() {
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_set((uint32_t*)init_semaphore_addr, 0);
 
     for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);
@@ -218,7 +220,8 @@ void kernel_main() {
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
         if (device_idx == linearized_mesh_coord) {
-            noc_semaphore_inc(global_noc_semaphore_addr, 1);
+            // DEBUG: Commented out to test if CCL communication causes hangs
+            // noc_semaphore_inc(global_noc_semaphore_addr, 1);
             noc_async_atomic_barrier();
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             if constexpr (is_1d_topology<topology>()) {
@@ -245,6 +248,8 @@ void kernel_main() {
     close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
-    noc_semaphore_set(semaphore_ptr, 0);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+    // DEBUG: Commented out to test if CCL communication causes hangs
+    // noc_semaphore_set(semaphore_ptr, 0);
 }
