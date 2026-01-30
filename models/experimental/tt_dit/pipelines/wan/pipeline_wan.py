@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
 from diffusers.loaders import WanLoraLoaderMixin
 from diffusers.models import AutoencoderKLWan, WanTransformer3DModel as TorchWanTransformer3DModel
-from diffusers.schedulers import UniPCMultistepScheduler
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
@@ -30,7 +30,6 @@ from ...models.vae.vae_wan2_1 import WanDecoder
 from ...utils import cache
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
-import PIL
 import os
 
 
@@ -125,6 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_parallel_config,
         num_links,
         checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        scheduler: FlowMatchEulerDiscreteScheduler = None,
         boundary_ratio: Optional[float] = 0.875,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
@@ -142,7 +142,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )
         self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
-        self.scheduler = UniPCMultistepScheduler.from_pretrained(
+        self.scheduler = scheduler or FlowMatchEulerDiscreteScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", trust_remote_code=True
         )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
@@ -198,12 +198,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def create_pipeline(
         mesh_device,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        scheduler: FlowMatchEulerDiscreteScheduler = None,
         sp_axis=None,
         tp_axis=None,
         num_links=None,
         dynamic_load=None,
         topology=None,
         is_fsdp=None,
+        pipeline_class=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -269,13 +271,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_axis=sp_axis,
             ),
         )
-
-        return WanPipeline(
+        pipeline_class_ = pipeline_class or WanPipeline
+        return pipeline_class_(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
             num_links=num_links or config["num_links"],
             boundary_ratio=0.875,
+            scheduler=scheduler,
             dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
@@ -526,7 +529,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def prepare_latents(
         self,
         batch_size: int,
-        image: Union[PIL.Image.Image, List[PIL.Image.Image]] = None,  # unused in T2V
+        image_prompt=None,  # unused in T2V
         num_channels_latents: int = 16,
         height: int = 480,
         width: int = 832,
@@ -581,7 +584,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         negative_prompt: Union[
             str, List[str]
         ] = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-        image: Union[PIL.Image.Image, List[PIL.Image.Image]] = None,
+        image_prompt=None,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -741,15 +744,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             torch.manual_seed(seed)
 
         latents, cond_latents = self.prepare_latents(
-            batch_size * num_videos_per_prompt,
-            image,
-            self.vae.config.z_dim,
-            height,
-            width,
-            num_frames,
-            torch.float32,
-            device,
-            latents,
+            batch_size=batch_size * num_videos_per_prompt,
+            image_prompt=image_prompt,
+            num_channels_latents=self.vae.config.z_dim,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            dtype=torch.float32,
+            device=device,
+            latents=latents,
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)

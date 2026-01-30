@@ -14,6 +14,26 @@ from ...utils.tensor import bf16_tensor
 CACHE_T = 2
 
 
+# helpers
+def rename_norm_state(state):
+    return {"weight": state["gamma"].squeeze()}
+
+
+def conv3d_to_linear_weight(state):
+    weight = state["weight"]
+    out_c, in_c, kt, kh, kw = weight.shape
+    assert kt == kh == kw == 1
+    weight = weight.reshape(out_c, in_c)
+    padded_out_c = aligned_channels(out_c)
+    padded_in_c = aligned_channels(in_c)
+    weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
+    bias = state["bias"]
+    bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
+    state["weight"] = weight
+    state["bias"] = bias
+    return state
+
+
 class WanAttentionBlock:
     def __init__(
         self,
@@ -451,9 +471,6 @@ class WanResidualBlock:
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
-        def rename_norm_state(state):
-            return {"weight": state["gamma"].squeeze()}
-
         self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
         self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
         self.conv1.load_state_dict(substate(state_dict, "conv1"))
@@ -1041,9 +1058,6 @@ class WanDecoder3d:
         for i, state in enumerate(indexed_substates(state_dict, "up_blocks")):
             self.up_blocks[i].load_state_dict(state)
 
-        def rename_norm_state(state):
-            return {"weight": state["gamma"].squeeze()}
-
         self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
         self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
 
@@ -1180,20 +1194,6 @@ class WanDecoder:
         self.cached_conv_count = count_convs(self.decoder)
 
     def load_state_dict(self, state_dict):
-        def conv3d_to_linear_weight(state):
-            weight = state["weight"]
-            out_c, in_c, kt, kh, kw = weight.shape
-            assert kt == kh == kw == 1
-            weight = weight.reshape(out_c, in_c)
-            padded_out_c = aligned_channels(out_c)
-            padded_in_c = aligned_channels(in_c)
-            weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
-            bias = state["bias"]
-            bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
-            state["weight"] = weight
-            state["bias"] = bias
-            return state
-
         self.post_quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
         self.decoder.load_state_dict(substate(state_dict, "decoder"))
 
@@ -1273,10 +1273,9 @@ class WanEncoder3D:
             parallel_config=parallel_config,
         )
 
-        # downsample blocks
+        # downsample blocks.
         self.down_blocks = []
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
-            # residual (+attention) blocks
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
                     WanResidualBlock(
@@ -1336,9 +1335,6 @@ class WanEncoder3D:
         self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
         for i, state in enumerate(indexed_substates(state_dict, "down_blocks")):
             self.down_blocks[i].load_state_dict(state)
-
-        def rename_norm_state(state):
-            return {"weight": state["gamma"].squeeze()}
 
         self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
         self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
@@ -1432,20 +1428,6 @@ class WanEncoder:
         self.cached_conv_count = count_convs(self.encoder)
 
     def load_state_dict(self, state_dict):
-        def conv3d_to_linear_weight(state):
-            weight = state["weight"]
-            out_c, in_c, kt, kh, kw = weight.shape
-            assert kt == kh == kw == 1
-            weight = weight.reshape(out_c, in_c)
-            padded_out_c = aligned_channels(out_c)
-            padded_in_c = aligned_channels(in_c)
-            weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
-            bias = state["bias"]
-            bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
-            state["weight"] = weight
-            state["bias"] = bias
-            return state
-
         self.encoder.load_state_dict(substate(state_dict, "encoder"))
         self.quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "quant_conv")))
 

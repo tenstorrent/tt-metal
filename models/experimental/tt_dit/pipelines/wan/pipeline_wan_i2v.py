@@ -13,8 +13,15 @@ from .pipeline_wan import WanPipeline
 
 import ttnn
 from ...models.vae.vae_wan2_1 import WanEncoder
+from diffusers.schedulers import UniPCMultistepScheduler
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
+from typing import NamedTuple
+
+
+class ImagePrompt(NamedTuple):
+    image: PIL.Image.Image
+    frame_pos: int
 
 
 class WanPipelineI2V(WanPipeline):
@@ -37,6 +44,17 @@ class WanPipelineI2V(WanPipeline):
 
         self.tt_encoder.load_state_dict(self.vae.state_dict())
 
+    @staticmethod
+    def create_pipeline(*args, **kwargs):
+        # Update I2V specific defaults
+        if "checkpoint_name" not in kwargs:
+            kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+        if "scheduler" not in kwargs:
+            kwargs["scheduler"] = UniPCMultistepScheduler.from_pretrained(
+                kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
+            )
+        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineI2V, **kwargs)
+
     def get_model_input(self, latents, cond_latents):
         """
         Adapter function to enable I2V. For base T2V, just return the latents.
@@ -49,14 +67,12 @@ class WanPipelineI2V(WanPipeline):
 
         # concatenate the latents and cond_latents
         model_input = torch.cat([latents, cond_latents], dim=-1).reshape(U, B, NPad, -1)
-        # model_input = torch.cat([latents[:, :N], cond_latents[:, :N]], dim=-1).reshape(U, B, N, -1)
-        # model_input = pad_vision_seq_parallel(model_input, num_devices=self.parallel_config.sequence_parallel.factor)
         return model_input
 
     def prepare_latents(
         self,
         batch_size: int,
-        image: Union[PIL.Image.Image, List[PIL.Image.Image]],
+        image_prompt: Union[ImagePrompt, PIL.Image.Image, List[ImagePrompt]],
         num_channels_latents: int = 16,
         height: int = 480,
         width: int = 832,
@@ -65,13 +81,15 @@ class WanPipelineI2V(WanPipeline):
         device: Optional[torch.device] = None,
         latents: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        assert batch_size == 1, "Only batch size 1 is supported for I2V"
-        assert isinstance(image, PIL.Image.Image) or (
-            isinstance(image, List) and len(image) == batch_size
-        ), "Batch size of image and latents must match"
+        assert batch_size == 1, "Only batch size 1 is currently supported for I2V"
+
+        if isinstance(image_prompt, ImagePrompt):
+            image_prompt = [image_prompt]
+        elif isinstance(image_prompt, PIL.Image.Image):
+            image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
+
         latents, _ = super().prepare_latents(
             batch_size=batch_size,
-            image=image,
             num_channels_latents=num_channels_latents,
             height=height,
             width=width,
@@ -80,16 +98,27 @@ class WanPipelineI2V(WanPipeline):
             device=device,
             latents=latents,
         )
+
+        image = image_prompt[0].image
+        latent_shape = latents.shape
+
+        # Initialize mask
+        msk = torch.zeros(batch_size, num_frames, latent_shape[-2], latent_shape[-1])
+
         ## Encode image
         # Convert image to tensor
-        image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
-        image = image.unsqueeze(2)
-        if self.config.expand_timesteps:
-            video_condition = image
-        else:
-            video_condition = torch.cat(
-                [image, image.new_zeros(image.shape[0], image.shape[1], num_frames - 1, height, width)], dim=2
-            )
+        video_condition = None
+        for image, frame_pos in image_prompt:
+            image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+
+            if video_condition is None:
+                video_condition = image.new_zeros(image.shape[0], image.shape[1], num_frames, height, width)
+            if self.config.expand_timesteps:  # Unverified code path
+                video_condition = image_prompt.unqueeze(2)
+                assert len(image_prompt) == 1, "Only single image conditioning is supported for expand timesteps"
+            else:
+                video_condition[:, :, frame_pos, :, :] = image
+            msk[:, frame_pos, :, :] = 1
 
         # Convert to ttnn
         tt_video_condition_BTHWC = video_condition.permute(0, 2, 3, 4, 1)
@@ -133,15 +162,12 @@ class WanPipelineI2V(WanPipeline):
         )
 
         encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
-        shape = encoded_video_torch.shape
 
-        # Add latent mask
-        msk = torch.ones(batch_size, num_frames, shape[-2], shape[-1])
-        msk[:, 1:] = 0
+        # Finalize mask setup into the latent space
         msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
-        msk = msk.view(1, msk.shape[1] // 4, 4, shape[-2], shape[-1])
+        msk = msk.view(1, msk.shape[1] // 4, 4, latent_shape[-2], latent_shape[-1])
         msk = msk.transpose(1, 2)
 
-        tt_y = torch.concat([msk, encoded_video_torch], dim=1)
+        tt_y = torch.cat([msk, encoded_video_torch], dim=1)
 
         return latents, tt_y
