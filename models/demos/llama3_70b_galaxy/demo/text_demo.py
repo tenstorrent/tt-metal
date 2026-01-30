@@ -195,7 +195,7 @@ def create_tt_model(
 
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded, use_prefix_caching, prefix_cached_ratio",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -215,6 +215,8 @@ def create_tt_model(
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # Batch-32 with non-uniform sampling
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -242,6 +244,8 @@ def create_tt_model(
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # Batch-32 with non-uniform sampling and log-probs calculation
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -285,6 +289,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
@@ -304,6 +310,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
@@ -323,6 +331,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
@@ -342,6 +352,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -361,6 +373,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded    #NOTE: currently cur pos/ page table sharding is not supported on repeat batch runs
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -380,6 +394,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -399,6 +415,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-16k-b1 - 1 user, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -418,6 +436,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -437,6 +457,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -456,6 +478,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -475,6 +499,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -494,6 +520,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -513,6 +541,8 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
         ),
         (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -532,6 +562,50 @@ def create_tt_model(
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
+            False,  # use_prefix_caching
+            0.0,  # prefix_cached_ratio
+        ),
+        (  # batch-1-prefix-caching - 1 user, small prompt, prefix caching (performance)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            True,  # use_prefix_caching
+            0.5,  # prefix_cached_ratio
+        ),
+        (  # batch-1-prefix-caching-pcc - 1 user, prefix caching with PCC (correctness)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            True,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+            True,  # use_prefix_caching
+            0.5,  # prefix_cached_ratio
         ),
     ],
     ids=[
@@ -552,6 +626,8 @@ def create_tt_model(
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
+        "batch-1-prefix-caching",  # 1 user, prefix caching (performance)
+        "batch-1-prefix-caching-pcc",  # 1 user, prefix caching with PCC (correctness)
     ],
 )
 @pytest.mark.parametrize(
@@ -609,10 +685,21 @@ def test_demo_text(
     print_outputs,
     is_cur_pos_sharded,
     is_page_table_sharded,
+    use_prefix_caching,
+    prefix_cached_ratio,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
+    if use_prefix_caching and batch_size != 1:
+        pytest.skip("Prefix caching only supported for batch_size=1")
+
+    # Reset prefetcher global so each test gets a clean state (avoids reusing
+    # address tensor from a previous test, which causes device mismatch TT_FATAL).
+    import models.demos.llama3_70b_galaxy.tt.prefetcher_common as prefetcher_common
+
+    prefetcher_common.global_tt_tensor_address = None
+
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
@@ -787,12 +874,22 @@ def test_demo_text(
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 128256
-            if is_ci_env or galaxy_type == "6U":
+            # Use local ref path if USE_LOCAL_REF_OUTPUTS is set (e.g. USE_LOCAL_REF_OUTPUTS=1 pytest ...)
+            if (is_ci_env or galaxy_type == "6U") and not os.environ.get("USE_LOCAL_REF_OUTPUTS"):
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
             torch_reference = torch.load(ref_output_path)
+            ref_logits = torch_reference["all_ref_logits"]
+            # Prefix-caching PCC uses batch_size=1; ref file may be batch-32 (320, 1, vocab). Use first user's steps.
+            if use_prefix_caching and batch_size == 1 and ref_logits.shape == (320, 1, vocab_size):
+                ref_logits = ref_logits.reshape(pcc_decode_len, 32, vocab_size)[:, 0, :].unsqueeze(1)  # (10, 1, 128256)
+                torch_reference["all_ref_logits"] = ref_logits
+                if len(torch_reference["reference_tokens"]) > max_encoded_prompt_len + pcc_decode_len:
+                    torch_reference["reference_tokens"] = torch_reference["reference_tokens"][
+                        : max_encoded_prompt_len + pcc_decode_len
+                    ]
             assert torch_reference["all_ref_logits"].shape == (
                 batch_size * pcc_decode_len,
                 1,
@@ -856,7 +953,8 @@ def test_demo_text(
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
                 # We run prefill warm up for all supported sequence lengths once on 1 user
-                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+                # Generator warmup runs with batch=32 internally; buffer must be at least 32.
+                tt_out_logits_all_users = torch.zeros(max(32, batch_size), 1, 131072) if pcc_check else None
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
                     page_table=page_table,
@@ -873,21 +971,52 @@ def test_demo_text(
             logger.info("Finished prefill warmup")
         logger.info(f"Starting prefill...")
 
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-
         try:
-            tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+            # Generator warmup (on first prefill) uses batch=32; buffer must be at least 32.
+            tt_out_logits_all_users = torch.zeros(max(32, batch_size), 1, 131072) if pcc_check else None
             if prefill_profile:
                 signpost("start")
-            toks = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=prefill_enable_trace,
-                tt_out_logits_all_users=tt_out_logits_all_users,
-                sampling_params=device_sampling_params,
-            )
+            if use_prefix_caching:
+                # Two-phase prefill: phase 1 fills KV cache; phase 2 prefills with cached prefix (timed).
+                # Phase 1: full prefill to fill KV cache (do not use output for decode).
+                generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=prefill_enable_trace,
+                    tt_out_logits_all_users=None,  # no PCC on phase 1
+                    sampling_params=device_sampling_params,
+                    start_pos=None,
+                )
+                # Phase 2: prefill with start_pos = num_cached_tokens (only new tokens); time this as inference_prefill.
+                num_cached_tokens = int(decoding_pos[0] * prefix_cached_ratio)
+                num_cached_tokens = min(num_cached_tokens, decoding_pos[0] - 1)  # at least 1 new token
+                # Number of cached tokens must be a multiple of KV cache page size
+                page_block_size = page_params["page_block_size"]
+                num_cached_tokens = (num_cached_tokens // page_block_size) * page_block_size
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                toks = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=prefill_enable_trace,
+                    tt_out_logits_all_users=tt_out_logits_all_users,
+                    sampling_params=device_sampling_params,
+                    start_pos=[num_cached_tokens],
+                )
+            else:
+                profiler.start(f"inference_prefill", iteration=batch_idx)
+                toks = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=prefill_enable_trace,
+                    tt_out_logits_all_users=tt_out_logits_all_users,
+                    sampling_params=device_sampling_params,
+                )
             if prefill_profile:
                 signpost("stop")
         except Exception as e:

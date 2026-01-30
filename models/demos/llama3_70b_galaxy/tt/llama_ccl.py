@@ -104,7 +104,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [4096, 128]
+            self.support_seqlens = [4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -632,6 +632,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
                 }
                 if not self.is_qwen
                 else {
@@ -643,6 +644,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "ATTN_REPLICATE": [(1, 1, seqlen, 128)],  # For prefix caching column replication
                 }
             )
             for key, shape in buffers_dict.items():
@@ -1182,6 +1184,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
         )
+
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
