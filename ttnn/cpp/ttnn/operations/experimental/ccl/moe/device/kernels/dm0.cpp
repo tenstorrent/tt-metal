@@ -144,12 +144,12 @@ void kernel_main() {
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         for (chunks_per_expert) {  // TODO: (GR)
-
-            //-------------------------------------------------------------------------
-            // Pipelined reading of W0/W1
-            //-------------------------------------------------------------------------
-            uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
         }
+
+        //-------------------------------------------------------------------------
+        // Pipelined reading of W0/W1
+        //-------------------------------------------------------------------------
+        uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
