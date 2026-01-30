@@ -632,7 +632,6 @@ def assert_hidden_dim_pcc(
 
     passing, pcc = comp_pcc(tt_output_torch, reference_output, pcc_required)
     logger.info(f"PCC: {pcc}")
-
     assert passing, f"Pearson Correlation Coefficient {pcc} is below required {pcc_required}."
     return pcc
 
