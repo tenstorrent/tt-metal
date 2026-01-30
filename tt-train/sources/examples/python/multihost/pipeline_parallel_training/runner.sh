@@ -64,8 +64,8 @@ fi
 ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 # install requirements
-mpirun-ulfm --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
+mpirun-ulfm --hostfile ${HOST_FILE} --tag-output uv pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
 
-CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
+CMD="python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
 # use tt-run to run the training script across all machines
 ${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS}" ${CMD}
