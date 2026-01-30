@@ -101,7 +101,6 @@ jobs:
       should-run-blackhole: ${{ inputs.run_blackhole_post_commit }}
       should-run-l2-nightly: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
       should-run-perf: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
-      arch-param: ${{ steps.check-branch.outputs.arch-param }}
     steps:
       - name: Setup
         uses: actions/checkout@v4
@@ -224,15 +223,6 @@ jobs:
 
             echo "test-branch-name=$TEST_BRANCH_NAME" >> $GITHUB_OUTPUT
             echo "✅ Created test branch '$TEST_BRANCH_NAME' and updated parent repository"
-
-            # Build architecture parameter
-            if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
-              echo 'arch-param=["wormhole_b0", "blackhole"]' >> $GITHUB_OUTPUT
-            elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
-              echo 'arch-param=["wormhole_b0"]' >> $GITHUB_OUTPUT
-            else
-              echo 'arch-param=["blackhole"]' >> $GITHUB_OUTPUT
-            fi
           else
             echo "branch-exists=false" >> $GITHUB_OUTPUT
             echo "❌ Mirrored branch '$MIRRORED_BRANCH' does not exist in submodule"
@@ -254,18 +244,22 @@ jobs:
             name: "All Post Commit Workflows"
             output-key: "all-post-commit-result"
             should-run: ${{ inputs.run_all_post_commit }}
+            arch: ""  # all-post-commit doesn't use architecture parameter
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
             output-key: "blackhole-result"
             should-run: ${{ inputs.run_blackhole_post_commit }}
+            arch: ""  # blackhole-post-commit doesn't use architecture parameter
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
             output-key: "tt-metal-l2-nightly-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
+            arch: "dynamic"  # architecture determined at runtime based on enabled tests
           - workflow: "perf-device-models.yaml"
             name: "Device Perf Regressions"
             output-key: "perf-device-models-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
+            arch: "dynamic"  # architecture determined at runtime based on enabled tests
     outputs:
       all-post-commit-result: ${{ steps.monitor.outputs.all-post-commit-result }}
       blackhole-result: ${{ steps.monitor.outputs.blackhole-result }}
@@ -286,13 +280,25 @@ jobs:
           MAX_RETRIES: 3
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
-          ARCH_PARAM: ${{ needs.setup.outputs.arch-param }}
         run: |
           WORKFLOW="${{ matrix.workflow }}"
           DISPLAY_NAME="${{ matrix.name }}"
           OUTPUT_KEY="${{ matrix.output-key }}"
+          ARCH_TYPE="${{ matrix.arch }}"
 
           echo "🚀 Triggering $DISPLAY_NAME ($WORKFLOW)..."
+
+          # Build architecture parameter dynamically if needed
+          if [ "$ARCH_TYPE" = "dynamic" ]; then
+            if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
+              ARCH_PARAM='["wormhole_b0", "blackhole"]'
+            elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
+              ARCH_PARAM='["wormhole_b0"]'
+            else
+              ARCH_PARAM='["blackhole"]'
+            fi
+            echo "📋 Using architecture parameter: $ARCH_PARAM"
+          fi
 
           # Trigger workflow with appropriate inputs
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
