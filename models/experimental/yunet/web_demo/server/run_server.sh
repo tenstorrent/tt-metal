@@ -23,13 +23,13 @@ echo "Server will start on: http://0.0.0.0:8000"
 echo ""
 
 # Check if uvicorn is installed
-if ! python3 -c "import uvicorn" 2>/dev/null; then
+if ! python -c "import uvicorn" 2>/dev/null; then
     echo "ERROR: uvicorn not found. Install with:"
-    echo "  pip3 install fastapi uvicorn python-multipart"
+    echo "  pip install fastapi uvicorn python-multipart"
     exit 1
 fi
 
 # Start the server
-python3 -m uvicorn models.experimental.yunet.web_demo.server.fast_api_yunet:app \
+python -m uvicorn models.experimental.yunet.web_demo.server.fast_api_yunet:app \
     --host 0.0.0.0 \
     --port 8000
