@@ -286,10 +286,13 @@ def test_pcc_paligemma_vlm_block(device, use_pretrained):
     cos_torch, sin_torch = model_torch.cos[:seq_len], model_torch.sin[:seq_len]
     out_torch, _ = block_torch.forward(hidden, cos_torch, sin_torch)
 
+    cos_ttnn = ttnn.from_torch(cos_torch)
+    sin_ttnn = ttnn.from_torch(sin_torch)
+
     # TTNN
     hidden_ttnn = ttnn.from_torch(hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     block_ttnn = model_ttnn.vlm_blocks[0]
-    out_ttnn, _ = block_ttnn.forward(hidden_ttnn)
+    out_ttnn, _ = block_ttnn.forward(hidden_ttnn, cos_ttnn, sin_ttnn)
 
     if isinstance(out_ttnn, ttnn.Tensor):
         out_ttnn = ttnn.to_torch(out_ttnn)

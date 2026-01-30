@@ -149,18 +149,14 @@ def main():
     # Load models
     print("\nLoading models...")
     weight_loader = PI0WeightLoader(CHECKPOINT_PATH)
+    torch_model = PI0ModelTorch(config, weight_loader)
 
-    # TTNN model creates x_t_ttnn noise in __init__, so set seed before it
-    torch.manual_seed(SEED)
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
     ttnn_model = PI0ModelTTNN(config, weight_loader, device)
-
-    torch_model = PI0ModelTorch(config, weight_loader)
 
     # Run inference
     print("Running inference...")
 
-    # PyTorch reference (reset seed - PyTorch generates noise in sample_actions)
     torch.manual_seed(SEED)
     with torch.no_grad():
         torch_actions = torch_model.sample_actions(
@@ -171,7 +167,7 @@ def main():
             state=state,
         )
 
-    # TTNN (noise already set at model init with same seed)
+    torch.manual_seed(SEED)
     with torch.no_grad():
         # Convert images to TTNN tensors
         images_ttnn = [
