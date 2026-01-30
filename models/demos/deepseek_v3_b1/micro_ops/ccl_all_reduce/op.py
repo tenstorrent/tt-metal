@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
 
 
 class DeepseekMinimalAllReduce:
@@ -143,18 +144,10 @@ class DeepseekMinimalAllReduce:
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
-        # Kernel paths
-        sender_reader_kernel_path = (
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/sender_reader.cpp"
-        )
-        sender_writer_kernel_path = (
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/sender_writer.cpp"
-        )
-        receiver_reader_kernel_path = (
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_reader.cpp"
-        )
-        reduction_kernel_path = (
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/reduction.cpp"
+        # Kernel paths (unified kernels)
+        sender_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/kernels/all_reduce_sender_kernel.cpp"
+        receiver_kernel_path = (
+            "models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/kernels/all_reduce_receiver_kernel.cpp"
         )
 
         # For each device in the mesh, create appropriate program
@@ -225,55 +218,56 @@ class DeepseekMinimalAllReduce:
                 dst_num_hops = 1
                 num_connections = 1
                 using_persistent_buffers = 1 if persistent_output_tensor is not None else 0
-
-                # === COMPILE TIME ARGS ===
-                sender_reader_compile_args = [
-                    src0_cb_index,  # cb0_id
-                    input_num_pages,  # num_tiles
-                    page_size_bytes,  # tensor0_page_size
-                    core_noc_x,
-                    core_noc_y,
-                ]
-
-                sender_writer_compile_args = [
-                    packet_header_cb_id,
-                    src0_cb_index,
-                    l1_alignment,
-                    input_num_pages,
-                    page_size_bytes,
-                    packet_size_bytes,
-                    core_noc_x,
-                    core_noc_y,
-                    remote_receiver_noc_x,
-                    remote_receiver_noc_y,
-                    dst_num_hops,
-                    num_connections,
-                    using_persistent_buffers,
-                ]
-
                 has_residual = 1 if residual_tensor_mesh is not None else 0
 
-                receiver_reader_compile_args = [
-                    packet_header_cb_id,
-                    compute_cb_in1,  # CB for remote data (intermediate tensor)
-                    l1_alignment,
-                    compute_cb_in2,  # CB for local data (input tensor)
-                    remote_sender_noc_x,
-                    remote_sender_noc_y,
-                    num_standard_tiles,
-                    compute_cb_residual,
-                    has_residual,
-                    using_persistent_buffers,
+                # === NAMED COMPILE TIME ARGS ===
+                # Sender kernel: NCRISC (reader) + BRISC (writer)
+                sender_ncrisc_ct_args = [
+                    ("cb0_id", src0_cb_index),
+                    ("num_tiles", input_num_pages),
+                    ("tensor_page_size", page_size_bytes),
+                    ("core_noc_x", core_noc_x),
+                    ("core_noc_y", core_noc_y),
                 ]
 
-                compute_compile_args = [
-                    compute_cb_in1,  # cb_in0 (remote data)
-                    compute_cb_in2,  # cb_in1 (local data)
-                    compute_cb_out,  # cb_out0
-                    compute_cb_residual,
-                    compute_cb_temp,
-                    has_residual,
-                    num_standard_tiles,
+                sender_brisc_ct_args = [
+                    ("packet_header_cb_id", packet_header_cb_id),
+                    ("packet_cb_id", src0_cb_index),
+                    ("l1_alignment", l1_alignment),
+                    ("input_num_tiles", input_num_pages),
+                    ("page_size_bytes", page_size_bytes),
+                    ("payload_size_bytes", packet_size_bytes),
+                    ("data_noc_x", core_noc_x),
+                    ("data_noc_y", core_noc_y),
+                    ("remote_receiver_noc_x", remote_receiver_noc_x),
+                    ("remote_receiver_noc_y", remote_receiver_noc_y),
+                    ("dst_num_hops", dst_num_hops),
+                    ("num_connections", num_connections),
+                    ("using_persistent_buffer", using_persistent_buffers),
+                ]
+
+                # Receiver kernel: NCRISC (reader) + TRISC (compute)
+                receiver_ncrisc_ct_args = [
+                    ("packet_header_cb_id", packet_header_cb_id),
+                    ("cb_in1", compute_cb_in1),
+                    ("l1_alignment", l1_alignment),
+                    ("cb_in2", compute_cb_in2),
+                    ("remote_sender_noc_x", remote_sender_noc_x),
+                    ("remote_sender_noc_y", remote_sender_noc_y),
+                    ("num_standard_tiles", num_standard_tiles),
+                    ("cb_residual", compute_cb_residual),
+                    ("has_residual", has_residual),
+                    ("using_persistent_buffer", using_persistent_buffers),
+                ]
+
+                receiver_trisc_ct_args = [
+                    ("cb_in0", compute_cb_in1),
+                    ("cb_in1", compute_cb_in2),
+                    ("cb_out0", compute_cb_out),
+                    ("cb_residual", compute_cb_residual),
+                    ("cb_temp", compute_cb_temp),
+                    ("has_residual", has_residual),
+                    ("num_tiles", num_standard_tiles),
                 ]
 
                 # === RUNTIME ARGS ===
@@ -311,7 +305,6 @@ class DeepseekMinimalAllReduce:
                 cb1_desc.core_ranges = receiver_core_set
 
                 # CB2: Local data for compute - backed by input tensor but with standard tile format
-                # Create from input tensor (sets buffer), then modify format_descriptors for standard tiles
                 cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(compute_cb_in2, input_tensor_device)
                 cb2_desc.core_ranges = receiver_core_set
                 cb2_desc.total_size = num_standard_tiles * standard_tile_size_bytes
@@ -391,51 +384,55 @@ class DeepseekMinimalAllReduce:
                     )
                     cb_list.append(cb7_desc)
 
-                # === KERNEL DESCRIPTORS ===
-                sender_reader_kernel = ttnn.KernelDescriptor(
-                    kernel_source=sender_reader_kernel_path,
+                # === KERNEL DESCRIPTORS using UnifiedKernelDescriptor ===
+                sender_unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source=sender_kernel_path,
                     core_ranges=sender_core_set,
-                    compile_time_args=sender_reader_compile_args,
-                    runtime_args=sender_reader_rt_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    ncrisc_named_compile_time_args=sender_ncrisc_ct_args,
+                    brisc_named_compile_time_args=sender_brisc_ct_args,
+                    trisc_named_compile_time_args=[],  # No compute on sender core
+                    ncrisc_common_runtime_args=[],
+                    trisc_common_runtime_args=[],
                 )
 
-                sender_writer_kernel = ttnn.KernelDescriptor(
-                    kernel_source=sender_writer_kernel_path,
-                    core_ranges=sender_core_set,
-                    compile_time_args=sender_writer_compile_args,
-                    runtime_args=sender_writer_rt_args,
-                    config=ttnn.WriterConfigDescriptor(),
-                )
-
-                receiver_reader_kernel = ttnn.KernelDescriptor(
-                    kernel_source=receiver_reader_kernel_path,
+                receiver_unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source=receiver_kernel_path,
                     core_ranges=receiver_core_set,
-                    compile_time_args=receiver_reader_compile_args,
-                    runtime_args=receiver_reader_rt_args,
-                    config=ttnn.ReaderConfigDescriptor(),
-                )
-
-                compute_kernel = ttnn.KernelDescriptor(
-                    kernel_source=reduction_kernel_path,
-                    core_ranges=receiver_core_set,
-                    compile_time_args=compute_compile_args,
-                    runtime_args=ttnn.RuntimeArgs(),
-                    config=ttnn.ComputeConfigDescriptor(
+                    ncrisc_named_compile_time_args=receiver_ncrisc_ct_args,
+                    brisc_named_compile_time_args=[],  # No writer on receiver core
+                    trisc_named_compile_time_args=receiver_trisc_ct_args,
+                    ncrisc_common_runtime_args=[],
+                    trisc_common_runtime_args=[],
+                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
                         math_approx_mode=False,
                     ),
                 )
 
+                # Get kernel descriptors
+                sender_kernels = sender_unified_kernel.get_kernel_descriptors()
+                receiver_kernels = receiver_unified_kernel.get_kernel_descriptors()
+
+                # Combine kernels: [sender_ncrisc, sender_brisc, sender_trisc, receiver_ncrisc, receiver_brisc, receiver_trisc]
+                all_kernels = sender_kernels + receiver_kernels
+
                 # === PROGRAM DESCRIPTOR ===
                 program = ttnn.ProgramDescriptor(
-                    kernels=[sender_reader_kernel, sender_writer_kernel, receiver_reader_kernel, compute_kernel],
+                    kernels=all_kernels,
                     semaphores=[],
                     cbs=cb_list,
                 )
 
-                # Add fabric connection for sender writer
+                # Set runtime args for kernels
+                # Sender kernels: index 0 (ncrisc), 1 (brisc), 2 (trisc)
+                program.kernels[0].runtime_args = sender_reader_rt_args
+                program.kernels[1].runtime_args = sender_writer_rt_args
+
+                # Receiver kernels: index 3 (ncrisc), 4 (brisc), 5 (trisc)
+                program.kernels[3].runtime_args = receiver_reader_rt_args
+
+                # Add fabric connection for sender writer (kernel index 1)
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                 neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
@@ -451,14 +448,14 @@ class DeepseekMinimalAllReduce:
                 )
                 sender_writer_rt_args_ref.extend(sender_fabric_args)
 
-                # Add fabric connection for receiver reader
-                receiver_reader_rt_args_ref = program.kernels[2].runtime_args[receiver_core.x][receiver_core.y]
+                # Add fabric connection for receiver reader (kernel index 3)
+                receiver_reader_rt_args_ref = program.kernels[3].runtime_args[receiver_core.x][receiver_core.y]
                 receiver_fabric_args = ttnn.setup_routing_plane_connection(
                     fabric_node_id,
                     [neighbor_fabric_node_id],
                     [receiver_link],
                     program,
-                    2,  # kernel_idx for receiver_reader
+                    3,  # kernel_idx for receiver_reader
                     receiver_core,
                 )
                 receiver_reader_rt_args_ref.extend(receiver_fabric_args)
