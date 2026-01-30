@@ -539,7 +539,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     // This test creates separate kernels for each core range with different unique RTA counts
     // Common RTAs remain consistent across all kernels
 
-    CoreRangeSet cr_set = program_config.cr_set;
     constexpr uint32_t kCommonRTASeparation = 1024 * sizeof(uint32_t);
     constexpr uint32_t num_common_runtime_args = 13;
 
