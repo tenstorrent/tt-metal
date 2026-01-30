@@ -128,7 +128,6 @@ target_sources(
         deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
-<<<<<<< HEAD
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
@@ -138,11 +137,9 @@ target_sources(
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
-=======
-        moe/moe.cpp
-        moe/device/moe_device_operation.cpp
-        moe/device/moe_program_factory.cpp
->>>>>>> e96b2a3c7a2 (compiling yay)
+        moe_compute/moe.cpp
+        moe_compute/device/moe_device_operation.cpp
+        moe_compute/device/moe_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
