@@ -1,9 +1,6 @@
 name: "(Galaxy) e2e tests"
 
 on:
-  push:
-    branches:
-      ["roseli/30675-reorg-6u-pipelines-1"]
   workflow_dispatch:
     inputs:
       wormhole:
