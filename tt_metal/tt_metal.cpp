@@ -1001,7 +1001,7 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 }
 
 namespace {
-static const std::unordered_map<tt::ARCH, std::vector<uint16_t>> ubb_bus_ids = {
+const std::unordered_map<tt::ARCH, std::vector<uint16_t>> ubb_bus_ids = {
     {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
