@@ -311,6 +311,59 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
     return result
 
 
+def prepare_output_tensor_from_combine_writer(
+    raw_torch_output, E, M, K, token_parallel_dim, data_parallel_dim, shard_width_bf16=2048
+):
+    active_token_counts = [M] * E  # TODO use active token counts that are passed in
+
+    padded_K = math.ceil(K / shard_width_bf16) * shard_width_bf16
+
+    assert raw_torch_output.shape == (
+        data_parallel_dim,
+        token_parallel_dim,
+        E,
+        M // num_token_parallel_dim,
+        padded_K // num_data_parallel_dim,
+    )
+
+    raw_torch_output = raw_torch_output.permute([2, 3, 1, 4]).reshape([E, M, padded_K])[:, :, :K]
+    torch_output = torch.zeros_like(raw_torch_output)
+
+    for e in range(E):
+        active_tokens = active_token_counts[e]
+        tokens_per_shard = math.ceil(
+            active_tokens,
+        )
+        for t in range(active_tokens):
+            bt = t // tokens_per_shard
+            ot = t % tokens_per_shard
+            torch_output[e, t] = raw_torch_output[e, bt * tokens_per_shard + ot]
+
+    return torch_output
+
+
+def get_combine_sharded_output_tensor(
+    occupied_core_range, E, M, K, token_parallel_dim, data_parallel_dim, device, shard_width_bf16=2048
+):
+    all_core_grid = device.compute_with_storage_grid_size()
+    CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})
+    all_core_range_set = CoreRangeSet([[0, 0], [all_core_grid.x - 1, all_core_grid.y - 1]])
+
+    shard_core_range = ttnn.select_from_corerangeset(
+        all_core_range_set.subtract(occupied_core_range), 0, token_parallel_dim * data_parallel_dim - 1
+    )
+
+    padded_K = math.ceil(K / shard_width_bf16) * shard_width_bf16
+
+    shape = (data_parallel_dim, token_parallel_dim, E, M // num_token_parallel_dim, padded_K // num_data_parallel_dim)
+
+    shard_shape = (E * M // token_parallel_dim, padded_K // data_parallel_dim)
+    shard_spec = ttnn.ShardSpec(shard_core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    return ttnn.zeros(shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem_config, device=device)
+
+
 def get_accuracy_metrics(torch_output, tt_output):
     _pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     std = torch_output.std().item()

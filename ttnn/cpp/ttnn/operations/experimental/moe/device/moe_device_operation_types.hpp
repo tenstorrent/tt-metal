@@ -12,6 +12,9 @@ namespace ttnn::operations::experimental::moe {
 struct operation_attributes_t {
     uint32_t num_experts{};
     uint32_t layer_id{};
+    uint32_t num_tokens_total{};
+    uint32_t output_height_shard_dim{};
+    uint32_t output_width_shard_dim{};
 };
 
 struct tensor_args_t {

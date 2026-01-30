@@ -12,10 +12,21 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
+    // Compile time arguments for writing to sharded output for combine
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
+
+    constexpr uint32_t combine_shard_width_tiles = get_named_compile_time_arg_val("combine_shard_width_tiles");
+    constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
+    constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
+    constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
+
+    std::array < std::tuple<uint32_t, uint32_t, height_shard_dim * width_shard_dim> output_shard_core_map =
+        OUTPUT_SHARD_CORE_MAP;
+
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -40,9 +51,10 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out = ...
 
-    // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
+        // Tile sizes
+        constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
@@ -57,6 +69,16 @@ void kernel_main() {
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
+
+    constexpr uint32_t untilize_max_pages = 4;  // from Vash
+
+    // constants needed for writing to combine sharded output
+    constexpr uint32_t datum_size_bytes = datum_size(get_dataformat(cb_c2w_out));
+    constexpr uint32_t tile_width_size_bytes = datum_size * tile_width;
+    constexpr uint32_t width_tile_base = ring_core_id * num_w2_tiles_w;
+    constexpr uint32_t shard_offset_per_expert_bytes =
+        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+    constexpr uint32_t source_buffer_iter_offset = 224 * in_tile_size;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -100,42 +122,100 @@ void kernel_main() {
     // Set state for the writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
+    // TODO get height_blocks from token_counts;
+    noc_semaphore_wait(reinterpret_cast < volatile tt_l1_ptr uint32_t*(metadata_ready_semaphore_addr), 1);
+    uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+
+    uint32_t height_blocks[num_experts];
+    height_blocks[0] = height_blocks[1] = 1;
+
+    const uint32_t width_tile_offset_start = width_tile_base % combine_shard_width_tiles;
+    const uint32_t source_base_l1_addr = get_read_ptr(cb_c2w_out);
+    bool source_buffer_iter = 0;
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Wait for compute core to tell us that all mm01 data is ready
-        cb_wait_front(cb_c2w_rdy, 1);
-        cb_pop_front(cb_c2w_rdy, 1);
+        const uint32_t active_tokens = per_expert_counts_ptr[expert_id];
+        const uint32_t height_blocks = tt : div_up(active_tokens, tile_height);
+        const uint32_t max_tokens_per_height_shard = tt::div_up(active_tokens, height_shard_dim);
+        const uint32_t expert_offset_bytes =
+            shard_offset_per_expert_bytes * expert_id for (uint32_t hb = 0; hb < height_blocks; ++hb) {
+            // Wait for compute core to tell us that all mm01 data is ready
+            cb_wait_front(cb_c2w_rdy, 1);
+            cb_pop_front(cb_c2w_rdy, 1);
 
-        // Take the data in cb_s2c_in2 and send it to the next core in the ring
-        // Ring synchronization: all cores participate regardless of whether they had CB work
-        // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
-        for (uint32_t i = 0; i < num_a2a_iters; ++i) {
-            for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                // Wait for current data to be ready in cb_s2c_in2
-                noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+            // Take the data in cb_s2c_in2 and send it to the next core in the ring
+            // Ring synchronization: all cores participate regardless of whether they had CB work
+            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+            for (uint32_t i = 0; i < num_a2a_iters; ++i) {
+                for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+                    // Wait for current data to be ready in cb_s2c_in2
+                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
 
-                // Signal to compute core that data is ready
-                cb_reserve_back(cb_w2c_rdy, 1);
-                cb_push_back(cb_w2c_rdy, 1);
+                    // Signal to compute core that data is ready
+                    cb_reserve_back(cb_w2c_rdy, 1);
+                    cb_push_back(cb_w2c_rdy, 1);
 
-                // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-                // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                    // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+                    // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
 
-                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                noc_async_write_one_packet_with_state</*posted=*/true>(
-                    local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+                    noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
+                    noc_async_write_one_packet_with_state</*posted=*/true>(
+                        local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(
-                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+                    // Signal neighbor that data is ready (increment their semaphore)
+                    noc_semaphore_inc</*posted=*/true>(
+                        neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
-                // Ensure write and semaphore have left the core before continuing
-                noc_async_posted_atomic_barrier();
+                    // Ensure write and semaphore have left the core before continuing
+                    noc_async_posted_atomic_barrier();
+                }
             }
+
+            // TODO confirm num_w2_tiles_w is the correct value
+            uint32_t width_tiles = num_w2_tiles_w  // 18 or 20
+                uint32_t wb = 0;
+
+            cb_wait_front(cb_c2w_out, 1);
+            const uint32_t source_l1_addr = source_base_l1_addr + source_buffer_iter * source_buffer_iter_offset;
+            while (width_tiles > 0) {
+                const uint32_t width_tile_start = width_tile_base + wb;
+                const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
+                const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
+                const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_size_bytes;
+
+                const uint32_t width_transfer_tiles =
+                    std::min(combine_shard_width_tiles - dest_width_offset_tiles, num_w2_tiles_w - wb);
+                const uint32_t width_transfer_bytes = width_transfer_tiles * tile_size_bytes;
+
+                for (uint32_t bt = 0, t = hb *tile_height = ; bt < num_tokens_block; ++bt, ++t) {
+                    const uint32_t dest_height_shard = t / max_tokens_per_height_shard;
+                    const uint32_t shard_row = t % max_tokens_per_height_shard;
+                    const uint32_t shard_row_offset_bytes =
+                        shard_row * combine_shard_width_tiles * tile_width_size_bytes;
+
+                    const dest_l1_addr =
+                        out_addr + expert_offset_bytes + dest_width_offset_tiles * +shard_row_offset_bytes;
+
+                    const uint32_t token_l1_addr = base_l1_addr + bt * tile_width_size_bytes;
+
+                    const auto [dest_noc_x, dest_noc_y] =
+                        output_shard_core_map[dest_height_shard * width_shard_dim + dest_width_shard];
+
+                    const uint64_t dest_noc_addr get_noc_addr(dest_noc_x, dest_noc_y, dest_l1_addr, 1);
+                    noc_async_write(token_l1_addr, dest_noc_addr, width_transfer_bytes);
+                }
+            }
+            wb += width_transfer_tiles;
+            width_tiles -= width_transfer_tiles;
+            noc_async_write_barrier();
+            cb_pop_front(cb_c2w_out, 1);
+
+            source_buffer_iter = !source_buffer_iter;
         }
     }
 }

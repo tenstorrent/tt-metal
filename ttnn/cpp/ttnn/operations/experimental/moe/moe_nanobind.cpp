@@ -32,7 +32,9 @@ void bind_moe(nb::module_& mod) {
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
             nb::arg("layer_id"),
-        });
+            nb::arg("num_tokens_total"),
+            nb::arg("output_height_shard_dim"),
+            nb::arg("output_width_shard_dim")});
 }
 
 }  // namespace ttnn::operations::experimental::moe::detail

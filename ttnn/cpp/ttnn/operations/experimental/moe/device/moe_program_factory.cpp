@@ -90,10 +90,24 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
     }
 
+    const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+    const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
+    const uint32_t output_height_shard_dim = operation_attributes.output_height_shard_dim;
+    const uint32_t output_width_shard_dim = operation_attributes.output_width_shard_dim;
+    const uint32_t output_shard_width_tiles = tensor_args.output_tensor.logical_shape()[-1] / tile_width;
+
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"num_experts", operation_attributes.num_experts},
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
+        {"combine_shard_width_tiles", output_shard_width_tiles},
+        {"tile_height", tile_height},
+        {"tile_width", tile_width},
+        {"num_tokens_total", num_tokens_total},
+        {"height_shard_dim", output_height_shard_dim},
+        {"width_shard_dim", output_width_shard_dim},
+
     };
 
     // Create kernels for the program
