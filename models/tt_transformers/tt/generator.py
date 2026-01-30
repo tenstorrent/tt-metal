@@ -412,7 +412,6 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
-            local_kwargs["user_id"] = user_id
 
             if sampling_enabled:
                 sampling_executed = True
@@ -511,11 +510,11 @@ class Generator:
                 last_token_idx_relative = last_token_idx - num_cached_tokens
                 ttnn.synchronize_device(self.model[model_id].mesh_device)
 
-                if res["hidden_states"] is not None:
+                if "hidden_states" in res:
                     output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
                         res["hidden_states"], last_token_idx=(last_token_idx_relative % 32)
                     )
-                elif res["logits"] is not None:
+                elif res["sampling"]:
                     tt_tokens = res["logits"][0]
                     tt_log_probs = res["logits"][1]
                     tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[
