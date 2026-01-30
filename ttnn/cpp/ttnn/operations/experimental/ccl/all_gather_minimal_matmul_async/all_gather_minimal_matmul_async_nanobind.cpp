@@ -199,9 +199,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("num_links") = 1,
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("force_transpose") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
+            nb::arg("force_transpose") = true,
+            nb::arg("num_workers_per_link") = 1,
+            nb::arg("num_buffers_per_channel") = 1});
 
     auto py_all_gather_minimal_matmul_async_config =
         nb::class_<ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig>(
