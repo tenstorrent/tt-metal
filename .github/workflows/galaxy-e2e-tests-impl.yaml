@@ -100,6 +100,13 @@ jobs:
                 | . + { runs_on: ($cfg[.sku].runs_on // []) }
               ]
             ' <<< "$full_tests")
+          echo "Filtered test matrix:"
+          echo "$filtered"
+          {
+            echo 'matrix<<EOF'
+            echo "$filtered"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   galaxy-e2e-tests:
     needs: load-test-matrix
