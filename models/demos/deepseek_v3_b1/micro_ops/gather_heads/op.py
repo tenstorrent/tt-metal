@@ -82,7 +82,6 @@ class GatherHeads:
         sender_grid_start_x = min(r.start.x for r in sender_core_ranges)
         sender_grid_start_y = min(r.start.y for r in sender_core_ranges)
         sender_grid_end_x = max(r.end.x for r in sender_core_ranges)
-        sender_grid_end_y = max(r.end.y for r in sender_core_ranges)
         sender_grid_width = sender_grid_end_x - sender_grid_start_x + 1  # 12 columns
 
         # Calculate data sizes from tensor shard shapes

@@ -287,7 +287,6 @@ class PreSDPA:
                 )
             ]
         )
-        SDPA_INPUT_NUM_CORES = 8  # 4 × 2 = 8 cores
 
         # Unicast parameters for interleaved layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head

@@ -57,9 +57,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     qnope_num_cores = QNOPE_GRID_COLS * matmul2_grid_y  # 64 cores
     qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y  # 32 cores
 
-    # Matmul3 weights shape: [128, 512] per Qnope core
-    matmul3_weights_shape = (QNOPE_HEAD_DIM, QNOPE_OUT_DIM)  # Per-core shape
-
     # Mcast/gather core coordinates (same as RMSNorm input core)
     # Use the full device grid width for mcast core (last column)
     mcast_core_x = device_grid_size.x - 1  # Last column

@@ -61,7 +61,6 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
     qrope_shard_w = qrope_input.shape[1] // qrope_cols  # 64
 
     qnope_elements = qnope_shard_h * qnope_shard_w  # 512
-    qrope_heads_per_core = qrope_shard_h  # 2
     qrope_elements_per_head = qrope_shard_w  # 64
 
     # Per-head size = qnope (512) + qrope (64) = 576
@@ -69,10 +68,6 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
 
     # Per-receiver: 8 heads
     num_heads_per_receiver = 8
-    output_per_receiver = num_heads_per_receiver * head_elements  # 4608
-
-    # Total output: 8 receivers * output_per_receiver elements
-    num_receivers = receiver_rows * receiver_cols  # 8
 
     # For BLOCK_SHARDED with shard (shard_h, shard_w) on grid (rows, cols):
     # Tensor is (rows * shard_h, cols * shard_w)
@@ -166,7 +161,6 @@ def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     qnope_elements_per_core = qnope_shard_shape[0] * qnope_shard_shape[1]  # 512
     qrope_heads_per_core = qrope_shard_shape[0]  # 2
     qrope_elements_per_head = qrope_shard_shape[1]  # 64
-    qrope_elements_per_core = qrope_heads_per_core * qrope_elements_per_head  # 128
 
     # Head size = qnope (512) + qrope (64) = 576 elements
     head_elements = qnope_elements_per_core + qrope_elements_per_head  # 576
