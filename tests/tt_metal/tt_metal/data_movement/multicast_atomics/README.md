@@ -4,7 +4,7 @@ This directory contains tests for `noc_semaphore_inc_multicast` which performs a
 
 ## Overview
 
-The `noc_semaphore_inc_multicast` API allows a single core to atomically increment semaphores on a grid of destination cores in a single multicast operation. This is useful for synchronization patterns where multiple cores needs to signal multiple destination cores.
+The `noc_semaphore_inc_multicast` API allows a single core to atomically increment semaphores on a grid of destination cores in a single multicast operation. This is useful for synchronization patterns where multiple cores need to signal multiple destination cores.
 
 ## Mesh Device API Support
 
