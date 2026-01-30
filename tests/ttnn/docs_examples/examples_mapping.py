@@ -44,6 +44,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.from_buffer": tensor_creation.test_from_buffer,
     "ttnn.bernoulli": tensor_creation.test_bernoulli,
     "ttnn.complex_tensor": tensor_creation.test_complex_tensor,
+    "ttnn.index_fill": tensor_creation.test_index_fill,
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,
