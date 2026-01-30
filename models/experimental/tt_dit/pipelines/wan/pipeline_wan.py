@@ -123,6 +123,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         parallel_config,
         vae_parallel_config,
         num_links,
+        *,
         checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         scheduler: FlowMatchEulerDiscreteScheduler = None,
         boundary_ratio: Optional[float] = 0.875,
@@ -197,8 +198,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     @staticmethod
     def create_pipeline(
         mesh_device,
+        *,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        scheduler: FlowMatchEulerDiscreteScheduler = None,
+        scheduler=None,
         sp_axis=None,
         tp_axis=None,
         num_links=None,

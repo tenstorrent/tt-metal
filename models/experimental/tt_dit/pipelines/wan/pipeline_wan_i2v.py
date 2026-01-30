@@ -25,8 +25,16 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *args, checkpoint_name: str = "Wan-AI/Wan2.2-I2V-A14B-Diffusers", **kwargs):
-        super().__init__(*args, model_type="i2v", checkpoint_name=checkpoint_name, **kwargs)
+    def __init__(self, *args, **kwargs):
+        # Update I2V specific defaults
+        if "checkpoint_name" not in kwargs:
+            kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+        if "scheduler" not in kwargs:
+            kwargs["scheduler"] = UniPCMultistepScheduler.from_pretrained(
+                kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
+            )
+
+        super().__init__(*args, model_type="i2v", **kwargs)
 
         self.tt_encoder = WanEncoder(
             base_dim=self.vae.config.base_dim,
@@ -99,16 +107,19 @@ class WanPipelineI2V(WanPipeline):
             latents=latents,
         )
 
-        image = image_prompt[0].image
         latent_shape = latents.shape
 
         # Initialize mask
         msk = torch.zeros(batch_size, num_frames, latent_shape[-2], latent_shape[-1])
-
+        inserted_frames = set()
         ## Encode image
         # Convert image to tensor
         video_condition = None
         for image, frame_pos in image_prompt:
+            assert (
+                frame_pos not in inserted_frames
+            ), f"Frame position {frame_pos} already processed. Please remove duplicate frame positions."
+            inserted_frames.add(frame_pos)
             image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
 
             if video_condition is None:
