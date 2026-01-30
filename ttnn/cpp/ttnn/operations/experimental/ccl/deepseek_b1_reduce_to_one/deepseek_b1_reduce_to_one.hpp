@@ -13,7 +13,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteReduceToOne {
+struct ExecuteDeepseekB1ReduceToOne {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& root_coord,
@@ -25,7 +25,8 @@ struct ExecuteReduceToOne {
 
 }  // namespace operations::experimental::ccl
 
-constexpr auto reduce_to_one = ttnn::
-    register_operation<"ttnn::experimental::reduce_to_one", ttnn::operations::experimental::ccl::ExecuteReduceToOne>();
+constexpr auto deepseek_b1_reduce_to_one = ttnn::register_operation<
+    "ttnn::experimental::deepseek_b1_reduce_to_one",
+    ttnn::operations::experimental::ccl::ExecuteDeepseekB1ReduceToOne>();
 
 }  // namespace ttnn

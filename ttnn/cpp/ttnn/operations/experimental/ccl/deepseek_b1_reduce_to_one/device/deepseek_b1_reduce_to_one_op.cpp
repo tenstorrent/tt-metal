@@ -11,12 +11,13 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include "reduce_to_one_op.hpp"
+#include "deepseek_b1_reduce_to_one_op.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl {
 
-void ReduceToOneOp::validate(const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+void DeepseekB1ReduceToOneOp::validate(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
     auto* mesh_device = input.device();
@@ -73,7 +74,7 @@ void ReduceToOneOp::validate(const operation_attributes_t& /*operation_attribute
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded");
 };
 
-ReduceToOneOp::spec_return_value_t ReduceToOneOp::compute_output_specs(
+DeepseekB1ReduceToOneOp::spec_return_value_t DeepseekB1ReduceToOneOp::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto* mesh_device = input_tensor.device();
@@ -111,7 +112,7 @@ ReduceToOneOp::spec_return_value_t ReduceToOneOp::compute_output_specs(
     return {intermediate_specs, final_output_specs};
 }
 
-ReduceToOneOp::tensor_return_value_t ReduceToOneOp::create_output_tensors(
+DeepseekB1ReduceToOneOp::tensor_return_value_t DeepseekB1ReduceToOneOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
@@ -144,7 +145,8 @@ ReduceToOneOp::tensor_return_value_t ReduceToOneOp::create_output_tensors(
     return {intermediate_tensors, final_output_tensors};
 }
 
-ReduceToOneOp::ReduceToOne::cached_mesh_workload_t ReduceToOneOp::ReduceToOne::create_mesh_workload(
+DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::cached_mesh_workload_t
+DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -204,7 +206,8 @@ ReduceToOneOp::ReduceToOne::cached_mesh_workload_t ReduceToOneOp::ReduceToOne::c
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> ReduceToOneOp::ReduceToOne::create_at(
+device_operation::CachedProgram<DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::shared_variables_t>
+DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
@@ -215,7 +218,7 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
     const auto& root_coordinate = operation_attributes.root_coord;
     const auto& exit_coordinate = operation_attributes.exit_coord;
 
-    return reduce_to_one_program_factory(
+    return deepseek_b1_reduce_to_one_program_factory(
         tensor_args,
         operation_attributes,
         root_coordinate,
@@ -230,14 +233,14 @@ device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> 
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
-ttnn::operations::experimental::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
+ttnn::operations::experimental::ccl::DeepseekB1ReduceToOneOp::tensor_return_value_t deepseek_b1_reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<std::vector<Tensor>>& optional_intermediate_tensors) {
-    using OperationType = ttnn::operations::experimental::ccl::ReduceToOneOp;
+    using OperationType = ttnn::operations::experimental::ccl::DeepseekB1ReduceToOneOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{root_coord, exit_coord, topology, input_tensor.tensor_spec()},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensors});

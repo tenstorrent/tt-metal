@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include "reduce_to_one_nanobind.hpp"
+#include "deepseek_b1_reduce_to_one_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -10,7 +10,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "reduce_to_one.hpp"
+#include "deepseek_b1_reduce_to_one.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -18,7 +18,7 @@ namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::ccl {
 
-void bind_reduce_to_one(nb::module_& module) {
+void bind_deepseek_b1_reduce_to_one(nb::module_& module) {
     const auto* doc =
         R"doc(
         Performs a sum reduction across all devices in a 2x4 mesh, with the final result on the root device.
@@ -42,10 +42,10 @@ void bind_reduce_to_one(nb::module_& module) {
             ttnn.Tensor: The reduced tensor (sum of all input shards) on the root device.
         )doc";
 
-    using OperationType = decltype(ttnn::reduce_to_one);
+    using OperationType = decltype(ttnn::deepseek_b1_reduce_to_one);
     ttnn::bind_registered_operation(
         module,
-        ttnn::reduce_to_one,
+        ttnn::deepseek_b1_reduce_to_one,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,

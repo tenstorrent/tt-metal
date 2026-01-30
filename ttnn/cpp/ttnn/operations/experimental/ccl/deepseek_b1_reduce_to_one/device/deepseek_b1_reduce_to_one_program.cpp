@@ -11,7 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <unordered_set>
-#include "reduce_to_one_op.hpp"
+#include "deepseek_b1_reduce_to_one_op.hpp"
 
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -175,15 +175,16 @@ inline uint32_t get_destination_semaphore_address(
     }
 }
 
-ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> reduce_to_one_program_factory(
-    const ReduceToOneOp::tensor_args_t& tensor_args,
-    const ReduceToOneOp::operation_attributes_t& /*operation_attributes*/,
+ttnn::device_operation::CachedProgram<DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::shared_variables_t>
+deepseek_b1_reduce_to_one_program_factory(
+    const DeepseekB1ReduceToOneOp::tensor_args_t& tensor_args,
+    const DeepseekB1ReduceToOneOp::operation_attributes_t& /*operation_attributes*/,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const MeshCoordinate& device_coordinate,
     std::optional<ttnn::MeshCoordinate>& forward_coord,
     std::optional<ttnn::MeshCoordinate>& backward_coord,
-    ReduceToOneOp::tensor_return_value_t& output_tensors,
+    DeepseekB1ReduceToOneOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& input_tensor = tensor_args.input_tensor;
@@ -392,7 +393,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         role, compute_num_tiles, local_cb, received_cb_r1, received_cb_r2, received_cb_r3};
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/receiver_reader_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/device/kernels/"
+        "deepseek_b1_receiver_reader_kernel.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -415,7 +417,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         output_phys_core.y};
     auto worker_writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/worker_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/device/kernels/"
+        "deepseek_b1_worker_writer_kernel.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(worker_writer_ct_args));
 
@@ -425,7 +428,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
     std::vector<uint32_t> fabric_writer_ct_args = {role, num_worker_slots, payload_size_bytes, packet_cb};
     auto fabric_writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/fabric_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/device/kernels/"
+        "deepseek_b1_fabric_writer_kernel.cpp",
         fabric_cores_set,
         tt::tt_metal::WriterDataMovementConfig(fabric_writer_ct_args));
 
@@ -435,7 +439,8 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
         role, compute_num_tiles, local_cb, received_cb_r1, received_cb_r2, received_cb_r3, output_cb, scratch_cb};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_to_one/device/kernels/compute_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/device/kernels/"
+        "deepseek_b1_compute_kernel.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -509,7 +514,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
 
     return {
         std::move(program),
-        ReduceToOneOp::ReduceToOne::shared_variables_t{
+        DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::shared_variables_t{
             .send_reader_kernel_id = reader_kernel,
             .send_worker_writer_kernel_id = worker_writer_kernel,
             .send_fabric_writer_kernel_id = fabric_writer_kernel,
@@ -532,7 +537,7 @@ ttnn::device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variabl
             .output_cb_handle = output_cb_handle}};
 }
 
-void ReduceToOneOp::ReduceToOne::override_runtime_arguments(
+void DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
