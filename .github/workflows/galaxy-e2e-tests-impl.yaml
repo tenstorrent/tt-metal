@@ -15,10 +15,6 @@ on:
       enabled-skus:
         required: true
         type: string
-      scheduled:
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   load-test-matrix:
