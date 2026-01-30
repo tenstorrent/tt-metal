@@ -329,6 +329,7 @@ void MAIN {
                     add_mask_fusion,
                     mask_cb_to_use,
                     cb_zero_in);
+                DPRINT << "done qk-matmul" << ENDL();
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
@@ -478,10 +479,12 @@ void MAIN {
 
         // Perform reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
+            DPRINT << "do reduce" << ENDL();
             // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1 (max and sum of logits of itself's core)
 
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
+                DPRINT << "do reduce more" << ENDL();
                 // This indicates that there are computes done by other workers.
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
@@ -565,6 +568,7 @@ void MAIN {
 
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
+            DPRINT << "done out_final" << ENDL();
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
@@ -589,8 +593,10 @@ void MAIN {
                 cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
                 cb_push_back(cb_out_final, out_chunk_tiles);
             } else {
+                DPRINT << "move out_accumulate_im to out_final" << ENDL();
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+                DPRINT << "done move out_accumulate_im to out_final" << ENDL();
             }
             // Free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
@@ -600,5 +606,6 @@ void MAIN {
 
     // Free up cb_q_in after Q chunks
     cb_pop_front(cb_q_in, q_chunk_tiles);
+    DPRINT << "done flash-decode-loop" << ENDL();
 }
 }  // namespace NAMESPACE

@@ -1904,6 +1904,7 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
+        DPRINT << *sem_addr << ENDL();
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
 }

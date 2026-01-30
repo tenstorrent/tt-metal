@@ -398,8 +398,7 @@ void kernel_main() {
                     for (uint32_t page = 0; page < k_num_pages; ++page) {
                         // Wait for NCRISC to signal this page is ready
                         uint32_t expected = chunk_base + page + 1;
-                        noc_semaphore_wait(ncrisc_brisc_sync_ptr, expected);
-                        DPRINT << "done waiting for page:" << page << ENDL();
+                        noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, expected);
 
                         // Calculate page address directly - addresses increment in lockstep
                         uint32_t page_addr = k_write_ptr + page * k_page_size;
@@ -412,13 +411,14 @@ void kernel_main() {
                 } else {
                     // Interleaved: chunk-level - wait for entire chunk, then multicast
                     uint32_t expected = chunk_count * 2 + 1;
-                    noc_semaphore_wait(ncrisc_brisc_sync_ptr, expected);
+                    noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, expected);
 
                     // Multicast entire chunk from base address
                     uint64_t mcast_dest_addr = mcast_noc_addr | k_write_ptr;
                     noc_async_write_multicast(
                         k_write_ptr, mcast_dest_addr, k_chunk_bytes, num_mcast_dests, false, MCAST_NOC);
                 }
+                DPRINT << "done mcast" << ENDL();
 
                 // After all data for this chunk: barrier and signal receivers
                 noc_async_write_barrier();
@@ -435,6 +435,7 @@ void kernel_main() {
     // DEBUG: Skip worker/reducer to isolate DRAM streaming + multicast
     return;
 #endif
+    DPRINT << "done multicast loop" << ENDL();
 
     if (is_worker) {
         DeviceZoneScopedN("writer-worker");
@@ -505,4 +506,5 @@ void kernel_main() {
         // Output is already in the sharded CB, nothing to do
         noc_async_writes_flushed();
     }
+    DPRINT << "done writer-reducer-loop" << ENDL();
 }
