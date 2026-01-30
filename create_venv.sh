@@ -213,11 +213,22 @@ validate_env_dir() {
 # Apply Configuration
 # ============================================================================
 
-# Apply configuration with precedence: arguments > env vars > defaults
+# Determine script directory (used for locating sibling scripts and OS detection)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Import functions for detecting OS
+. "$SCRIPT_DIR/install_dependencies.sh" --source-only
+detect_os
+
+# Apply configuration with precedence: arguments > OS detection > default
 # Python version
 if [ -n "$ARG_PYTHON_VERSION" ]; then
     VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
-elif [ -z "${VENV_PYTHON_VERSION:-}" ]; then
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "24.04" ]; then
+    VENV_PYTHON_VERSION="3.12"
+elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
+    VENV_PYTHON_VERSION="3.10"
+else
     VENV_PYTHON_VERSION="3.10"
 fi
 
@@ -295,10 +306,6 @@ source "$PYTHON_ENV_DIR/bin/activate"
 UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
 echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
 uv pip install "uv==${UV_CURRENT_VERSION}"
-
-# Import functions for detecting OS (use absolute path from SCRIPT_DIR)
-. "$SCRIPT_DIR/install_dependencies.sh" --source-only
-detect_os
 
 # PyTorch CPU index URL for all uv pip commands
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
