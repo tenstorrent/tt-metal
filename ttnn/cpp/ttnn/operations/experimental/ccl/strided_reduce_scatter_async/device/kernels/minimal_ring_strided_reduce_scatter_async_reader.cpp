@@ -112,6 +112,7 @@ void kernel_main() {
     DPRINT << "cb_reader_output_id: " << cb_reader_output_id << ENDL();
     DPRINT << "tile_granularity: " << tile_granularity << ENDL();
     DPRINT << "page_size: " << page_size << ENDL();
+    DPRINT << "batch_size: " << input_tensor_B << ENDL();
 
     // Let's set some particular values for the params used
     const uint32_t batch_size = input_tensor_B;
@@ -147,12 +148,23 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
+        DPRINT << "================================================" << ENDL();
+        DPRINT << "batch: " << b << " started" << ENDL();
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            DPRINT << "--------------------------------" << ENDL();
+            DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
+
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                 for (uint32_t i = 0; i < ring_size; i++) {
+                    DPRINT << "************************************************" << ENDL();
+                    DPRINT << "ring iteration: " << i << " started" << ENDL();
+                    DPRINT << "slice_idx: " << slice_idx << ENDL();
+                    DPRINT << "direction: " << (uint32_t)direction << ENDL();
+
                     const bool do_reduce = i != 0;
                     uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     uint32_t actual_slice_idx;
@@ -162,8 +174,11 @@ void kernel_main() {
                         actual_slice_idx =
                             slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
                     }
+                    DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
+                           << ", chunk_idx: " << chunk_idx << ENDL();
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                         if (do_reduce) {
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
@@ -225,6 +240,7 @@ void kernel_main() {
                                     slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
                                 global_tile_idx = slice_coordinates_to_global_tile_index(
                                     slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
                                 uint32_t input_tile_id = global_tile_idx + batch_offset;
                                 uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
@@ -247,6 +263,7 @@ void kernel_main() {
                                 cb_push_back(cb_intermediate_id, tile_granularity);
                             }
                         }
+                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                     }
 
                     // Next slice idx
@@ -261,8 +278,12 @@ void kernel_main() {
                         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                         sem_target = 0;
                     }
+                    DPRINT << "ring iteration: " << i << " done" << ENDL();
                 }
+                DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
             }
+            DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
         }
+        DPRINT << "batch: " << b << " done" << ENDL();
     }
 }

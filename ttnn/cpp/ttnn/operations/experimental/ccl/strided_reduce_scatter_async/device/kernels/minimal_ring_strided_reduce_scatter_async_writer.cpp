@@ -253,17 +253,29 @@ void kernel_main() {
         DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
         DPRINT << "worker_id: " << worker_id << ENDL();
         DPRINT << "num_workers: " << num_workers << ENDL();
+        DPRINT << "batch_size: " << input_tensor_B << ENDL();
 
         DPRINT << " start_row_offset: " << start_row_offset << ENDL();
 
         for (uint32_t b = 0; b < batch_size; b++) {
+            DPRINT << "================================================" << ENDL();
+            DPRINT << "batch: " << b << " started" << ENDL();
+
             for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+                DPRINT << "--------------------------------" << ENDL();
+                DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
                 uint32_t output_tile_id_start = b * output_batch_num_pages;
 
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                    DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                     for (uint32_t i = 0; i < ring_size; i++) {
+                        DPRINT << "************************************************" << ENDL();
+                        DPRINT << "ring iteration: " << i << " started" << ENDL();
+                        DPRINT << "slice_idx: " << slice_idx << ENDL();
+                        DPRINT << "direction: " << (uint32_t)direction << ENDL();
+
                         uint32_t actual_slice_idx;
                         if (direction) {
                             actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
@@ -271,9 +283,12 @@ void kernel_main() {
                             actual_slice_idx =
                                 slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
                         }
+                        DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
+                               << ", chunk_idx: " << chunk_idx << ENDL();
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                            DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
                             uint32_t first_mm_core_idx = 0;
@@ -331,6 +346,7 @@ void kernel_main() {
                                         slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
                                     global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                    DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
 
                                     if (i < (ring_size - 1)) {
                                         auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
@@ -350,21 +366,21 @@ void kernel_main() {
                                     }
                                 }
                                 cb_pop_front(cb_output_id, tile_granularity);
-
-                                if (i < (ring_size - 1)) {
-                                    uint64_t out_ready_sem_noc_addr_in_pkt =
-                                        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                    fabric_unicast_noc_unicast_atomic_inc_with_state<
-                                        UnicastAtomicIncUpdateMask::DstAddr>(
-                                        &mux_connection_handle,
-                                        pkt_hdr_seminc,
-                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                            out_ready_sem_noc_addr_in_pkt, 0});
-                                    noc_async_writes_flushed();
-                                } else {
-                                    noc_async_write_barrier();
-                                }
                             }
+
+                            // Signal reader after all tiles for this chunk_piece_idx are written
+                            if (i < (ring_size - 1)) {
+                                uint64_t out_ready_sem_noc_addr_in_pkt =
+                                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                                    &mux_connection_handle,
+                                    pkt_hdr_seminc,
+                                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                                noc_async_writes_flushed();
+                            } else {
+                                noc_async_write_barrier();
+                            }
+                            DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                         }
 
                         // Signal ring cycle done only after all chunks in final iteration
@@ -383,13 +399,17 @@ void kernel_main() {
                         } else {
                             slice_idx++;
                         }
+                        DPRINT << "ring iteration: " << i << " done" << ENDL();
                     }
                     // Reset the global semaphore before the round
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
                     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+                    DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
                 }
+                DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
             }
+            DPRINT << "batch: " << b << " done" << ENDL();
         }
 
         noc_async_write_barrier();
