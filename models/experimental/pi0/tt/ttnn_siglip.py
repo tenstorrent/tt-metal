@@ -181,11 +181,7 @@ class PatchEmbeddingTTNN:
         Returns:
             TTNN tensor (batch_size, num_patches, hidden_size)
         """
-        # Convert to PyTorch if needed (shouldn't happen in normal flow)
-        # if isinstance(pixel_values, ttnn.Tensor):
-        #     pixel_values = ttnn.to_torch(pixel_values)
 
-        # Step 1: Transfer to device in TILE layout directly (B, C, H, W)
         x = pixel_values
 
         # Step 2: Permute to channel-last: (B, C, H, W) -> (B, H, W, C)

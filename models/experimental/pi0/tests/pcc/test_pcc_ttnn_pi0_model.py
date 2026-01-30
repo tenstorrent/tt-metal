@@ -136,14 +136,11 @@ def test_pcc_pi0_ttnn(device):
     # Load weights
     weight_loader = PI0WeightLoader(str(checkpoint_path))
 
-    # TTNN model creates x_t_ttnn noise in __init__, so set seed before it
-    torch.manual_seed(SEED)
+    # Initialize models
+    model_torch = PI0ModelTorch(config, weight_loader)
     model_ttnn = PI0ModelTTNN(config, weight_loader, device)
 
-    # PyTorch model doesn't create noise in __init__, just init it
-    model_torch = PI0ModelTorch(config, weight_loader)
-
-    # PyTorch model generates noise in sample_actions, so reset seed to same value
+    # Run PyTorch
     torch.manual_seed(SEED)
     with torch.no_grad():
         torch_actions = model_torch.sample_actions(
@@ -154,7 +151,8 @@ def test_pcc_pi0_ttnn(device):
             state=inputs["state"],
         )
 
-    # Run TTNN (no need to reset seed - noise was set during init)
+    # Run TTNN
+    torch.manual_seed(SEED)
     with torch.no_grad():
         # Convert images to TTNN tensors
         images_ttnn = [

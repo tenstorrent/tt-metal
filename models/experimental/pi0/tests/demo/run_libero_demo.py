@@ -168,19 +168,17 @@ def main():
     print(f"\n📦 Loading models...")
     weight_loader = PI0WeightLoader(str(checkpoint_path))
 
-    # TTNN model creates x_t_ttnn noise in __init__, so set seed before it
-    torch.manual_seed(SEED)
+    print(f"   Loading PyTorch reference...")
+    torch_model = PI0ModelTorch(config, weight_loader)
+
     print(f"   Loading TTNN model...")
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
     ttnn_model = PI0ModelTTNN(config, weight_loader, device)
 
-    print(f"   Loading PyTorch reference...")
-    torch_model = PI0ModelTorch(config, weight_loader)
-
     # Run inference
     print(f"\n🚀 Running inference on LIBERO images (10 denoising steps)...")
 
-    # PyTorch reference (reset seed - PyTorch generates noise in sample_actions)
+    # PyTorch reference
     torch.manual_seed(SEED)
     t0 = time.time()
     with torch.no_grad():
@@ -194,7 +192,8 @@ def main():
     torch_time = (time.time() - t0) * 1000
     print(f"   PyTorch: {torch_time:.2f}ms")
 
-    # TTNN (noise already set at model init with same seed)
+    # TTNN
+    torch.manual_seed(SEED)
     t0 = time.time()
     with torch.no_grad():
         # Convert images to TTNN tensors
