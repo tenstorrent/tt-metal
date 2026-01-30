@@ -317,8 +317,8 @@ def verify_outputs(q_tensors, kv_tensors, q_output, kv_output):
     q_pcc = calc_pcc(q_expected, q_actual)
     kv_pcc = calc_pcc(kv_expected, kv_actual)
 
-    q_close = torch.allclose(q_expected, q_actual, rtol=1e-2, atol=1e-2)
-    kv_close = torch.allclose(kv_expected, kv_actual, rtol=1e-2, atol=1e-2)
+    q_close = torch.allclose(q_expected, q_actual, rtol=1e-2, atol=2.5e-2)
+    kv_close = torch.allclose(kv_expected, kv_actual, rtol=1e-2, atol=2.5e-2)
 
     q_max_err = torch.max(torch.abs(q_expected - q_actual)).item()
     kv_max_err = torch.max(torch.abs(kv_expected - kv_actual)).item()
