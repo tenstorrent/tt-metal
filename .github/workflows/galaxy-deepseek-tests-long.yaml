@@ -1,6 +1,9 @@
 name: "(Galaxy) DeepSeek tests (long)"
 
 on:
+  push:
+    branches:
+      - pprajapati/deepseek_long_seq_CI
   workflow_dispatch:
     inputs:
       platform:
