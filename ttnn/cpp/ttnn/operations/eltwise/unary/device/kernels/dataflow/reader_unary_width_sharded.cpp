@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t row_width = get_compile_time_arg_val(1);
     constexpr uint32_t num_cores_total = get_compile_time_arg_val(2);
+    constexpr uint32_t datum_size = get_compile_time_arg_val(3);
     constexpr auto src_tensor_args = TensorAccessorArgs<2>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -23,7 +24,6 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_tensor_args, src_addr, row_width);
 
     // Calculate element size in bytes and tile width in bytes
-    const uint32_t datum_size = row_width / (responsibility * tt::constants::TILE_WIDTH);
     const uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * datum_size;
 
     uint32_t core_number = start_core_number;
@@ -45,10 +45,10 @@ void kernel_main() {
             noc_async_read(noc_addrs[tile_row] + tile_col * tile_width_bytes, l1_write_addr, tile_width_bytes);
 
             l1_write_addr += tile_width_bytes;
-            noc_addrs[tile_row] += tile_width_bytes;
         }
 
         noc_async_read_barrier();
+        tt::data_movement::common::print_bf16_pages(l1_write_addr, 1024, 1);
         cb_push_back(cb_id_out, 1);
         core_number++;
     }

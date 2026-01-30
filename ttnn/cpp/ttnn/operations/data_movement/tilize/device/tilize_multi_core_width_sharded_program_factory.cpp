@@ -42,7 +42,8 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
     uint32_t num_cores_total = total_cores.num_cores();
 
     // Calculate row width in bytes and core responsibility
-    uint32_t row_width = input.logical_shape()[1] * input.element_size();
+    uint32_t row_width = shard_spec.shape[1] * input.element_size();
+    uint32_t datum_size = input.element_size();
     uint32_t responsibility = ((num_tiles_per_row - 1) / num_cores_total) + 1;
 
     uint32_t src0_cb_index = 0;
@@ -60,7 +61,8 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
             .set_page_size(src1_cb_index, page_size);
     CBHandle cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, row_width, num_cores_total};
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src0_cb_index, row_width, num_cores_total, datum_size};
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src1_cb_index, single_tile_size};
 
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
@@ -130,12 +132,13 @@ void TilizeMultiCoreWidthShardedProgramFactory::override_runtime_arguments(
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,
     const Tensor& output_tensor) {
-    auto& input = tensor_args.input_tensor;
+    const auto& input = tensor_args.input_tensor;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output_tensor.buffer();
 
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.unary_reader_kernel_id;
+    const auto& writer_kernel_id = shared_variables.unary_writer_kernel_id;
 
     auto& program = cached_program.program;
 
@@ -145,9 +148,14 @@ void TilizeMultiCoreWidthShardedProgramFactory::override_runtime_arguments(
     CoreRangeSet total_cores = CoreRangeSet(default_cores);
 
     for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = src_buffer->address();
-        runtime_args[1] = dst_buffer->address();
+        // auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        // runtime_args[0] = src_buffer->address();
+        // runtime_args[1] = dst_buffer->address();
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_runtime_args[0] = src_buffer->address();
+
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+        writer_runtime_args[0] = dst_buffer->address();
     }
 }
 }  // namespace ttnn::prim
