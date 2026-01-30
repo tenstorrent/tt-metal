@@ -105,10 +105,6 @@ jobs:
               ]
             ' <<< "$full_tests")
 
-          echo "Filtered test matrix:"
-          echo "$filtered"
-          echo "matrix=$filtered" >> "$GITHUB_OUTPUT"
-
   galaxy-e2e-tests:
     needs: load-test-matrix
     # if enabled-skus is empty or no tests match, matrix is [], and job is skipped
