@@ -460,15 +460,16 @@ MetalContext& MetalContext::instance() {
 void MetalContext::destroy_instance(bool check_device_count) {
     // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
     // one thread while no work is being done on the MetalContext.
-    if (!g_instance) {
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
         return;
     }
-    if (check_device_count && g_instance->device_manager() && g_instance->device_manager()->is_initialized() &&
-        !g_instance->device_manager()->get_all_active_devices().empty()) {
+    if (check_device_count && instance->device_manager() && instance->device_manager()->is_initialized() &&
+        !instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
     is_tearing_down = true;
-    delete g_instance;
+    delete instance;
     is_tearing_down = false;
     g_instance.store(nullptr, std::memory_order_release);
 }
