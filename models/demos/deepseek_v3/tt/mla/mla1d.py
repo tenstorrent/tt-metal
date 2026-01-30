@@ -53,7 +53,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 class MLA1D(AbstractModule):
     """
-    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
+    Multi-Latent Attention Module for 1D tensor parallelism.
     """
 
     @classmethod
