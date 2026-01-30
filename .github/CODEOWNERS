@@ -303,9 +303,6 @@ models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/codeowner-bypass
 models/*/mnist/ @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/*/squeezebert/ @cfjchu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/nlp/llms/falcon7b/ttnn_falcon7b @cfjchu @uaydonat @tenstorrent/codeowner-bypass
-models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT @tenstorrent/codeowner-bypass
-models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
-models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/demos/nlp/llms/llama3_70b/galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
