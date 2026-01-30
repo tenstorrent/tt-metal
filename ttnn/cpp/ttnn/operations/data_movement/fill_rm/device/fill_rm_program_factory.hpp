@@ -7,7 +7,7 @@
 #include "fill_rm_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm::program {
+namespace ttnn::prim {
 
 struct FillRMSharedVariables {
     tt::tt_metal::KernelHandle kernel_id = 0;
@@ -27,4 +27,4 @@ struct FillRMProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::fill_rm::program
+}  // namespace ttnn::prim

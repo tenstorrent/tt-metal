@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
+namespace ttnn::experimental::prim {
 
 struct FusedRmsnormPostAllGatherParams {
     float eps;
@@ -28,8 +28,4 @@ struct FusedRmsnormPostAllGatherInputs {
     std::optional<Tensor> rope_sin;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+}  // namespace ttnn::experimental::prim

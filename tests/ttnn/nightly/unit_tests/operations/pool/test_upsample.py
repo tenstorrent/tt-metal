@@ -215,16 +215,15 @@ def test_upsample_various(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, num_channels, height, width, scale_h, scale_w, num_slices",
+    "batch_size, num_channels, height, width, scale_h, scale_w",
     (
-        (1, 256, 64, 128, 2, 2, 2),
-        (1, 128, 64, 128, 2, 2, 2),
+        (1, 256, 32, 64, 2, 2),
+        (1, 256, 64, 128, 2, 2),
+        (1, 128, 64, 128, 2, 2),
     ),
 )
 @pytest.mark.parametrize("run_twice", [True])
-def test_panoptic_upsample_sliced(
-    device, batch_size, num_channels, height, width, scale_h, scale_w, num_slices, run_twice
-):
+def test_panoptic_upsample(device, batch_size, num_channels, height, width, scale_h, scale_w, run_twice):
     input_shape_nchw = [batch_size, num_channels, height, width]
     scale_factor = (scale_h, scale_w)
     mode_pytorch = "nearest"  # we only did nearest in panoptic due to pcc dropping very little and bilinear not being able to fit in memory as of now
@@ -233,10 +232,10 @@ def test_panoptic_upsample_sliced(
     dtype_ttnn = ttnn.bfloat16
 
     batch_size, channels, input_h, input_w = input_shape_nchw
-    assert channels % num_slices == 0, "Channels must be divisible by num_slices"
-    slice_channels = channels // num_slices
 
-    logger.info(f"Running Panoptic Upsample with Channel Slicing (slices={num_slices})")
+    logger.info(
+        f"Running Panoptic Upsample: {channels} ch @ {input_h}x{input_w}, scale={scale_factor}, mode={mode_ttnn}"
+    )
 
     torch.manual_seed(0)
     torch_input_nchw = torch.rand(input_shape_nchw, dtype=dtype_torch)
@@ -248,40 +247,23 @@ def test_panoptic_upsample_sliced(
         torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn
     )
 
-    sliced_results = []
-    for slice_idx in range(num_slices):
-        start_ch = slice_idx * slice_channels
-        end_ch_exclusive = (slice_idx + 1) * slice_channels
+    ttnn_output_nhwc = ttnn.upsample(
+        ttnn_input_nhwc,
+        scale_factor=scale_factor,
+        mode=mode_ttnn,
+    )
 
-        x_slice_nhwc = ttnn.slice(
-            ttnn_input_nhwc, [0, 0, 0, start_ch], [batch_size, input_h, input_w, end_ch_exclusive]
-        )
-
-        x_slice_upsampled = ttnn.upsample(
-            x_slice_nhwc,
+    if run_twice:
+        ttnn.deallocate(ttnn_output_nhwc, True)
+        ttnn_output_nhwc = ttnn.upsample(
+            ttnn_input_nhwc,
             scale_factor=scale_factor,
             mode=mode_ttnn,
         )
 
-        if run_twice:
-            ttnn.deallocate(x_slice_upsampled, True)
-            x_slice_upsampled = ttnn.upsample(
-                x_slice_nhwc,
-                scale_factor=scale_factor,
-                mode=mode_ttnn,
-            )
-
-        x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
-        sliced_results.append(x_slice_upsampled)
-
-        ttnn.deallocate(x_slice_nhwc)
+    ttnn_output_nhwc = ttnn.to_memory_config(ttnn_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
 
     ttnn.deallocate(ttnn_input_nhwc)
-
-    ttnn_output_nhwc = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    for slice_result in sliced_results:
-        ttnn.deallocate(slice_result)
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
 

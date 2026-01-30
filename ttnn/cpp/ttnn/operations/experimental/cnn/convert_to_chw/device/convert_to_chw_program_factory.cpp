@@ -6,7 +6,7 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::cnn::to_chw::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
@@ -35,10 +35,10 @@ void set_runtime_args_for_all_kernels(
 }  // namespace
 
 ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
-    const ToChwParams& /*operation_attributes*/, const ToChwInputs& tensor_args, Tensor& tensor_return_value) {
+    const ConvertToCHWParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto& a = tensor_args.input;
+    const auto& a = tensor_args;
     auto& output = tensor_return_value;
 
     const auto& input_shape = a.logical_shape();
@@ -157,8 +157,8 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
 
 void ConvertToCHWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ToChwParams& /*operation_attributes*/,
-    const ToChwInputs& tensor_args,
+    const ConvertToCHWParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& output) {
     auto& program = cached_program.program;
     const auto& cb_in = cached_program.shared_variables.cb_in;
@@ -171,7 +171,7 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
 
     // buffers are not provided so we take them from output/input tensors
     auto* output_dram_buffer = output.buffer();
-    auto* input_dram_buffer = tensor_args.input.buffer();
+    auto* input_dram_buffer = tensor_args.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);
@@ -180,4 +180,4 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
         program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
 }
 
-}  // namespace ttnn::operations::experimental::cnn::to_chw::program
+}  // namespace ttnn::experimental::prim

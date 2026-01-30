@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-namespace ttnn::operations::experimental::isin::common {
+namespace ttnn::experimental::prim {
 
 constexpr int32_t FIRST_DIMENSION = 0;
 
@@ -17,4 +17,4 @@ constexpr auto OUTPUT_TENSOR_DATA_TYPE = tt::tt_metal::DataType::UINT32;
 constexpr auto OUTPUT_TENSOR_LAYOUT = tt::tt_metal::Layout::ROW_MAJOR;
 constexpr uint32_t OUTPUT_TENSOR_RANK = 1;
 
-}  // namespace ttnn::operations::experimental::isin::common
+}  // namespace ttnn::experimental::prim

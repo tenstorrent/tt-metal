@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::argmax {
+namespace ttnn::prim {
 
 /*
  * Generates the output shape for the reduction operation.
@@ -21,4 +21,4 @@ namespace ttnn::operations::reduction::argmax {
  */
 ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim);
 
-}  // namespace ttnn::operations::reduction::argmax
+}  // namespace ttnn::prim

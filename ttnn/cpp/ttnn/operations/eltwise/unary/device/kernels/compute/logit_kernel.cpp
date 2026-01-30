@@ -16,8 +16,7 @@
 #include "compute_kernel_api/copy_dest_values.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);
 
@@ -73,7 +72,7 @@ void MAIN {
             log_tile(0);
 #ifdef WHERE  // Conditional negation: when eps > 0.5 and input < eps, negate the logit result (multiply by -1.0) to
               // ensure positive output. WHERE selects negated result (true) or original result (false).
-            copy_dest_values(2, 0);
+            copy_dest_values(0, 2);
 
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 1);
@@ -102,4 +101,3 @@ void MAIN {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

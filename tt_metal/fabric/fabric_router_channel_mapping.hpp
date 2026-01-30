@@ -84,7 +84,8 @@ public:
         Topology topology,
         bool downstream_is_tensix_builder,
         RouterVariant variant,
-        const IntermeshVCConfig* intermesh_config);
+        const IntermeshVCConfig* intermesh_config,
+        bool has_z_on_device = false);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -112,11 +113,17 @@ public:
      */
     bool is_z_router() const;
 
+    /**
+     * Check if this is a standard mesh router
+     */
+    bool is_mesh_router() const;
+
 private:
     Topology topology_;
     bool downstream_is_tensix_builder_;
     RouterVariant variant_;
     const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
+    bool has_z_on_device_ = false;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;

@@ -145,10 +145,10 @@ void FabricContext::compute_packet_specifications() {
         }
 
         // Validate 1D topology against memory map limits
-        // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
+        // ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         TT_FATAL(
             max_1d_hops_ <= Limits::MAX_1D_HOPS,
-            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 256 bytes limit).",
+            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 1024 bytes limit).",
             max_1d_hops_,
             Limits::MAX_1D_HOPS);
 
@@ -182,16 +182,20 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
     switch (extension_words) {
         case 0: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<0>);
         case 1: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<1>);
+        case 2: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<2>);
+        case 3: return sizeof(tt::tt_fabric::LowLatencyPacketHeaderT<3>);
         default: TT_THROW("Unsupported extension words: {}", extension_words);
     }
 }
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (19, 35) to avoid switch bloat
+    // Only max-capacity tiers per header size (19, 35, 51, 67) to avoid switch bloat
     switch (route_buffer_size) {
-        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header max
-        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header max
+        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header, max capacity
+        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header, max capacity
+        case 51: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<51>);  // 112B header, max capacity
+        case 67: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<67>);  // 128B header, max capacity
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
 }
@@ -284,29 +288,38 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+bool FabricContext::has_z_router_on_device(const FabricNodeId& fabric_node_id) const {
+    // Check if this fabric node has Z router ethernet channels
+    // Query control plane for active channels and check if any have Z direction
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
 
-    // Iterate through all meshes to find which one contains this device
-    const auto& mesh_ids = mesh_graph.get_mesh_ids();
-    for (const auto& mesh_id : mesh_ids) {
-        const auto& mesh_connections = inter_mesh_connectivity[*mesh_id];
+    // Try to get active channels - if node doesn't exist, the map lookup will return empty
+    auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
-        // Check if this device ID is within this mesh's connectivity map
-        if (device_id < mesh_connections.size()) {
-            const auto& chip_connections = mesh_connections[device_id];
-
-            // Check if any connection from this chip uses Z direction
-            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                if (router_edge.port_direction == RoutingDirection::Z) {
-                    return true;
-                }
-            }
+    // If no channels, node doesn't have Z router (or isn't configured yet)
+    if (active_channels.empty()) {
+        log_debug(
+            LogMetal,
+            "Fabric node M{}D{} does NOT have Z router (no active channels)",
+            *fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        return false;
+    }
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        // direction is eth_chan_directions, compare with eth_chan_directions::Z
+        if (direction == eth_chan_directions::Z) {
+            log_debug(
+                LogMetal,
+                "Fabric node M{}D{} HAS Z router (channel {} has Z direction)",
+                *fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                eth_chan_id);
+            return true;
         }
     }
 
+    log_debug(LogMetal, "Fabric node M{}D{} does NOT have Z router", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
     return false;
 }
 

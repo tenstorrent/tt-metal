@@ -281,7 +281,7 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
-    if (this->target_type_ == TargetDevice::Simulator) {
+    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock) {
         return;
     }
 
@@ -419,7 +419,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,

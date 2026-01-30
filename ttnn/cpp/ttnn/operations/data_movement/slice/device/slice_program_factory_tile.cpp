@@ -161,7 +161,9 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 }
 }  // namespace
 
-namespace slice::program {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
 
 // Slice Tile Program Factory implementation
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
@@ -216,7 +218,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    set_slice_runtime_args_tile<true>(
+    ttnn::operations::data_movement::set_slice_runtime_args_tile<true>(
         input,
         output,
         args.slice_start,
@@ -253,7 +255,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
             ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    set_slice_runtime_args_tile<false>(
+    ttnn::operations::data_movement::set_slice_runtime_args_tile<false>(
         src_tensor,
         dst_tensor,
         slice_start,
@@ -268,6 +270,4 @@ void SliceTileProgramFactory::override_runtime_arguments(
         cached_program.shared_variables.accumulated_total_per_dim);
 }
 
-}  // namespace slice::program
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

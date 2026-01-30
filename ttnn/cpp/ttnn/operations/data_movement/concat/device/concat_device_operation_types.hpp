@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::concat {
+namespace ttnn::prim {
 
 struct ConcatParams {
     uint32_t dim;
@@ -18,4 +18,4 @@ struct ConcatInputs {
     std::vector<Tensor> input_tensors;
 };
 
-}  // namespace ttnn::operations::data_movement::concat
+}  // namespace ttnn::prim

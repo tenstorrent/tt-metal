@@ -45,6 +45,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -371,7 +372,7 @@ bool initialize_program(
     }
 
     if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->get_device(0, 0)->get_active_ethernet_cores(true);
+        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
                 tt::LogTest,
@@ -731,7 +732,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         }
 
         // Set benchmark counters before timing (all values are known at this point)
-        set_benchmark_counters(state, info, mesh_device->get_device(0, 0), executor.total_program_iterations);
+        set_benchmark_counters(state, info, mesh_device->impl().get_device(0, 0), executor.total_program_iterations);
 
         // Run warmup
         executor.warmup_programs();

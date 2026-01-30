@@ -1,14 +1,22 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_impl.hpp"
 #include <fmt/format.h>
 #include <optional>
 
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <tt_stl/assert.hpp>
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+
+#include "tt-metalium/shape.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
@@ -16,17 +24,12 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
-#include "tt-metalium/shape.hpp"
-#include "tt-metalium/math.hpp"
-#include "ttnn/distributed/distributed_tensor.hpp"
-
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/distributed/api.hpp"
+#include <tt_stl/assert.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -49,20 +52,6 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
-}
-
-uint32_t element_size_bytes(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
-        default: TT_THROW("Unsupported data type");
-    }
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
@@ -454,7 +443,7 @@ std::string to_string_impl(const Tensor& tensor) {
             return tensor;
         }
         if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return to_layout_impl<T>(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         }
         return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
     };
@@ -885,6 +874,36 @@ std::vector<T> convert_to_logical_data(tt::stl::Span<const T> row_major_physical
     return logical_data;
 }
 
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile(
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
+    if (shape.width() * shape.height() == 0) {
+        return std::vector<T>();
+    }
+    TT_FATAL(
+        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
+        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
+        "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
+        tile.get_tile_shape()[0],
+        tile.get_tile_shape()[1],
+        shape);
+
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
+    auto transpose_within_face = tile.get_transpose_within_face();
+    auto transpose_of_faces = tile.get_transpose_of_faces();
+
+    return convert_layout(
+        data_to_convert,
+        shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -923,7 +942,7 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        return tensor_impl::convert_layout_row_major_to_tile(
+        return CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), row_major_physical_data_span);
     }
     if (!row_major_physical_data.empty()) {
@@ -999,10 +1018,6 @@ std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const Te
     return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
 }
 
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
-}
-
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
     tt::stl::Span<const bfloat16> physical_data, const TensorSpec& tensor_spec);
 template std::vector<float> decode_tensor_data<float>(
@@ -1035,7 +1050,7 @@ Tensor to_layout_impl(const Tensor& tensor, Layout target_layout) {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 TT_FATAL(target_layout == Layout::TILE, "Unsupported layout conversion");
-                return convert_layout_row_major_to_tile(physical_shape, tile, input_data);
+                return CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(physical_shape, tile, input_data);
             case Layout::TILE:
                 TT_FATAL(target_layout == Layout::ROW_MAJOR, "Unsupported layout conversion");
                 return convert_layout_tile_to_row_major(physical_shape, tile, input_data);
@@ -1367,7 +1382,7 @@ tt::tt_metal::HostStorage transform_storage(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tt::tt_metal::tensor_impl::convert_layout_row_major_to_tile(
+                tilized_data = CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
                     input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }

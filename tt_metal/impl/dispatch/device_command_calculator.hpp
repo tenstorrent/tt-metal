@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <stdint.h>
 #include <type_traits>
 #include <utility>
@@ -30,6 +32,11 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_prefetch_relay_linear_h() {
         this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }

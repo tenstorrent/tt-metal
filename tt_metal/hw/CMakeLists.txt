@@ -519,6 +519,7 @@ target_sources(
             inc/api/dataflow/dataflow_api.h
             inc/api/debug/assert.h
             inc/api/debug/dprint.h
+            inc/api/debug/timing_perturbation.h
             inc/api/debug/dprint_pages.h
             inc/api/debug/dprint_tensix.h
             inc/api/debug/dprint_tile.h
@@ -538,6 +539,7 @@ target_sources(
             inc/experimental/lock.h
             inc/experimental/noc.h
             inc/experimental/circular_buffer.h
+            inc/experimental/dataflow_buffer.h
             inc/experimental/noc_semaphore.h
             inc/experimental/endpoints.h
             inc/experimental/core_local_mem.h
@@ -551,6 +553,8 @@ target_sources(
             inc/internal/bit_utils.h
             inc/internal/circular_buffer_interface.h
             inc/internal/circular_buffer_init.h
+            inc/internal/dataflow_buffer_interface.h
+            inc/internal/dataflow_buffer_init.h
             inc/internal/firmware_common.h
             inc/internal/mod_div_lib.h
             inc/internal/risc_attribs.h

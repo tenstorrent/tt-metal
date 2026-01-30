@@ -204,6 +204,7 @@ detail::ProgramImpl::ProgramImpl() :
 
     cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
+    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -211,6 +212,12 @@ detail::ProgramImpl::ProgramImpl() :
         kernel_groups_.push_back({});
         core_to_kernel_group_index_table_.push_back({});
     }
+
+    TT_ASSERT(
+        cb_mask_width_ >= max_cbs_,
+        "CB mask width ({}) is insufficient for architecture's {} CBs",
+        cb_mask_width_,
+        max_cbs_);
 
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
@@ -406,7 +413,7 @@ KernelGroup::KernelGroup(
     const detail::ProgramImpl& program,
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
-    uint32_t local_cb_mask,
+    uint64_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -575,8 +582,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
-            uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
-            uint32_t local_cb_mask = 0;
+            uint32_t min_remote_cb_start_index = max_cbs_;
+            uint64_t local_cb_mask = 0;
+            uint32_t num_dfbs = 0;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : cores) {
@@ -593,18 +601,19 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
-                            uint32_t used_cbs = local_val->second.to_ulong();
+                            uint64_t used_cbs = local_val->second.to_ullong();
                             local_cb_mask |= used_cbs;
-                            max_local_cb_end_index = std::max(
-                                max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
+                            uint32_t calculated_index =
+                                cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(used_cbs));
+                            max_local_cb_end_index = std::max(max_local_cb_end_index, calculated_index);
                             if (!logged_noncontiguous) {
                                 // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
                                 // above a zero bit.
-                                uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
+                                uint64_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
                                 if (non_contiguous_cbs) {
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
-                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    uint32_t first_unused_index = static_cast<uint32_t>(__builtin_ctzll(~used_cbs));
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);
@@ -618,7 +627,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     std::lock_guard lock(m);
                                     // Keep track of which programs have been logged to avoid spamming the log. This is
                                     // particularly important for mesh devices.
-                                    static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
+                                    static std::set<std::tuple<uint64_t, uint32_t, std::string>> logged;
                                     auto cb_tuple =
                                         std::make_tuple(non_contiguous_cbs, first_unused_index, kernels_str);
 
@@ -631,8 +640,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                                 HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
-                                        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-                                            if (non_contiguous_cbs & (1 << i)) {
+                                        for (uint32_t i = 0; i < max_cbs_; i++) {
+                                            if (non_contiguous_cbs & (1ULL << i)) {
                                                 if (!cb_ids.empty()) {
                                                     cb_ids += ",";
                                                 }
@@ -655,7 +664,18 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
-                                min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
+                                min_remote_cb_start_index,
+                                static_cast<uint32_t>(__builtin_ctzll(remote_val->second.to_ullong())));
+                        }
+
+                        if (not hal.get_supports_dfbs(programmable_core_type_index)) {
+                            continue;
+                        }
+                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
+                        // KernelGroup to hold value of number of dfbs
+                        auto local_dfb_val = per_core_num_dfbs_.find(core);
+                        if (local_dfb_val != per_core_num_dfbs_.end()) {
+                            num_dfbs += local_dfb_val->second;
                         }
                     }
                 }
@@ -668,6 +688,13 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
+            TT_FATAL(
+                !(local_cb_mask != 0 && num_dfbs != 0),
+                "Cannot use both circular buffers and dataflow buffers on the same core. "
+                "local_cb_mask: {}, num_dfbs: {}",
+                local_cb_mask,
+                num_dfbs);
+            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
@@ -726,16 +753,17 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                auto add_buffer_indices = [&cb_indices](
+                uint32_t max_cbs = max_cbs_;
+                auto add_buffer_indices = [&cb_indices, max_cbs](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
                         // TT_ASSERT since we validate when constructing the config that it's within range
                         TT_ASSERT(
-                            buffer_index < NUM_CIRCULAR_BUFFERS,
+                            buffer_index < max_cbs,
                             "Invalid circular buffer index: {} should be between 0 and {}",
                             buffer_index,
-                            NUM_CIRCULAR_BUFFERS);
+                            max_cbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
@@ -1071,6 +1099,11 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
+    // Mock devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     auto extract_dst_noc_unicast_info =
         [&device](
             const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
@@ -1438,10 +1471,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    kernel->register_kernel_elf_paths_with_watcher(*device);
+                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                        tt::TargetDevice::Mock) {
+                        kernel->register_kernel_elf_paths_with_watcher(*device);
+                    }
+
+                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
+                                   tt::TargetDevice::Mock;
 
                     if (detail::HashLookup::inst().add(kernel_hash)) {
-                        GenerateBinaries(device, build_options, kernel);
+                        if (!is_mock) {
+                            GenerateBinaries(device, build_options, kernel);
+                        } else {
+                            // Create empty stub binaries for mock devices
+                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                        }
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
                     detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
@@ -1453,12 +1498,18 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
     sync_build_steps(events);
 
-    for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
-            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+    // Mock devices don't have binaries to read
+    bool is_mock =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    if (!is_mock) {
+        for (const auto& kernels : kernels_) {
+            for (const auto& pair : kernels) {
+                const auto& kernel = pair.second;
+                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+            }
         }
+        sync_build_steps(events);
     }
-    sync_build_steps(events);
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
@@ -1626,6 +1677,8 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.cb_offset = state.cb_offset;
     program_config.cb_size = state.cb_size;
     program_config.local_cb_size = state.local_cb_size;
+    program_config.dfb_offset = state.dfb_offset;
+    program_config.dfb_size = state.dfb_size;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -1644,6 +1697,8 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+using DataflowBuffersGetter =
+    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
 
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
@@ -1662,12 +1717,17 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
+    DataflowBuffersGetter dataflow_buffers_getter =
+        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
+        return this->dataflow_buffers_;
+    };
+
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
 
     set_finalized();
 }
@@ -1679,6 +1739,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
+    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
@@ -1704,6 +1765,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         state.offset = program_dispatch::finalize_cbs(
             index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
+            index,
+            kernel_groups_getter(index),
+            dataflow_buffers_getter(),
+            state.offset,
+            state.dfb_offset,
+            state.dfb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

@@ -28,6 +28,8 @@ file(
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
+    deepseek_minimal_all_reduce/device/kernels/*
+    deepseek_moe_reduce_scatter/device/kernels/*
 )
 
 target_sources(
@@ -118,6 +120,12 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
+        deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
+        deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
+        deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
+        deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

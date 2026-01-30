@@ -348,7 +348,7 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
             dst_buffer = dst_buffer.transform(
                 [&tensor](const tt::tt_metal::HostBuffer& shard) {
                     return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
@@ -496,12 +496,26 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
             .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<TensorToMesh>(TensorToMesh::create(
-        mesh_device,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{dim}},
-            .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
+// Shard a tensor across one mesh dimension, and replicate the tensor along the other dimensions.
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis) {
+    if (!cluster_axis.has_value()) {
+        return std::make_unique<TensorToMesh>(TensorToMesh::create(
+            mesh_device,
+            MeshMapperConfig{
+                .placements = {MeshMapperConfig::Shard{dim}},
+                .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
+    }
+    TT_FATAL(
+        cluster_axis.value() >= 0 && cluster_axis.value() < mesh_device.shape().dims(),
+        "Cluster axis {} is out of range for mesh device with {} dimensions",
+        cluster_axis.value(),
+        mesh_device.shape().dims());
+    tt::stl::SmallVector<MeshMapperConfig::Placement> placements(
+        mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
+    placements[cluster_axis.value()] = MeshMapperConfig::Shard{dim};
+    return std::make_unique<TensorToMesh>(
+        TensorToMesh::create(mesh_device, MeshMapperConfig{.placements = placements}));
 }
 
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config) {

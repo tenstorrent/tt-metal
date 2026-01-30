@@ -11,15 +11,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard::program {
+namespace ttnn::prim {
 
 template <bool local_is_output>
 ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFactory<local_is_output>::create(
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     const auto& local_tensor = local_is_output ? output : input;
     const auto& remote_tensor = local_is_output ? input : output;
     const auto local_shard_spec = local_tensor.shard_spec().value();
@@ -67,7 +65,7 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
-        detail::compute_width_sharding_reshard_segments(
+        ttnn::operations::data_movement::detail::compute_width_sharding_reshard_segments(
             local_shard_spec.shape,
             remote_shard_spec.shape,
             local_cores,
@@ -120,11 +118,11 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
 template <bool is_reader>
 void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/,
+    const ReshardInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
     uint32_t remote_address = remote_tensor.buffer()->address();
@@ -144,4 +142,4 @@ void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
 template struct ReshardSameHeightFactory<true>;
 template struct ReshardSameHeightFactory<false>;
 
-}  // namespace ttnn::operations::data_movement::reshard::program
+}  // namespace ttnn::prim

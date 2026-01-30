@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 
-namespace ttnn::operations::reduction::topk::program {
+namespace ttnn::prim {
 
 struct TopKMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -23,13 +23,13 @@ struct TopKMultiCoreProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const TopkParams& args, const TopkInputs& tensor_args, tensor_return_value_t& output_tensors);
+        const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const TopkParams& args,
         const TopkInputs& tensor_args,
-        tensor_return_value_t& output_tensors);
+        std::tuple<Tensor, Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::reduction::topk::program
+}  // namespace ttnn::prim

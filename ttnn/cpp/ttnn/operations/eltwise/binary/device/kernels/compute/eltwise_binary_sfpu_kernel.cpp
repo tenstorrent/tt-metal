@@ -18,6 +18,8 @@
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
+#include "compute_kernel_api/remainder_int32.h"
+#include "compute_kernel_api/fmod_int32.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
@@ -26,8 +28,7 @@
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
@@ -175,4 +176,3 @@ void MAIN {
         cb_push_back(cb_out0, per_core_block_size);
     }
 }
-}  // namespace NAMESPACE

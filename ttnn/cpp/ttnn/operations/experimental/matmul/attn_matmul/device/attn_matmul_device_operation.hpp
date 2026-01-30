@@ -15,14 +15,14 @@
 #include "attn_matmul_device_operation_types.hpp"
 #include "attn_matmul_program_factory.hpp"
 
-namespace ttnn::operations::experimental::matmul::attn_matmul {
+namespace ttnn::experimental::prim {
 
 struct AttnMatmulDeviceOperation {
-    using operation_attributes_t = attn_matmul::operation_attributes_t;
-    using tensor_args_t = attn_matmul::tensor_args_t;
-    using spec_return_value_t = attn_matmul::spec_return_value_t;
-    using tensor_return_value_t = attn_matmul::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AttnMatmulProgramFactory>;
+    using operation_attributes_t = AttnMatmulParams;
+    using tensor_args_t = AttnMatmulInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<AttnMatmulProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -37,11 +37,11 @@ struct AttnMatmulDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::matmul::attn_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation::tensor_return_value_t attn_matmul(
+Tensor attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,

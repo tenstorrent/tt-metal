@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::manual_seed {
+namespace ttnn::prim {
 struct ManualSeedParams {
     tt::tt_metal::distributed::MeshDevice* device = nullptr;
     std::optional<uint32_t> seeds = std::nullopt;
@@ -21,4 +21,4 @@ struct ManualSeedInputs {
     std::optional<Tensor> user_ids = std::nullopt;
 };
 
-}  // namespace ttnn::operations::reduction::manual_seed
+}  // namespace ttnn::prim

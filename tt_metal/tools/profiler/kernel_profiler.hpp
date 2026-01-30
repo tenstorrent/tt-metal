@@ -369,6 +369,10 @@ __attribute__((noinline)) void finish_profiler() {
                     // Host index is reset because we got a new DRAM buffer
                     profiler_control_buffer[hostIndex] = 0;
                     currEndIndexAll = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
+                    dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                                      PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                  hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                  profiler_control_buffer[hostIndex] * sizeof(uint32_t);
                 }
             }
 
@@ -438,10 +442,10 @@ __attribute__((noinline)) void quick_push() {
     profiler_data_buffer[myRiscID].data[ID_LH] =
         (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
 
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
-
     mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
     if constexpr (NON_DROPPING) {
         if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
@@ -798,9 +802,9 @@ __attribute__((noinline)) void trace_only_init() {
 #define DeviceIncrementTraceCount()
 
 // null macros when noc tracing is disabled
-#define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted)
-#define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted)
-#define RECORD_NOC_EVENT(type, posted)
+#define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
+#define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
+#define RECORD_NOC_EVENT(type, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 // null macros when perf counters are disabled

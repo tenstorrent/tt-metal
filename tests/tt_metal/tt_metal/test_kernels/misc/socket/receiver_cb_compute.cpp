@@ -9,8 +9,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "api/socket_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
@@ -41,4 +40,3 @@ void MAIN {
         socket_pop_pages(socket, 1);
     }
 }
-}  // namespace NAMESPACE

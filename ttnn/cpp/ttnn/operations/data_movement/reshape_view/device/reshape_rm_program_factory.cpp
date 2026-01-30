@@ -10,10 +10,10 @@
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 #define MASK_16 0xFFFFFFFFFFFFFFF0
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
-ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
-    const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value) {
+ReshapeViewRMProgramFactory::cached_program_t ReshapeViewRMProgramFactory::create(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
@@ -182,10 +182,10 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     return {std::move(program), {reader_kernel_id, reader_kernel_id2, can_use_dual_kernel, num_cores_x, num_cores_y}};
 }
 
-void ReshapeRMProgramFactory::override_runtime_arguments(
+void ReshapeViewRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ReshapeParams& operation_attributes,
-    const ReshapeInputs& tensor_args,
+    const ReshapeViewParams& operation_attributes,
+    const ReshapeViewInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -221,4 +221,4 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

@@ -69,6 +69,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hostdevcommon/common_values.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -87,6 +88,11 @@ std::shared_ptr<Kernel> GetKernel(const ProgramImpl& program, KernelHandle kerne
 namespace program_dispatch {
 
 namespace {
+
+inline bool is_watcher_assert_enabled() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+}
 
 struct CommandConstants {
     CoreType dispatch_core_type;
@@ -139,6 +145,16 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
+        // Initialize RTA/CRTA offsets to sentinel when watcher enabled. Launch message memory
+        // may contain stale data from previous dispatches. Can't use 0 as "no args" since 0 is
+        // a valid L1 offset. Sentinel (0xFFFF) distinguishes "no args" from "args at offset 0"
+        if (is_watcher_assert_enabled()) {
+            auto rta_offsets = kg->launch_msg.view().kernel_config().rta_offset();
+            for (size_t i = 0; i < rta_offsets.size(); i++) {
+                kg->launch_msg.view().kernel_config().rta_offset()[i].rta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
+                kg->launch_msg.view().kernel_config().rta_offset()[i].crta_offset() = RTA_CRTA_NO_ARGS_SENTINEL;
+            }
+        }
         std::ranges::fill(max_rtas, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
@@ -161,12 +177,19 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             uint32_t rta_offset = base_offset + offset;
             offset += max_rtas[dispatch_class] * sizeof(uint32_t);
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
-            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                uint32_t processor_index = hal.get_processor_index(
-                    kernel->get_kernel_programmable_core_type(),
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i));
-                kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+            // Per-kernel check: Only set actual offset if this kernel has RTAs
+            if (max_rtas[dispatch_class] > 0) {
+                for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                    uint32_t processor_index = hal.get_processor_index(
+                        kernel->get_kernel_programmable_core_type(),
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i));
+                    TT_FATAL(
+                        rta_offset <= std::numeric_limits<uint16_t>::max(),
+                        "RTA offset {} overflows uint16_t",
+                        rta_offset);
+                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                }
             }
         }
         kg->total_rta_size = offset;
@@ -218,13 +241,20 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
             auto dispatch_class = kernel->dispatch_class();
-            for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                uint32_t processor_index = hal.get_processor_index(
-                    kernel->get_kernel_programmable_core_type(),
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i));
-                kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                    crta_offsets[dispatch_class];
+            // Per-kernel check: Only set actual offset if this kernel has CRTAs
+            if (max_crtas[dispatch_class] > 0) {
+                for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                    uint32_t processor_index = hal.get_processor_index(
+                        kernel->get_kernel_programmable_core_type(),
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i));
+                    TT_FATAL(
+                        crta_offsets[dispatch_class] <= std::numeric_limits<uint16_t>::max(),
+                        "CRTA offset {} overflows uint16_t",
+                        crta_offsets[dispatch_class]);
+                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
+                        crta_offsets[dispatch_class];
+                }
             }
         }
     }
@@ -278,16 +308,18 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size) {
     uint32_t max_local_end_index = 0;
-    uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t min_remote_start_index = max_cbs;
 
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
-        uint32_t local_cb_mask = kernel_config.local_cb_mask();
-        uint32_t current_local_end_index = local_cb_mask == 0 ? 0 : 32 - __builtin_clz(local_cb_mask);
+        uint64_t local_cb_mask = kernel_config.local_cb_mask();
+        uint32_t current_local_end_index =
+            local_cb_mask == 0 ? 0
+                               : ProgramImpl::cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(local_cb_mask));
         max_local_end_index = std::max(max_local_end_index, current_local_end_index);
         min_remote_start_index = std::min(min_remote_start_index, (uint32_t)kernel_config.min_remote_cb_start_index());
     }
-
     local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t remote_cb_offset = base_offset + local_cb_size;
     for (auto& kg : kernel_groups) {
@@ -295,9 +327,8 @@ uint32_t finalize_cbs(
         kernel_config.local_cb_offset() = base_offset;
         kernel_config.remote_cb_offset() = remote_cb_offset;
     }
-
-    uint32_t remote_cb_size = (NUM_CIRCULAR_BUFFERS - min_remote_start_index) *
-                              UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t remote_cb_size =
+        (max_cbs - min_remote_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t total_cb_size = local_cb_size + remote_cb_size;
     cb_offset = base_offset;
     cb_size = total_cb_size;
@@ -313,6 +344,13 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
+    // Mock devices don't have real binaries, skip finalization
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        kernel_text_offset = base_offset;
+        kernel_text_size = 0;
+        return base_offset;
+    }
+
     const auto& hal = MetalContext::instance().hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -484,7 +522,7 @@ void generate_runtime_args_cmds(
             std::uniform_int_distribution<int> dist(0, 65535);
             for (uint32_t count = 0; count < total_words; count++) {
                 uint16_t rnd = static_cast<uint16_t>(dist(gen));
-                const uint32_t known_garbage = 0xBEEF0000 | rnd;
+                const uint32_t known_garbage = WATCHER_RTA_UNSET_PATTERN | rnd;
                 command_start_ptr[count] = known_garbage;
             }
         }
@@ -505,6 +543,10 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
+        // When watcher assert is enabled, RTAs are stored as [count | args...] in the command buffer
+        // RuntimeArgsData.rt_args_data points to args (skips count) for user-facing API
+        // data_in_sequence points to args location in command buffer for retargeting
+        uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
@@ -512,20 +554,25 @@ void generate_runtime_args_cmds(
             for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
                 auto& data = rt_args_data[i][j];
                 uint32_t* data_in_sequence =
-                    (uint32_t*)((char*)runtime_args_command_sequences.back().data() + data_offset + offset);
-                if (data.first.get().rt_args_data == data.second.get().data()) {
+                    reinterpret_cast<uint32_t*>(
+                        reinterpret_cast<char*>(runtime_args_command_sequences.back().data()) + data_offset + offset) +
+                    count_word_offset;
+                // rt_args_data points to args; data.second.get().data() points to count when watcher enabled
+                if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
                     // Update the pointer to point into the command sequence. Future RTA updates will modify the command
                     // sequence directly.
                     data.first.get().rt_args_data = data_in_sequence;
                 } else {
-                    TT_ASSERT(data.first.get().rt_args_data == std::get<0>(rt_data_and_sizes[i][j]));
+                    TT_ASSERT(
+                        data.first.get().rt_args_data ==
+                        (reinterpret_cast<const uint32_t*>(std::get<0>(rt_data_and_sizes[i][j])) + count_word_offset));
                     // Pointer already points into another command sequence. Schedule a copy from there.
                     rta_updates.emplace_back(
                         data.first.get().rt_args_data,
                         data_in_sequence,
                         data.first.get().rt_args_count * sizeof(uint32_t));
                 }
-                offset += data.first.get().rt_args_count * sizeof(uint32_t);
+                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
             }
             data_offset += data_inc;
         }
@@ -602,6 +649,7 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
+    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     // Calculate the best way to multicast common RTAs.
 
     // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
@@ -617,6 +665,8 @@ BatchedTransfers assemble_runtime_args_commands(
         if (common_rt_args.empty()) {
             continue;
         }
+        TT_ASSERT(kernel->common_runtime_args_data().data() == common_rt_args.data() + count_word_offset);
+        TT_ASSERT(kernel->common_runtime_args_data().size() == common_rt_args.size() - count_word_offset);
         per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
     }
 
@@ -747,8 +797,10 @@ BatchedTransfers assemble_runtime_args_commands(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                     TT_ASSERT(
                                         runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[dispatch_class]);
+                                    // Back up pointer to include count word for dispatch
+                                    // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).rt_args_data,
+                                        kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[dispatch_class]);
                                 }
@@ -814,10 +866,14 @@ BatchedTransfers assemble_runtime_args_commands(
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
 
-                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                    TT_ASSERT(
+                        (kernel->common_runtime_args_data().size() + count_word_offset) * sizeof(uint32_t) ==
+                        common_size);
                     TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
+                    // Back up pointer to include count word for dispatch (same as RTAs)
+                    // common_runtime_args_data().data() points to args; backing up includes count
                     common_rt_data_and_sizes.back().emplace_back(
-                        kernel->common_runtime_args_data().data(),
+                        kernel->common_runtime_args_data().data() - count_word_offset,
                         common_rt_args.size() * sizeof(uint32_t),
                         common_size);
                     common_rt_args_data.back().emplace_back(
@@ -1016,6 +1072,7 @@ public:
     void construct_commands(
         IDevice* device, const CommandConstants& constants, ProgramImpl& program, BatchedTransfers& batched_transfers) {
         const auto& hal = MetalContext::instance().hal();
+        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
         const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
@@ -1051,8 +1108,8 @@ public:
                     }
                     for (const auto& buffer_index : cb->remote_buffer_indices()) {
                         const uint32_t base_index =
-                            remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            remote_offset_index +
+                            ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                         cb_config_payload[base_index] = cb->config_address();
                         cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
@@ -1397,6 +1454,9 @@ public:
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
 
+        // Byte offset to skip count word when watcher enabled. Uses sizeof(uint32_t) instead of 1
+        // because transfer.data and data_collection_location are byte pointers (uint8_t*)
+        uint32_t count_word_byte_offset = is_watcher_assert_enabled() ? sizeof(uint32_t) : 0;
         // Write out batched semaphore + CB multicast transfers.
         for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
             auto& cmd_data = batched_cmd_data[i];
@@ -1434,16 +1494,21 @@ public:
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
                 if (transfer.rta_data) {
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) == transfer.data.data()) {
+                    // When watcher enabled, transfer.data contains [count | args...]
+                    // rt_args_data points to args location (data + offset)
+                    // rta_updates only copy args (count already written during initial copy)
+                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                        (transfer.data.data() + count_word_byte_offset)) {
                         // rt_args_data points to the original vector. Update it so later modifications directly modify
                         // the command stream.
-                        transfer.rta_data->rt_args_data = reinterpret_cast<uint32_t*>(data_collection_location[j]);
+                        transfer.rta_data->rt_args_data =
+                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
                     } else {
                         // rt_args_data points into the command stream. Setup a copy from that other location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
                             transfer.rta_data->rt_args_data,
-                            data_collection_location[j],
-                            static_cast<uint32_t>(transfer.data.size())});
+                            data_collection_location[j] + count_word_byte_offset,
+                            static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
                     }
                 }
                 j++;
@@ -1982,6 +2047,7 @@ void update_program_dispatch_commands(
     }
 
     // Update CB Configs
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
@@ -2000,7 +2066,7 @@ void update_program_dispatch_commands(
                 cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
                                                                    UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
@@ -2388,11 +2454,12 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
 
     std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
     const auto& hal = MetalContext::instance().hal();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         all_cb_configs_payloads.push_back(
-            std::vector<uint32_t>(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
+            std::vector<uint32_t>(max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
         auto& cb_config_payload = all_cb_configs_payloads.back();
         uint32_t first_unused_index = 0;
         for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
@@ -2410,7 +2477,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
                 first_unused_index = std::max(first_unused_index, base_index + 4);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
                                                                    UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);

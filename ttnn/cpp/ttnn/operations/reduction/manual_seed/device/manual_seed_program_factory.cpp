@@ -11,7 +11,7 @@
 
 #include <vector>
 
-namespace ttnn::operations::reduction::manual_seed::program {
+namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 namespace {
@@ -285,4 +285,4 @@ void ManualSeedSetSeedsSetCoresProgramFactory::override_runtime_arguments(
     override_multi_core_runtime_args(cached_program, tensor_args.user_ids.value(), tensor_args.seeds);
 }
 
-}  // namespace ttnn::operations::reduction::manual_seed::program
+}  // namespace ttnn::prim

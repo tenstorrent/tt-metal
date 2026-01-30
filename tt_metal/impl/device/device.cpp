@@ -229,7 +229,13 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
+    // SystemMemoryManager now has internal stubs for mock devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+
+    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
@@ -631,11 +637,13 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
     TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
 }
 
-std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const { return std::nullopt; }
+std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
+    return default_allocator_->get_lowest_occupied_l1_address(0);
+}
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
-    return std::nullopt;
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
 CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
@@ -647,6 +655,15 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
+}
+
+SystemMemoryManager& Device::sysmem_manager() {
+    // SystemMemoryManager handles mock devices internally with stubs
+    // For mock devices, ensure lazy initialization if not already done
+    if (!sysmem_manager_) {
+        sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, 1);
+    }
+    return *sysmem_manager_;
 }
 
 void Device::enable_program_cache() {
@@ -691,6 +708,9 @@ uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
+        return CoreCoord{0, 0};  // Return default for mock devices
+    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
@@ -759,9 +779,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
-                this->id());
+        bool noc_translation_enabled = true;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+            noc_translation_enabled = tt::tt_metal::MetalContext::instance()
+                                          .get_cluster()
+                                          .get_cluster_desc()
+                                          ->get_noc_translation_table_en()
+                                          .at(this->id());
+        }
         bool dram_is_virtualized =
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =

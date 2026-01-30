@@ -104,8 +104,9 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd(filepath, true);
-        this->initialize_from_mgd(mgd, fabric_config);
+        mesh_graph_desc_file_path_ = filepath;
+        mesh_graph_descriptor_.emplace(filepath, true);
+        this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config);
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -188,11 +189,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
-    if (has_flag(fabric_type, FabricType::TORUS_X)) {
+    if (has_flag(fabric_type, FabricType::TORUS_X) and mesh_shape[1] > 1) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
     }
-    if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+    if (has_flag(fabric_type, FabricType::TORUS_Y) and mesh_shape[0] > 1) {
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
@@ -225,10 +226,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
-        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE)
-                           ? mgd.get_num_eth_ports_per_direction()
-                           : 0,  // Z set to the same number as xy if in black hole
-    };
+        .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
     // Count total meshes including switches (switches are treated as meshes internally)
     uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
