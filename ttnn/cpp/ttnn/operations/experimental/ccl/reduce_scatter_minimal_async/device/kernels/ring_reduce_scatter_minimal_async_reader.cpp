@@ -110,9 +110,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         if constexpr (fuse_op) {
-            DPRINT << "Wait for matmul batch" << b << ENDL();
             matmul_receiver.wait_for_matmul_batch(b);
-            DPRINT << "Got matmul batch" << b << ENDL();
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;
@@ -279,5 +277,4 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "Finish Reduce Scatter Reader kernel" << ENDL();
 }

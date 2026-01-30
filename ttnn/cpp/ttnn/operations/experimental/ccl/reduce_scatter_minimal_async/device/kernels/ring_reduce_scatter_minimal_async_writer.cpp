@@ -455,15 +455,11 @@ void kernel_main() {
                 slice_idx++;
             }
         }
-        DPRINT << "Wait batch ready semaphore" << ENDL();
 
         // Reset the global semaphore before the next batch
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
-
-        DPRINT << "Reset batch ready semaphore" << ENDL();
     }
-    DPRINT << "Finish reduce scatter. Disconnect fabric" << ENDL();
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
@@ -481,5 +477,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-    DPRINT << "Finish Reduce Scatter Writer kernel" << ENDL();
 }
