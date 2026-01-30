@@ -16,8 +16,31 @@ from models.experimental.tt_symbiote.modules.moe import (
     Glm4MoeMoE,
     TTNNGlm4MoeMoE,
 )
-from models.experimental.tt_symbiote.utils.device_management import set_device
+from models.experimental.tt_symbiote.utils.device_management import set_device, DeviceInit
 from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
+from models.experimental.tt_symbiote.core.run_config import DistributedConfig, DistributedTensorConfig
+from dataclasses import dataclass
+import ttnn
+from models.demos.deepseek_v3.tt.ccl import CCL
+
+
+@dataclass
+class MoEDistributedConfig(DistributedConfig):
+    """Distributed configuration for MoE modules."""
+
+    def __post_init__(self):
+        if self.tensor_config is None:
+            self.tensor_config = DistributedTensorConfig(
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1)
+            )
+        if self.ccl_manager is None:
+            self.ccl_manager = CCL
+
+
+class MoEDeviceInit(DeviceInit):
+    @staticmethod
+    def init_state_impl(device):
+        return MoEDistributedConfig(mesh_device=device)
 
 
 @pytest.fixture
@@ -126,7 +149,7 @@ def test_glm4_moe_full(mesh_device, default_moe_config):
 
     outputs_torch = model(inputs)
     ttnn_model = TTNNGlm4MoeMoE.from_torch(model)
-    set_device(ttnn_model, mesh_device)
+    set_device(ttnn_model, mesh_device, MoEDeviceInit)
     outputs_ttnn = ttnn_model(inputs)
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Glm4MoeMoE")
 
