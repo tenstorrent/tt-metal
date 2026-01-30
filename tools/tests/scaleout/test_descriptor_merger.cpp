@@ -388,7 +388,7 @@ TEST_F(DescriptorMergerTest, RejectNonexistentFile) {
 // Torus Merge Tests: Torus-specific inter_board_connections merging
 // ============================================================================
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_MergeXTorusAndYTorusIntoXYTorus) {
     // Test that X_TORUS and Y_TORUS node types can merge into a combined XY_TORUS configuration
     // Both X and Y torus have the same Wormhole architecture and compatible topology
@@ -413,7 +413,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeXTorusAndYTorusIntoXYTorus) {
     EXPECT_EQ(merged_gen, xy_gen) << "X torus + Y torus should equal XY torus";
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_MergeBHXTorusAndBHYTorusIntoXYTorus) {
     // Test that BH (Blackhole) X_TORUS and Y_TORUS can merge into XY_TORUS
     // Validates torus merging works for Blackhole architecture, not just Wormhole
@@ -437,7 +437,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeBHXTorusAndBHYTorusIntoXYTorus) {
     EXPECT_EQ(merged_gen, xy_gen) << "BH X torus + Y torus should equal BH XY torus";
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_MergeTwoIdenticalXTorusDescriptors) {
     // Test merging two identical X_TORUS descriptors
     // Both have the same torus type and architecture - should merge successfully
@@ -462,7 +462,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeTwoIdenticalXTorusDescriptors) {
     EXPECT_EQ(merged_gen, x_gen) << "Two identical X torus should merge into single X torus";
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_MergeXYTorusWithXTorusDescriptors) {
     // Test merging XY_TORUS with X_TORUS descriptors
     // XY_TORUS already contains X-direction connections, X_TORUS adds more
@@ -491,7 +491,7 @@ TEST_F(DescriptorMergerTest, DISABLED_MergeXYTorusWithXTorusDescriptors) {
 // Split/Merge Tests: End-to-end split and merge workflows for all topologies
 // ============================================================================
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
     // Test splitting the 8x16 WH_GALAXY_XY_TORUS superpod descriptor and merging it back
     const std::string source_path =
@@ -527,7 +527,7 @@ TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge8x16WhGalaxyXyTorusSuperpod) 
     }
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge5WhGalaxyYTorusSuperpod) {
     // Test splitting the 5 WH_GALAXY_Y_TORUS superpod descriptor and merging it back
     const std::string source_path = "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto";
@@ -561,7 +561,7 @@ TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge5WhGalaxyYTorusSuperpod) {
     }
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_SplitAndMerge16N300Cluster) {
     // Test splitting and merging the 16 N300 cluster descriptor
     // This validates split/merge works for N300 architecture (not just WH/BH)
@@ -651,7 +651,7 @@ TEST_F(DescriptorMergerTest, RejectWHAndBHMesh) {
     }
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_RejectGraphTemplatesWithDifferentChildren_ForwardPass) {
     // Test forward pass: source has nodes that target doesn't have
     // File 1 has {node_a, node_b}, File 2 has {node_c, node_d} - completely different sets
@@ -746,7 +746,7 @@ root_instance {
         << "Should reject graph_templates with different children (backward pass: target has extra nodes)";
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_AllowCrossDescriptorConnectionsOnDifferentPorts) {
     // Test that the same node can connect to different nodes across multiple descriptors
     // as long as different ports are used. This is valid because:
@@ -1109,7 +1109,7 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     }
 }
 
-// TODO https://github.com/tenstorrent/tt-metal/issues/36811
+// TODO: Disabled due to #36811
 TEST_F(DescriptorMergerTest, DISABLED_MergeExistingBHTorusDescriptors) {
     // Test merging existing bh_galaxy_x_torus.textproto and bh_galaxy_y_torus.textproto
     // This demonstrates using actual existing descriptor files from the cabling_descriptors directory
