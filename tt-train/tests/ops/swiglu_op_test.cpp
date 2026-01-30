@@ -278,6 +278,13 @@ TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoLlama_64x1x256x384) {
     CompareKernelVsReferenceWithShape({64, 1, 256, 384}, 1024);
 }
 
+// 10. Edge case: Unbalanced workload where some cores get more rows than others
+// This tests the padding synchronization mechanism in multicast.
+// 57 rows on a 56-core grid means 1 core gets 2 rows, 55 cores get 1 row.
+TEST_F(SwiGLUOpTest, SwiGLU_UnbalancedWorkload_57x1x32x32) {
+    CompareKernelVsReferenceWithShape({57, 1, 32, 32}, 32);
+}
+
 // ============================================================================
 // Section 3: Shape Validation Tests
 // ============================================================================
