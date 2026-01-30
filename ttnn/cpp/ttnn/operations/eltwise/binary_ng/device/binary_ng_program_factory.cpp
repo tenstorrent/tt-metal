@@ -289,6 +289,8 @@ void set_or_update_runtime_arguments(
     uint32_t num_rows_per_tile = 0;
     uint32_t tiles_per_row_width = 1;
     uint32_t common_row_width_elements = 0;
+    uint32_t reader_stride_size_bytes = 0;
+    uint32_t writer_stride_size_bytes = 0;
 
     if (row_major_inputs) {
         uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
@@ -323,6 +325,14 @@ void set_or_update_runtime_arguments(
 
         uint32_t total_logical_rows = cND * cD * cN * cC * cHt_r;
         tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
+        const uint32_t a_tile_bytes = tile_hw * a.element_size();
+        const uint32_t a_row_width_bytes = common_row_width_elements * a.element_size();
+        reader_stride_size_bytes =
+            (a_row_width_bytes > a_tile_bytes) ? a_tile_bytes : tt::round_up(a_row_width_bytes, a_alignment);
+        const uint32_t c_tile_bytes = tile_hw * c.element_size();
+        const uint32_t c_row_width_bytes = common_row_width_elements * c.element_size();
+        writer_stride_size_bytes =
+            (c_row_width_bytes > c_tile_bytes) ? c_tile_bytes : tt::round_up(c_row_width_bytes, c_alignment);
         // Calculate Total Height-Units to distribute
         c_num_tiles = tt::div_up(total_logical_rows, num_rows_per_tile);
     } else {
@@ -382,7 +392,7 @@ void set_or_update_runtime_arguments(
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 24>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
@@ -418,6 +428,7 @@ void set_or_update_runtime_arguments(
         // If Narrow Row: 1 unit = 1 physical tile (but logical row count logic applies inside)
         uint32_t compute_tiles = row_major_inputs ? (c_num_tiles * tiles_per_row_width) : c_num_tiles;
 
+        uint32_t packed_scalar_for_reader = 0u;
         if (b.has_value()) {
             if (has_sharding) {
                 auto b_shard_shape = b_shard_shape_generator(core);
@@ -439,7 +450,9 @@ void set_or_update_runtime_arguments(
                     current_row,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                    c_alignment};
+                    c_alignment,
+                    tiles_per_row_width,
+                    writer_stride_size_bytes};
             } else {
                 writer_runtime_args = {
                     c.buffer()->address(),
@@ -475,13 +488,14 @@ void set_or_update_runtime_arguments(
             // only quant ops have different dtypes for a & b and we want to force f32 for better accuracy when
             // scale is passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
+            packed_scalar_for_reader = packed_scalar;
             std::vector<uint32_t> writer_runtime_args;
             if (row_major_inputs) {
                 writer_runtime_args = {
                     c.buffer()->address(),
                     common_row_width_elements,
                     c_num_tiles,
-                    packed_scalar,
+                    c_current_shard_width,
                     cD,
                     cN,
                     cC,
@@ -491,7 +505,9 @@ void set_or_update_runtime_arguments(
                     current_row,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                    c_alignment};
+                    c_alignment,
+                    tiles_per_row_width,
+                    writer_stride_size_bytes};
             } else {
                 writer_runtime_args = {
                     packed_scalar,
@@ -545,7 +561,10 @@ void set_or_update_runtime_arguments(
                 static_cast<uint32_t>(a.buffer()->aligned_page_size()),
                 b_page_size,
                 a_alignment,
-                b_alignment};
+                b_alignment,
+                tiles_per_row_width,
+                reader_stride_size_bytes,
+                packed_scalar_for_reader};
         } else {
             reader_runtime_args = {
                 a.buffer()->address(),
@@ -880,6 +899,24 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
     reader_defines["RM_HAS_B"] = b.has_value() ? "1" : "0";
+    reader_defines["SCALAR_OP"] = (inputs_row_major && !b.has_value()) ? "1" : "0";
+    const auto bcast_type = operation_attributes.subtile_broadcast_type;
+    const bool rm_row_bcast_a =
+        (bcast_type == SubtileBroadcastType::ROW_A || bcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+         bcast_type == SubtileBroadcastType::SCALAR_A);
+    const bool rm_row_bcast_b =
+        (bcast_type == SubtileBroadcastType::ROW_B || bcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+         bcast_type == SubtileBroadcastType::SCALAR_B);
+    const bool rm_col_bcast_a =
+        (bcast_type == SubtileBroadcastType::COL_A || bcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+         bcast_type == SubtileBroadcastType::SCALAR_A);
+    const bool rm_col_bcast_b =
+        (bcast_type == SubtileBroadcastType::COL_B || bcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+         bcast_type == SubtileBroadcastType::SCALAR_B);
+    reader_defines["RM_ROW_BCAST_A"] = rm_row_bcast_a ? "1" : "0";
+    reader_defines["RM_ROW_BCAST_B"] = rm_row_bcast_b ? "1" : "0";
+    reader_defines["RM_COL_BCAST_A"] = rm_col_bcast_a ? "1" : "0";
+    reader_defines["RM_COL_BCAST_B"] = rm_col_bcast_b ? "1" : "0";
 
     // overwrite reader and write kernel names so that reader reads both and b and
     // writer does not read b and seperate kernels for native row major data.

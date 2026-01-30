@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 #define ALIGN_TO(len, align) (((len) + (align) - 1) / (align)) * (align)
 #ifndef SCALAR_OP
@@ -15,7 +14,7 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(index++);
     const uint32_t row_width_elements = get_arg_val<uint32_t>(index++);
     const uint32_t dst_num_tiles = get_arg_val<uint32_t>(index++);
-    const uint32_t packed_scalar = get_arg_val<uint32_t>(index++);
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(index++);
 
     const uint32_t outD = get_arg_val<uint32_t>(index++);
     const uint32_t outN = get_arg_val<uint32_t>(index++);
@@ -28,6 +27,9 @@ void kernel_main() {
     const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
     const uint32_t page_size_arg = get_arg_val<uint32_t>(index++);
     const uint32_t alignment = get_arg_val<uint32_t>(index++);
+    const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
+    const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
+    (void)dst_shard_width;
 
     constexpr auto cb_id_out = tt::CBIndex::c_2;
     constexpr auto dst_args = TensorAccessorArgs<0>();
@@ -39,9 +41,6 @@ void kernel_main() {
     const uint32_t row_width_bytes = row_width_elements * element_size;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, full_page_size);
-
-    const uint32_t tiles_per_row = (row_width_elements + tile_hw - 1) / tile_hw;
-    uint32_t stride_size_bytes = (row_width_bytes > tile_bytes) ? tile_bytes : ALIGN_TO(row_width_bytes, alignment);
 
     uint32_t tmp = current_row_start;
     uint32_t start_th = tmp % outHt;
@@ -59,20 +58,6 @@ void kernel_main() {
     uint32_t tiles_popped_count = 0;
 
     uint32_t current_global_row_idx = current_row_start;
-
-#if SCALAR_OP
-    constexpr auto cb_id_scalar = tt::CBIndex::c_1;
-    constexpr uint32_t onetile = 1;
-    cb_reserve_back(cb_id_scalar, onetile);
-#ifdef FILL_WITH_VALUE_FLOAT
-    const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT(cb_id_scalar, *float_ptr);
-#endif
-#ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_scalar, packed_scalar);
-#endif
-    cb_push_back(cb_id_scalar, onetile);
-#endif
 
     for (uint32_t nd = start_nd; nd < outND && tiles_popped_count < dst_num_tiles; ++nd, start_d = 0) {
         for (uint32_t d = start_d; d < outD && tiles_popped_count < dst_num_tiles; ++d, start_n = 0) {
