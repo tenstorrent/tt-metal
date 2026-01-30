@@ -76,20 +76,26 @@ void kernel_main() {
         uint32_t start_column_id = get_arg_val<uint32_t>(4);
         uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(5);
         uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(6);
+        uint32_t sblock_width_size = get_arg_val<uint32_t>(7);
+        uint32_t single_sblock_size_row_arg = get_arg_val<uint32_t>(8);
+
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
             uint32_t this_block_num_rows = tile_height;
             if (start_row_id + tile_height > total_num_rows) {
                 this_block_num_rows = total_num_rows - start_row_id;
             }
             if (this_block_num_rows > 0) {
-                read_block(
-                    this_block_num_rows,
-                    start_row_id,
-                    start_column_id,
-                    width_size,
-                    size_2d,
-                    element_size,
-                    single_block_size_row_arg);
+                for (uint32_t m = 0; m < width_size; m += sblock_width_size) {
+                    uint32_t start_column_id_u = start_column_id + m;
+                    read_block(
+                        this_block_num_rows,
+                        start_row_id,
+                        start_column_id_u,
+                        sblock_width_size,
+                        size_2d,
+                        element_size,
+                        single_sblock_size_row_arg);
+                }
             }
             start_row_id += tile_height;
         }
