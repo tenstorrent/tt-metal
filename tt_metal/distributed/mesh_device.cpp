@@ -268,7 +268,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mesh_graph = get_control_plane().get_mesh_graph();
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
@@ -303,8 +303,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
         const auto& supplied_ids = config.physical_device_ids();
         for (int supplied_id : supplied_ids) {
-            auto fabric_node_id =
-                MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
+            auto fabric_node_id = get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
             TT_FATAL(
                 !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
                 "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
@@ -389,12 +388,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
 
     // Validate all devices are on compute meshes (not switches) before creating any resources
-    const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mesh_graph = get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     fabric_node_ids.reserve(device_ids.size());
     for (const auto& device_id : device_ids) {
-        auto fabric_node_id =
-            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
+        auto fabric_node_id = get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         TT_FATAL(
             !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
             "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
@@ -651,7 +649,7 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::get_cluster().arch(); }
 
 size_t MeshDeviceImpl::num_rows() const { return view_->num_rows(); }
 
@@ -1153,7 +1151,7 @@ bool MeshDeviceImpl::initialize_impl(
     num_virtual_eth_cores_ =
         tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,

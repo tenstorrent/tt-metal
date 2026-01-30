@@ -140,7 +140,7 @@ protected:
         init_max_cbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
         bool is_n300_or_t3k_cluster =
             cluster_type == tt::tt_metal::ClusterType::T3K or cluster_type == tt::tt_metal::ClusterType::N300;
         auto core_type =
@@ -175,7 +175,7 @@ protected:
         }
     }
 
-    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+    void init_max_cbs() { max_cbs_ = tt::tt_metal::get_hal().get_arch_num_circular_buffers(); }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     uint32_t max_cbs_{};
@@ -249,8 +249,8 @@ protected:
         // For Blackhole P150_X8 systems (8 independent chips), opening 4 devices leaves 4 inactive, causing a fatal error.
         // For T3K (4 N300 boards = 8 chips), opening 4 MMIO devices automatically activates all 8 chips, so it works.
         // Skip the test only on Blackhole systems with more than 4 devices.
-        const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-        const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+        const auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
+        const size_t num_devices = tt::tt_metal::get_cluster().number_of_devices();
         const size_t requested_devices = 4;  // 1x4 mesh
 
         if (cluster_type == tt::tt_metal::ClusterType::P150_X8 && num_devices > requested_devices) {

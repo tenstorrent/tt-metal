@@ -139,7 +139,7 @@ public:
     FDKernelType GetKernelType() const { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() const { return logical_core_; }
     tt_cxy_pair GetVirtualCore() const {
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        return tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     }
     ChipId GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet

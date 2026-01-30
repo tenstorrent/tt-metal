@@ -109,7 +109,7 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::vector<uint32_t> const& ct_args = {num_channels};
 
     // Kernel Setup
-    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    uint32_t erisc_unreserved_base = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
@@ -146,7 +146,7 @@ void run(
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t /*max_channels_per_direction*/) {
-    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    uint32_t erisc_unreserved_base = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
     ChipId device_id = std::numeric_limits<ChipId>::max();
     tt_xy_pair eth_receiver_core;
     tt_xy_pair eth_sender_core;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
         if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {

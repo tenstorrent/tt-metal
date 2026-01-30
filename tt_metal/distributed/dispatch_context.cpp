@@ -30,7 +30,7 @@ DispatchContext& DispatchContext::get() {
 }
 
 void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_device) {
-    fast_dispatch_enabled_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    fast_dispatch_enabled_ = tt::tt_metal::get_rtoptions().get_fast_dispatch();
     const auto& cluster = MetalContext::instance().get_cluster();
     TT_FATAL(
         !fast_dispatch_enabled_,
@@ -51,7 +51,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     // Query the number of command queues requested
     populate_fd_kernels(active_devices, num_hw_cqs);
     device_manager->configure_and_load_fast_dispatch_kernels();
-    tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
+    tt::tt_metal::get_rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
@@ -100,7 +100,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     }
 
     fast_dispatch_enabled_ = false;
-    tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
+    tt::tt_metal::get_rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 }
 
 }  // namespace tt::tt_metal::experimental

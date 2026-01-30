@@ -32,7 +32,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topolo
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         // We can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
@@ -50,7 +50,7 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
 }
 
 uint32_t FabricContext::get_max_1d_hops_from_topology() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Extract mesh shapes from topology
@@ -66,7 +66,7 @@ uint32_t FabricContext::get_max_1d_hops_from_topology() const {
 }
 
 uint32_t FabricContext::get_max_2d_hops_from_topology() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Extract mesh shapes from topology
@@ -292,7 +292,7 @@ bool FabricContext::has_z_router_on_device(const FabricNodeId& fabric_node_id) c
     // Check if this fabric node has Z router ethernet channels
     // Query control plane for active channels and check if any have Z direction
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Try to get active channels - if node doesn't exist, the map lookup will return empty
     auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
@@ -439,7 +439,7 @@ void FabricContext::compute_routing_mode() {
 }
 
 size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) const {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     tt::ARCH arch = hal.get_arch();
 
     // Get architecture-specific limit from single source of truth
@@ -455,7 +455,7 @@ size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) cons
     TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
 
     // Validate alignment (must be L1-aligned for NOC transfers)
-    const auto alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    const auto alignment = tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::L1);
     TT_FATAL(requested_size % alignment == 0, "Packet size {} must be {}-byte aligned", requested_size, alignment);
 
     return requested_size;

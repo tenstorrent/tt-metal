@@ -460,7 +460,7 @@ std::optional<std::string> CmdlineParser::get_yaml_config_path() {
         std::filesystem::path fpath(yaml_config);
         if (!fpath.is_absolute()) {
             const auto& fname = fpath.filename();
-            fpath = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            fpath = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
                     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/" / fname;
             log_warning(tt::LogTest, "Relative fpath for config provided, using absolute path: {}", fpath);
         }
@@ -948,7 +948,7 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
     if (test_config.skip.has_value()) {
         // Determine current platform identifiers
         auto arch_name = tt::tt_metal::hal::get_arch_name();
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
         std::string cluster_name = std::string(enchantum::to_string(cluster_type));
         for (const auto& token : test_config.skip.value()) {
             if (token == arch_name || token == cluster_name) {

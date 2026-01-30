@@ -26,13 +26,12 @@ TEST_F(DPrintMeshFixture, TensixTestPrintInvalidCore) {
     // device setup, but not the print server should simply ignore the invalid cores.
     std::map<tt::CoreType, std::vector<CoreCoord>> dprint_cores;
     dprint_cores[tt::CoreType::WORKER] = {{0, 0}, {1, 1}, {100, 100}};
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
-        tt::llrt::RunTimeDebugFeatureDprint, dprint_cores);
+    tt::tt_metal::get_rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, dprint_cores);
 
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.
     for (auto& mesh_device : this->devices_) {
         EXPECT_TRUE(mesh_device != nullptr);
     }
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
+    tt::tt_metal::get_rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
 }

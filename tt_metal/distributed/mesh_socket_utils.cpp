@@ -18,7 +18,7 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 struct SocketSenderSize {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = get_hal().get_alignment(HalMemType::L1);
     const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
     const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
     const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
@@ -101,7 +101,7 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane = tt::tt_metal::get_control_plane();
         TT_FATAL(
             sender_node_id.mesh_id == recv_node_id.mesh_id,
             "1D Fabric requires sender and receiver to be on the same mesh");
@@ -300,7 +300,7 @@ void write_socket_configs(
     const SocketSenderSize sender_size;
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     auto get_fabric_node_from_coord = [&](const MeshCoordinate& device_coord,
@@ -595,7 +595,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
     const std::shared_ptr<MeshDevice>& sender_device,
     const std::shared_ptr<MeshDevice>& receiver_device) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
-    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
 
     for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
         const auto& connection = config.socket_connection_config[i];
@@ -630,8 +630,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
 
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
     tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table) {
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const auto& global_logical_bindings = tt::tt_metal::get_control_plane().get_global_logical_bindings();
     std::vector<multihost::Rank> ranks;
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {

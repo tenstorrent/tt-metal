@@ -44,16 +44,16 @@ inline YAML::Node string_to_yaml_node(const std::string& input) {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir = tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    std::string core_desc_dir = tt_metal::get_rtoptions().get_root_dir();
     if (core_desc_dir.back() != '/') {
         core_desc_dir += "/";
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
-    if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    if (tt_metal::get_rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
-            tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+            tt_metal::get_rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
@@ -113,8 +113,8 @@ const core_descriptor_t& get_core_descriptor_config(
                 std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
         config_by_arch;
 
-    ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-    uint32_t harvesting_mask = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
+    ARCH arch = tt::tt_metal::get_cluster().arch();
+    uint32_t harvesting_mask = tt::tt_metal::get_cluster().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
     uint32_t num_harvested_on_axis = mask_bitset.count();
 
@@ -124,14 +124,14 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     std::string product_name = get_product_name(arch, num_harvested_on_axis);
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::N150) {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster()) {
+        if (tt::tt_metal::get_cluster().get_board_type(device_id) == BoardType::N150) {
             // some Galaxy machines are setup with N150s that have 0 harvested rows.
             // get_product_name ( ) returns those chips as galaxy. Override that to nebula_x1.
             product_name = "nebula_x1";
         } else {
             TT_ASSERT(
-                tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::GALAXY,
+                tt::tt_metal::get_cluster().get_board_type(device_id) == BoardType::GALAXY,
                 "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
         }
     }
@@ -153,7 +153,7 @@ const core_descriptor_t& get_core_descriptor_config(
 
     auto compute_with_storage_start = desc_yaml["compute_with_storage_grid_range"]["start"];
     auto compute_with_storage_end = desc_yaml["compute_with_storage_grid_range"]["end"];
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         compute_with_storage_start = desc_yaml["tg_compute_with_storage_grid_range"]["start"];
         compute_with_storage_end = desc_yaml["tg_compute_with_storage_grid_range"]["end"];
     }
@@ -161,9 +161,9 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
     // // Adjusts the core grid configuration based on the value of the environment variable
-    if (tt_metal::MetalContext::instance().rtoptions().is_core_grid_override_todeprecate()) {
+    if (tt_metal::get_rtoptions().is_core_grid_override_todeprecate()) {
         auto compute_with_storage_end_override =
-            string_to_yaml_node(tt_metal::MetalContext::instance().rtoptions().get_core_grid_override_todeprecate());
+            string_to_yaml_node(tt_metal::get_rtoptions().get_core_grid_override_todeprecate());
         TT_FATAL(
             compute_with_storage_end_override.IsSequence(),
             "compute_with_storage_end_override must be a YAML sequence");
@@ -208,17 +208,15 @@ const core_descriptor_t& get_core_descriptor_config(
 
     std::vector<RelativeCoreCoord> dispatch_cores;
     const auto* dispatch_cores_string = "dispatch_cores";
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }
 
-    CoreCoord grid_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord grid_size = tt::tt_metal::get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<CoreCoord> logical_active_eth_cores;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
-        logical_active_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    if (tt::tt_metal::get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        logical_active_eth_cores = tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id);
     }
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
@@ -238,7 +236,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
+        !dispatch_cores.empty() || tt_metal::get_rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
@@ -307,8 +305,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
         std::size_t tensix_num_worker_cols = worker_grid.x;
         std::size_t tensix_num_worker_rows = worker_grid.y;
         uint32_t tensix_num_worker_cores = tensix_num_worker_cols * tensix_num_worker_rows;
-        const metal_SocDescriptor& soc_desc =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device_id);
         // Get physical compute grid range based on SOC Desc and Logical Coords
         // Logical Worker Coords start at 0,0
         CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(CoreCoord(0, 0));

@@ -369,7 +369,7 @@ TEST_F(SplitGalaxyMeshDeviceFixture, BigMeshSocketRandomConnections) {
         sender_mesh_id,
         recv_mesh_id);
 
-    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    auto local_mesh_binding = tt::tt_metal::get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
     if (local_mesh_binding[0] == sender_mesh_id) {

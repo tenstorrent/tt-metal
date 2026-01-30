@@ -66,7 +66,7 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
 }
 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
-    llrt::RunTimeOptions& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    llrt::RunTimeOptions& rtoptions = tt::tt_metal::get_rtoptions();
     return get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
 }
 
@@ -212,7 +212,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (MetalContext::instance().rtoptions().get_profiler_trace_only() || was_force_read) {
+                    if (get_rtoptions().get_profiler_trace_only() || was_force_read) {
                         profiler.processResults(
                             device,
                             virtual_cores_map.at(device->id()),

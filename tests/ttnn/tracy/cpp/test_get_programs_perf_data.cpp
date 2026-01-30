@@ -56,15 +56,15 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
 
     void SetUp() override {
-        if (!MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        if (!get_rtoptions().get_profiler_enabled()) {
             GTEST_SKIP() << "Skipping test, since it can only be run with profiler enabled.";
         }
 
-        if (!MetalContext::instance().rtoptions().get_profiler_mid_run_dump()) {
+        if (!get_rtoptions().get_profiler_mid_run_dump()) {
             GTEST_SKIP() << "Skipping test, since it can only be run with profiler mid-run dump enabled.";
         }
 
-        if (!MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
+        if (!get_rtoptions().get_profiler_cpp_post_process()) {
             GTEST_SKIP() << "Skipping test, since it can only be run with profiler C++ post-processing enabled.";
         }
 

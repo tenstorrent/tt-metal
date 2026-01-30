@@ -76,7 +76,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     this->relay_connection_info.worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
 
     // Get relay-specific info from fabric context
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Store free slots stream ID
@@ -175,7 +175,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
         args_out.push_back(0u);  // has_local_tensix_relay_connection = false
     } else {
         // Query the fabric router config from fabric context
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
         const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
 
         // Pack full relay connection info

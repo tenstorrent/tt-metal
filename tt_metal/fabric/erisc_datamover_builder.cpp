@@ -88,13 +88,13 @@ namespace {
 bool is_fabric_two_erisc_enabled() {
     auto& mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
-    bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
+    bool force_disable_2_erisc = tt::tt_metal::get_rtoptions().get_disable_fabric_2_erisc_mode();
     if (force_disable_2_erisc) {
         log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
         return false;
     }
 
-    const auto& hal = mc.hal();
+    const auto& hal = tt::tt_metal::get_hal();
     // by default, enable only single erisc mode for future architectures as well to simplify bringup
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
@@ -124,7 +124,7 @@ void configure_risc_settings(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         if (num_riscv_cores == 1) {
             enable_handshake = true;
-            enable_context_switch = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+            enable_context_switch = tt::tt_metal::get_rtoptions().get_enable_2_erisc_mode();
             enable_interrupts = false;
         } else {
             // Blackhole: Distribute sender/receiver across two RISC cores
@@ -149,8 +149,8 @@ void configure_risc_settings(
 
 size_t get_num_riscv_cores() {
     if (is_fabric_two_erisc_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        size_t nriscs =
+            tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         return nriscs;
     }
     return 1;
@@ -160,7 +160,7 @@ size_t get_num_riscv_cores() {
 // On Blackhole with 2 ERISCs: ERISC0 services senders, ERISC1 does not
 // On Wormhole or Blackhole with 1 ERISC: all RISCs service both
 bool should_risc_service_sender_channels(size_t risc_id) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = tt::tt_metal::get_hal().get_arch();
     size_t num_riscv_cores = get_num_riscv_cores();
 
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
@@ -173,7 +173,7 @@ bool should_risc_service_sender_channels(size_t risc_id) {
 // On Blackhole with 2 ERISCs: ERISC1 services receivers, ERISC0 does not
 // On Wormhole or Blackhole with 1 ERISC: all RISCs service both
 bool should_risc_service_receiver_channels(size_t risc_id) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = tt::tt_metal::get_hal().get_arch();
     size_t num_riscv_cores = get_num_riscv_cores();
 
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
@@ -205,7 +205,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     enable_handshake_(true),
     enable_context_switch_(true),
     enable_interrupts_(true) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = tt::tt_metal::get_hal().get_arch();
 
     configure_risc_settings(
         get_num_riscv_cores(),
@@ -223,7 +223,7 @@ bool requires_forced_assignment_to_noc1() {
     //
     // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
     //
-    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
+    return tt::tt_metal::get_hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
 }  // anonymous namespace
 
@@ -240,15 +240,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_bw_telemetry() ||
-        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    if (tt::tt_metal::get_rtoptions().get_enable_fabric_bw_telemetry() ||
+        tt::tt_metal::get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
     }
 
     // Allocate code profiling buffer (conditionally enabled)
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = tt::tt_metal::get_rtoptions();
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Buffer size: max timer types * 16 bytes per result
         constexpr size_t code_profiling_buffer_size =
@@ -356,7 +356,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     buffer_address += field_size;
 
     // location for temporarily store the src address when performing inline writes to L1 with spoof
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    if (tt::tt_metal::get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         this->notify_worker_of_read_counter_update_src_address = buffer_address;
         buffer_address += field_size;
     }
@@ -614,14 +614,13 @@ void append_worker_to_fabric_edm_sender_rt_args(
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
-        CoreCoord tensix_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                chip_id, logical_core, CoreType::WORKER);
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        CoreCoord tensix_core = tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            chip_id, logical_core, CoreType::WORKER);
+        tt::tt_metal::get_cluster().write_core(
             &connection_info,
             sizeof(tt::tt_fabric::fabric_connection_info_t),
             tt_cxy_pair(chip_id, tensix_core),
-            tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt_metal::get_hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) +
                 connection_offset);
     }
@@ -819,13 +818,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 }
 
 void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
-    auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& telemetry_rtoptions = tt::tt_metal::get_rtoptions();
     const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
     const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
                                             telemetry_settings.enabled && telemetry_settings.stats_mask != 0;
     const auto local_physical_chip_id =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
-            this->local_fabric_node_id);
+        tt::tt_metal::get_control_plane().get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
         bool telemetry_enabled_on_erisc =
             telemetry_globally_enabled &&
@@ -841,7 +839,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     const auto& risc_config = config.risc_configs[risc_id];
     const bool telemetry_enabled = risc_config.telemetry_enabled();
 
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = tt::tt_metal::get_rtoptions();
     ct_args.push_back(static_cast<uint32_t>(telemetry_enabled));
 
     // Add telemetry statistic mask (per ERISC)
@@ -927,9 +925,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
     }();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
+    const auto& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(local_physical_chip_id);
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -1305,7 +1303,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool has_tensix_extension,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     log_debug(
         tt::LogFabric,
         "Building FabricEriscDatamover for device {}:  "
@@ -1389,8 +1387,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_buffer_index_semaphore_id[i] = 0;
         }
     } else {
-        const bool is_2D_routing =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
+        const bool is_2D_routing = tt::tt_metal::get_control_plane().get_fabric_context().is_2D_routing_enabled();
 
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
@@ -1501,7 +1498,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         downstream_vc_idx,
         builder_config::MAX_NUM_VCS);
 
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     // VC1 is only supported for 2D routing

@@ -190,7 +190,7 @@ bool cb_config_successful(
     distributed::MeshWorkload& workload,
     const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_cbs = get_hal().get_arch_num_circular_buffers();
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
@@ -235,7 +235,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
+    uint32_t rta_base0 = get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<std::string, std::string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
@@ -268,10 +268,10 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
-    vector<uint32_t> dummy_kernel0_args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    vector<uint32_t> dummy_kernel0_args_readback = tt::tt_metal::get_cluster().read_core(
         device->id(),
         eth_noc_xy,
-        MetalContext::instance().hal().get_dev_addr(
+        get_hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
@@ -362,13 +362,12 @@ bool test_dummy_EnqueueProgram_with_sems(
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
-            const uint32_t semaphore_buffer_size =
-                program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
+            const uint32_t semaphore_buffer_size = program_config.num_sems * get_hal().get_alignment(HalMemType::L1);
             uint32_t semaphore_base = workload.get_sem_base_addr(mesh_device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
-                 i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+                 i += (get_hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
                 const bool is_semaphore_value_correct =
                     semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
                 expected_semaphore_vals_for_core_idx++;
@@ -809,12 +808,12 @@ bool verify_rt_args(
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    tt::tt_metal::get_cluster().l1_barrier(device->id());
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
                       ? device->ethernet_core_from_logical_core(logical_core)
                       : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    std::vector<uint32_t> args_readback =
+        tt::tt_metal::get_cluster().read_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(
         tt::LogTest,
         "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
@@ -864,7 +863,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
-            unique_args_addr = MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
+            unique_args_addr = get_hal().get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type");
@@ -1313,8 +1312,7 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 }
 
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     if (erisc_count != 2) {
         GTEST_SKIP() << "Skipping test as this test requires 2 active ethernet cores";
     }
@@ -1336,8 +1334,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
 // Test to see we can launch a kernel at the same time on both active ethernet cores
 // If they can't handshake it means only 1 was able to launch
 TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     if (erisc_count < 2) {
         GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
     }
@@ -1392,8 +1389,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                HalProgrammableCoreType::ACTIVE_ETH);
+            const auto erisc_count =
+                tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,
@@ -1823,8 +1820,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        const auto erisc_count =
-            tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+        const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
             local_test_functions::test_my_coordinates(

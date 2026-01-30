@@ -21,15 +21,13 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
-    bool custom_mesh_graph_path_set =
-        tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
-    std::string custom_mesh_graph_path =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
+    bool custom_mesh_graph_path_set = tt::tt_metal::get_rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
+    std::string custom_mesh_graph_path = tt::tt_metal::get_rtoptions().get_custom_fabric_mesh_graph_desc_path();
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
         chip_to_eth_coord_mapping);
     TT_FATAL(
-        !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
+        !tt::tt_metal::get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
@@ -119,7 +117,7 @@ public:
     // The derived fixture must infer if the current system is suitable for the requested
     // topology in the Mesh Graph, when implementing this function.
     bool system_supported() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    eth_coord_mapping.size() &&
@@ -150,7 +148,7 @@ public:
     virtual std::string get_path_to_mesh_graph_desc() = 0;
     virtual std::vector<std::vector<EthCoord>> get_eth_coord_mapping() = 0;
     bool system_supported() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    eth_coord_mapping.size() &&
@@ -278,8 +276,8 @@ public:
     // The derived fixture must infer if the current system is suitable for the requested
     // topology in the Mesh Graph, when implementing this function.
     bool system_supported() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& cluster = tt::tt_metal::get_cluster();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    mesh_graph.get_mesh_ids().size() &&
                cluster.get_board_type(0) == BoardType::UBB;
@@ -303,8 +301,8 @@ public:
     }
 
     bool system_supported() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& cluster = tt::tt_metal::get_cluster();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
                    mesh_graph.get_mesh_ids().size() &&
                cluster.is_ubb_galaxy();
@@ -327,13 +325,13 @@ public:
     }
 
     bool system_supported() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
         if (not cluster.is_ubb_galaxy()) {
             return false;
         }
         // Check if the number of processes spawned by the user is equal to the number of processes specified in the MGD
         uint32_t num_user_procs = *tt::tt_metal::MetalContext::instance().global_distributed_context().size();
-        auto mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        auto mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         uint32_t num_meshes = mesh_graph.get_mesh_ids().size();
         // TODO (AS): For now assume that all meshes have the same number of processes per mesh
         const auto& host_ranks = mesh_graph.get_host_ranks(tt::tt_fabric::MeshId{0});

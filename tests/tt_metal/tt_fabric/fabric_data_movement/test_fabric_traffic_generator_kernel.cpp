@@ -97,9 +97,9 @@ class FabricTrafficGeneratorKernelIntegrationTest : public Fabric1DFixture {
 protected:
 
     static void SetUpTestSuite() {
-        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_all_telemetry();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
+        tt::tt_metal::get_rtoptions().set_enable_fabric_telemetry(true);
+        tt::tt_metal::get_rtoptions().set_enable_all_telemetry();
+        tt::tt_metal::get_rtoptions().set_enable_fabric_bw_telemetry(true);
         Fabric1DFixture::SetUpTestSuite();
     }
 
@@ -143,12 +143,12 @@ protected:
 };
 
 TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() != ARCH::BLACKHOLE) {
+    if (tt::tt_metal::get_hal().get_arch() != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Test only supported for BLACKHOLE architecture";
     }
 
     // Get control plane and mesh IDs
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     ASSERT_FALSE(mesh_ids.empty()) << "No meshes available";
     MeshId mesh_id = mesh_ids[0];

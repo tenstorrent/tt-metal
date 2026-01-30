@@ -162,7 +162,7 @@ protected:
 
     // Helper to extract mesh shapes from ControlPlane
     std::vector<MeshShape> get_mesh_shapes_from_control_plane() {
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane = tt::tt_metal::get_control_plane();
         const auto& mesh_graph = control_plane.get_mesh_graph();
 
         std::vector<MeshShape> shapes;
@@ -196,7 +196,7 @@ TEST_F(MockClusterTopologyFixture, HopCalculations_WithRealTopology) {
 
 TEST_F(MockClusterTopologyFixture, KnownClusterTypes_HaveExpectedHops) {
     // Query actual cluster type from cluster descriptor
-    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    const auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
 
     auto shapes = get_mesh_shapes_from_control_plane();
 

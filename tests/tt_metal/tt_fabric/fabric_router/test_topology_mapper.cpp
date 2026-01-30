@@ -23,9 +23,9 @@ protected:
         setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "10", 1);
 
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto& cluster = tt::tt_metal::get_cluster();
+        const auto& hal = tt::tt_metal::get_hal();
+        const auto& rtoptions = tt::tt_metal::get_rtoptions();
         constexpr bool run_discovery = true;
 
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
@@ -43,7 +43,7 @@ bool contains(const std::vector<tt::tt_metal::AsicID>& asic_ids, const tt::tt_me
 
 TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
@@ -97,7 +97,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     const std::filesystem::path dual_galaxy_big_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(dual_galaxy_big_mesh_graph_desc_path.string());
@@ -159,7 +159,7 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
 
 TEST_F(TopologyMapperTest, N300MeshGraphTest) {
     const std::filesystem::path n300_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(n300_mesh_graph_desc_path.string());
@@ -199,7 +199,7 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
 
 TEST_F(TopologyMapperTest, P100MeshGraphTest) {
     const std::filesystem::path p100_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(p100_mesh_graph_desc_path.string());
@@ -243,7 +243,7 @@ TEST_F(TopologyMapperTest, P100MeshGraphTest) {
 
 TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     const std::filesystem::path bh_qb_4x4_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(bh_qb_4x4_mesh_graph_desc_path.string());
@@ -330,7 +330,7 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
 
 TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
     const std::filesystem::path bh_qb_4x4_strict_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_reduced_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(bh_qb_4x4_strict_mesh_graph_desc_path.string());
@@ -392,7 +392,7 @@ TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
 
 TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
     const std::filesystem::path bh_qb_4x4_relaxed_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
@@ -454,7 +454,7 @@ TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
 
 TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
     const std::filesystem::path bh_qb_4x4_strict_invalid_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_invalid_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
@@ -483,7 +483,7 @@ TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
     GTEST_SKIP();
 
     const std::filesystem::path t3k_multimesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_multimesh_graph_desc_path.string());
@@ -498,7 +498,7 @@ TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
 
 TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
 
     auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
@@ -626,7 +626,7 @@ TEST_F(TopologyMapperTest, ClosetBox3PodTTSwitchHostnameAPIs) {
 
 TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
@@ -668,7 +668,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_1pin) 
 
 TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
@@ -717,7 +717,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 
 TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
@@ -749,7 +749,7 @@ class T3kTopologyMapperWithCustomMappingFixture
 TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / mesh_graph_desc_path;
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
 

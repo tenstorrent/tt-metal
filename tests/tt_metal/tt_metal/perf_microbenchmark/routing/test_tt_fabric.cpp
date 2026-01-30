@@ -133,8 +133,7 @@ int main(int argc, char** argv) {
     bool dump_built_tests = cmdline_parser.dump_built_tests();
     if (dump_built_tests) {
         std::filesystem::path dump_file_dir =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            std::string(OUTPUT_DIR);
+            std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
         if (!std::filesystem::exists(dump_file_dir)) {
             std::filesystem::create_directory(dump_file_dir);
         }
@@ -168,7 +167,7 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
+            tt::tt_metal::get_rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
         log_info(
@@ -214,7 +213,7 @@ int main(int argc, char** argv) {
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 
             // Set code profiling enabled based on rtoptions
-            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            auto& rtoptions = tt::tt_metal::get_rtoptions();
             test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
 
             for (auto& built_test : built_tests) {
@@ -292,7 +291,7 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
+    tt::tt_metal::get_rtoptions().set_enable_fabric_bw_telemetry(false);
 
     // Generate summaries after all tests have run
     if (has_bandwidth_tests) {

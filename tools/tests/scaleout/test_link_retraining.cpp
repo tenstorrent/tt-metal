@@ -63,7 +63,11 @@ protected:
 
         // Initialize physical system descriptor
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-            *driver_, distributed_context_, &context_->hal(), context_->rtoptions(), true /* run_discovery*/);
+            *driver_,
+            distributed_context_,
+            &tt::tt_metal::get_hal(),
+            tt::tt_metal::get_rtoptions(),
+            true /* run_discovery*/);
 
         // Populate asic_id_to_chip_id map
         for (const auto& [chip_id, asic_id] : cluster_->get_unique_chip_ids()) {

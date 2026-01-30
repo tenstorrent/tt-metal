@@ -96,8 +96,7 @@ void RunTest(
         CreateKernel(program_, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", crs, config);
 
         for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
-            if (tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                    HalProgrammableCoreType::ACTIVE_ETH) > 1) {
+            if (tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH) > 1) {
                 UpdateGoldenOutput(golden_output, mesh_device, "ER0");
             } else {
                 UpdateGoldenOutput(golden_output, mesh_device, "ER");
@@ -114,8 +113,7 @@ void RunTest(
 }  // namespace
 
 TEST_F(DPrintMeshFixture, TensixTestPrintPrependDeviceCoreRisc) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, true);
+    tt::tt_metal::get_rtoptions().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -123,13 +121,11 @@ TEST_F(DPrintMeshFixture, TensixTestPrintPrependDeviceCoreRisc) {
             },
             mesh_device);
     }
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, false);
+    tt::tt_metal::get_rtoptions().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
 }
 
 TEST_F(DPrintMeshFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, true);
+    tt::tt_metal::get_rtoptions().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
         if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
             log_info(
@@ -144,6 +140,5 @@ TEST_F(DPrintMeshFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
             },
             mesh_device);
     }
-    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-        tt::llrt::RunTimeDebugFeatureDprint, false);
+    tt::tt_metal::get_rtoptions().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
 }

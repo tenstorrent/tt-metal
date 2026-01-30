@@ -130,7 +130,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     // Write Input to Master L1
     detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();

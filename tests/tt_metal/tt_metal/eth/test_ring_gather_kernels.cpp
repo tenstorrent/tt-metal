@@ -106,7 +106,7 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_device_ring(
         const auto& mesh_device = mesh_devices[i];
         auto* device = mesh_device->get_devices()[0];
         auto ethernet_connected_device_ids =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(device->id());
+            tt::tt_metal::get_cluster().get_ethernet_connected_device_ids(device->id());
         for (const auto& connected_device_id : ethernet_connected_device_ids) {
             for (uint32_t j = 0; j < mesh_devices.size(); ++j) {
                 if (mesh_devices[j]->id() == connected_device_id) {
@@ -145,8 +145,7 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
         auto* second_device = second_mesh_device->get_devices()[0];
         uint32_t i = 0;
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
-            if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                    first_device->id(), first_eth_core)) {
+            if (not tt::tt_metal::get_cluster().is_ethernet_link_up(first_device->id(), first_eth_core)) {
                 continue;
             }
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
@@ -184,8 +183,7 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
             const auto& receiver_mesh_device = device_ring[i + 1];
             auto* receiver_device = receiver_mesh_device->get_devices()[0];
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                        sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -286,12 +284,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
              (uint32_t)i,
              (uint32_t)sem_l1_byte_address});
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
             src_eth_l1_byte_address + (i * byte_size_per_device));
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
@@ -308,12 +306,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             }
         }
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             receiver_device->id(),
             receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
             all_zeros,
             dst_eth_l1_byte_address);
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             receiver_device->id(),
             receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
@@ -356,7 +354,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& core = std::get<2>(sender_receivers[i]);
-        auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        auto readback_vec = tt::tt_metal::get_cluster().read_core(
             device->get_devices()[0]->id(),
             device->get_devices()[0]->ethernet_core_from_logical_core(core),
             src_eth_l1_byte_address,
@@ -454,13 +452,13 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             device->get_devices()[0]->id(),
             device->get_devices()[0]->ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             device->get_devices()[0]->id(),
             device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
@@ -532,7 +530,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
 TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
     auto erisc_unreserved_base_addr =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
@@ -546,7 +544,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
 
 TEST_F(MeshDeviceFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
     auto erisc_unreserved_base_addr =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t sem_l1_byte_address = erisc_unreserved_base_addr;

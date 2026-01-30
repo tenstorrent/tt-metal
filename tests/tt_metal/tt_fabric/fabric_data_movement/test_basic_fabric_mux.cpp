@@ -112,12 +112,12 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     tt::tt_fabric::MeshId mesh_id = control_plane.get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         chip_id_offset = 4;
     }
     std::vector<ChipId> physical_chip_ids(num_devices);
@@ -304,8 +304,8 @@ void create_worker_kernel(
 
     CoreCoord termination_master_logical_core = worker_test_config.termination_master_logical_core;
     CoreCoord termination_master_virtual_core = device->worker_core_from_logical_core(termination_master_logical_core);
-    uint32_t termination_master_noc_xy_encoding = tt_metal::MetalContext::instance().hal().noc_xy_encoding(
-        termination_master_virtual_core.x, termination_master_virtual_core.y);
+    uint32_t termination_master_noc_xy_encoding =
+        tt_metal::get_hal().noc_xy_encoding(termination_master_virtual_core.x, termination_master_virtual_core.y);
     const bool is_termination_master = termination_master_logical_core == worker_logical_core;
 
     std::vector<uint32_t> worker_ct_args = {
@@ -329,7 +329,7 @@ void create_worker_kernel(
     // hence, we can use the noc encoding derived using current device
     CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
     uint32_t receiver_noc_xy_encoding =
-        tt_metal::MetalContext::instance().hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y);
+        tt_metal::get_hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y);
 
     std::vector<uint32_t> worker_rt_args = {
         test_config.num_open_close_iters,
@@ -356,7 +356,7 @@ void create_worker_kernel(
         termination_master_noc_xy_encoding};
 
     if (test_config.is_2d_fabric) {
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& control_plane = tt::tt_metal::get_control_plane();
         const auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
         const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(
@@ -427,8 +427,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 
     const bool is_2d_fabric =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
-        Topology::Mesh;
+        tt::tt_metal::get_control_plane().get_fabric_context().get_fabric_topology() == Topology::Mesh;
     test_config.is_2d_fabric = is_2d_fabric;
 
     // [device] -> {(logical_core, hops)}

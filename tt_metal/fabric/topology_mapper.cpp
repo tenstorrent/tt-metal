@@ -62,7 +62,7 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
 
 // Helper function to get timeout duration for topology mapping operations
 std::chrono::duration<float> get_topology_mapping_timeout() {
-    auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+    auto timeout = tt::tt_metal::get_rtoptions().get_timeout_duration_for_operations();
     if (timeout.count() <= 0.0f) {
         timeout = std::chrono::duration<float>(60.0f);
     }
@@ -241,7 +241,7 @@ TopologyMapper::TopologyMapper(
 
     // Build fabric node id to asic id mapping directly from the provided logical to physical chip mapping
     // Update chip_topology_mapping_ entries with the mapping information
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
         // Convert physical chip id to asic id
         // First try to find it in the local cluster (for local chips)
@@ -389,7 +389,7 @@ ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID as
 }
 
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
 
     // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
     // descriptor
@@ -414,7 +414,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
     const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
 
     // Get local cluster for physical_chip_id lookup
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto& my_host = physical_system_descriptor_.my_host_name();
 
     // Create MappedChipInfo entry for each ASIC
@@ -926,7 +926,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 
     // Fill in physical_chip_id for ASICs that belong to this host
     // (The controller may have set it to 0 for ASICs on other hosts)
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto& my_host = physical_system_descriptor_.my_host_name();
     for (auto& info : chip_topology_mapping_) {
         if (info.physical_chip_id == 0 && !info.hostname.empty() && info.hostname == my_host) {
@@ -1384,7 +1384,7 @@ namespace {
 std::uint32_t get_num_connections_per_direction(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     // Check the number of connections per direction for each asic
     std::uint32_t num_connections_per_direction = 1;  // Default to 1 connection per direction
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     for (const auto& [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
         auto neighbors = psd.get_asic_neighbors(asic_id);
         for (const auto& neighbor : neighbors) {

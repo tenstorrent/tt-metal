@@ -467,7 +467,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = tt::tt_metal::get_hal().get_arch();
     size_t arch_index;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;

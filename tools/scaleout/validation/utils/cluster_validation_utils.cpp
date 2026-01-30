@@ -170,7 +170,7 @@ void configure_local_kernels(
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
 
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -180,9 +180,8 @@ void configure_local_kernels(
 
     // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
     auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
-    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
-                      ? tt::tt_metal::NOC::NOC_1
-                      : tt::tt_metal::NOC::NOC_0;
+    auto noc_id =
+        tt::tt_metal::get_cluster().arch() == ARCH::BLACKHOLE ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     struct WriteTask {
         ChipId chip_id;
@@ -321,16 +320,15 @@ void configure_cross_host_kernels(
     uint32_t data_size,
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
 
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
     auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
-    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
-                      ? tt::tt_metal::NOC::NOC_1
-                      : tt::tt_metal::NOC::NOC_0;
+    auto noc_id =
+        tt::tt_metal::get_cluster().arch() == ARCH::BLACKHOLE ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
@@ -527,7 +525,7 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
     // - Uncorrected codewords are detected but no retrains were issued
     // - Uncorrected codewords are increasing
     // - A data mismatch is detected
-    auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+    auto arch = tt::tt_metal::get_cluster().arch();
     if (arch == tt::ARCH::BLACKHOLE) {
         // BH systems support real-time link retraining/recovery. As such its considered normal for link retrain
         // counts to be increasing.
@@ -685,7 +683,7 @@ void dump_link_stats(
     uint32_t data_size,
     uint32_t packet_size_bytes) {
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
 
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
@@ -1174,7 +1172,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             " Total Data Size: (Bytes): " + std::to_string(data_size));
     }
 
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     std::vector<ChipId> device_ids;
@@ -1191,7 +1189,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::get_rtoptions().get_dispatch_core_config());
     } catch (const std::exception& e) {
         log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
         log_output_rank0("Error details: " + std::string(e.what()));
@@ -1266,7 +1264,7 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
 }
 
 void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     std::vector<uint32_t> set = {1};
 
     const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
@@ -1375,7 +1373,7 @@ void forward_link_reset_metadata_from_controller(
 
 void reset_local_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
@@ -1487,7 +1485,7 @@ void reset_cross_node_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
     const std::vector<ResetPair>& cross_node_reset_pairs) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     std::vector<uint32_t> set = {1};
 
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
@@ -1555,7 +1553,7 @@ bool generate_link_metrics(
     uint32_t data_size,
     const ConnectivityValidationConfig& validation_config) {
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
-    for (const auto& [chip_id, asic_id] : tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids()) {
+    for (const auto& [chip_id, asic_id] : tt::tt_metal::get_cluster().get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
@@ -1692,7 +1690,7 @@ void perform_link_reset(
     uint32_t reset_asic_location,
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool link_retrain_supported = tt::tt_metal::get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
 
     tt::tt_metal::AsicTopology reset_topology =

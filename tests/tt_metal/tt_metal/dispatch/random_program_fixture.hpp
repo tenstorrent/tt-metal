@@ -302,9 +302,8 @@ private:
         int num = 0;
 
         if (is_eth) {
-            max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
-                        1;
+            max_index =
+                tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) - 1;
         }
         num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;

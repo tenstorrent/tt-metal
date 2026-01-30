@@ -44,7 +44,7 @@ class SimulatorFixture : public MeshDeviceFixture {
 protected:
     void SetUp() override {
         // Check if simulator mode is enabled
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        if (!tt::tt_metal::get_rtoptions().get_simulator_enabled()) {
             GTEST_SKIP()
                 << "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
         }

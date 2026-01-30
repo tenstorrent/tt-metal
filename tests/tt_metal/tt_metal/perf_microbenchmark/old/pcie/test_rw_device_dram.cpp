@@ -63,8 +63,7 @@ int main(int argc, char** argv) {
 
         // Application Setup
         srand(time(nullptr));
-        uint32_t dram_addr =
-            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
+        uint32_t dram_addr = tt::tt_metal::get_hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;
         log_info(LogTest, "Target DRAM channel = {}", dram_channel);
 

@@ -295,9 +295,8 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(
-            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
-            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+        .l1_buffer_addr =
+            tt::align(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), get_hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{},
     };
 
@@ -306,8 +305,8 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                HalProgrammableCoreType::ACTIVE_ETH);
+            const auto erisc_count =
+                tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 log_info(tt::LogTest, "Active Eth DM{} Loopback. Logical core {}", erisc_idx, active_eth_core.str());
                 dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
@@ -332,9 +331,8 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .core_range = {{0, 0}, {0, 0}},  // Set below
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(
-            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
-            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+        .l1_buffer_addr =
+            tt::align(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), get_hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{},
     };
 
@@ -343,8 +341,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            const auto erisc_count =
-                tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+            const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 log_info(tt::LogTest, "Single Idle Eth DM{} Loopback. Logical core {}", erisc_idx, idle_eth_core.str());
                 dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
@@ -381,7 +378,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixLoopDRAMReadSingleCoreBothProcessors)
     constexpr uint32_t num_iterations = 100;
 
     const uint32_t brisc_base_addr = 8519744;
-    uint32_t ncrisc_base_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t ncrisc_base_addr = get_hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
 
     uint32_t brisc_num_pages_to_read = 43264;
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;

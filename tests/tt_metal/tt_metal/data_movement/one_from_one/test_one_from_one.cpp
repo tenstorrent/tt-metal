@@ -113,7 +113,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};

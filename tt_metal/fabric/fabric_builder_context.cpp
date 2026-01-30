@@ -189,7 +189,7 @@ void FabricBuilderContext::initialize_tensix_config() {
 }
 
 IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Check if multiple meshes exist

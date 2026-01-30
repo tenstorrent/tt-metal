@@ -39,8 +39,8 @@ L1AddressInfo get_l1_address_and_size(
 DramAddressInfo get_dram_address_and_size() {
     // Obtaining DRAM address and size //
 
-    auto dram_base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    uint32_t dram_size = MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
+    auto dram_base_address = get_hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_size = get_hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
 
     return {dram_base_address, dram_size};
 }

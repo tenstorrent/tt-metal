@@ -134,7 +134,7 @@ bool run_noc_api_latency_test(
 
     /* ================ RUNNING THE PROGRAM ================ */
 
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};

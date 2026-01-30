@@ -25,7 +25,7 @@ std::optional<std::string> CmdlineParser::get_yaml_config_path() {
         std::filesystem::path fpath(yaml_config);
         if (!fpath.is_absolute()) {
             const auto& fname = fpath.filename();
-            fpath = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            fpath = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
                     "tests/tt_metal/multihost/fabric_tests/" / fname;
             log_warning(tt::LogTest, "Relative fpath for config provided, using absolute path: {}", fpath);
         }

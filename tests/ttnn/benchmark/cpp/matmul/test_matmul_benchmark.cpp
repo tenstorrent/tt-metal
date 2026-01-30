@@ -377,7 +377,7 @@ void RunMatmulBenchmark(
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
     double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
 
-    const int freq_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+    const int freq_mhz = tt::tt_metal::get_cluster().get_device_aiclk(device_id);
     double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
 
     double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;

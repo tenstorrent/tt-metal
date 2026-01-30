@@ -347,9 +347,7 @@ public:
             config.named_compile_args),
         config_(config),
         dm_cores_(dm_cores.begin(), dm_cores.end()) {
-        TT_FATAL(
-            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
-            "QuasarDataMovementKernel is only supported on Quasar");
+        TT_FATAL(get_cluster().arch() == ARCH::QUASAR, "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
             config.num_processors_per_cluster == dm_cores.size(),
             "Number of processors per cluster specified in config must match number of DM cores per cluster that have "

@@ -27,7 +27,7 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) 
     ZoneScopedN("CommandQueue_constructor");
 
     uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_->id());
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();

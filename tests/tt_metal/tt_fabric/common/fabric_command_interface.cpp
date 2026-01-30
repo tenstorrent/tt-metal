@@ -16,8 +16,8 @@ FabricCommandInterface::FabricCommandInterface(const ControlPlane& control_plane
 }
 
 void FabricCommandInterface::issue_command_to_routers(RouterCommand router_command) const {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& cluster = tt::tt_metal::get_cluster();
+    const auto& hal = tt::tt_metal::get_hal();
 
     const auto router_cmd_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_COMMAND);
@@ -107,8 +107,8 @@ RouterState FabricCommandInterface::read_router_state(
     const FabricNodeId& fabric_node_id,
     chan_id_t channel_id) const {
     // Query state of specific router
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& cluster = tt::tt_metal::get_cluster();
+    const auto& hal = tt::tt_metal::get_hal();
 
     const auto router_state_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTER_STATE);

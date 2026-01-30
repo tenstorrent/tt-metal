@@ -59,7 +59,7 @@ int main(int argc, char** /*argv*/) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 

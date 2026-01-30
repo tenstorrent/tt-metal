@@ -29,7 +29,7 @@ protected:
     uint32_t actual_kernel_config_size_{};
     uint32_t unreserved_base_{};
     uint32_t unreserved_size_{};
-    const Hal& hal_{MetalContext::instance().hal()};
+    const Hal& hal_{get_hal()};
     // Total L1 memory available to be partitioned between kernel config buffer and user-allocatable space
     const uint32_t max_worker_l1_size_{hal::get_max_worker_l1_unreserved_size()};
     const uint32_t kernel_config_base_{
@@ -107,8 +107,8 @@ protected:
 // Helper for RAII kernel nullification
 class ScopedNullifyKernels {
 public:
-    ScopedNullifyKernels() { tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true); }
-    ~ScopedNullifyKernels() { tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false); }
+    ScopedNullifyKernels() { tt::tt_metal::get_rtoptions().set_kernels_nullified(true); }
+    ~ScopedNullifyKernels() { tt::tt_metal::get_rtoptions().set_kernels_nullified(false); }
 
     ScopedNullifyKernels(const ScopedNullifyKernels&) = delete;
     ScopedNullifyKernels& operator=(const ScopedNullifyKernels&) = delete;
