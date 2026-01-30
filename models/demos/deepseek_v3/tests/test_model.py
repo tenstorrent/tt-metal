@@ -51,6 +51,7 @@ def generate_reference_io(
         state_dict = sub_state_dict(state_dict, "", hf_config.num_hidden_layers)
 
         logger.info(f"Creating reference model")
+
         # Create model on meta device (no weight initialization or memory allocation)
         with torch.device("meta"):
             reference_model = DeepseekV3ForCausalLM(hf_config).eval()
@@ -59,7 +60,13 @@ def generate_reference_io(
         reference_model = reference_model.to_empty(device=torch.device("cpu"))
 
         logger.info(f"Loading state dict into reference model")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+
+        # Use assign=True to avoid copying tensors
+        reference_model.load_state_dict(dequantized_state_dict, assign=True)
+
+        del dequantized_state_dict
+
         reference_model = reference_model.to(torch.bfloat16)
     else:
         logger.info("Creating reference model with random weights")

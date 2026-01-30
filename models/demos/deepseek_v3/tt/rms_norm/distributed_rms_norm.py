@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_state_dicts
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -28,6 +28,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class DistributedRMSNorm(RMSNormBase):
@@ -43,20 +44,20 @@ class DistributedRMSNorm(RMSNormBase):
         num_shards = torch_metaweight.shape[0]
         assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
 
-        # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config
-        # so that RunConfig can populate it with the actual weight tensors at runtime
+        # Return WeightSpec - conversion will happen at top level
+        # The nested structure "rms_norm_post_all_gather.weight" must match the op name used in the model config
+        # so that RunConfig can populate it with the actual weight tensors at runtime.
+        # name + preprocessor support cache path; torch_tensor supports disk path.
         return {
             "rms_norm_post_all_gather": {
-                "weight": shard_and_save(
-                    output_path / "rmsnorm.weight",
-                    torch_metaweight.reshape(
-                        (num_shards, 1, -1, ttnn.TILE_SIZE)
-                    ),  # Reshape to tile width sticks for optimal performance
+                "weight": WeightSpec(
+                    name="weight",
+                    torch_tensor=torch_metaweight,
                     shard_dims=(0, -2),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    preprocessor=lambda t: t.reshape((num_shards, 1, -1, ttnn.TILE_SIZE)),
                 )
             }
         }

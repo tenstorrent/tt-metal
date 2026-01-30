@@ -16,7 +16,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     KvCacheConfig,
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
-    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
@@ -28,6 +27,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -54,17 +54,16 @@ class MLA2D(MLA1D):
     @classmethod
     def _convert_weight(
         cls,
-        path: Path,
         torch_metaweight: torch.Tensor,
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
-    ) -> SavedWeight:
+    ) -> WeightSpec:
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
             assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
             torch_metaweight = slices[0]
             dims = (None, dims[1])
-        return super()._convert_weight(path, torch_metaweight, dims, mesh_device)
+        return super()._convert_weight(torch_metaweight, dims, mesh_device)
 
     @classmethod
     def prefill_model_config(

@@ -16,13 +16,14 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     TypecastConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class Embedding1D(AbstractModule):
@@ -54,25 +55,28 @@ class Embedding1D(AbstractModule):
             torch_weight.shape[-1] % mesh_device.get_num_devices() == 0
         ), "Embedding weight last dimension must be divisible by the number of devices"
 
-        # Save to disk with standard naming - "embedding" must match the op name used in the model config
+        # Return WeightSpec - conversion will happen at top level
+        # The weight name "embedding" must match the op name used in the model config
         # so that RunConfig can populate it with the actual weight tensors at runtime
+        def preprocessor(t):
+            # Convert to TTNN tensor with 1D sharding across final dimension
+            return t.reshape(
+                hf_config.vocab_size,
+                mesh_device.shape[1],
+                mesh_device.shape[0],
+                even_int_div(hf_config.hidden_size, mesh_device.get_num_devices()),
+            )
+
         return {
             "embedding": {
-                "weight": shard_and_save(
-                    output_path / "embedding.weight",
-                    # Convert to TTNN tensor with 1D sharding across final dimension
-                    torch_weight.reshape(
-                        hf_config.vocab_size,
-                        mesh_device.shape[1],
-                        mesh_device.shape[0],
-                        even_int_div(hf_config.hidden_size, mesh_device.get_num_devices()),
-                    ),
+                "weight": WeightSpec(
+                    torch_tensor=torch_weight,
                     shard_dims=(2, 1),
-                    mesh_device=mesh_device,
                     remove_dims=True,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    preprocessor=preprocessor,
                 )
             }
         }

@@ -96,7 +96,6 @@ def test_forward_pass(
         state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
     else:
         state_dict = reference_model.to(torch.bfloat16).state_dict()
-
     torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
     reference_model = reference_model.to(torch.float32)
     reference_output = reference_model(torch_input)

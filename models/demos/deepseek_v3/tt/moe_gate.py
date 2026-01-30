@@ -22,12 +22,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     TopKConfig,
     TopKFallbackConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
-    TOPK_MIN_WIDTH,
-    even_int_div,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI2, TOPK_MIN_WIDTH, even_int_div
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -35,6 +30,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class MoEGate(AbstractModule):
@@ -55,59 +51,51 @@ class MoEGate(AbstractModule):
         assert state_dict is not None
         return {
             "gate_proj": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"gate_proj.input_tensor_b",
-                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                "input_tensor_b": WeightSpec(
+                    torch_tensor=state_dict[f"{prefix}weight"],
                     shard_dims=(None, None),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
+                    preprocessor=lambda t: t.T.unsqueeze(0).unsqueeze(0),
                 )
             },
             "add_score_correction_bias": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"e_score_correction_bias.input_tensor_b",
-                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                "input_tensor_b": WeightSpec(
+                    torch_tensor=state_dict[f"{prefix}e_score_correction_bias"],
                     shard_dims=(None, None),
-                    mesh_device=mesh_device,
                     dtype=ttnn.float32,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    preprocessor=lambda t: t.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                 )
             },
             "multiply_expert_scale": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"multiply_expert_scale.input_tensor_b",
-                    torch.tensor([hf_config.routed_scaling_factor])
-                    .repeat(1, hf_config.num_experts_per_tok)
-                    .unsqueeze(0)
-                    .unsqueeze(0),
+                "input_tensor_b": WeightSpec(
+                    torch_tensor=torch.tensor([hf_config.routed_scaling_factor]),
                     shard_dims=(None, None),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    preprocessor=lambda t: t.repeat(1, hf_config.num_experts_per_tok).unsqueeze(0).unsqueeze(0),
                 )
             },
             "scatter_top_expert_groups": {
-                "input": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.input",
-                    torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
+                "input": WeightSpec(
+                    torch_tensor=torch.empty(0),  # Will be created in preprocessor
                     shard_dims=(None, None),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    preprocessor=lambda t: torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
                 ),
-                "src": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.src",
-                    torch.ones((1, 1, 1, hf_config.topk_group)),
+                "src": WeightSpec(
+                    torch_tensor=torch.empty(0),  # Will be created in preprocessor
                     shard_dims=(None, None),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
+                    preprocessor=lambda t: torch.ones((1, 1, 1, hf_config.topk_group)),
                 ),
             },
         }
