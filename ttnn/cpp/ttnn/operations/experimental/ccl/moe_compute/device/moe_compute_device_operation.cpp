@@ -2,23 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_device_operation.hpp"
+#include "moe_compute_device_operation.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::experimental::prim {
 
-MoEDeviceOperation::program_factory_t MoEDeviceOperation::select_program_factory(
+MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return MoEMeshWorkloadFactory{};
+    return MoEComputeMeshWorkloadFactory{};
 }
 
-void MoEDeviceOperation::validate_on_program_cache_hit(
+void MoEComputeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-void MoEDeviceOperation::validate_on_program_cache_miss(
+void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Tilize
     TT_FATAL(
@@ -31,7 +31,7 @@ void MoEDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be uint32");
 }
 
-MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs(
+MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
     const ttnn::Tensor& tilize_mapping_tensor = tensor_args.tilize_expert_mapping_tensor;
@@ -110,7 +110,7 @@ MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs
     return {tilized_output_spec, expert_activation_spec, e_t_spec, matmul_output_spec};
 }
 
-MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tensors(
+MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
     return {
@@ -124,7 +124,7 @@ MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tens
 
 namespace ttnn::prim {
 
-std::vector<ttnn::Tensor> moe(
+std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,
     const ttnn::Tensor& tilize_expert_indices_tensor,
     const ttnn::Tensor& tilize_expert_scores_tensor,
@@ -133,7 +133,7 @@ std::vector<ttnn::Tensor> moe(
     const ttnn::Tensor& matmul_w2_tensor,
     const uint32_t layer_id,
     const std::optional<uint32_t> cluster_axis) {
-    using OperationType = ttnn::experimental::prim::MoEDeviceOperation;
+    using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.layer_id = layer_id, .cluster_axis = cluster_axis},

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_program_factory.hpp"
-#include "moe_device_operation_types.hpp"
+#include "moe_compute_program_factory.hpp"
+#include "moe_compute_device_operation_types.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -73,27 +73,28 @@ get_cores(ttnn::MeshDevice* mesh_device) {
 
 namespace ttnn::experimental::prim {
 
-MoEMeshWorkloadFactory::cached_mesh_workload_t MoEMeshWorkloadFactory::create_mesh_workload(
-    const MoEParams& args,
+MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
+    const MoEComputeParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const MoEInputs& tensor_args,
+    const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, MoEMeshWorkloadFactory::shared_variables_t> shared_variables;
+    std::unordered_map<ttnn::MeshCoordinateRange, MoEComputeMeshWorkloadFactory::shared_variables_t> shared_variables;
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
-            MoEMeshWorkloadFactory::create_at(args, coord, tensor_args, tensor_return_value, tensor_coords);
+            MoEComputeMeshWorkloadFactory::create_at(args, coord, tensor_args, tensor_return_value, tensor_coords);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
-    return MoEMeshWorkloadFactory::cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+    return MoEComputeMeshWorkloadFactory::cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t> MoEMeshWorkloadFactory::create_at(
-    const MoEParams& args,
+ttnn::device_operation::CachedProgram<MoEComputeMeshWorkloadFactory::shared_variables_t>
+MoEComputeMeshWorkloadFactory::create_at(
+    const MoEComputeParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const MoEInputs& tensor_args,
+    const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet&) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -632,15 +633,13 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
 
     tt::tt_metal::KernelHandle tilize_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
-        "tilize_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
         tilize_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(tilize_compile_time_args, {}, tilize_named_compile_time_args));
 
     tt::tt_metal::KernelHandle tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/dataflow/"
-        "tilize_writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
         tilize_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(tilize_compile_time_args, {}, tilize_named_compile_time_args));
 
@@ -655,8 +654,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
 
     tt::tt_metal::KernelHandle tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/compute/"
-        "tilize_compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute/tilize_compute.cpp",
         tilize_core_range_set,
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
 
@@ -777,7 +775,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
     // Create kernels for the program
     auto matmul_dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm0.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -787,7 +785,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
 
     auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm1.cpp",
         matmul_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -797,7 +795,7 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
 
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
         matmul_core_range_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
@@ -897,10 +895,10 @@ ttnn::device_operation::CachedProgram<MoEMeshWorkloadFactory::shared_variables_t
          .matmul_cores = matmul_cores}};
 }
 
-void MoEMeshWorkloadFactory::override_runtime_arguments(
+void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const MoEParams&,
-    const MoEInputs& tensor_args,
+    const MoEComputeParams&,
+    const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     // output tensors
     const ttnn::Tensor& output_tensor = tensor_return_value.at(0);

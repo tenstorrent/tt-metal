@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 namespace nb = nanobind;
-void bind_moe(nb::module_& mod);
+void bind_moe_compute(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl
