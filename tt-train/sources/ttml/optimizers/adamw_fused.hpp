@@ -14,7 +14,7 @@ struct AdamWFusedConfig {
     float beta1{0.9F};
     float beta2{0.999F};
     float epsilon{1e-8F};
-    float weight_decay{0.0F};
+    float weight_decay{1e-2F};
     bool amsgrad{false};
     bool stochastic_rounding{false};
 };
