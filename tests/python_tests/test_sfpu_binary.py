@@ -144,7 +144,7 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop, workers_tensix_coord
 
     assert len(res_tensor) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
@@ -214,7 +214,7 @@ def sfpu_binary(formats, dest_acc, mathop, workers_tensix_coordinates):
 
     assert len(res_tensor) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

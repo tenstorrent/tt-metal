@@ -159,7 +159,7 @@ def test_unpack_tilize_comprehensive(
 
     assert len(res_from_L1) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     assert passed_test(

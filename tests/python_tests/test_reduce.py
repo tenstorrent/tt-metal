@@ -84,7 +84,7 @@ def test_reduce(formats, dest_acc, reduce_dim, pool_type, workers_tensix_coordin
 
     assert len(res_from_L1) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 

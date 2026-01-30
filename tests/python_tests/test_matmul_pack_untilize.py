@@ -85,7 +85,7 @@ def test_matmul_pack_untilize(
     res_from_L1 = configuration.run(workers_tensix_coordinates)
     assert len(res_from_L1) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=(torch_format))
 

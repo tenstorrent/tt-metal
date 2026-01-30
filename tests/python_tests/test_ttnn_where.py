@@ -107,7 +107,7 @@ def test_ttnn_where(formats, dest_acc, mathop, test_case, workers_tensix_coordin
     res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(
         golden
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     golden_tensor = torch.tensor(
         golden,
@@ -218,5 +218,5 @@ def test_ttnn_where_mcw(
 
     assert len(res_tensor) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"

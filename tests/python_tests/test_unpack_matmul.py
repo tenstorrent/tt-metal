@@ -195,7 +195,7 @@ def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates)
 
     assert len(res_from_L1) == len(
         golden_tensor
-    ), "Result tensor and golder tensor are not of the same length"
+    ), "Result tensor and golden tensor are not of the same length"
 
     # Only compare the active faces in each tile since that's what the hardware processes
     num_elements_per_tile = num_faces * 256  # Each face is 16x16 = 256 elements
