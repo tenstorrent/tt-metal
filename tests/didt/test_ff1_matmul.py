@@ -235,12 +235,7 @@ def test_specific_board_ff1_matmul(
     determinism_check_interval,
 ):
     test_ff1_matmul(
-        t3k_single_board_mesh_device,
-        gelu,
-        math_fidelity,
-        didt_workload_iterations,
-        determinism_check_interval,
-        False,
+        t3k_single_board_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
     )
 
 
@@ -274,7 +269,6 @@ def test_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
         grid_size=grid_size,
     )
 
@@ -310,7 +304,6 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
         grid_size=grid_size,
     )
 
@@ -361,7 +354,7 @@ def test_mesh_size_ff1_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    # check that sub-mesh with sub_mesh_shape and mesh_coordinate is can fit within the parent mesh of MESH_X by MESH_Y
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
     if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
         pytest.skip(
             f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"

@@ -267,12 +267,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
 def test_specific_chip_resnet_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
-    test_resnet_conv(
-        mesh_device.get_device(logical_chip_id),
-        didt_workload_iterations,
-        determinism_check_interval,
-        False,
-    )
+    test_resnet_conv(mesh_device.get_device(logical_chip_id), didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")
@@ -323,7 +318,7 @@ def test_specific_board_resnet_conv(t3k_single_board_mesh_device, didt_workload_
 def test_mesh_size_resnet_conv(
     mesh_device, sub_mesh_shape, mesh_coordinate, didt_workload_iterations, determinism_check_interval
 ):
-    # check that sub-mesh with sub_mesh_shape and mesh_coordinate is can fit within the parent mesh of MESH_X by MESH_Y
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
     if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
         pytest.skip(
             f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"

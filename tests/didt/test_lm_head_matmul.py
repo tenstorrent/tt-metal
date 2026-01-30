@@ -162,7 +162,6 @@ def test_specific_chip_lm_head_matmul(
         mesh_device.get_device(logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
-        False,
     )
 
 
@@ -176,7 +175,7 @@ def test_specific_chip_lm_head_matmul(
 def test_specific_board_lm_head_matmul(
     t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval)
 
 
 @skip_for_blackhole("Use test_blackhole_grid_size_lm_head_matmul test for blackhole!")
@@ -196,7 +195,7 @@ def test_specific_board_lm_head_matmul(
     indirect=["mesh_device"],
 )
 def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iterations, determinism_check_interval):
-    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=grid_size)
 
 
 @skip_for_wormhole_b0("Use test_grid_size_lm_head_matmul for blackhole!")
@@ -219,7 +218,7 @@ def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iteratio
 def test_blackhole_grid_size_lm_head_matmul(
     mesh_device, grid_size, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=grid_size)
 
 
 @pytest.mark.parametrize(
@@ -257,14 +256,14 @@ def test_blackhole_grid_size_lm_head_matmul(
 def test_mesh_size_lm_head_matmul(
     mesh_device, sub_mesh_shape, mesh_coordinate, didt_workload_iterations, determinism_check_interval
 ):
-    # check that sub-mesh with sub_mesh_shape and mesh_coordinate is can fit within the parent mesh of MESH_X by MESH_Y
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
     if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
         pytest.skip(
             f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"
         )
     sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
     logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
-    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval)
 
 
 @pytest.mark.parametrize(
@@ -285,4 +284,4 @@ def test_random_mesh_size_lm_head_matmul(mesh_device, didt_workload_iterations, 
 
     sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
     logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
-    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_lm_head_matmul(sub_mesh_device, didt_workload_iterations, determinism_check_interval)
