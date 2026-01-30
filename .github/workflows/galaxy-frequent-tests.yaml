@@ -51,15 +51,12 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-      contents: read
-      actions: read
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-      use-artifacts-from-run: 21532317647
   galaxy-integration-tests:
     needs: build-artifact
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
