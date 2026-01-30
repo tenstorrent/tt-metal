@@ -40,7 +40,7 @@ constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
-constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(21);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -115,7 +115,6 @@ void kernel_main() {
     // Let's set some particular values for the params used
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
-    const uint32_t chunk_width_in_tiles = 2;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
 
     uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
