@@ -51,7 +51,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-      use-artifacts-from-run: 21500669848
+      use-artifacts-from-run: 21500952355
   galaxy-e2e-tests:
     needs: build-artifact
     uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
