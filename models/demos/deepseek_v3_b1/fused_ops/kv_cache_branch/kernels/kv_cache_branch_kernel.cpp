@@ -25,7 +25,7 @@ struct Core {
     static constexpr bool is_dkv_matmul_core = get_named_compile_time_arg_val("is_dkv_matmul_core") == 1;
     static constexpr bool is_kv_rmsnorm_core = get_named_compile_time_arg_val("is_kv_rmsnorm_core") == 1;
     static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
-    static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 2;  // Temporary disable
+    static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;
 };
 
 void kernel_main() {

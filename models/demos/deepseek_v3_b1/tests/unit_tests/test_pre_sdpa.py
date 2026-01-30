@@ -357,7 +357,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info("Computing golden reference...")
 
     # Golden uses shuffled weights to produce same interleaved output
-    _, torch_qrope_expected, torch_sdpa_expected = PreSDPA.golden(
+    _, _, torch_sdpa_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
@@ -376,15 +376,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     )
 
     # ========================================================================
-    # Verify RoPE output (Qrope after RoPE)
-    # ========================================================================
-    logger.info("Verifying Qrope RoPE output...")
-    # Note: We can't directly extract qrope output from the fused kernel since it's an intermediate CB
-    # But we can verify it indirectly through the SDPA input (which includes RoPE-processed qrope)
-    # The golden qrope_output is [64, 1, 64] after RoPE
-    # This is interleaved into SDPA input, so we verify SDPA input includes correct RoPE output
-
-    # ========================================================================
     # Verify final output (SDPA Input)
     # ========================================================================
     logger.info("Verifying SDPA Input interleaved results...")
@@ -396,7 +387,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     sdpa_input_passing, sdpa_input_pcc_message = comp_pcc(torch_sdpa_input_expected_flat, sdpa_input_output_torch, 0.98)
     logger.info(f"SDPA Input PCC: {sdpa_input_pcc_message}")
 
-    # Assert final output passes (this implicitly verifies RoPE since SDPA input includes RoPE-processed qrope)
+    # Assert final output passes
     assert sdpa_input_passing, f"SDPA Input verification failed: {sdpa_input_pcc_message}"
 
-    logger.info("✓ PreSDPA test passed (with RoPE fusion)!")
+    logger.info("✓ PreSDPA test passed!")

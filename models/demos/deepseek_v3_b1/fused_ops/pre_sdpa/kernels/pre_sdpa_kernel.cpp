@@ -512,7 +512,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("MATMUL3");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
+        deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
         matmul3(matmul3_args);
     }
 

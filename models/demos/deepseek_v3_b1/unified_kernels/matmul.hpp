@@ -77,7 +77,7 @@ struct Matmul {
     //   pop_in0 - whether to pop in0 after compute (default true)
     //   pop_in1 - whether to pop in1 after compute (default true)
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1, bool skip_init = false>
+    template <typename CTArgs, bool IsActiveCore, bool pop_in0, bool pop_in1>
     class Op {
     public:
         void operator()(const RTArgs& args) {
