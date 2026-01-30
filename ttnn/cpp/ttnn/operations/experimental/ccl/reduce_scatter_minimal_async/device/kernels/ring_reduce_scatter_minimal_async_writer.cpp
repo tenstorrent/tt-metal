@@ -36,7 +36,7 @@ constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
+constexpr uint32_t input_tensor_B = 2;  // get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
@@ -455,10 +455,15 @@ void kernel_main() {
                 slice_idx++;
             }
         }
+        DPRINT << "Wait batch ready semaphore" << ENDL();
+
         // Reset the global semaphore before the next batch
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+
+        DPRINT << "Reset batch ready semaphore" << ENDL();
     }
+    DPRINT << "Finish reduce scatter. Disconnect fabric" << ENDL();
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
@@ -476,4 +481,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+    DPRINT << "Finish Reduce Scatter Writer kernel" << ENDL();
 }

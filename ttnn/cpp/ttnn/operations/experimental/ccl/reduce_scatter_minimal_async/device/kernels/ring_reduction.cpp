@@ -13,7 +13,7 @@ void MAIN {
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
-    constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
+    constexpr uint32_t input_tensor_B = 2;  // get_compile_time_arg_val(5);
     constexpr uint32_t slice_C = get_compile_time_arg_val(6);
 
     uint32_t arg_idx = 0;

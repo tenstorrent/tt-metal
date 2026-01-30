@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "matmul_dataflow_common.hpp"
 #ifdef FUSE_AG
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
@@ -125,6 +126,7 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+    DPRINT << "Matmul has " << M_blocks_per_core << "M blocks per core" << ENDL();
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
@@ -261,4 +263,5 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    DPRINT << "Finish Matmul in1 sender/out kernel" << ENDL();
 }

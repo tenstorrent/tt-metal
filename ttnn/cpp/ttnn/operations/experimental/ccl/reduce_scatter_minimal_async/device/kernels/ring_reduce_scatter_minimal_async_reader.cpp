@@ -26,7 +26,7 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_B = 2;  // get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(12);
@@ -110,7 +110,9 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         if constexpr (fuse_op) {
+            DPRINT << "Wait for matmul batch" << b << ENDL();
             matmul_receiver.wait_for_matmul_batch(b);
+            DPRINT << "Got matmul batch" << b << ENDL();
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;
@@ -277,4 +279,5 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "Finish Reduce Scatter Reader kernel" << ENDL();
 }
