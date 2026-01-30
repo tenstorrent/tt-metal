@@ -123,9 +123,9 @@ target_sources(
         deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
-        moe_compute/moe.cpp
-        moe_compute/device/moe_device_operation.cpp
-        moe_compute/device/moe_program_factory.cpp
+        moe_compute/moe_compute.cpp
+        moe_compute/device/moe_compute_device_operation.cpp
+        moe_compute/device/moe_compute_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
