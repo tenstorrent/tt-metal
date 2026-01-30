@@ -91,7 +91,8 @@ void RunTest(
     using tt::tt_metal::test::dprint::GenerateInputTileWithOffset;
 
     std::vector<uint32_t> u32_vec{};
-    std::string expected_output;
+    std::string expected_output_write;
+    std::string expected_output_read;
 
     /* Generating input tiles so that all numbers are consecutive in the uint32_t representation.
        Tile with i=0 starts at 0, tile with i=1 starts at tile_size, etc.
@@ -103,13 +104,16 @@ void RunTest(
 
         using tt::tt_metal::test::dprint::GenerateExpectedData;
         std::string golden_output = GenerateExpectedData(data_format, tile);
-        expected_output += fmt::format("Print tile {}:{}\n", i, golden_output);
+        expected_output_write += fmt::format("Write tile {}:{}\n", i, golden_output);
+        expected_output_read += fmt::format("Read tile {}:{}\n", i, golden_output);
     }
 
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
     fixture->RunProgram(mesh_device, workload);
 
     const auto* filename = "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
+    auto expected_output = expected_output_write + expected_output_read;
+
     EXPECT_TRUE(FilesMatchesString(filename, expected_output));
 }
 
