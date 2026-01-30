@@ -430,21 +430,23 @@ void MetalContext::teardown() {
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::atomic<MetalContext*> g_instance{nullptr};
-// Use a recursive mutex because the instance destructor calls into MetalContext::instance.
-std::recursive_mutex g_instance_mutex;
+std::mutex g_instance_mutex;
 bool registered_atexit = false;
-std::atomic_bool is_tearing_down = false;
 
 MetalContext& MetalContext::instance() {
-    if (is_tearing_down) {
-        TT_ASSERT(g_instance, "MetalContext is tearing down but no instance exists.");
-        // During teardown multiple threads may call instance() to access the same instance, so return the existing
-        // instance in that case instead of deadlocking.
-        return *g_instance.load(std::memory_order_acquire);
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (instance) {
+        // There is a potential race condition here if the instance is being torn down while this call is running or
+        // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
+        // from the teardown process (maybe on one of several threads) and is synchronized with the teardown.
+        return *instance;
     }
     std::lock_guard lock(g_instance_mutex);
-    if (!g_instance) {
-        g_instance = new MetalContext();
+    // Check again in case another thread created the instance while we were waiting for the lock.
+    instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
+        instance = new MetalContext();
+        g_instance.store(instance, std::memory_order_release);
         if (!registered_atexit) {
             std::atexit([]() {
                 // Don't check device count because the destruction order is complicated and we can't guarantee that the
@@ -454,7 +456,7 @@ MetalContext& MetalContext::instance() {
             registered_atexit = true;
         }
     }
-    return *g_instance.load(std::memory_order_acquire);
+    return *instance;
 }
 
 void MetalContext::destroy_instance(bool check_device_count) {
@@ -468,9 +470,9 @@ void MetalContext::destroy_instance(bool check_device_count) {
         !instance->device_manager()->get_all_active_devices().empty()) {
         TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
     }
-    is_tearing_down = true;
     delete instance;
-    is_tearing_down = false;
+    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
+    // return the old instance.
     g_instance.store(nullptr, std::memory_order_release);
 }
 
