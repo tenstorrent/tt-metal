@@ -45,7 +45,7 @@ void bind_pad(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::SmallVector<std::array<uint32_t, 2>> padding,
+               const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {

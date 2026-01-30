@@ -23,7 +23,11 @@ void unpack_main() {
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize_<true>(0, per_core_block_c_tiles);
             llk_unpack_untilize_<false>(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 

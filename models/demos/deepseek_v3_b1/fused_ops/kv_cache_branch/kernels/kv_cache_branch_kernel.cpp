@@ -28,11 +28,9 @@ struct Core {
     static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 2;  // Temporary disable
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
 // ============================================================================
 // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
-// Named compile-time args: TODO
-// Runtime args: TODO
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
@@ -233,4 +231,3 @@ KERNEL_ENTRY {
         k_rope(k_rope_args);
     }
 }
-KERNEL_END

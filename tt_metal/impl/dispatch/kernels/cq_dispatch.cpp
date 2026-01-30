@@ -54,6 +54,7 @@ constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
 constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
+constexpr uint32_t dev_dispatch_progress_ptr = DEV_DISPATCH_PROGRESS_PTR;
 
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 
@@ -211,6 +212,10 @@ FORCE_INLINE volatile uint32_t* get_cq_completion_read_ptr() {
 
 FORCE_INLINE volatile uint32_t* get_cq_completion_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(dev_completion_q_wr_ptr);
+}
+
+FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(dev_dispatch_progress_ptr);
 }
 
 FORCE_INLINE
@@ -494,9 +499,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
         bool hit_boundary = false;
         if (available_data == 0) {
-            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
-                hit_boundary = true;
-            });
+            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(
+                data_ptr, [&](bool /*will_wrap*/) { hit_boundary = true; });
         }
         uint32_t xfer_size = length > available_data ? available_data : length;
         if (hit_boundary) {
@@ -1303,6 +1307,11 @@ void kernel_main() {
     }
     bool done = false;
     uint32_t heartbeat = 0;
+    uint32_t dispatch_progress = 0;  // Track number of commands processed for tracking dispatch progress updates
+
+    // Initialize progress counter in L1 memory
+    *get_dispatch_progress_ptr() = dispatch_progress;
+
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
@@ -1310,6 +1319,10 @@ void kernel_main() {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
+
+        // Increment dispatch progress counter and write to L1 memory
+        dispatch_progress++;
+        *get_dispatch_progress_ptr() = dispatch_progress;
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);

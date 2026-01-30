@@ -20,7 +20,6 @@ class KVCacheBranch:
     KV Cache Branch fused operation implementation using ttnn.generic_op.
 
     This class implements the KV cache branch operations as a fused execution:
-    # TODO: Add description of what operations this performs
     """
 
     @staticmethod
@@ -87,7 +86,6 @@ class KVCacheBranch:
             Output tensor with KV cache branch operations applied
         """
         # Get tensor properties
-        input_shape = input_tensor.shape
         data_format = input_tensor.dtype
 
         # Get core grid from input tensor's memory config
@@ -140,7 +138,6 @@ class KVCacheBranch:
         kv_rmsnorm_gamma_cb = 13  # 16x32 tile, 1024 bytes (sharded gamma, 1 tile)
         kv_rmsnorm_output_cb = 14  # 16x32 tile, 1024 bytes (sharded output, 1 tile)
         k_rope_output_cb = 15  # 1x32 tile, 64 bytes (Wt tiles output) - SAME AS KV in merged
-        k_rope_input_test_cb = 17
 
         # DKV Matmul
         dkv_matmul_k_num_tiles = 7168 // 32
@@ -382,7 +379,6 @@ class KVCacheBranch:
         sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sin_cb, sin_tensor)
         # CB X: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
-        # krope_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(krope_input_cb, krope_input_tensor)
 
         # CB X: Rotated input intermediate (not backed by tensor)
         rotated_interm_format = ttnn.CBFormatDescriptor(

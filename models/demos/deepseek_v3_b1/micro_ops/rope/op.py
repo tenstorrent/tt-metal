@@ -111,7 +111,7 @@ class RopeSingleCore:
 
         # Calculate dimensions in tiles
         # With tiny tiles: shard_shape[0] = n_heads, shard_shape[1] = head_dim
-        head_dim_per_core_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt), 32 // 32 = 1
+        head_dim_per_core_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt)
 
         # Calculate tile sizes
         # For tiny tiles, the tile height matches the shard height (num_q_heads_per_core)

@@ -257,14 +257,14 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
         ttnn_output,
     )
 
-    # TODO: Convert back to torch for verification
+    # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)
 
     expected_shape = (1, 512)
     assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
 
     logger.info("Running KV cache branch golden reference...")
-    # TODO: Compute reference output using PyTorch
+    # Compute reference output using PyTorch
     torch_expected = KVCacheBranch.golden(
         torch_input,
         torch_W_dkv_rope,
@@ -287,4 +287,4 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
     logger.info(pcc_message)
     assert passing, pcc_message
 
-    logger.info("✓ KV cache branch test setup complete (implementation pending)")
+    logger.info("✓ KV cache branch test passed!)")

@@ -100,6 +100,11 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
 
     const uint32_t output_cb_page_size = (float)output_shape[-1] * output_tensor.element_size();
     const uint32_t output_cb_pages = output_nsticks_per_core;
+
+    // Fill CB - single page to hold pre-filled stick
+    auto [fill_cb_index, fill_cb_handle] =
+        tt::tt_metal::create_cb(cb_idx++, program, all_cores, output_cb_page_size, 1, output_cb_data_format);
+
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         cb_idx++,
         program,
@@ -133,10 +138,11 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
         enable_split_reader ? 1U : 0U,               // ct_arg[11]: split_reader (same as reader)
         0U,                                          // ct_arg[12]: reader_id (will be set per core)
         grid_nsticks_per_core,                       // ct_arg[13]: grid_nsticks_per_core
-        is_sharded ? 1U : 0U                         // ct_arg[14]: is_sharded
+        is_sharded ? 1U : 0U,                        // ct_arg[14]: is_sharded
+        fill_cb_index                                // ct_arg[15]: fill_cb_index
     };
 
-    // Add tensor accessor args for input tensor (15 compile time args offset)
+    // Add tensor accessor args for input tensor (16 compile time args offset)
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
     if (!is_sharded) {
         tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
