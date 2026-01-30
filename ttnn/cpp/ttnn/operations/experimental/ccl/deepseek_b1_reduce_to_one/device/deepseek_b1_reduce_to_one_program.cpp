@@ -19,9 +19,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-// Device roles for 2x4 mesh with 3-level reduction tree
+// Device roles for 4x2 mesh (4 rows by 2 columns) with 3-level reduction tree
 //
-// Mesh layout (coord = [col, row]):
+// Mesh layout (coord = [row, col]):
 //   [0,0] a0  |  b0 [1,0]   row 0 - sender (sends to row 1)
 //   [0,1] a1  |  b1 [1,1]   row 1 - root2 (a1) / root1 (b1)
 //   [0,2] a2  |  b2 [1,2]   row 2 - root3 (receives from row 3, sends to row 1)

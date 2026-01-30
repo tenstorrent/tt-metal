@@ -17,10 +17,31 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl {
 
 void DeepseekB1ReduceToOneOp::validate(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
     auto* mesh_device = input.device();
+
+    // Validate mesh shape: must be exactly 4 rows x 2 columns
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(
+        mesh_shape.dims() == 2 && mesh_shape[0] == 4 && mesh_shape[1] == 2,
+        "Mesh shape must be exactly 4x2 (4 rows x 2 columns), got {}x{}",
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    // Validate root_coord: must be in middle rows (1 or 2)
+    const auto& root_coord = operation_attributes.root_coord;
+    TT_FATAL(
+        root_coord[0] == 1 || root_coord[0] == 2,
+        "Root coordinate row must be 1 or 2 (middle rows), got {}",
+        root_coord[0]);
+    TT_FATAL(root_coord[1] < 2, "Root coordinate column must be 0 or 1, got {}", root_coord[1]);
+
+    // Validate exit_coord: must be within mesh bounds
+    const auto& exit_coord = operation_attributes.exit_coord;
+    TT_FATAL(exit_coord[0] < 4, "Exit coordinate row must be less than 4, got {}", exit_coord[0]);
+    TT_FATAL(exit_coord[1] < 2, "Exit coordinate column must be less than 2, got {}", exit_coord[1]);
 
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
@@ -57,10 +78,28 @@ void DeepseekB1ReduceToOneOp::validate(
             optional_intermediate_tensors.value().size() == 3,
             "Expected 3 intermediate tensors for 3 reduction rounds, got {}",
             optional_intermediate_tensors.value().size());
-        for (const auto& tensor : optional_intermediate_tensors.value()) {
+
+        const auto& input_spec = input.tensor_spec();
+        for (size_t i = 0; i < optional_intermediate_tensors.value().size(); i++) {
+            const auto& tensor = optional_intermediate_tensors.value()[i];
             TT_FATAL(
                 tensor.device() == mesh_device,
-                "Intermediate tensor must be allocated on same mesh device as input tensor");
+                "Intermediate tensor {} must be allocated on same mesh device as input tensor",
+                i);
+            TT_FATAL(tensor.is_sharded(), "Intermediate tensor {} must be sharded", i);
+
+            // Each intermediate buffer receives one complete shard, so must match input spec
+            const auto& tensor_spec = tensor.tensor_spec();
+            TT_FATAL(
+                tensor_spec.logical_shape() == input_spec.logical_shape(),
+                "Intermediate tensor {} logical shape {} does not match input logical shape {}",
+                i,
+                tensor_spec.logical_shape(),
+                input_spec.logical_shape());
+            TT_FATAL(
+                tensor_spec.tensor_layout().get_data_type() == input_spec.tensor_layout().get_data_type(),
+                "Intermediate tensor {} dtype does not match input dtype",
+                i);
         }
     }
 
@@ -83,6 +122,8 @@ DeepseekB1ReduceToOneOp::spec_return_value_t DeepseekB1ReduceToOneOp::compute_ou
     // - intermediate_r1: LEAF → ROOT* (round 1)
     // - intermediate_r2: ROOT3 → ROOT2/ROOT1 (round 2)
     // - intermediate_r3: ROOT2 → ROOT1 (round 3)
+    // All buffers have the same size as the input tensor because each sender transmits
+    // its complete shard in every round (no partial sends or aggregated multi-shard sends).
     std::vector<TensorSpec> intermediate_specs = {
         input_tensor.tensor_spec(), input_tensor.tensor_spec(), input_tensor.tensor_spec()};
 
