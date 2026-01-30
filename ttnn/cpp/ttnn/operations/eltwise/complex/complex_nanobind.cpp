@@ -41,7 +41,7 @@ void bind_complex_tensor(nb::module_& mod) {
                 ttnn.ComplexTensor: the complex tensor with real and imag parts.
 
             Note:
-                This operations supports tensors according to the following data types and layout:
+                This operation supports tensors according to the following data types and layouts:
 
                 .. list-table:: real and imag tensors
                     :header-rows: 1
