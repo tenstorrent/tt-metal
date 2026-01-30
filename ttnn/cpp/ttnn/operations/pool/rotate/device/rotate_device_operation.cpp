@@ -11,7 +11,10 @@
 namespace ttnn::operations::rotate {
 
 RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
-    const operation_attributes_t& /* operation_attributes */, const tensor_args_t& /* tensor_args */) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /* tensor_args */) {
+    if (operation_attributes.interpolation_mode == "bilinear") {
+        return BilinearProgramFactory{};
+    }
     return NearestProgramFactory{};
 }
 
@@ -47,8 +50,8 @@ void RotateDeviceOperation::validate_inputs(
 
     // Interpolation mode validation
     TT_FATAL(
-        operation_attributes.interpolation_mode == "nearest",
-        "Only 'nearest' interpolation_mode is supported, got '{}'",
+        operation_attributes.interpolation_mode == "nearest" || operation_attributes.interpolation_mode == "bilinear",
+        "Only 'nearest' and 'bilinear' interpolation_mode are supported, got '{}'",
         operation_attributes.interpolation_mode);
 }
 
