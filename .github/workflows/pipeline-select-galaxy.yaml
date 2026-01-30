@@ -231,7 +231,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: 'wh_galaxy,bh_galaxy'
+      enabled-skus: wh_galaxy
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}

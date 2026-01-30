@@ -19,14 +19,6 @@ on:
           - flux1
           - motif
           - qwenimage
-      wormhole:
-        required: false
-        type: boolean
-        default: true
-      blackhole:
-        required: false
-        type: boolean
-        default: false
       platform:
         required: false
         type: choice
@@ -73,24 +65,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      # For scheduled runs: hardcode the full list of SKUs you want active.
-      # For workflow_dispatch: derive from checkboxes.
-      enabled-skus: >-
-        ${{
-          github.event_name == 'schedule'
-            && 'wh_galaxy,bh_galaxy'
-            || (
-              inputs.wormhole && inputs.blackhole
-                && 'wh_galaxy,bh_galaxy'
-                || (
-                  inputs.wormhole
-                    && 'wh_galaxy'
-                    || (
-                      inputs.blackhole
-                        && 'bh_galaxy'
-                        || ''
-                    )
-                )
-            )
-        }}
+      enabled-skus: wh_galaxy
       model: ${{ inputs.model || 'all' }}
