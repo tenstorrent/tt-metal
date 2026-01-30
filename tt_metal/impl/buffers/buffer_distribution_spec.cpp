@@ -82,58 +82,6 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
-std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
-    TT_FATAL(
-        tensor_shape.rank() >= shard_shape.rank(),
-        "Tensor shape rank ({}) can't be less than shard shape rank ({})!",
-        tensor_shape.rank(),
-        shard_shape.rank());
-
-    uint64_t tensor_volume = tensor_shape.volume();
-    uint64_t shard_volume = shard_shape.volume();
-    tt::stl::SmallVector<uint32_t> new_tensor_shape;
-    tt::stl::SmallVector<uint32_t> new_shard_shape;
-
-    bool matching_dims_sequence = false;
-    bool last_dim_divisible = false;
-    uint64_t cur_tensor_volume = 1;
-    uint64_t cur_shard_volume = 1;
-    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
-        auto tensor_size = tensor_shape[dim];
-        auto shard_size = shard_shape[dim];
-
-        bool should_merge_dims = false;
-        if (dim < -1) {
-            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
-        }
-
-        if (should_merge_dims) {
-            new_tensor_shape.back() *= tensor_size;
-            new_shard_shape.back() *= shard_size;
-        } else {
-            new_tensor_shape.push_back(tensor_size);
-            new_shard_shape.push_back(shard_size);
-            matching_dims_sequence = true;
-        }
-        matching_dims_sequence &= tensor_size == shard_size;
-        last_dim_divisible = tensor_size % shard_size == 0;
-
-        cur_tensor_volume *= tensor_size;
-        cur_shard_volume *= shard_size;
-        if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
-            break;
-        }
-    }
-
-    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
-        new_tensor_shape.back() *= tensor_shape[dim];
-    }
-
-    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
-    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
-    return {Shape(std::move(new_tensor_shape)), Shape(std::move(new_shard_shape))};
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -162,7 +110,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     cores_ = compute_core_list(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
-        CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
+        detail::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     if (tensor_shape_in_pages_.volume() != 0) {
         TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
@@ -182,7 +130,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     }
 
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
-        CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
+        detail::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     init_precomputed_data();
 }
@@ -348,6 +296,59 @@ UncompressedBufferPageMapping compute_page_mapping(
 
     return page_mapping;
 }
+
+std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape) {
+    TT_FATAL(
+        tensor_shape.rank() >= shard_shape.rank(),
+        "Tensor shape rank ({}) can't be less than shard shape rank ({})!",
+        tensor_shape.rank(),
+        shard_shape.rank());
+
+    uint64_t tensor_volume = tensor_shape.volume();
+    uint64_t shard_volume = shard_shape.volume();
+    tt::stl::SmallVector<uint32_t> new_tensor_shape;
+    tt::stl::SmallVector<uint32_t> new_shard_shape;
+
+    bool matching_dims_sequence = false;
+    bool last_dim_divisible = false;
+    uint64_t cur_tensor_volume = 1;
+    uint64_t cur_shard_volume = 1;
+    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
+        auto tensor_size = tensor_shape[dim];
+        auto shard_size = shard_shape[dim];
+
+        bool should_merge_dims = false;
+        if (dim < -1) {
+            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
+        }
+
+        if (should_merge_dims) {
+            new_tensor_shape.back() *= tensor_size;
+            new_shard_shape.back() *= shard_size;
+        } else {
+            new_tensor_shape.push_back(tensor_size);
+            new_shard_shape.push_back(shard_size);
+            matching_dims_sequence = true;
+        }
+        matching_dims_sequence &= tensor_size == shard_size;
+        last_dim_divisible = tensor_size % shard_size == 0;
+
+        cur_tensor_volume *= tensor_size;
+        cur_shard_volume *= shard_size;
+        if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
+            break;
+        }
+    }
+
+    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
+        new_tensor_shape.back() *= tensor_shape[dim];
+    }
+
+    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
+    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
+    return {Shape(std::move(new_tensor_shape)), Shape(std::move(new_shard_shape))};
+}
+
 }  // namespace detail
 
 }  // namespace tt::tt_metal
