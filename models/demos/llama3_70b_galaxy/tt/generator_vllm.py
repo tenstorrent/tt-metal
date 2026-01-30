@@ -186,7 +186,7 @@ class LlamaForCausalLM(Generator):
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
         # max_seq_len = 128
-        n_layers = 2
+        # n_layers = 2
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
