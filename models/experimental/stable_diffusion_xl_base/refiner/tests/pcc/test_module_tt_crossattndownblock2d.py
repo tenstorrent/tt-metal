@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -16,15 +16,17 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, down_block_id, pcc",
+    "image_resolution, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, down_block_id, pcc",
     [
-        ((1, 384, 64, 64), (1, 1536), (1, 77, 1280), 768, 12, 768, 1, 0.996),
-        ((1, 768, 32, 32), (1, 1536), (1, 77, 1280), 1536, 24, 1536, 2, 0.990),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 384, 64, 64), (1, 1536), (1, 77, 1280), 768, 12, 768, 1, 0.996),
+        ((1024, 1024), (1, 768, 32, 32), (1, 1536), (1, 77, 1280), 1536, 24, 1536, 2, 0.990),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattndown(
     device,
+    image_resolution,
     input_shape,
     temb_shape,
     encoder_shape,
@@ -49,7 +51,7 @@ def test_crossattndown(
 
     torch_crosattn = unet.down_blocks[down_block_id]
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_crosattn = TtCrossAttnDownBlock2D(
         device,
         state_dict,

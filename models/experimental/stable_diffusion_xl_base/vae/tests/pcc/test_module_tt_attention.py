@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -15,9 +15,10 @@ from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape",
+    "image_resolution, input_shape, encoder_shape",
     [
-        ((1, 512, 128, 128), None),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 512, 128, 128), None),
     ],
 )
 @pytest.mark.parametrize(
@@ -28,7 +29,7 @@ from models.common.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_attention(device, input_shape, encoder_shape, block_name, pcc, is_ci_env, reset_seeds):
+def test_vae_attention(device, image_resolution, input_shape, encoder_shape, block_name, pcc, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -39,7 +40,7 @@ def test_vae_attention(device, input_shape, encoder_shape, block_name, pcc, is_c
     vae.eval()
     state_dict = vae.state_dict()
 
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     if block_name == "encoder":
         torch_attention = vae.encoder.mid_block.attentions[0]
         tt_attention = TtAttention(

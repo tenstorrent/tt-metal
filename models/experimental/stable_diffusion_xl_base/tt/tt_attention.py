@@ -90,6 +90,9 @@ class TtAttention(LightweightModule):
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
         self.out_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_out")
 
+        # Debug
+        self.module_path = module_path
+
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states

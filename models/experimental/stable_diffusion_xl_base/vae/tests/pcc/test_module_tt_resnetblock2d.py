@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -14,26 +14,37 @@ from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, resnet_id, conv_shortcut, block, pcc",
+    "image_resolution, input_shape, block_id, resnet_id, conv_shortcut, block, pcc",
     [
-        ((1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
-        ((1, 512, 128, 128), 0, 0, False, "up_blocks", 0.999),
-        ((1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),
-        ((1, 512, 512, 512), 2, 0, True, "up_blocks", 0.999),
-        ((1, 256, 512, 512), 2, 1, False, "up_blocks", 0.999),
-        ((1, 256, 1024, 1024), 3, 0, True, "up_blocks", 0.999),
-        ((1, 128, 1024, 1024), 3, 1, False, "up_blocks", 0.999),
-        ((1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998),
-        ((1, 128, 512, 512), 1, 0, True, "down_blocks", 0.999),
-        ((1, 256, 512, 512), 1, 1, False, "down_blocks", 0.999),
-        ((1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),
-        ((1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999),
-        ((1, 512, 128, 128), 3, 0, False, "down_blocks", 0.999),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
+        ((1024, 1024), (1, 512, 128, 128), 0, 0, False, "up_blocks", 0.999),
+        ((1024, 1024), (1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),
+        ((1024, 1024), (1, 512, 512, 512), 2, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 256, 512, 512), 2, 1, False, "up_blocks", 0.999),
+        ((1024, 1024), (1, 256, 1024, 1024), 3, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 128, 1024, 1024), 3, 1, False, "up_blocks", 0.999),
+        ((1024, 1024), (1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998),
+        ((1024, 1024), (1, 128, 512, 512), 1, 0, True, "down_blocks", 0.999),
+        ((1024, 1024), (1, 256, 512, 512), 1, 1, False, "down_blocks", 0.999),
+        ((1024, 1024), (1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),
+        ((1024, 1024), (1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999),
+        ((1024, 1024), (1, 512, 128, 128), 3, 0, False, "down_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_resnetblock2d(
-    device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, debug_mode, is_ci_env, reset_seeds
+    device,
+    image_resolution,
+    input_shape,
+    block_id,
+    resnet_id,
+    conv_shortcut,
+    block,
+    pcc,
+    debug_mode,
+    is_ci_env,
+    reset_seeds,
 ):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -57,7 +68,7 @@ def test_vae_resnetblock2d(
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
     vae_block = "encoder" if is_encoder else "decoder"
 
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,

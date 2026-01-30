@@ -80,6 +80,7 @@ def test_conv2d_block_sharded_sdxl(device):
         packer_l1_acc=True,
         act_db=True,
         w_db=True,
+        reshard_if_not_optimal=True,
         perf_test_mode=USE_PERF_TEST_MODE,
     )
 

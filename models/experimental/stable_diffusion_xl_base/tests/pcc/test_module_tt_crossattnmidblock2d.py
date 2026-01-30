@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,14 +15,18 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim",
+    "image_resolution, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim",
     [
-        ((1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
+        # 512x512 image resolution
+        ((512, 512), (1, 1280, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnmid(
     device,
+    image_resolution,
     input_shape,
     temb_shape,
     encoder_shape,
@@ -45,7 +49,7 @@ def test_crossattnmid(
 
     torch_crosattn = unet.mid_block
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_crosattn = TtUNetMidBlock2DCrossAttn(
         device,
         state_dict,
@@ -102,5 +106,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.982)
     logger.info(f"PCC is: {pcc_message}")

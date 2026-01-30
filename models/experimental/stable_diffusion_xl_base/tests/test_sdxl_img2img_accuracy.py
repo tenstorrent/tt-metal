@@ -29,6 +29,14 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 10000, 2
 
 
 @pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
+@pytest.mark.parametrize(
     "device_params, use_cfg_parallel",
     [
         (
@@ -105,6 +113,7 @@ def test_accuracy_sdxl_img2img(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     negative_prompt,
     num_inference_steps,
     vae_on_device,
@@ -136,6 +145,7 @@ def test_accuracy_sdxl_img2img(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        image_resolution,
         dataset["edit_prompt"],
         dataset["original_image"],
         negative_prompt,

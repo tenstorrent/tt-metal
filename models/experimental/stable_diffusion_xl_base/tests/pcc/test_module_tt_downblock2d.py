@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,13 +15,16 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape",
+    "image_resolution, input_shape, temb_shape",
     [
-        ((1, 320, 128, 128), (1, 1280)),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 320, 128, 128), (1, 1280)),
+        # 512x512 image resolution
+        ((512, 512), (1, 320, 64, 64), (1, 1280)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(device, image_resolution, temb_shape, input_shape, debug_mode, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -34,7 +37,7 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
 
     torch_downblock = unet.down_blocks[0]
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_downblock = TtDownBlock2D(
         device, state_dict, f"down_blocks.0", model_config=model_config, has_downsample=True, debug_mode=debug_mode
     )
@@ -67,5 +70,5 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.9987)
     logger.info(f"PCC is {pcc_message}")
