@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -25,8 +26,8 @@ namespace tt::tt_metal::experimental::tt_fabric {
 
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
-    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_adjacency,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_adjacency,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
     const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
     const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const TopologyMappingConfig& config) {
@@ -34,15 +35,22 @@ TopologyMappingResult map_mesh_to_physical(
 
     using namespace ::tt::tt_fabric;
 
-    // Use the adjacency graphs directly
-    const AdjacencyGraph<FabricNodeId>& target_graph = logical_adjacency;
-    const AdjacencyGraph<tt::tt_metal::AsicID>& global_graph = physical_adjacency;
+    // Convert maps to AdjacencyGraph format
+    const AdjacencyGraph<FabricNodeId> target_graph(logical_adjacency);
+    const AdjacencyGraph<tt::tt_metal::AsicID> global_graph(physical_adjacency);
 
     // Build constraints
     MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
 
     // Add mesh host rank constraints (trait-based constraint)
-    constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank);
+    // Catch exceptions from constraint validation and convert to failure result
+    try {
+        constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank);
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.error_message = e.what();
+        return result;
+    }
 
     // Add pinning constraints if any
     // Build position trait maps for pinning constraints
@@ -57,14 +65,7 @@ TopologyMappingResult map_mesh_to_physical(
             }
 
             // Validate that the fabric node exists in logical adjacency
-            const auto& logical_nodes = logical_adjacency.get_nodes();
-            bool found = false;
-            for (const auto& node : logical_nodes) {
-                if (node == fabric_node) {
-                    found = true;
-                    break;
-                }
-            }
+            bool found = logical_adjacency.find(fabric_node) != logical_adjacency.end();
             if (!found) {
                 result.success = false;
                 result.error_message =
@@ -91,8 +92,10 @@ TopologyMappingResult map_mesh_to_physical(
         }
 
         // Build ASIC to position map from config.asic_positions
-        const auto& physical_nodes = physical_adjacency.get_nodes();
-        std::unordered_set<tt::tt_metal::AsicID> physical_node_set(physical_nodes.begin(), physical_nodes.end());
+        std::unordered_set<tt::tt_metal::AsicID> physical_node_set;
+        for (const auto& [asic_id, _] : physical_adjacency) {
+            physical_node_set.insert(asic_id);
+        }
         for (const auto& [asic_id, pos] : config.asic_positions) {
             // Only include ASICs that are in the physical adjacency graph
             if (physical_node_set.find(asic_id) != physical_node_set.end()) {
@@ -170,7 +173,15 @@ TopologyMappingResult map_mesh_to_physical(
         config.strict_mode ? ConnectionValidationMode::STRICT : ConnectionValidationMode::RELAXED;
 
     // Solve using topology solver
-    auto solver_result = solve_topology_mapping(target_graph, global_graph, constraints, validation_mode);
+    // Catch exceptions from constraint validation and convert to failure result
+    MappingResult<FabricNodeId, tt::tt_metal::AsicID> solver_result;
+    try {
+        solver_result = solve_topology_mapping(target_graph, global_graph, constraints, validation_mode);
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.error_message = e.what();
+        return result;
+    }
 
     // Convert result
     result.success = solver_result.success;

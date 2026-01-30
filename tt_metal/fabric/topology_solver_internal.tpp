@@ -883,7 +883,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     // Check if global graph has enough nodes
     if (graph_data.n_global < graph_data.n_target) {
         std::string error_msg = fmt::format(
-            "Cannot map target graph to global graph: target graph has {} nodes, but global graph only has {} nodes",
+            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has {} nodes",
             graph_data.n_target,
             graph_data.n_global);
         if (quiet_mode) {
@@ -1010,6 +1010,41 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     bool found = dfs_recursive(assigned_count, graph_data, constraint_data, validation_mode);
 
     if (!found && assigned_count == 0) {
+        // Search failed from the beginning - check if channel constraints are the issue in strict mode
+        if (validation_mode == ConnectionValidationMode::STRICT) {
+            // Check if any target edge requires more channels than any physical edge can provide
+            for (size_t i = 0; i < graph_data.n_target; ++i) {
+                for (size_t neighbor : graph_data.target_adj_idx[i]) {
+                    if (neighbor <= i) continue;  // Check each edge once
+                    size_t required = graph_data.target_conn_count[i].at(neighbor);
+                    // Find maximum available channels in physical graph
+                    size_t max_available = 0;
+                    for (size_t g1 = 0; g1 < graph_data.n_global; ++g1) {
+                        auto it = graph_data.global_conn_count[g1].begin();
+                        for (; it != graph_data.global_conn_count[g1].end(); ++it) {
+                            max_available = std::max(max_available, it->second);
+                        }
+                    }
+                    if (required > max_available) {
+                        std::string error_msg = fmt::format(
+                            "Strict mode validation failed: target graph edge from node {} to {} requires {} channels, "
+                            "but physical graph edges have at most {} channels. "
+                            "Strict mode requires sufficient channel capacity for all edges.",
+                            graph_data.target_nodes[i],
+                            graph_data.target_nodes[neighbor],
+                            required,
+                            max_available);
+                        if (quiet_mode) {
+                            log_debug(tt::LogFabric, "{}", error_msg);
+                        } else {
+                            log_error(tt::LogFabric, "{}", error_msg);
+                        }
+                        state_.error_message = error_msg;
+                        return found;
+                    }
+                }
+            }
+        }
         // Search failed from the beginning - provide summary
         std::string error_msg = fmt::format(
             "Failed to find mapping: target graph with {} nodes cannot be placed in global graph with {} nodes under given constraints",
@@ -1132,7 +1167,16 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
     ConnectionValidationMode validation_mode,
     std::vector<std::string>* warnings,
     bool quiet_mode) {
-    // First, validate that all target nodes are mapped
+    // First, validate connection counts (collects warnings/errors)
+    // This needs to happen before checking unmapped nodes so channel errors are captured
+    if (warnings != nullptr) {
+        validate_connection_counts(mapping, graph_data, validation_mode, warnings);
+    }
+
+    // In STRICT mode, prioritize channel errors over unmapped node errors
+    bool has_channel_errors = (validation_mode == ConnectionValidationMode::STRICT && warnings != nullptr && !warnings->empty());
+
+    // Validate that all target nodes are mapped
     std::vector<size_t> unmapped_targets;
     for (size_t i = 0; i < mapping.size(); ++i) {
         if (mapping[i] == -1) {
@@ -1157,9 +1201,22 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
         } else {
             log_error(tt::LogFabric, "{}", error_msg);
         }
-        if (warnings != nullptr) {
+        // Only add unmapped error if we don't have channel errors (channel errors take priority)
+        if (warnings != nullptr && !has_channel_errors) {
             warnings->push_back(error_msg);
         }
+        // Return false if no channel errors, otherwise channel errors will be handled below
+        if (!has_channel_errors) {
+            return false;
+        }
+    }
+
+    // In STRICT mode, fail if any channel errors were found
+    if (has_channel_errors) {
+        log_error(
+            tt::LogFabric,
+            "Mapping validation failed in strict mode: {} validation error(s) found",
+            warnings->size());
         return false;
     }
 
@@ -1236,20 +1293,6 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                 return false;
             }
         }
-    }
-
-    // Validate connection counts (collects warnings/errors)
-    if (warnings != nullptr) {
-        validate_connection_counts(mapping, graph_data, validation_mode, warnings);
-    }
-
-    // In STRICT mode, fail if any warnings were added (they're actually errors)
-    if (validation_mode == ConnectionValidationMode::STRICT && warnings != nullptr && !warnings->empty()) {
-        log_error(
-            tt::LogFabric,
-            "Mapping validation failed in strict mode: {} validation error(s) found",
-            warnings->size());
-        return false;
     }
 
     if (validation_mode == ConnectionValidationMode::RELAXED && warnings != nullptr && !warnings->empty()) {
@@ -1335,9 +1378,29 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 
     if (!valid) {
         result.success = false;
-        if (!validation_warnings.empty()) {
-            // Use first validation error as main error message
-            result.error_message = validation_warnings[0];
+        // Prioritize state.error_message (e.g., "larger" error, "channel" error) over validation warnings
+        if (!state.error_message.empty() &&
+            (state.error_message.find("larger") != std::string::npos ||
+             state.error_message.find("only has") != std::string::npos ||
+             state.error_message.find("channel") != std::string::npos)) {
+            result.error_message = state.error_message;
+        } else if (!validation_warnings.empty()) {
+            // Prioritize channel errors in strict mode
+            bool has_channel_error = false;
+            std::string channel_error;
+            for (const auto& warning : validation_warnings) {
+                if (warning.find("channel") != std::string::npos) {
+                    has_channel_error = true;
+                    channel_error = warning;
+                    break;
+                }
+            }
+            if (has_channel_error) {
+                result.error_message = channel_error;
+            } else {
+                // Use first validation error as main error message
+                result.error_message = validation_warnings[0];
+            }
             if (quiet_mode) {
                 log_debug(
                     tt::LogFabric,
