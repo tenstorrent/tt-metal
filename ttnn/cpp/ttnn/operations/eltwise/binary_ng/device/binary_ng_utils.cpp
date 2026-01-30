@@ -362,31 +362,27 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
 
 std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
     using enum OpConfig::SfpuBinaryOp;
+
+    std::optional<std::string> int_data_format;
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
+        int_data_format = (dtype == DataType::INT32) ? "Int32" : (dtype == DataType::UINT32) ? "UInt32" : "UInt16";
+    }
     switch (sfpu_binary_op) {
         case ADD:
-            if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
-                const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                          : (dtype == DataType::UINT32) ? "UInt32"
-                                                                        : "UInt16";
-                return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", data_format)};
+            if (int_data_format) {
+                return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
             return {"add_binary_tile_init();", "add_binary_tile"};
         case SUB:
-            if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
-                const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                          : (dtype == DataType::UINT32) ? "UInt32"
-                                                                        : "UInt16";
-                return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", data_format)};
+            if (int_data_format) {
+                return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
             return {"sub_binary_tile_init();", "sub_binary_tile"};
         case MUL:
-            if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
-                const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                          : (dtype == DataType::UINT32) ? "UInt32"
-                                                                        : "UInt16";
+            if (int_data_format) {
                 return {
-                    fmt::format("mul_int_tile_init<DataFormat::{}>();", data_format),
-                    fmt::format("mul_int_tile<DataFormat::{}>", data_format)};
+                    fmt::format("mul_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("mul_int_tile<DataFormat::{}>", *int_data_format)};
             }
             return {"mul_binary_tile_init();", "mul_binary_tile"};
         case DIV:
@@ -401,53 +397,36 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case FMOD: return {"fmod_int32_tile_init();", "fmod_int32_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
-            if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
-                const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                          : (dtype == DataType::UINT32) ? "UInt32"
-                                                                        : "UInt16";
-                return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", data_format)};
+            if (int_data_format) {
+                return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
             return {"rsub_binary_tile_init();", "rsub_binary_tile"};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
-        case LEFT_SHIFT: {
-            const char* data_format = (dtype == DataType::UINT32)   ? "UInt32"
-                                      : (dtype == DataType::UINT16) ? "UInt16"
-                                                                    : "Int32";
-            return {"binary_shift_tile_init();", fmt::format("binary_left_shift_tile<DataFormat::{}>", data_format)};
-        }
-        case RIGHT_SHIFT: {
-            const char* data_format = (dtype == DataType::UINT32)   ? "UInt32"
-                                      : (dtype == DataType::UINT16) ? "UInt16"
-                                                                    : "Int32";
-            return {"binary_shift_tile_init();", fmt::format("binary_right_shift_tile<DataFormat::{}>", data_format)};
-        }
-        case LOGICAL_RIGHT_SHIFT: {
-            const char* data_format = (dtype == DataType::UINT32)   ? "UInt32"
-                                      : (dtype == DataType::UINT16) ? "UInt16"
-                                                                    : "Int32";
+        case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
-                fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", data_format)};
-        }
-        case BITWISE_AND: {
-            const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                      : (dtype == DataType::UINT32) ? "UInt32"
-                                                                    : "UInt16";
-            return {"binary_bitwise_tile_init();", fmt::format("bitwise_and_binary_tile<DataFormat::{}>", data_format)};
-        }
-        case BITWISE_OR: {
-            const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                      : (dtype == DataType::UINT32) ? "UInt32"
-                                                                    : "UInt16";
-            return {"binary_bitwise_tile_init();", fmt::format("bitwise_or_binary_tile<DataFormat::{}>", data_format)};
-        }
-        case BITWISE_XOR: {
-            const char* data_format = (dtype == DataType::INT32)    ? "Int32"
-                                      : (dtype == DataType::UINT32) ? "UInt32"
-                                                                    : "UInt16";
-            return {"binary_bitwise_tile_init();", fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", data_format)};
-        }
+                fmt::format("binary_left_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+        case RIGHT_SHIFT:
+            return {
+                "binary_shift_tile_init();",
+                fmt::format("binary_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+        case LOGICAL_RIGHT_SHIFT:
+            return {
+                "binary_shift_tile_init();",
+                fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+        case BITWISE_AND:
+            return {
+                "binary_bitwise_tile_init();",
+                fmt::format("bitwise_and_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
+        case BITWISE_OR:
+            return {
+                "binary_bitwise_tile_init();",
+                fmt::format("bitwise_or_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
+        case BITWISE_XOR:
+            return {
+                "binary_bitwise_tile_init();",
+                fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case MAXIMUM:
             if (dtype == DataType::INT32) {
                 return {"binary_max_tile_init();", "binary_max_int32_tile"};

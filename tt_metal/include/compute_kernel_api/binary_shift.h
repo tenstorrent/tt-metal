@@ -21,7 +21,8 @@ namespace ckernel {
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
- * @tparam data_format Template argument specifying the data type. Supported types: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
  *
  * Return value: None
  *
@@ -47,7 +48,8 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
- * @tparam data_format Template argument specifying the data type. Supported types: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
  *
  * Return value: None
  *
@@ -73,7 +75,8 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
- * @tparam data_format Template argument specifying the data type. Supported types: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
  *
  * Return value: None
  *
