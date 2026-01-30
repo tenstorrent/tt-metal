@@ -109,7 +109,7 @@ jobs:
           github-run-id: ${{ steps.check.outputs.run_id }}
           run-type: ${{ steps.check.outputs.run_type }}
           conclusion: ${{ steps.check.outputs.conclusion }}
-          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack-webhook-url: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_WEBHOOK_URL }}
           database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
 
       - name: Skip notification
