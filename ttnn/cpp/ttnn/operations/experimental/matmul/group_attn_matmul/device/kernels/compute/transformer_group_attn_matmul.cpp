@@ -161,8 +161,7 @@ void kernel_main() {
                 cb_intermed1,
                 out_cb_id,
                 compute_kernel_lib::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::WaitMode::Wait,
-                cb_in1>(out_num_tiles, 1);
+                compute_kernel_lib::WaitMode::Wait>(out_num_tiles, 1);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

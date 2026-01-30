@@ -142,6 +142,9 @@ ALWI void tilize(
     if constexpr (do_uninit) {
         if constexpr (use_fast) {
             fast_tilize_uninit(input_cb, output_cb);
+            if constexpr (use_dt_reconfig) {
+                reconfig_data_format_srca(input_cb, reconfig_from_cb);
+            }
         } else if constexpr (use_dt_reconfig) {
             tilize_uninit_with_dt(input_cb, reconfig_from_cb, output_cb);
         } else {
