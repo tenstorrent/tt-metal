@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.common.utility_functions import nearest_32
@@ -304,15 +303,9 @@ class TtLlamaRotarySetup(LightweightModule):
         Returns:
             [cos, sin] list where each has shape [1, 1, seq_len, head_dim]
         """
-        logger.info(
-            f"[ROPE_EMBEDDING] Input: position_ids.shape={position_ids.shape}, "
-            f"seq_len={seq_len}, head_dim={self.head_dim}, "
-            f"cos_matrix.shape={self.cos_matrix.shape}, sin_matrix.shape={self.sin_matrix.shape}"
-        )
 
         # Reshape position_ids for embedding lookup: [1, seq_len] -> [seq_len, 1]
         rot_idxs = ttnn.reshape(position_ids, [seq_len, 1])
-        logger.info(f"[ROPE_EMBEDDING] Reshaped rot_idxs.shape={rot_idxs.shape}")
 
         # Look up cos/sin values from the pre-computed embedding tables
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)
@@ -321,8 +314,5 @@ class TtLlamaRotarySetup(LightweightModule):
         # Reshape to [1, 1, seq_len, head_dim] to match expected prefill format
         cos = ttnn.reshape(cos, [1, 1, seq_len, self.head_dim])
         sin = ttnn.reshape(sin, [1, 1, seq_len, self.head_dim])
-        logger.info(
-            f"[ROPE_EMBEDDING] Final shapes: cos.shape={cos.shape}, sin.shape={sin.shape}"
-        )
 
         return [cos, sin]
