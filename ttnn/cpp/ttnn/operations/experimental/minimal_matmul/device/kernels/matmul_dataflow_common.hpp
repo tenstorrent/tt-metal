@@ -57,7 +57,6 @@ struct TensorShape2D {
     uint32_t logical_d1;
     uint32_t padded_d0;
     uint32_t padded_d1;
-    // Constructor to initialize with 2D shape
     TensorShape2D(uint32_t _d0, uint32_t _d1, uint32_t _padded_d0, uint32_t _padded_d1) :
         logical_d0(_d0), logical_d1(_d1), padded_d0(_padded_d0), padded_d1(_padded_d1) {
         ASSERT(_d0 > 0);
@@ -199,6 +198,71 @@ void write_block_sync(
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_writes_flushed();
+}
+
+/**
+ *
+ * Read ternary inputs (ternary_a and ternary_b) and write data to CB
+ *
+ * For ternary_a: only read 1 row of tiles (N_block_tiles). Compute kernel will bcast this row.
+ * For ternary_b: read N_block_tiles * N_block_tiles tiles (full block)
+ *
+ * Note: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_b tiles one row at a time.
+ * This helps with compute utilization and overall performance, as compute kernel can start addcmul
+ * without waiting for the full block of ternary_b tiles.
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_ternary_blocks_sync(
+    const TensorAccessorType& ternary_a_accessor,
+    const TensorAccessorType& ternary_b_accessor,
+    const TensorShape2D& shape,
+    uint32_t ternary_a_cb,
+    uint32_t ternary_b_cb,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+
+    uint32_t i = d0_start;
+    uint32_t m_id = 0;
+
+    cb_reserve_back(ternary_a_cb, N_block_tiles);
+    uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
+    const uint32_t n_tile_start = i * shape.logical_d1;
+    const uint32_t n_tile_end = std::min(n_tile_start + N_block_tiles, shape.logical_d1);
+    for (uint32_t n_tile_id = n_tile_start; n_tile_id < n_tile_end; n_tile_id++) {
+        noc_async_read_tile(n_tile_id, ternary_a_accessor, ternary_a_write_ptr);
+        ternary_a_write_ptr += tile_size_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(ternary_a_cb, N_block_tiles);
+
+    for (; i < d0_end; i++, m_id++) {
+        cb_reserve_back(ternary_b_cb, N_block_tiles);
+
+        uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
+        for (uint32_t j = d1_start, n_id = 0; j < d1_end; j++, n_id++) {
+            if (j >= shape.logical_d1) {
+                ternary_b_write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, ternary_b_accessor, ternary_b_write_ptr);
+            }
+            ternary_b_write_ptr += tile_size_bytes;
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(ternary_b_cb, N_block_tiles);
+    }
+    for (; m_id < M_block_tiles; m_id++) {
+        cb_reserve_back(ternary_b_cb, N_block_tiles);
+        cb_push_back(ternary_b_cb, N_block_tiles);
+    }
 }
 
 /**
