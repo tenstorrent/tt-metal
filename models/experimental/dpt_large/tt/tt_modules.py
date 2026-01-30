@@ -16,10 +16,21 @@ from typing import Optional
 
 import math
 import torch
-import ttnn
-from tt_lib.fallback_ops import fallback_ops
+try:
+    import ttnn  # type: ignore
+except Exception:  # pragma: no cover
+    ttnn = None  # type: ignore
 
-from models.common.utility_functions import torch_to_tt_tensor_rm, torch2tt_tensor
+try:
+    from tt_lib.fallback_ops import fallback_ops  # type: ignore
+except Exception:  # pragma: no cover
+    fallback_ops = None  # type: ignore
+
+try:
+    from models.common.utility_functions import torch_to_tt_tensor_rm, torch2tt_tensor  # type: ignore
+except Exception:  # pragma: no cover
+    torch_to_tt_tensor_rm = None  # type: ignore
+    torch2tt_tensor = None  # type: ignore
 
 
 def _tt_from_torch_rm(t: torch.Tensor, device):
@@ -55,6 +66,24 @@ def unpad_tokens_3d(x_3d_padded: torch.Tensor, original_N: int):
     if x_3d_padded.dim() != 3:
         raise ValueError(f"unpad_tokens_3d expects [B, N_pad, C], got {tuple(x_3d_padded.shape)}")
     return x_3d_padded[:, :original_N, :]
+
+
+def build_attn_padding_mask_4d(padded_seq_len: int, valid_seq_len: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """Build an additive attention mask that blocks padded key/value tokens.
+
+    Returns a tensor shaped [1, 1, S, S] with zeros for valid keys and -inf for
+    padded keys (columns >= valid_seq_len). This is meant to be *added* to the
+    attention score matrix before softmax (PyTorch/TTNN SDPA convention).
+    """
+    s = int(padded_seq_len)
+    v = int(valid_seq_len)
+    if v < 0 or s < 0:
+        raise ValueError(f"Invalid lengths: padded_seq_len={s}, valid_seq_len={v}")
+    if v >= s or s == 0:
+        return torch.zeros((1, 1, s, s), dtype=dtype)
+    mask = torch.zeros((1, 1, s, s), dtype=dtype)
+    mask[..., :, v:] = float("-inf")
+    return mask
 
 
 class TTLinear:
@@ -226,8 +255,9 @@ class TTAttention:
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.device = device
-        # TT layer config for program/memory options
-        self.layer_cfg = program_config
+        # Persist knobs so callers can tune memory/program behavior.
+        self.output_mem = output_mem
+        self.program_config = program_config
         # Pre-create TTNN projection weights for device-side output matmul
         try:
             # Use transposed weights to avoid transpose_b flag during linear
@@ -300,6 +330,8 @@ class TTAttention:
             )
             scale = 1.0 / math.sqrt(D)
             sdpa_kwargs = dict(is_causal=False, scale=scale)
+            if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
+                sdpa_kwargs["attn_mask"] = mm_opts["attn_mask"]
             pc = getattr(self, "program_config", None)
             if pc is not None:
                 try:
@@ -378,6 +410,8 @@ class TTAttention:
 class TTMLP:
     def __init__(self, fc1_w, fc1_b, fc2_w, fc2_b, device, output_mem=None, program_config=None):
         self.device = device
+        self.output_mem = output_mem
+        self.program_config = program_config
         # Host fallback linears kept for safety
         self._fc1_host = TTLinear(
             fc1_w, fc1_b, device, output_mem=output_mem, fast_gelu=True, program_config=program_config

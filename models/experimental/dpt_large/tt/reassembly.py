@@ -132,27 +132,27 @@ class DPTReassembly(nn.Module):
 
     def __init__(
         self,
-        config: DPTLargeConfig = DEFAULT_CONFIG,
+        config: DPTLargeConfig | None = None,
         proj_channels: Optional[int] = None,
         tt_device=None,
         layer_cfg: TTLayerConfig | None = None,
     ):
         super().__init__()
-        self.config = config
+        self.config = config if config is not None else DPTLargeConfig()
         self.tt_device = tt_device
         self.layer_cfg = layer_cfg
         memcfg = layer_cfg.memcfg() if layer_cfg else None
-        hidden_size = config.hidden_size
+        hidden_size = self.config.hidden_size
         # Allow small test configs to override the fusion channel width without
         # touching the HF-aligned `config.fusion_hidden_size`. The HF
         # checkpoint uses 256, which is the default here.
-        self.fusion_channels = proj_channels if proj_channels is not None else config.fusion_hidden_size
+        self.fusion_channels = proj_channels if proj_channels is not None else self.config.fusion_hidden_size
 
         # Readout configuration mirrors HF's DPTReassembleStage for the
         # non-hybrid DPT model. We only implement the "project" path for now,
         # which is what DPT-Large uses.
-        self.readout_type = config.readout_type
-        self.hidden_act = config.hidden_act
+        self.readout_type = self.config.readout_type
+        self.hidden_act = self.config.hidden_act
 
         self.readout_projects: Optional[nn.ModuleList] = None
         if self.readout_type == "project":
@@ -161,9 +161,9 @@ class DPTReassembly(nn.Module):
                 [
                     nn.Sequential(
                         nn.Linear(2 * hidden_size, hidden_size),
-                        nn.GELU() if self.hidden_act == "gelu" else nn.ReLU(),
-                    )
-                    for _ in range(len(config.neck_hidden_sizes))
+                    nn.GELU() if self.hidden_act == "gelu" else nn.ReLU(),
+                )
+                    for _ in range(len(self.config.neck_hidden_sizes))
                 ]
             )
 
@@ -172,12 +172,12 @@ class DPTReassembly(nn.Module):
             [
                 DPTReassembleLayerTT(
                     hidden_size=hidden_size,
-                    channels=config.neck_hidden_sizes[i],
-                    factor=config.reassemble_factors[i],
+                    channels=self.config.neck_hidden_sizes[i],
+                    factor=self.config.reassemble_factors[i],
                     tt_device=tt_device,
                     memcfg=memcfg,
                 )
-                for i in range(len(config.neck_hidden_sizes))
+                for i in range(len(self.config.neck_hidden_sizes))
             ]
         )
 
@@ -185,13 +185,13 @@ class DPTReassembly(nn.Module):
         self.convs = nn.ModuleList(
             [
                 nn.Conv2d(
-                    in_channels=config.neck_hidden_sizes[i],
+                    in_channels=self.config.neck_hidden_sizes[i],
                     out_channels=self.fusion_channels,
                     kernel_size=3,
                     padding=1,
                     bias=False,
                 )
-                for i in range(len(config.neck_hidden_sizes))
+                for i in range(len(self.config.neck_hidden_sizes))
             ]
         )
 

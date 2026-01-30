@@ -35,6 +35,35 @@ python -m models.experimental.dpt_large.demo.runner \
   --dump-perf generated/dpt_large_perf.json
 ```
 
+Write only the perf header JSON (useful for perf dashboards):
+
+```sh
+python -m models.experimental.dpt_large.demo.runner \
+  --image path/to/image.jpg \
+  --tt-run --device wormhole_n300 \
+  --dump-perf-header generated/dpt_large_perf_header.json
+```
+
+## Accuracy + Throughput (PCC/FPS)
+
+Compute PCC (TT vs CPU) and per-image FPS on a folder of images:
+
+```sh
+python -m models.experimental.dpt_large.demo.eval_pcc \
+  --images-dir path/to/images \
+  --tt-run --device wormhole_n300 \
+  --dump-json generated/dpt_large_eval.json
+```
+
+Run CPU-only (no TT device) to get a baseline:
+
+```sh
+python -m models.experimental.dpt_large.demo.eval_pcc \
+  --images-dir path/to/images \
+  --device cpu \
+  --dump-json generated/dpt_large_cpu_eval.json
+```
+
 ## Tests
 
 CPU-only smoke test:

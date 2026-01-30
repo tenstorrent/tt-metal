@@ -12,7 +12,13 @@ Modules are organized as:
 
 from .tt.config import DPTLargeConfig
 from .tt.fallback import DPTFallbackPipeline, run_depth_cpu
-from .tt.pipeline import DPTTTPipeline, run_depth
+
+# TT pipeline depends on TTNN + tt_lib; keep CPU-only environments importable.
+try:  # pragma: no cover
+    from .tt.pipeline import DPTTTPipeline, run_depth
+except Exception:  # pragma: no cover
+    DPTTTPipeline = None  # type: ignore
+    run_depth = None  # type: ignore
 
 __all__ = [
     "DPTLargeConfig",

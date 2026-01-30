@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import copy
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -35,11 +36,14 @@ class DPTTTPipeline:
     preserving the same interfaces so perf-tuning can happen later.
     """
 
-    config: DPTLargeConfig = DEFAULT_CONFIG
+    config: DPTLargeConfig = field(default_factory=DPTLargeConfig)
     pretrained: bool = True
     device: str = "cpu"
 
     def __post_init__(self):
+        # Avoid mutating a caller-provided config (and never mutate the module-level DEFAULT_CONFIG).
+        self.config = copy.deepcopy(self.config)
+
         self.fallback = DPTFallbackPipeline(config=self.config, pretrained=self.pretrained, device=self.device)
         # Align neck shapes with HF when using pretrained weights
         # Align fusion/head flags too (BN usage, optional projection)
@@ -97,6 +101,18 @@ class DPTTTPipeline:
         self.reassembly.eval()
         self.fusion_head.eval()
         return self
+
+    def close(self):
+        if hasattr(self.backbone, "close"):
+            self.backbone.close()
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
 
     # ------------------------------------------------------------------ forward
     def forward(self, image_path: str | list[str], normalize: bool = True) -> np.ndarray | list[np.ndarray]:
@@ -196,9 +212,11 @@ class DPTTTPipeline:
 def run_depth(
     image_path: str,
     use_tt: bool = True,
-    config: DPTLargeConfig = DEFAULT_CONFIG,
+    config: DPTLargeConfig | None = None,
     **kwargs,
 ) -> np.ndarray:
+    if config is None:
+        config = DPTLargeConfig()
     if not use_tt:
         pipe = DPTFallbackPipeline(config=config, **kwargs)
         return pipe.run_depth_cpu(image_path)
