@@ -482,7 +482,7 @@ jobs:
         # # to be addressed.
         # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
     - name: Run clang-tidy-pr-comments action
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
       # v1.8.0
       uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
       with:
