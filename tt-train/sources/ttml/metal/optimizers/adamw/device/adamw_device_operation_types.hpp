@@ -7,6 +7,8 @@
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
+#include "metal/common/const_utils.hpp"
+
 namespace ttml::metal::optimizers::adamw::device {
 
 struct operation_attributes_t {
@@ -18,7 +20,7 @@ struct operation_attributes_t {
     float epsilon{};
     float weight_decay{};
     bool amsgrad{false};
-    bool stochastic_rounding{false};
+    StochasticRounding stochastic_rounding{StochasticRounding::Disabled};
 };
 
 struct tensor_args_t {

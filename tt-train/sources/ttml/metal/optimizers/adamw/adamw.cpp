@@ -21,7 +21,7 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    bool stochastic_rounding) {
+    StochasticRounding stochastic_rounding) {
     return ttnn::prim::adamw(
         param_in,
         grad,
