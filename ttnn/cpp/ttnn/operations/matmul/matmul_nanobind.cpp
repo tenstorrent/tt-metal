@@ -11,6 +11,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
@@ -18,6 +20,21 @@
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
+
+// fmt formatter for UnaryWithParam to enable fmt::format("{}", unary_with_param)
+template <>
+struct fmt::formatter<ttnn::operations::unary::UnaryWithParam> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const ttnn::operations::unary::UnaryWithParam& param, FormatContext& ctx) const {
+        if (param.params.empty()) {
+            return fmt::format_to(ctx.out(), "UnaryWithParam(op_type={})", param.op_type);
+        }             return fmt::format_to(
+                ctx.out(), "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
+
+    }
+};
 
 namespace ttnn::operations::matmul {
 
@@ -92,6 +109,17 @@ void py_module(nb::module_& mod) {
         Larger values mean fewer cores are used but each core does more work.
         Must be chosen such that (total_N / per_core_N) cores are available.
     )doc");
+    matmul_multi_core_reuse_program_config.def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) {
+        return fmt::format(
+            "MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, out_subblock_h={}, "
+            "out_subblock_w={}, per_core_M={}, per_core_N={})",
+            config.compute_with_storage_grid_size,
+            config.in0_block_w,
+            config.out_subblock_h,
+            config.out_subblock_w,
+            config.per_core_M,
+            config.per_core_N);
+    });
 
     auto matmul_multi_core_reuse_multicast_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(
@@ -244,6 +272,24 @@ void py_module(nb::module_& mod) {
 
         Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def(
+        "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
+                "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={})",
+                config.compute_with_storage_grid_size,
+                config.in0_block_w,
+                config.out_subblock_h,
+                config.out_subblock_w,
+                config.out_block_h,
+                config.out_block_w,
+                config.per_core_M,
+                config.per_core_N,
+                config.transpose_mcast,
+                config.fused_activation,
+                config.fuse_batch);
+        });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(
@@ -410,7 +456,29 @@ void py_module(nb::module_& mod) {
             When true, the output is converted from tiled layout to row-major layout during
             the operation. This can be useful when the subsequent operation expects row-major
             data and can eliminate a separate untilization pass. Defaults to false.
-        )doc");
+        )doc")
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
+                "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
+                "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
+                "num_global_cb_receivers={}, untilize_out={})",
+                config.compute_with_storage_grid_size,
+                config.in0_block_w,
+                config.out_block_h,
+                config.out_block_w,
+                config.out_subblock_h,
+                config.out_subblock_w,
+                config.per_core_M,
+                config.per_core_N,
+                config.fuse_batch,
+                config.fused_activation,
+                config.mcast_in0,
+                config.gather_in0,
+                config.hop_cores,
+                config.num_global_cb_receivers,
+                config.untilize_out);
+        });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -454,7 +522,18 @@ void py_module(nb::module_& mod) {
             If specified, the activation function is applied directly during the DRAM-sharded
             matmul operation. This can provide significant performance benefits by avoiding
             additional memory round-trips in DRAM-based operations.
-        )doc");
+        )doc")
+        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
+            // Include fused_activation in the repr for full visibility during tracing/debugging.
+            const char* fused_activation_repr =
+                config.fused_activation.has_value() ? "set" : "None";
+            return fmt::format(
+                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, fused_activation={})",
+                config.in0_block_w,
+                config.per_core_M,
+                config.per_core_N,
+                fused_activation_repr);
+        });
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(
