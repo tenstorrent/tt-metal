@@ -108,7 +108,10 @@ def get_pcie_devices_per_tray(
     chip_to_bus_id: dict[int, int],
     chip_to_boardtype: dict[int, str],
 ) -> dict[int, list[int]]:
-    """Group PCIe devices by tray based on bus_id."""
+    """Group PCIe devices by tray based on bus_id.
+
+    Returns empty dict if not on a Galaxy/UBB system.
+    """
     result: dict[int, list[int]] = {}
     for chip in get_ubb_chips_with_tray(arch, chips_with_mmio, chip_to_bus_id, chip_to_boardtype):
         result.setdefault(chip["tray_id"], []).append(chip["pcie_id"])
@@ -123,6 +126,8 @@ def get_tp2_device_pairs(
 ) -> list[list[int]]:
     """
     Get Ethernet-connected device pairs for TP2.
+
+    Returns empty list if not on a Galaxy/UBB system.
 
     Algorithm:
     1. Group chips by tray using bus_id upper nibble
