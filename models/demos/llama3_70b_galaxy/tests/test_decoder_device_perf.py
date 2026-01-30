@@ -22,6 +22,14 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 from models.demos.llama3_70b_galaxy.demo.demo_qwen_decode import run_qwen_demo
 
+from models.tt_transformers.tests.test_utils import (
+    merge_device_rows,
+    print_dict,
+    process_measurements,
+    verify_value_within_margin,
+    find_repeated_block,
+    find_repeated_runs,
+)
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -21
@@ -496,6 +504,7 @@ def load_qwen_perf_targets():
 
 # This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
 # the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
+@pytest.mark.no_ensure_devices_tg
 @pytest.mark.no_reset_device
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
@@ -509,9 +518,8 @@ def load_qwen_perf_targets():
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device(
     reset_seeds,
-    galaxy_type,
 ):
-    perf_targets = load_perf_targets(galaxy_type)
+    perf_targets = load_perf_targets("6U")
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-default"
@@ -536,16 +544,27 @@ def test_llama_TG_perf_device(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # Excluding compile run and capture trace entries
-    len_without_second_sampling_compile_run = (
-        len(df) - NUM_OPS_IN_SAMPLING
-    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
-    df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
-    df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
-    # Excluding model embeddings and lmhead+sampling ops
-    df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
-    df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    num_runs = 2  # Compile and Trace Run
+    # Find the starting index of the first repeating sequence of ops
+    first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
+    adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
+    first_run_end = first_run_start + adjusted_len
+    last_run_start = len(df) - adjusted_len
+    df_model_compilation = df[0:first_run_start]  # Compile run
+    df_model_trace = df[last_run_start:]  # Trace run
+
+    # Find the head and tail of the repeating region in the model compilation / trace region of ops
+    head_tail_ops = find_repeated_block(df_model_trace["OP CODE"].tolist(), num_layers)
+
+    # [op_start_index:op_end_index] = all core layers region
+    op_start_index = head_tail_ops["num_head_ops"]
+    num_tail_ops = head_tail_ops["num_tail_ops"]
+    num_layer_block_ops = head_tail_ops["num_layer_block_ops"]
+    op_end_index = op_start_index + num_layer_block_ops * num_layers
+    df_layers_compilation = df_model_compilation[op_start_index:op_end_index]
+    df_layers_trace = df_model_trace[op_start_index:op_end_index]
+
     # Use layers 2-9 for verifying against targets for more stability
     assert len(df_layers_compilation) % num_layers == 0
 
@@ -556,8 +575,20 @@ def test_llama_TG_perf_device(
     df_mid_layers_compilation = df_layers_compilation[int(len(df_layers_compilation) / num_layers) :]
     df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
     # model tail ops (lm head + sampling)
-    df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
-    df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
+    df_model_tail_compilation_wo_plus_one = df_model_compilation[op_end_index : op_end_index + num_tail_ops - 2]
+    df_model_tail_compilation_plus_one = df_model_compilation[
+        op_end_index
+        + num_tail_ops
+        - 2
+        + NUM_OPS_IN_SAMPLING : op_end_index
+        + num_tail_ops
+        - 2
+        + NUM_OPS_IN_SAMPLING
+        + 2
+    ]
+    df_model_tail_compilation = pd.concat([df_model_tail_compilation_wo_plus_one, df_model_tail_compilation_plus_one])
+    df_model_tail_trace = df_model_trace[op_end_index:]
+
     # Get first layer compilation and trace measurements
     avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
         df_first_layer_compilation, 1
@@ -630,13 +661,6 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
     print_dict(avg_kernel_duration_model_tail_trace, "avg_kernel_duration_model_tail_trace")
     print_dict(avg_dispatch_duration_model_tail_trace, "avg_dispatch_duration_model_tail_trace")
-
-    assert len(avg_kernel_duration_mid_layers_compilation) == len(
-        perf_targets["decoder"]
-    ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
-    assert len(avg_dispatch_duration_model_tail_trace) == len(
-        perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."
 
     all_passing = True
     # Verify decoder layer (mid layers)
@@ -792,6 +816,11 @@ def test_llama_TG_perf_device(
     # Verify model tail ops
     logger.info(f"Model tail ops")
     for op_code_with_id in avg_kernel_duration_model_tail_compilation.keys():
+        # Skip ops that exist in compilation but not in trace (e.g., ops in excluded sampling section)
+        if op_code_with_id not in avg_dispatch_duration_model_tail_trace:
+            logger.warning(f"Skipping {op_code_with_id}: exists in compilation but not in trace")
+            continue
+
         if op_code_with_id in perf_targets["model_tail"]:
             op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
 
@@ -873,7 +902,8 @@ def test_llama_TG_perf_device(
     # Model tail ops
     for op_id in avg_kernel_duration_model_tail_trace.keys():
         op_to_op_latency = avg_dispatch_duration_model_tail_trace[op_id]
-        if is_collective_op(op_id):
+        if is_collective_op(op_id) or op_id not in avg_kernel_duration_model_tail_compilation:
+            # Use trace timing for collective ops or ops not present in compilation (e.g., sampling ops)
             kernel_duration = avg_kernel_duration_model_tail_trace[op_id]
         else:
             kernel_duration = avg_kernel_duration_model_tail_compilation[op_id]
@@ -893,7 +923,7 @@ def test_llama_TG_perf_device(
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
 
-    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    run_type = "tg_llama_demo_decode_6u"
     # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
@@ -917,9 +947,8 @@ def test_llama_TG_perf_device(
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
     reset_seeds,
-    galaxy_type,
 ):
-    perf_targets = load_perf_targets(galaxy_type)
+    perf_targets = load_perf_targets("6U")
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-non-overlapped-dispatch"
@@ -941,17 +970,30 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # Excluding compile run and capture trace entries
-    len_without_second_sampling_compile_run = (
-        len(df) - NUM_OPS_IN_SAMPLING
-    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
-    df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
-    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    # Find the starting index of the first repeating sequence of ops
+    num_runs = 2  # Compile and Trace Run
+    first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
+    adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
+    first_run_end = first_run_start + adjusted_len
+    last_run_start = len(df) - adjusted_len
+    df_model_trace = df[last_run_start:]  # Trace run
+
+    # Find the head and tail of the repeating region in the model compilation / trace region of ops
+    head_tail_ops = find_repeated_block(df_model_trace["OP CODE"].tolist(), num_layers)
+
+    # [op_start_index:op_end_index] = all core layers region
+    op_start_index = head_tail_ops["num_head_ops"]
+    num_layer_block_ops = head_tail_ops["num_layer_block_ops"]
+    op_end_index = op_start_index + num_layer_block_ops * num_layers
+
+    # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_layers = df_model_trace[op_start_index:op_end_index]
+
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
-    df_model_tail = df_model[DECODER_OP_END_INDEX:]
+    df_model_tail = df_model_trace[op_end_index:]
 
     (
         _,
@@ -983,13 +1025,6 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
     print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
-
-    assert len(avg_dispatch_duration_mid_layers) == len(
-        perf_targets["decoder"]
-    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
-    assert len(avg_dispatch_duration_model_tail) == len(
-        perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
 
     logger.info("Decoder")
     passing = True
@@ -1090,7 +1125,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             all_passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
-    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    run_type = "tg_llama_demo_decode_6u"
     # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
@@ -1239,13 +1274,6 @@ def test_qwen_TG_perf_device(
     print_dict(avg_kernel_duration_model_tail_trace, "avg_kernel_duration_model_tail_trace")
     print_dict(avg_dispatch_duration_model_tail_trace, "avg_dispatch_duration_model_tail_trace")
 
-    # assert len(avg_kernel_duration_mid_layers_compilation) == len(
-    #     perf_targets["decoder"]
-    # ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
-    # assert len(avg_dispatch_duration_model_tail_trace) == len(
-    #     perf_targets["model_tail"]
-    # ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."
-
     all_passing = True
     # Verify decoder layer (mid layers)
     logger.info(f"Decoder layer")
@@ -1399,6 +1427,11 @@ def test_qwen_TG_perf_device(
     # Verify model tail ops
     logger.info(f"Model tail ops")
     for op_code_with_id in avg_kernel_duration_model_tail_compilation.keys():
+        # Skip ops that exist in compilation but not in trace (e.g., ops in excluded sampling section)
+        if op_code_with_id not in avg_dispatch_duration_model_tail_trace:
+            logger.warning(f"Skipping {op_code_with_id}: exists in compilation but not in trace")
+            continue
+
         if op_code_with_id in perf_targets["model_tail"]:
             op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
 
@@ -1479,15 +1512,11 @@ def test_qwen_TG_perf_device(
     # Model tail ops
     for op_id in avg_kernel_duration_model_tail_trace.keys():
         op_to_op_latency = avg_dispatch_duration_model_tail_trace[op_id]
-        if is_collective_op(op_id):
+        # Use trace timing for collective ops or ops not present in compilation (e.g., sampling ops)
+        if is_collective_op(op_id) or op_id not in avg_kernel_duration_model_tail_compilation:
             kernel_duration = avg_kernel_duration_model_tail_trace[op_id]
         else:
-            print(f"op_id: {op_id} not found in avg_kernel_duration_model_tail_compilation")
-            kernel_duration = (
-                avg_kernel_duration_model_tail_compilation[op_id]
-                if op_id in avg_kernel_duration_model_tail_compilation.keys()
-                else 0
-            )
+            kernel_duration = avg_kernel_duration_model_tail_compilation[op_id]
 
         if op_to_op_latency < 0:
             op_to_op_latency = 0

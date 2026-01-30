@@ -46,16 +46,6 @@ jobs:
               "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
             }, # Pavle Josipovic
             {
-              "name": "Galaxy Llama 70B model perf tests",
-              "model-type": "Llama-70B",
-              "model-name": "llama70b",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 60,
-              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
-            {
               "name": "Llama Galaxy Perf Unit Tests",
               "model-name": "llama_unit_tests",
               "arch": "wormhole_b0",
@@ -88,6 +78,16 @@ jobs:
           ]' --compact-output)
 
           ACTIVE_MODELS=$(jq -n '[
+            {
+              "name": "Galaxy Llama 70B model perf tests",
+              "model-type": "Llama-70B",
+              "model-name": "llama70b",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 60,
+              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
+              "owner_id": "U053W15B6JF"
+            }, # Djordje Ivanovic
             {
               "name": "Galaxy DiT SD3.5 model perf tests",
               "model-type": "SD3.5",

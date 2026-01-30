@@ -731,8 +731,11 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
 
 
 @pytest.fixture()
-def ensure_devices_tg():
+def ensure_devices_tg(request):
     import ttnn
+
+    if "no_ensure_devices_tg" in request.keywords:
+        return
 
     device_ids = ttnn.get_device_ids()
     assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
