@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
-namespace operations::ccl::moe {
+namespace operations::experimental::ccl::moe {
 
 struct ExecuteSelectiveReduceCombine {
     static ttnn::Tensor invoke(
@@ -26,8 +26,8 @@ struct ExecuteSelectiveReduceCombine {
         const std::optional<uint32_t>& axis,
         tt::tt_fabric::Topology topology,
         uint32_t num_links,
-        uint32_t num_token_parallel_cores,
-        uint32_t num_data_parallel_cores,
+        uint32_t token_parallel_core_dim,
+        uint32_t data_parallel_core_dim,
         const CoreRangeSet worker_core_range_set,
         const CoreRangeSet mux_core_range_set,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -35,9 +35,10 @@ struct ExecuteSelectiveReduceCombine {
         const std::optional<GlobalSemaphore>& optional_cross_device_semaphore = std::nullopt);
 };
 
-}  // namespace operations::ccl::moe
+}  // namespace operations::experimental::ccl::moe
 
-constexpr auto selective_reduce_combine = ttnn::
-    register_operation<"ttnn::selective_reduce_combine", ttnn::operations::ccl::moe::ExecuteSelectiveReduceCombine>();
+constexpr auto selective_reduce_combine = ttnn::register_operation<
+    "ttnn::experimental::selective_reduce_combine",
+    ttnn::operations::experimental::ccl::moe::ExecuteSelectiveReduceCombine>();
 
 }  // namespace ttnn
