@@ -9,7 +9,12 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
-#include "program/dispatch.hpp"
+
+namespace tt::tt_metal {
+namespace program_dispatch {
+uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
+}  // namespace program_dispatch
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
