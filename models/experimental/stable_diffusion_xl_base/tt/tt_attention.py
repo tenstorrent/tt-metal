@@ -26,6 +26,8 @@ class TtAttention(LightweightModule):
         super().__init__()
         self.device = device
 
+        self.module_path = module_path
+
         self.inner_dim = out_dim if out_dim is not None else dim_head * heads
         self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads
         self.query_dim = query_dim
@@ -97,7 +99,7 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
-            tracy.signpost("Attention QKV Start")
+            tracy.signpost(f"Attention QKV Start: {self.module_path}")
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,

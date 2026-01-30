@@ -19,6 +19,8 @@ class TtTransformer2DModel(LightweightModule):
 
         self.device = device
 
+        self.module_path = module_path
+
         self.norm_groups = 32
         self.norm_eps = 1e-6
 
@@ -76,6 +78,18 @@ class TtTransformer2DModel(LightweightModule):
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
 
+        # if input_tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+        #   # Only deallocate if we're actually creating a new tensor
+        #   old_l1_tensor = input_tensor
+        #   input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        #   ttnn.deallocate(old_l1_tensor, force=True)
+
+        # Move input_tensor to DRAM and explicitly deallocate L1 version
+        # if input_tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+        #     old_l1_tensor = input_tensor
+        #     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        #     ttnn.deallocate(old_l1_tensor, force=True)
+
         hidden_states = input_tensor
 
         mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -88,6 +102,7 @@ class TtTransformer2DModel(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -100,12 +115,14 @@ class TtTransformer2DModel(LightweightModule):
             **self.groupnorm_config,
         )
 
-        # C=1280 appears only in base, C=1536/768 appear only in refiner
+        # C=1280 appears only in base, C=1536 appear only in refiner
         if C == 1280 or C == 1536 or C == 768:
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
+            # old_tensor = hidden_states
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        tracy.signpost("Transformer2DModel Linear In Start")
+            # ttnn.deallocate(old_tensor, force=True)  # Explicit cleanup
+        tracy.signpost(f"Transformer2DModel Linear In Start: {self.module_path}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
@@ -117,7 +134,7 @@ class TtTransformer2DModel(LightweightModule):
         tracy.signpost("Transformer2DModel Linear In End")
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
-        tracy.signpost("Transformer2DModel Linear Out Start")
+        tracy.signpost(f"Transformer2DModel Linear Out Start: {self.module_path}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,
