@@ -13,7 +13,7 @@ for i in $(seq 0 5); do
   echo "[${i}] $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG_FILE"
   set +e
   echo "Running task $TASK" | tee -a "$LOG_FILE"
-  codexapi task "Go through each column for the fused op unit test $TASK. Look at all ⛔️ and ❌ entries and make a list of the missing/broken tests. Before you start read the AGENTS_GUIDE_ADD_TEST.md file for more context on what's contained in these tests and about concrete requirements. Pick the first missing/failing test from the list and investigate+fix the issue. Update the README.md with the new status of the test; see Update instructions in the README.md for more details. Once you've fixed the issue, repeat the process for the next missing/failing test." --max-iterations 5 --progress | tee -a "$LOG_FILE"
+  codexapi task "Go through each column in the README.md for the fused op unit test $TASK. Look at all ⛔️ and ❌ entries and make a list of the missing/broken tests. Before you start read the AGENTS_GUIDE_ADD_TEST.md file for more context on what's contained in these tests and about concrete requirements. Pick the first missing/failing test from the list and investigate+fix the issue. Update the README.md with the new status of the test; see Update instructions in the README.md for more details. Once you've fixed the issue, repeat the process for the next missing/failing test." --max-iterations 5 --progress | tee -a "$LOG_FILE"
   cmd_status=${PIPESTATUS[0]}
   set -e
 

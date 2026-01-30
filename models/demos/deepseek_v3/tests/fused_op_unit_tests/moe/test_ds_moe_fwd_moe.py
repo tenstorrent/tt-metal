@@ -492,12 +492,12 @@ def _run_ds_moe_fwd_moe_test(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         # TODO: Replace expected_perf_us baselines with theoretical targets.
-        ("decode", 1, 0.9926, 0.2, 0.2, 11267.595),
-        ("prefill", 128, 0.9926, 0.2, 0.2, 11754.253),
-        pytest.param("prefill", 1024, 0.9926, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-1024"),
-        pytest.param("prefill", 8192, 0.9926, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-8192"),
-        pytest.param("prefill", 32768, 0.9926, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-32768"),
-        pytest.param("prefill", 131072, 0.9926, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-131072"),
+        ("decode", 1, 0.988, 0.2, 0.2, 11267.595),
+        ("prefill", 128, 0.988, 0.2, 0.2, 11754.253),
+        pytest.param("prefill", 1024, 0.988, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-1024"),
+        pytest.param("prefill", 8192, 0.988, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-8192"),
+        pytest.param("prefill", 32768, 0.988, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-32768"),
+        pytest.param("prefill", 131072, 0.988, 0.2, 0.2, 11754.253, marks=_CI_SKIP_MARK, id="prefill-131072"),
     ],
 )
 @pytest.mark.parametrize(
@@ -587,7 +587,6 @@ def test_ds_moe_fwd_moe(
     [
         ("decode", 1),
         ("prefill", 128),
-        pytest.param("prefill", 131072, marks=[_CI_SKIP_MARK], id="prefill-131072"),
     ],
 )
 def test_ds_moe_fwd_moe_device_perf(mode, seq_len):
