@@ -10,10 +10,15 @@ This script validates that copyright headers in source files follow the expected
 - SPDX-FileCopyrightText: © YEAR Copyright Holder
 - SPDX-License-Identifier: Apache-2.0
 
-Simple logic:
-- Files with no copyright → Adds Tenstorrent AI ULC copyright
-- Files with existing copyright → Allows any copyright holder (individual contributors or Tenstorrent)
-- Individual contributors are responsible for adding their own copyright if they want it
+Logic for new files (untracked or added but not committed):
+- Files with no copyright -> Adds Tenstorrent AI ULC copyright (when using --fix)
+- Files with any copyright -> ALL copyrights must have current year
+- Individual contributors can add their own copyright, but year must be current
+
+Logic for existing files (already committed):
+- Files with no copyright -> Adds Tenstorrent AI ULC copyright (when using --fix)
+- Files with existing copyright -> Allows any copyright holder and any year
+- Tenstorrent Inc. -> Fixed to Tenstorrent AI ULC
 
 The script is designed to complement the Espressif check-copyright tool by validating
 SPDX copyright headers while allowing individual contributors to maintain their copyright.
@@ -87,6 +92,41 @@ class CopyrightValidator:
         """Check if file path contains excluded patterns."""
         path_str = str(file_path)
         return any(pattern in path_str for pattern in self.EXCLUDED_PATTERNS)
+
+    def _is_year_valid_for_new_file(self, year_part: str, current_year: int) -> bool:
+        """
+        Check if a copyright year is valid for a new file.
+
+        Valid cases:
+        - Single year matching current year: "2026"
+        - Year range ending with current year: "2025-2026"
+
+        Invalid cases:
+        - Old single year: "2025"
+        - Range not ending with current year: "2024-2025"
+        - Malformed years: "20261", "202X", etc.
+
+        Args:
+            year_part: The year string from copyright (e.g., "2026" or "2025-2026")
+            current_year: The current year to validate against
+
+        Returns:
+            True if the year is valid for a new file, False otherwise
+        """
+        year_str = str(current_year)
+        year_part_stripped = year_part.strip()
+
+        # Check if it's a range (contains a dash)
+        if "-" in year_part_stripped:
+            # For ranges, current year must be the end year
+            parts = year_part_stripped.split("-", 1)
+            if len(parts) == 2:
+                end_year = parts[1].strip()
+                return end_year == year_str
+            return False
+        else:
+            # For single years, must exactly match current year (no substring matching)
+            return year_part_stripped == year_str
 
     def find_copyright_lines(
         self, lines: List[str]
@@ -167,6 +207,7 @@ class CopyrightValidator:
         license_line: Optional[str],
         errors: List[str],
         file_path: Path,
+        is_new_file: bool = False,
     ) -> Tuple[List[str], List[str]]:
         """
         Fix copyright issues in the file content.
@@ -176,6 +217,8 @@ class CopyrightValidator:
             copyright_lines: Found copyright lines
             license_line: Found license line
             errors: Validation errors found
+            file_path: Path to the file being fixed
+            is_new_file: True if this is a newly added file
 
         Returns:
             Tuple of (fixed_lines, fixes_applied)
@@ -185,8 +228,10 @@ class CopyrightValidator:
 
         # Detect file comment style
         comment_style = self._detect_comment_style(all_lines, file_path)
+        current_year = datetime.now().year
 
         # Fix forbidden "Tenstorrent Inc." to "Tenstorrent AI ULC"
+        # and fix year for new files
         for i, line in enumerate(fixed_lines):
             if i >= self.MAX_HEADER_LINES:
                 break
@@ -196,23 +241,57 @@ class CopyrightValidator:
                 year_part, company_part = copyright_match.groups()
                 company_name = company_part.strip().rstrip(".")
 
-                if "tenstorrent inc" in company_name.lower():
-                    # Replace the company name using targeted regex substitution
-                    new_company = self.EXPECTED_COMPANY
+                # Determine what needs to be fixed
+                new_company_name = None
+                new_year = None
 
-                    # Create a pattern specifically for replacing Tenstorrent Inc
-                    tenstorrent_pattern = re.compile(
-                        r"(^\s*(?://|#|\*)\s*SPDX-FileCopyrightText:\s*(?:©|\(c\))\s*\d{4}(?:-\d{4})?\s+)(Tenstorrent Inc\.?)(\s*.*$)",
+                # Check if company name needs fixing
+                if "tenstorrent inc" in company_name.lower():
+                    new_company_name = self.EXPECTED_COMPANY
+
+                # Check if year needs fixing for new files
+                # For new files, fix year for ALL copyrights (Tenstorrent and contributors)
+                if is_new_file and not self._is_year_valid_for_new_file(
+                    year_part, current_year
+                ):
+                    new_year = str(current_year)
+
+                # Apply fixes if needed by parsing once and rebuilding
+                if new_company_name or new_year:
+                    # Parse the line to extract its components
+                    # Pattern: <prefix><copyright_symbol><year><company><trailing>
+                    full_pattern = re.compile(
+                        r"^(\s*(?://|#|\*)\s*SPDX-FileCopyrightText:\s*)(©|\(c\))(\s*)(\d{4}(?:-\d{4})?)(\s+)(.+?)(\s*)$",
                         re.IGNORECASE,
                     )
+                    match = full_pattern.match(line)
+                    if match:
+                        prefix = match.group(1)  # "// SPDX-FileCopyrightText: "
+                        copyright_symbol = match.group(2)  # "©" or "(c)"
+                        space_after_symbol = match.group(3)  # space(s) after symbol
+                        old_year = match.group(4)  # "2025" or "2024-2025"
+                        space_after_year = match.group(5)  # space(s) after year
+                        old_company = match.group(6)  # "Tenstorrent Inc." or other
+                        trailing = match.group(7)  # any trailing whitespace/comments
 
-                    new_line = tenstorrent_pattern.sub(
-                        lambda m: m.group(1) + new_company + m.group(3), line
-                    )
-                    fixed_lines[i] = new_line
-                    fixes_applied.append(
-                        f"Line {i+1}: Fixed 'Tenstorrent Inc.' → '{new_company}'"
-                    )
+                        # Build the fixed line with corrected components
+                        final_year = new_year if new_year else old_year
+                        final_company = (
+                            new_company_name if new_company_name else old_company
+                        )
+
+                        new_line = f"{prefix}{copyright_symbol}{space_after_symbol}{final_year}{space_after_year}{final_company}{trailing}"
+                        fixed_lines[i] = new_line
+
+                        # Record what was fixed
+                        if new_company_name:
+                            fixes_applied.append(
+                                f"Line {i+1}: Fixed '{company_name}' -> '{new_company_name}'"
+                            )
+                        if new_year:
+                            fixes_applied.append(
+                                f"Line {i+1}: Updated copyright year from {old_year} to {new_year}"
+                            )
 
         # Add missing copyright header if needed (only if no copyright exists at all)
         if not copyright_lines:
@@ -383,6 +462,9 @@ class CopyrightValidator:
         if not self.should_check_file(file_path):
             return ValidationResult(is_valid=True, errors=[])
 
+        # Always check if this is a new file to enforce current year
+        is_new = self.is_new_file(file_path)
+
         try:
             # Read the entire file when fixing, or just the header when validating
             with open(file_path, "r", encoding="utf-8") as f:
@@ -419,11 +501,40 @@ class CopyrightValidator:
 
         # Simple logic: if copyright exists, don't enforce Tenstorrent copyright
         # Individual contributors are responsible for adding their own copyright if they want it
+        # For new files: all copyrights must have the current year
+
+        # For new files, enforce that ALL copyrights have the current year
+        if is_new and copyright_lines:
+            current_year = datetime.now().year
+            invalid_years = []
+
+            for i, line in enumerate(lines[: self.MAX_HEADER_LINES], 1):
+                copyright_match = self.SPDX_COPYRIGHT_PATTERN.match(line)
+                if copyright_match:
+                    year_part, company_part = copyright_match.groups()
+                    company_name = company_part.strip().rstrip(".")
+
+                    # Check year for ALL copyrights on new files
+                    if not self._is_year_valid_for_new_file(year_part, current_year):
+                        invalid_years.append((i, year_part, company_name))
+
+            # Report errors for all invalid years (if not fixing)
+            if invalid_years and not fix_errors:
+                for line_num, year, company in invalid_years:
+                    errors.append(
+                        f"Line {line_num}: New file must have copyright year {current_year}. "
+                        f"Found '{year}' for '{company}'."
+                    )
 
         # Apply fixes if requested
         if fix_errors and all_lines is not None:
             fixed_lines, file_fixes = self._fix_copyright_issues(
-                all_lines, copyright_lines, license_line, errors, file_path
+                all_lines,
+                copyright_lines,
+                license_line,
+                errors,
+                file_path,
+                is_new_file=is_new,
             )
             if file_fixes:
                 try:
@@ -561,11 +672,46 @@ class CopyrightValidator:
             # Git not installed
             return []
 
+    def is_new_file(self, file_path: Path) -> bool:
+        """
+        Check if a file is newly added to git (not yet committed).
+
+        Args:
+            file_path: Path to the file to check
+
+        Returns:
+            True if the file is new (untracked or added), False otherwise
+        """
+        try:
+            # Use git status --porcelain to check file status
+            # Status codes:
+            # "??" = untracked file (new file not yet added)
+            # "A " = file added to index (staged for first commit)
+            # "AM" = file added to index and modified
+            cmd = ["git", "status", "--porcelain", str(file_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+            if not result.stdout.strip():
+                # File is tracked and unchanged, so not new
+                return False
+
+            status_code = result.stdout[:2]
+            # Check if file is untracked or newly added
+            return status_code.startswith("??") or status_code.startswith("A")
+
+        except subprocess.CalledProcessError:
+            # Not in a git repository or git command failed
+            return False
+        except FileNotFoundError:
+            # Git not installed
+            return False
+
 
 def main() -> int:
     """Main entry point for the copyright validation script."""
     parser = argparse.ArgumentParser(
-        description="Validate copyright headers in source files",
+        description="Validate copyright headers in source files. "
+        "Automatically enforces current year for newly added files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Examples:
@@ -574,6 +720,9 @@ Examples:
   {sys.argv[0]} --fix                    # Fix copyright issues automatically
   {sys.argv[0]} --git-staged --fix       # Fix copyright issues in staged files
   {sys.argv[0]}                          # Check all files with verbose output
+
+Note: New files (untracked or added but not committed) must have the current year
+      in their copyright. Use --fix to automatically update the year.
         """,
     )
     parser.add_argument(
