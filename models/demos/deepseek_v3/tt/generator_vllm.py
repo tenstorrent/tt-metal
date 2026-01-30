@@ -43,6 +43,44 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._vllm_global_stride = None
+        self._vllm_decode_perm_key = None
+        self._vllm_decode_perm = None
+        self._vllm_decode_inv_perm = None
+
+    def _get_vllm_decode_perm(self, batch_size: int, stride_value: int):
+        key = (batch_size, stride_value, self.dp_factor, self.mesh_device.shape[0])
+        if self._vllm_decode_perm_key == key and self._vllm_decode_perm is not None:
+            return self._vllm_decode_perm, self._vllm_decode_inv_perm
+        mesh_rows = self.mesh_device.shape[0]
+        mesh_cols = self.mesh_device.shape[1]
+        expected = mesh_rows * USERS_PER_ROW
+        if batch_size != expected or stride_value * mesh_rows != expected:
+            return None, None
+        batch_per_shard_local = even_int_div(USERS_PER_ROW, mesh_cols)
+        perm = [0] * batch_size
+        inv = [0] * batch_size
+        for global_user_id in range(batch_size):
+            dp_rank = global_user_id // stride_value
+            local = global_user_id % stride_value
+            row_idx = dp_rank
+            if local >= USERS_PER_ROW:
+                mapped_user_id = global_user_id
+            else:
+                col_idx = local // batch_per_shard_local
+                local_batch = local % batch_per_shard_local
+                if row_idx >= mesh_rows or col_idx >= mesh_cols:
+                    mapped_user_id = global_user_id
+                else:
+                    mapped_user_id = row_idx * USERS_PER_ROW + col_idx * batch_per_shard_local + local_batch
+            if mapped_user_id >= batch_size:
+                return None, None
+            perm[mapped_user_id] = global_user_id
+            inv[global_user_id] = mapped_user_id
+        self._vllm_decode_perm_key = key
+        self._vllm_decode_perm = torch.tensor(perm, dtype=torch.long)
+        self._vllm_decode_inv_perm = torch.tensor(inv, dtype=torch.long)
+        return self._vllm_decode_perm, self._vllm_decode_inv_perm
 
     @classmethod
     def initialize_vllm_model(
@@ -109,13 +147,22 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             ((max_prompt_len + pad_block_size - 1) // pad_block_size) * pad_block_size if max_prompt_len > 0 else 0
         )
         num_of_users = tokens.shape[0]
+        stride_guess = None
+        if empty_slots is not None and len(empty_slots) > 0:
+            # Guess stride by detecting first discontinuity (vLLM global user ids)
+            for i in range(1, len(empty_slots)):
+                if empty_slots[i] != empty_slots[i - 1] + 1:
+                    stride_guess = int(empty_slots[i])
+                    break
+            if stride_guess is None:
+                stride_guess = int(len(empty_slots))
+
         if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_prefill_logged"):
             self._debug_prefill_logged = True
             lens_t = lengths if isinstance(lengths, torch.Tensor) else torch.as_tensor(lengths)
             lens_min = int(lens_t.min().item()) if lens_t.numel() else 0
             lens_max = int(lens_t.max().item()) if lens_t.numel() else 0
             empty_summary = None
-            stride_guess = None
             if empty_slots is not None and len(empty_slots) > 0:
                 empty_summary = {
                     "len": len(empty_slots),
@@ -123,11 +170,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     "max": int(max(empty_slots)),
                     "head": [int(x) for x in empty_slots[: min(16, len(empty_slots))]],
                 }
-                # Guess stride by detecting first discontinuity
-                for i in range(1, len(empty_slots)):
-                    if empty_slots[i] != empty_slots[i - 1] + 1:
-                        stride_guess = int(empty_slots[i])
-                        break
             logger.info(
                 "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} stride_guess={} page_table_shape={}",
                 tuple(tokens.shape),
@@ -139,42 +181,75 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 None if page_table is None else tuple(page_table.shape),
             )
         stride = None
-        if empty_slots is not None and len(empty_slots) > 0 and getattr(self, "dp_factor", 1) > 1:
-            if page_table is not None:
+        if getattr(self, "dp_factor", 1) > 1:
+            global_stride = kwargs.get("global_stride", None)
+            if global_stride is not None:
+                stride = int(global_stride)
+                self._vllm_global_stride = stride
+            elif stride_guess is not None:
+                # Prefer the global stride encoded in empty_slots
+                stride = int(stride_guess)
+            elif (
+                empty_slots is not None
+                and len(empty_slots) > 0
+                and page_table is not None
+                and page_table.shape[0] >= self.dp_factor
+            ):
+                # Fallback only if no empty_slots/global_stride are available
                 stride = int(page_table.shape[0] // self.dp_factor)
-            else:
-                # Derive stride from first discontinuity in empty_slots
-                for j in range(1, len(empty_slots)):
-                    if empty_slots[j] != empty_slots[j - 1] + 1:
-                        stride = int(empty_slots[j])
-                        break
-                if stride is None:
-                    stride = int(len(empty_slots))
+
+            if stride is not None and stride <= 0:
+                stride = None
+
+            if stride_guess is not None and stride is not None and stride != stride_guess and global_stride is None:
+                logger.warning(
+                    "[INV] stride mismatch: stride={} stride_guess={} page_table_shape={} dp_factor={}. Using stride_guess.",
+                    stride,
+                    stride_guess,
+                    None if page_table is None else tuple(page_table.shape),
+                    self.dp_factor,
+                )
+                stride = int(stride_guess)
 
         batch_per_shard = (
             even_int_div(USERS_PER_ROW, self.dp_factor) if getattr(self, "dp_factor", 1) > 1 else USERS_PER_ROW
         )
 
         def _map_vllm_user_id(global_user_id: int) -> int:
-            if stride is None or self.dp_factor <= 1:
+            if stride is None or stride <= 0 or self.dp_factor <= 1:
                 return global_user_id
+            mesh_rows = self.mesh_device.shape[0]
+            mesh_cols = self.mesh_device.shape[1]
             dp_rank = global_user_id // stride
             local = global_user_id % stride
-            row_idx = local // batch_per_shard
-            local_batch = local % batch_per_shard
-            if row_idx >= self.mesh_device.shape[0] or dp_rank >= self.dp_factor:
+            row_idx = dp_rank
+            if local >= USERS_PER_ROW:
                 logger.warning(
-                    "[INV] vLLM user_id mapping out of range: user_id={} stride={} dp_rank={} local={} row_idx={} batch_per_shard={} mesh_shape={}",
+                    "[INV] vLLM user_id mapping local index out of range: user_id={} stride={} dp_rank={} local={} users_per_row={} mesh_shape={}",
+                    global_user_id,
+                    stride,
+                    dp_rank,
+                    local,
+                    USERS_PER_ROW,
+                    self.mesh_device.shape,
+                )
+                return global_user_id
+            col_idx = local // batch_per_shard
+            local_batch = local % batch_per_shard
+            if row_idx >= mesh_rows or col_idx >= mesh_cols:
+                logger.warning(
+                    "[INV] vLLM user_id mapping out of range: user_id={} stride={} dp_rank={} local={} row_idx={} col_idx={} batch_per_shard={} mesh_shape={}",
                     global_user_id,
                     stride,
                     dp_rank,
                     local,
                     row_idx,
+                    col_idx,
                     batch_per_shard,
                     self.mesh_device.shape,
                 )
                 return global_user_id
-            return row_idx * USERS_PER_ROW + dp_rank * batch_per_shard + local_batch
+            return row_idx * USERS_PER_ROW + col_idx * batch_per_shard + local_batch
 
         last_logits = []
         for i in range(num_of_users):
@@ -184,8 +259,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 if stride is not None:
                     dp_rank = int(user_id) // stride
                     local = int(user_id) % stride
-                    row_idx = local // batch_per_shard
-                    col_idx = dp_rank
+                    row_idx = dp_rank
+                    col_idx = local // batch_per_shard
                 else:
                     dp_rank = None
                     local = None
@@ -228,6 +303,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        global_stride = kwargs.get("global_stride", None)
+        if global_stride is not None:
+            self._vllm_global_stride = int(global_stride)
+        global_stride = self._vllm_global_stride
         if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_decode_forward_logged"):
             self._debug_decode_forward_logged = True
             positions = kwargs.get("start_pos", None)
@@ -249,10 +328,25 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
+        positions = kwargs["start_pos"]
+        if not isinstance(positions, torch.Tensor):
+            positions = torch.as_tensor(positions)
+        if page_table is not None and getattr(self, "dp_factor", 1) > 1 and global_stride is not None:
+            perm, inv = self._get_vllm_decode_perm(page_table.shape[0], int(global_stride))
+            if perm is not None:
+                perm = perm.to(device=tokens_step.device)
+                inv = inv.to(device=tokens_step.device)
+                tokens_step = tokens_step.index_select(0, perm)
+                positions = positions.index_select(0, perm)
+                page_table = page_table.index_select(0, perm)
+            else:
+                inv = None
+        else:
+            inv = None
         return_value = (
             self._decode_step(
                 tokens_step=tokens_step,
-                positions=kwargs["start_pos"],
+                positions=positions,
                 batch_size_per_row=USERS_PER_ROW,
                 page_table=page_table,
             )
@@ -260,6 +354,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             .squeeze(0)
             .unsqueeze(1)
         )  # [1,1,B,V] -> [B, 1, V]
+        if inv is not None:
+            return_value = return_value.index_select(0, inv)
         return return_value
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
