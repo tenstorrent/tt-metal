@@ -48,7 +48,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                std::optional<uint32_t> mm_block_ht,
                std::optional<uint32_t> mm_block_wt,
                std::optional<uint32_t> mm_M_block_ht,
-               std::optional<uint32_t> mm_N_block_wt) -> ttnn::Tensor {
+               std::optional<uint32_t> mm_N_block_wt,
+               std::optional<uint32_t> chunk_width_in_mm_blocks) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffers,
@@ -68,7 +69,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                     mm_block_ht,
                     mm_block_wt,
                     mm_M_block_ht,
-                    mm_N_block_wt);
+                    mm_N_block_wt,
+                    chunk_width_in_mm_blocks);
             },
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffers") = nb::none(),
@@ -89,7 +91,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("mm_block_ht") = nb::none(),
             nb::arg("mm_block_wt") = nb::none(),
             nb::arg("mm_M_block_ht") = nb::none(),
-            nb::arg("mm_N_block_wt") = nb::none()});
+            nb::arg("mm_N_block_wt") = nb::none(),
+            nb::arg("chunk_width_in_mm_blocks") = nb::none()});
 }
 
 }  // namespace

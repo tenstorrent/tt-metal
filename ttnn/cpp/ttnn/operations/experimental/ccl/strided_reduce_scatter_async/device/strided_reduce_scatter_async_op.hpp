@@ -240,7 +240,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
     std::optional<uint32_t> mm_M_block_ht,
-    std::optional<uint32_t> mm_N_block_wt);
+    std::optional<uint32_t> mm_N_block_wt,
+    std::optional<uint32_t> chunk_width_in_mm_blocks);
 
 void line_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -300,7 +301,8 @@ StridedReduceScatterProgramArtifacts build_line_strided_reduce_scatter_async_pro
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
     std::optional<uint32_t> mm_M_block_ht,
-    std::optional<uint32_t> mm_N_block_wt);
+    std::optional<uint32_t> mm_N_block_wt,
+    std::optional<uint32_t> chunk_width_in_mm_blocks);
 
 namespace operations::experimental::ccl {
 

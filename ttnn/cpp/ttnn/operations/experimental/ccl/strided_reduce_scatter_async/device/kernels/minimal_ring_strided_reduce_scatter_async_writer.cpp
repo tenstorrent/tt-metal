@@ -48,13 +48,14 @@ constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
 constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(25);
+constexpr uint32_t chunk_width_in_mm_blocks = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
 
-constexpr uint32_t num_ct_args = 26;
+constexpr uint32_t num_ct_args = 27;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -224,7 +225,6 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t chunk_width_in_tiles = 2;
-        const uint32_t chunk_width = 2;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
 
         uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
@@ -249,7 +249,7 @@ void kernel_main() {
         DPRINT << "start_row_offset: " << start_row_offset << ENDL();
         DPRINT << "start_tiles_read: " << start_tiles_read << ENDL();
         DPRINT << "start_tiles_to_read: " << start_tiles_to_read << ENDL();
-        DPRINT << "chunk_width: " << chunk_width << ENDL();
+        DPRINT << "chunk_width_in_mm_blocks: " << chunk_width_in_mm_blocks << ENDL();
         DPRINT << "direction: " << (uint32_t)direction << ENDL();
         DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
         DPRINT << "worker_id: " << worker_id << ENDL();

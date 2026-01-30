@@ -165,6 +165,7 @@ tt::stl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_
         operation_attributes.mm_block_wt,
         operation_attributes.mm_M_block_ht,
         operation_attributes.mm_N_block_wt,
+        operation_attributes.chunk_width_in_mm_blocks,
         input_tensor.logical_shape(),
         input_tensor.padded_shape(),
         input_tensor.tensor_spec().page_config(),
@@ -298,7 +299,8 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
         std::optional<uint32_t> mm_M_block_ht,
-        std::optional<uint32_t> mm_N_block_wt) {
+        std::optional<uint32_t> mm_N_block_wt,
+        std::optional<uint32_t> chunk_width_in_mm_blocks) {
     using OperationType = ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::
         StridedReduceScatterAsyncDeviceOperation;
     const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
@@ -322,7 +324,8 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         mm_block_ht,
         mm_block_wt,
         mm_M_block_ht,
-        mm_N_block_wt};
+        mm_N_block_wt,
+        chunk_width_in_mm_blocks};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -60,7 +60,7 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 21;
+    constexpr uint32_t ct_idx = 22;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -115,7 +115,6 @@ void kernel_main() {
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const uint32_t chunk_width_in_tiles = 2;
-    const uint32_t chunk_width = 2;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
 
     uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
@@ -174,7 +173,7 @@ void kernel_main() {
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
                         uint32_t effective_chunk_width_in_tiles =
-                            get_effective_chunk_width_in_tiles(chunk_idx, chunk_width, slice_Wt);
+                            get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
                         uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,

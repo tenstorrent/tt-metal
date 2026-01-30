@@ -38,6 +38,7 @@ class ReduceScatterTestConfig:
     mm_block_wt: object = None  # Optional[int]
     mm_M_block_ht: object = None  # Optional[int]
     mm_N_block_wt: object = None  # Optional[int]
+    chunk_width_in_mm_blocks: object = None  # Optional[int]
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -78,6 +79,7 @@ def run_reduce_scatter_impl(
     mm_block_wt=None,
     mm_M_block_ht=None,
     mm_N_block_wt=None,
+    chunk_width_in_mm_blocks=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -217,6 +219,7 @@ def run_reduce_scatter_impl(
                 mm_block_wt=mm_block_wt,
                 mm_M_block_ht=mm_M_block_ht,
                 mm_N_block_wt=mm_N_block_wt,
+                chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
             )
         elif use_new:
             logger.info(f"Using new reduce scatter")
@@ -612,6 +615,7 @@ def test_strided_reduce_scatter_async(
         mm_block_wt,
         mm_M_block_ht,
         mm_N_block_wt,
+        chunk_width_in_mm_blocks,
     ) = astuple(test_config)
 
     run_reduce_scatter_impl(
@@ -640,4 +644,5 @@ def test_strided_reduce_scatter_async(
         mm_block_wt=mm_block_wt,
         mm_M_block_ht=mm_M_block_ht,
         mm_N_block_wt=mm_N_block_wt,
+        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
     )
