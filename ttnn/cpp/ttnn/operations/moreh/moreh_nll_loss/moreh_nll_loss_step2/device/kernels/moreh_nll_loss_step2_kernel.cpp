@@ -6,8 +6,7 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
@@ -146,4 +145,3 @@ void MAIN {
     cb_pop_front(cb_divisor_recip, onetile);
 #endif
 }
-}  // namespace NAMESPACE

@@ -25,9 +25,7 @@
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // Compile time arguments
 
     // Input dimensions in tiles
@@ -575,4 +573,3 @@ void MAIN {
     // Free up cb_q_in after Q chunks
     cb_pop_front(cb_q_in, q_chunk_tiles);
 }
-}  // namespace NAMESPACE
