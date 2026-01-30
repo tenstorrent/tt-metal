@@ -84,6 +84,14 @@ inline std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
+inline std::vector<uint32_t> GenerateInputTileWithOffset(tt::DataFormat data_format, uint32_t offset) {
+    std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);
+    for (unsigned int& i : u32_vec) {
+        i += offset;
+    }
+    return u32_vec;
+}
+
 inline std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     std::string data;
     if (data_format == tt::DataFormat::Float32) {
