@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .tt_modules import pad_tokens_3d, unpad_tokens_3d
+from .tt_modules import build_attn_padding_mask_4d, pad_tokens_3d, unpad_tokens_3d
 from .config import DPTLargeConfig, DEFAULT_CONFIG
 
 LOG = logging.getLogger(__name__)
@@ -40,14 +40,14 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
     def __init__(
         self,
-        config: DPTLargeConfig = DEFAULT_CONFIG,
+        config: DPTLargeConfig | None = None,
         hf_model: Optional[torch.nn.Module] = None,
         pretrained: bool = True,
         device: str = "cpu",
         tt_layer_cfg=None,
     ):
         super().__init__()
-        self.config = config
+        self.config = config if config is not None else DPTLargeConfig()
         # Host device for HF model (usually 'cpu'); TT device comes from config.device.
         self.device_str = device
         self.tt_layer_cfg = tt_layer_cfg
@@ -58,9 +58,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             if DPTForDepthEstimation is None:
                 raise ImportError("transformers is required to build the ViT backbone.")
             if pretrained:
-                self.model = DPTForDepthEstimation.from_pretrained(config.model_name, output_hidden_states=True)
+                self.model = DPTForDepthEstimation.from_pretrained(self.config.model_name, output_hidden_states=True)
             else:
-                hf_cfg = DPTConfig(**config.to_hf_kwargs())
+                hf_cfg = DPTConfig(**self.config.to_hf_kwargs())
                 self.model = DPTForDepthEstimation(hf_cfg)
 
         self.model.to(self.device_str)
@@ -78,13 +78,16 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self.TTTransformerBlock = None
         self.TTPatchEmbedding = None
         self.tt_prog_cfg = None
+        self.tt_patch = None
+        self.tt_blocks = []
+        self._attn_mask_cache = {}
         self.used_tt_encoder_last_forward: bool = False
         try:
             import ttnn  # noqa: F401
             from .tt_modules import TTTransformerBlock, TTPatchEmbedding
 
             # Use config.device for TT accelerator selection so the host can remain on CPU.
-            if config.enable_tt_device and config.device != "cpu":
+            if self.config.enable_tt_device and self.config.device != "cpu":
                 self.tt_device = ttnn.open_device(device_id=0)
                 self.TTTransformerBlock = TTTransformerBlock
                 self.TTPatchEmbedding = TTPatchEmbedding
@@ -200,6 +203,21 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         )
 
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=tokens_torch.shape[1]) if self.tt_layer_cfg else {}
+        if pad_seq and orig_len < tokens_torch.shape[1]:
+            # Provide an attention mask so padded tokens do not participate in attention.
+            mm_opts["valid_seq_len"] = int(orig_len)
+            cache_key = (int(tokens_torch.shape[1]), int(orig_len))
+            attn_mask_tt = self._attn_mask_cache.get(cache_key)
+            if attn_mask_tt is None:
+                mask_torch = build_attn_padding_mask_4d(tokens_torch.shape[1], orig_len, dtype=torch.float32)
+                attn_mask_tt = ttnn.from_torch(
+                    mask_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.tt_device,
+                )
+                self._attn_mask_cache[cache_key] = attn_mask_tt
+            mm_opts["attn_mask"] = attn_mask_tt
         hidden_states_tt: List[ttnn.Tensor] = [tokens_tt]
         for blk in self.tt_blocks[: self.config.num_hidden_layers]:
             tokens_tt = blk(tokens_tt, **mm_opts)
@@ -208,7 +226,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         feats: Dict[int, torch.Tensor] = {}
         token_maps: Dict[int, torch.Tensor] = {}
 
-        for idx in self.config.output_layers:
+        max_idx = max(0, int(self.config.num_hidden_layers) - 1)
+        safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
+        for idx in safe_layers:
             # +1 offset because hidden_states_tt[0] holds embeddings.
             h_tt = hidden_states_tt[idx + 1]
             h_host = h_tt.cpu()
@@ -244,4 +264,22 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             return self._forward_tt_encoder(pixel_values, return_tt=return_tt)
         return self._forward_cpu_backbone(pixel_values, return_tt=return_tt)
 
-    __call__ = forward
+    def close(self):
+        try:
+            if self.tt_device is None:
+                return
+            import ttnn  # type: ignore
+
+            try:
+                ttnn.close_device(self.tt_device)
+            finally:
+                self.tt_device = None
+        except Exception:
+            # Best-effort cleanup; avoid raising during interpreter shutdown.
+            self.tt_device = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

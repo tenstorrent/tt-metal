@@ -26,6 +26,9 @@ def test_fallback_depth(tmp_path):
     cfg = DPTLargeConfig(
         image_size=96, hidden_size=256, intermediate_size=512, num_hidden_layers=2, num_attention_heads=4
     )
+    hf_kwargs = cfg.to_hf_kwargs()
+    assert hf_kwargs["num_hidden_layers"] == cfg.num_hidden_layers
+    assert max(hf_kwargs["backbone_out_indices"]) <= cfg.num_hidden_layers - 1
     pipe = DPTFallbackPipeline(config=cfg, pretrained=False, device="cpu")
     depth = pipe.run_depth_cpu(str(img_path))
     assert depth.shape == (1, 1, cfg.image_size, cfg.image_size)

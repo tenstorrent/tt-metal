@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 
 import math
-import ttnn
+try:
+    import ttnn  # type: ignore
+except Exception:  # pragma: no cover
+    ttnn = None  # type: ignore
 
 from .config import DPTLargeConfig, DEFAULT_CONFIG
 
@@ -57,6 +60,8 @@ class TTLayerConfig:
         Fast path uses block-sharded L1 to mirror the ViT demo; strict path
         defaults to plain L1 to keep parity and simplicity.
         """
+        if ttnn is None:
+            return None
         try:
             if self.use_block_sharded:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
@@ -74,6 +79,8 @@ class TTLayerConfig:
         Uses the configured SDPA grid when available; falls back to the
         general L1 chunking scheme if SDPA is unsupported in the runtime.
         """
+        if ttnn is None:
+            return None
         try:
             SDPAProgramConfig = ttnn.SDPAProgramConfig  # exposed in ttnn.__init__
         except Exception:

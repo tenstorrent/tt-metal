@@ -65,12 +65,14 @@ class DPTLargeConfig:
         always gather the requested number of hidden states (allowing
         duplicates when the encoder has fewer than four blocks).
         """
-        # Preferred output layers (clamped to encoder depth for HF)
+        # Preferred output layers (clamped to encoder depth for HF).
+        #
+        # Do not inflate `num_hidden_layers` based on default `output_layers`:
+        # tests intentionally use tiny configs (e.g., 2 layers) and expect the
+        # constructed HF backbone to stay tiny.
+        max_layer_idx = max(0, int(self.num_hidden_layers) - 1)
         base_out_indices = list(self.output_layers)
-        # Ensure HF backbone has enough layers for these taps
-        needed_layers = max(base_out_indices) + 1 if base_out_indices else self.num_hidden_layers
-        max_layer_idx = max(0, max(self.num_hidden_layers, needed_layers) - 1)
-        safe_out_indices = [min(i, max_layer_idx) for i in base_out_indices]
+        safe_out_indices = [min(max(int(i), 0), max_layer_idx) for i in base_out_indices]
 
         return dict(
             use_batch_norm_in_fusion_residual=self.use_batch_norm_in_fusion_residual,
@@ -80,7 +82,7 @@ class DPTLargeConfig:
             num_channels=self.num_channels,
             hidden_size=self.hidden_size,
             intermediate_size=self.intermediate_size,
-            num_hidden_layers=max_layer_idx + 1,
+            num_hidden_layers=int(self.num_hidden_layers),
             num_attention_heads=self.num_attention_heads,
             qkv_bias=self.qkv_bias,
             layer_norm_eps=self.layer_norm_eps,

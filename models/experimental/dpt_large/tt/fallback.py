@@ -166,6 +166,8 @@ class DPTFallbackPipeline:
         return self.run_depth_cpu(image_path, normalize=normalize)
 
 
-def run_depth_cpu(image_path: str, config: DPTLargeConfig = DEFAULT_CONFIG, **kwargs) -> np.ndarray:
+def run_depth_cpu(image_path: str, config: DPTLargeConfig | None = None, **kwargs) -> np.ndarray:
+    if config is None:
+        config = DPTLargeConfig()
     pipeline = DPTFallbackPipeline(config=config, **kwargs)
     return pipeline.run_depth_cpu(image_path)

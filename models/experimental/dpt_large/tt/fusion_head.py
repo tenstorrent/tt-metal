@@ -240,7 +240,8 @@ class DPTFeatureFusionLayerTT(nn.Module):
                         mode="bilinear",
                         align_corners=False,
                     )
-                hidden_state = hidden_state + self.residual_layer1(residual)
+                residual_out = self.residual_layer1(residual)
+                hidden_state = ttnn.add(hidden_state, residual_out)
 
             hidden_state = self.residual_layer2(hidden_state)
             hidden_state = fallback_ops.interpolate(
@@ -516,23 +517,23 @@ class DPTFusionHead(nn.Module):
 
     def __init__(
         self,
-        config: DPTLargeConfig = DEFAULT_CONFIG,
+        config: DPTLargeConfig | None = None,
         channels: int = 256,
         tt_device=None,
         layer_cfg: TTLayerConfig | None = None,
     ):
         super().__init__()
-        self.config = config
+        self.config = config if config is not None else DPTLargeConfig()
         self.channels = channels
         self.tt_device = tt_device
         self.layer_cfg = layer_cfg
         self.memcfg = layer_cfg.memcfg() if layer_cfg else None
 
         # Fusion stage (merges multi-scale features to a pyramid of fused maps).
-        self.fusion_stage = DPTFeatureFusionStageTT(config=config, tt_device=tt_device, memcfg=self.memcfg)
+        self.fusion_stage = DPTFeatureFusionStageTT(config=self.config, tt_device=tt_device, memcfg=self.memcfg)
 
         # Depth head operating on fused feature maps.
-        self.depth_head = DPTDepthEstimationHeadTT(config=config, tt_device=tt_device, memcfg=self.memcfg)
+        self.depth_head = DPTDepthEstimationHeadTT(config=self.config, tt_device=tt_device, memcfg=self.memcfg)
 
     # ------------------------------------------------------------------ weight loading
     def load_from_hf_state_dict(self, state_dict: Dict[str, torch.Tensor]):

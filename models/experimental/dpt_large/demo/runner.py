@@ -43,11 +43,17 @@ def main():
     parser.add_argument("--dump-depth", type=str, default=None)
     parser.add_argument("--dump-depth-color", type=str, default=None)
     parser.add_argument("--dump-perf", type=str, default=None)
+    parser.add_argument("--dump-perf-header", type=str, default=None)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
     args = parser.parse_args()
 
     images = _collect_images(args)
+    if len(images) == 0:
+        raise SystemExit(
+            "No input images found. Supported extensions: .jpg/.jpeg/.png/.bmp "
+            "(provide --image or a non-empty --images-dir)."
+        )
 
     if args.tt_run and args.device == "cpu":
         raise SystemExit("--tt-run requires --device != cpu")
@@ -67,71 +73,71 @@ def main():
         tt_perf_neck=use_tt,
     )
 
-    if use_tt:
-        from ..tt.pipeline import DPTTTPipeline
-
-        # Pipeline (TT path shares weights with CPU fallback for preprocessing).
-        tt_pipeline = DPTTTPipeline(config=config, device="cpu")
-        cpu_pipeline = tt_pipeline.fallback
-    else:
-        tt_pipeline = None
-        cpu_pipeline = DPTFallbackPipeline(config=config, device="cpu")
-
-    # Warmup around the selected pipeline only.
-    for _ in range(args.warmup):
+    tt_pipeline = None
+    cpu_pipeline = None
+    try:
         if use_tt:
-            assert tt_pipeline is not None
-            _ = tt_pipeline.forward(images[0], normalize=True)
-        else:
-            _ = cpu_pipeline.run_depth_cpu(images[0], normalize=True)
+            from ..tt.pipeline import DPTTTPipeline
 
-    timings = []
-    depth = None
-    for _ in range(args.repeat):
-        start = time.perf_counter()
-        for img in images:
+            # Pipeline (TT path shares weights with CPU fallback for preprocessing).
+            tt_pipeline = DPTTTPipeline(config=config, device="cpu")
+            cpu_pipeline = tt_pipeline.fallback
+        else:
+            cpu_pipeline = DPTFallbackPipeline(config=config, device="cpu")
+
+        # Warmup around the selected pipeline only.
+        for _ in range(args.warmup):
             if use_tt:
                 assert tt_pipeline is not None
-                depth = tt_pipeline.forward(img, normalize=True)
+                _ = tt_pipeline.forward(images[0], normalize=True)
             else:
-                depth = cpu_pipeline.run_depth_cpu(img, normalize=True)
-        end = time.perf_counter()
-        timings.append((end - start) * 1000)
+                assert cpu_pipeline is not None
+                _ = cpu_pipeline.run_depth_cpu(images[0], normalize=True)
 
-    if depth is None:
-        raise RuntimeError("No images were processed (check --image/--images-dir input).")
+        timings = []
+        depth = None
+        for _ in range(args.repeat):
+            start = time.perf_counter()
+            for img in images:
+                if use_tt:
+                    assert tt_pipeline is not None
+                    depth = tt_pipeline.forward(img, normalize=True)
+                else:
+                    assert cpu_pipeline is not None
+                    depth = cpu_pipeline.run_depth_cpu(img, normalize=True)
+            end = time.perf_counter()
+            timings.append((end - start) * 1000)
 
-    latency_ms_mean = float(np.mean(timings))
-    latency_ms_std = float(np.std(timings))
-    fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
-    perf = dict(
-        mode="tt" if use_tt else "cpu",
-        latency_ms_mean=latency_ms_mean,
-        latency_ms_std=latency_ms_std,
-        total_ms=latency_ms_mean,
-        fps=fps,
-        device=args.device,
-        dtype="bfloat16",
-        input_h=args.height,
-        input_w=args.width,
-        batch_size=1,
-        modules=["backbone", "reassembly", "fusion_head"] if use_tt else ["cpu_fallback"],
-    )
-    # Attach last per-stage timing breakdown from the TT pipeline when available.
-    if use_tt and tt_pipeline is not None and getattr(tt_pipeline, "last_perf", None) is not None:
-        perf["stage_breakdown_ms"] = tt_pipeline.last_perf
+        if depth is None:
+            raise RuntimeError("No images were processed (check --image/--images-dir input).")
 
-    if args.dump_depth:
-        Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
-        np.save(args.dump_depth, depth)
-    if args.dump_depth_color:
-        Path(args.dump_depth_color).parent.mkdir(parents=True, exist_ok=True)
-        _save_depth_color(depth, args.dump_depth_color)
+        latency_ms_mean = float(np.mean(timings))
+        latency_ms_std = float(np.std(timings))
+        fps = 1000.0 / latency_ms_mean if latency_ms_mean > 0 else 0.0
+        perf = dict(
+            mode="tt" if use_tt else "cpu",
+            latency_ms_mean=latency_ms_mean,
+            latency_ms_std=latency_ms_std,
+            total_ms=latency_ms_mean,
+            fps=fps,
+            device=args.device,
+            dtype="bfloat16",
+            input_h=args.height,
+            input_w=args.width,
+            batch_size=1,
+            modules=["backbone", "reassembly", "fusion_head"] if use_tt else ["cpu_fallback"],
+        )
+        # Attach last per-stage timing breakdown from the TT pipeline when available.
+        if use_tt and tt_pipeline is not None and getattr(tt_pipeline, "last_perf", None) is not None:
+            perf["stage_breakdown_ms"] = tt_pipeline.last_perf
 
-    if args.dump_perf:
-        Path(args.dump_perf).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.dump_perf).write_text(json.dumps(perf, indent=2))
-        header_path = Path(args.dump_perf).with_name(Path(args.dump_perf).stem + "_header.json")
+        if args.dump_depth:
+            Path(args.dump_depth).parent.mkdir(parents=True, exist_ok=True)
+            np.save(args.dump_depth, depth)
+        if args.dump_depth_color:
+            Path(args.dump_depth_color).parent.mkdir(parents=True, exist_ok=True)
+            _save_depth_color(depth, args.dump_depth_color)
+
         header = dict(
             model=dict(
                 name="dpt-large",
@@ -152,8 +158,24 @@ def main():
             fps=perf.get("fps", 0),
             stage_breakdown_ms=perf.get("stage_breakdown_ms", {}),
         )
-        header_path.parent.mkdir(parents=True, exist_ok=True)
-        header_path.write_text(json.dumps(header, indent=2))
+
+        if args.dump_perf:
+            Path(args.dump_perf).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.dump_perf).write_text(json.dumps(perf, indent=2))
+
+        if args.dump_perf_header:
+            header_path = Path(args.dump_perf_header)
+        elif args.dump_perf:
+            header_path = Path(args.dump_perf).with_name(Path(args.dump_perf).stem + "_header.json")
+        else:
+            header_path = None
+
+        if header_path is not None:
+            header_path.parent.mkdir(parents=True, exist_ok=True)
+            header_path.write_text(json.dumps(header, indent=2))
+    finally:
+        if tt_pipeline is not None and hasattr(tt_pipeline, "close"):
+            tt_pipeline.close()
 
 
 if __name__ == "__main__":
