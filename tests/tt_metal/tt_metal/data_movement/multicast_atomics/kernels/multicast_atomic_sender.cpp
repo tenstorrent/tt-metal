@@ -27,9 +27,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // Send multicast atomic increment to all destination cores
             noc_semaphore_inc_multicast(dst_multicast_noc_addr, atomic_inc_value, num_dests);
-
-            // Wait for atomic operation to complete before proceeding
         }
+        // Wait for atomic operation to complete before proceeding
         noc_async_atomic_barrier();
     }
 
