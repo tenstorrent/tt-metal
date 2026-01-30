@@ -762,12 +762,10 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         
         // Add write packed large unicast command
         command_sequence.add_dispatch_write_packed_large_unicast(
-            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_NONE,
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN,
             l1_alignment,
             write_sub_cmds.size(),
-            write_sub_cmds,
-            nullptr,
-            0);
+            write_sub_cmds);
         
         // Add relay linear packed command
         command_sequence.add_prefetch_relay_linear_packed(
@@ -793,7 +791,6 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     };
     
     // Iterate through host ranges and build sub-commands
-    uint32_t current_dst_offset = 0;
     for (const auto& host_range : core_page_mapping.host_ranges) {
         uint64_t src_offset = static_cast<uint64_t>(host_range.host_page_start) * buffer.page_size();
         const uint8_t* src_region_start = src_ptr + src_offset;
