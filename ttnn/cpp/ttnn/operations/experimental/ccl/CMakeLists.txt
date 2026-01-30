@@ -137,9 +137,9 @@ target_sources(
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
-        moe_compute/moe.cpp
-        moe_compute/device/moe_device_operation.cpp
-        moe_compute/device/moe_program_factory.cpp
+        moe_compute/moe_compute.cpp
+        moe_compute/device/moe_compute_device_operation.cpp
+        moe_compute/device/moe_compute_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
