@@ -21,8 +21,6 @@
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
-class TensorAttributes;
-
 /**
  * HostTensor is a host data class. It has the semantics of a container, and all host <-> device communications are
  * explicit.
