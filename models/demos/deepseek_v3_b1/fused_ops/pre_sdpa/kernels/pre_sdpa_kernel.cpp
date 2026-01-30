@@ -32,19 +32,16 @@ void kernel_main() {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
 // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
-// Runtime args: [scalar, scalar2]
+// Runtime args: []
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
-    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm2_num_faces")>;
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     // RMSNorm reader runtime args
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(7168))
-    };
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
@@ -77,11 +74,8 @@ void kernel_main() {
             "rmsnorm2_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
     };
 
-    // RMSNorm2 reader args (uses same scalars_cb, different scalar value)
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(1),  // scalar2 (1/sqrt(1536))
-    };
+    // RMSNorm2 reader args
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{};
 
     // Matmul2 reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul2_args{};
@@ -192,11 +186,10 @@ void kernel_main() {
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_named_compile_time_arg_val("rmsnorm_interm_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
         get_arg_val<uint32_t>(0),  // epsilon
+        get_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -220,11 +213,10 @@ void kernel_main() {
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),  // reuse scalars cb
-        get_named_compile_time_arg_val("rmsnorm2_interm_cb"),  // separate interm CB (3 tiles)
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
         get_arg_val<uint32_t>(0),                              // epsilon (same as rmsnorm1)
+        get_arg_val<float>(2),                                 // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -323,10 +315,8 @@ void kernel_main() {
     // Gather writes directly to rmsnorm2_input_cb (3 tiles of 16x32)
     // Uses SEPARATE CBs with exact sizes:
     //   - Input: rmsnorm2_input_cb (3 tiles from gather)
-    //   - Interm: rmsnorm2_interm_cb (3 tiles)
     //   - Output: rmsnorm2_output_cb (3 tiles)
     //   - Gamma: rmsnorm2_gamma_cb (3 tiles)
-    //   - Scalars: reuses scalars_cb (same epsilon, different scalar)
     // ========================================================================
     // pop_input = true (gathered data is consumed after RMSNorm2)
     {
