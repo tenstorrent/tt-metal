@@ -13,7 +13,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct MoEParams {
+struct MoEComputeParams {
     uint32_t layer_id;
     std::optional<uint32_t> cluster_axis;
 
@@ -26,7 +26,7 @@ struct MoEParams {
     }
 };
 
-struct MoEInputs {
+struct MoEComputeInputs {
     const ttnn::Tensor& tilize_input_tensor;
     const ttnn::Tensor& tilize_expert_indices_tensor;
     const ttnn::Tensor& tilize_expert_scores_tensor;
