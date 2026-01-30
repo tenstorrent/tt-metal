@@ -201,6 +201,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr);
 
+    // Shared L1 location for NCRISC to communicate k_write_ptr to BRISC
+    // Use semaphore addr + 4 bytes (semaphores are 4 bytes apart)
+    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 4);
+
     // Bidirectional semaphore pattern:
     // NCRISC increments for each page/chunk ready, BRISC waits then resets to 0
     // NCRISC waits for 0 before pushing to CB (safe to reuse buffer)
@@ -220,6 +225,10 @@ void kernel_main() {
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t k_write_ptr = get_write_ptr(cb_k_in);
                 k_base_read_ptr = get_noc_addr(k_write_ptr);
+
+                // Share k_write_ptr with BRISC via L1 (BRISC reads this instead of CB state)
+                DPRINT << "k_write_ptr: " << k_write_ptr << ENDL();
+                *k_write_ptr_shared = k_write_ptr;
 
                 const uint32_t k_chunk_bytes = k_chunk_tiles * k_tile_bytes;
 

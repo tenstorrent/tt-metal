@@ -364,8 +364,10 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr);
 
-        // Get K buffer base address - same as reader, addresses are deterministic
-        uint32_t k_write_ptr = get_write_ptr(cb_k_in);
+        // Shared L1 location where NCRISC writes k_write_ptr for BRISC to read
+        // Use semaphore addr + 4 bytes (same offset as reader)
+        volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 4);
 
         // Set up multicast addresses
         // Must use NOC_0 for multicast due to grid wrapping requirements
@@ -386,26 +388,39 @@ void kernel_main() {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 DeviceZoneScopedN("mcast-sender-multicast");
 
+                // Wait for first page signal before reading k_write_ptr
+                // This ensures NCRISC has done cb_reserve_back and written k_write_ptr_shared
+                noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, 1);
+
+                // Read k_write_ptr from shared L1 location (written by NCRISC after cb_reserve_back)
+                // This avoids race with CB state and ensures we get the correct double-buffered address
+                invalidate_l1_cache();
+                uint32_t k_write_ptr = *k_write_ptr_shared;
+                DPRINT << "k_write_ptr: " << k_write_ptr << ENDL();
+
                 if constexpr (kv_is_sharded) {
                     // Sharded: page-level pipelining - multicast each page as it arrives
-                    // NCRISC increments from 0 for each page, resets to 0 after chunk
-                    for (uint32_t page = 0; page < k_num_pages; ++page) {
+                    // Already waited for page 1 above, multicast first page now
+                    uint32_t page_addr = k_write_ptr;
+                    uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                    noc_async_write_multicast(
+                        page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
+
+                    // Remaining pages: wait for each signal then multicast
+                    for (uint32_t page = 1; page < k_num_pages; ++page) {
                         // Wait for NCRISC to signal this page is ready (semaphore >= page+1)
                         noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, page + 1);
 
                         // Calculate page address directly - addresses increment in lockstep
-                        uint32_t page_addr = k_write_ptr + page * k_page_size;
+                        page_addr = k_write_ptr + page * k_page_size;
 
                         // Multicast this page immediately to other cores in S block
-                        uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                        mcast_dest_addr = mcast_noc_addr | page_addr;
                         noc_async_write_multicast(
                             page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
                     }
                 } else {
-                    // Interleaved: chunk-level - wait for entire chunk, then multicast
-                    // NCRISC sets to 1 when chunk is ready
-                    noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, 1);
-
+                    // Interleaved: chunk-level - already waited for signal above
                     // Multicast entire chunk from base address
                     uint64_t mcast_dest_addr = mcast_noc_addr | k_write_ptr;
                     noc_async_write_multicast(
