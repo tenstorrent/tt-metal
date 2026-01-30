@@ -248,13 +248,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
     logger.info(f"Done creating TT tensors.")
     logger.info("Running KV cache branch operation...")
     ttnn_result = KVCacheBranch.op(
-        ttnn_input,
-        ttnn_W_dkv_rope,
-        ttnn_gamma,
-        tt_cos,
-        tt_sin,
-        tt_trans_replicated,
-        ttnn_output,
+        ttnn_input, ttnn_W_dkv_rope, ttnn_gamma, tt_cos, tt_sin, tt_trans_replicated, ttnn_output, epsilon, use_fp32
     )
 
     # Convert back to torch for verification

@@ -85,6 +85,14 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(uint src_index, uint dst_
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(src_index);
     rmsnorm_bcast_scalar_reuse_dest_as_src();
+    if constexpr (clear_dest) {
+        if constexpr (Dst == DstSync::SyncFull) {
+            TT_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+        } else {
+            static_assert(Dst == DstSync::SyncHalf);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id);
+        }
+    }
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
