@@ -337,12 +337,14 @@ jobs:
           echo "✅ $DISPLAY_NAME triggered (run ID: $run_id): $run_url"
 
           # Monitor workflow with retry logic for failed jobs
-          attempt=0
+          attempt=1
           timeout_seconds=$((WORKFLOW_TIMEOUT * 60))
+          max_attempts=$MAX_RETRIES
 
-          while [ $attempt -lt $MAX_RETRIES ]; do
-            echo "📊 Monitoring $DISPLAY_NAME (attempt $((attempt + 1))/$MAX_RETRIES)..."
+          while [ $attempt -le $max_attempts ]; do
+            echo "📊 Monitoring $DISPLAY_NAME (attempt $attempt/$max_attempts)..."
             elapsed=0
+            should_retry=false
 
             while [ $elapsed -lt $timeout_seconds ]; do
               status=$(gh run view "$run_id" --json status,conclusion \
@@ -357,25 +359,24 @@ jobs:
                   echo "$OUTPUT_KEY=success:$run_url" >> $GITHUB_OUTPUT
                   exit 0
                 else
-                  echo "🛑 $DISPLAY_NAME completed with status: $conclusion (attempt $((attempt + 1)))"
+                  echo "🛑 $DISPLAY_NAME completed with status: $conclusion (attempt $attempt/$max_attempts)"
 
-                  # Retry failed jobs only
-                  if [ $attempt -lt $((MAX_RETRIES - 1)) ]; then
-                    attempt=$((attempt + 1))
-                    echo "🔄 Retrying failed jobs only (attempt $((attempt + 1))/$MAX_RETRIES)..."
+                  # Check if we should retry
+                  if [ $attempt -lt $max_attempts ]; then
+                    echo "🔄 Retrying failed jobs only (will be attempt $((attempt + 1))/$max_attempts)..."
 
                     if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
                       echo "✅ Rerun triggered for run ID: $run_id"
                       sleep 30  # Wait for rerun to start
-                      elapsed=0  # Reset timeout for retry
-                      break  # Break inner loop to start monitoring again
+                      should_retry=true
+                      break  # Break inner loop to continue outer loop for next attempt
                     else
                       echo "❌ Failed to trigger rerun"
                       echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
                       exit 1
                     fi
                   else
-                    echo "❌ Max retries reached"
+                    echo "❌ Max retries reached ($max_attempts attempts)"
                     echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
                     exit 1
                   fi
@@ -386,7 +387,13 @@ jobs:
               elapsed=$((elapsed + POLL_INTERVAL))
             done
 
-            # Check if we timed out
+            # Check if we broke out to retry or if we timed out
+            if [ "$should_retry" = "true" ]; then
+              attempt=$((attempt + 1))
+              continue  # Continue to next retry attempt
+            fi
+
+            # If we didn't break for retry, we timed out
             if [ $elapsed -ge $timeout_seconds ]; then
               echo "⏰ $DISPLAY_NAME timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
               echo "$OUTPUT_KEY=timeout:$run_url" >> $GITHUB_OUTPUT
@@ -394,8 +401,8 @@ jobs:
             fi
           done
 
-          # If we exit the retry loop without success
-          echo "❌ $DISPLAY_NAME failed after $MAX_RETRIES attempts"
+          # If we somehow exit the retry loop without success (shouldn't happen)
+          echo "❌ $DISPLAY_NAME failed after $max_attempts attempts"
           echo "$OUTPUT_KEY=failure:$run_url" >> $GITHUB_OUTPUT
           exit 1
 
