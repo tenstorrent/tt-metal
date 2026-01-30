@@ -13,9 +13,12 @@ from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to
 class BroadcastRMSNorm:
     """
     Fused Broadcast + RMSNorm operation using ttnn.generic_op.
-    NCRISC: ccl_broadcast reader kernel + RMSNorm reader
-    BRISC: ccl_broadcast writer
+    NCRISC: ccl_broadcast reader kernel + RMSNorm reader (or just RMSNorm if skip_ccl)
+    BRISC: ccl_broadcast writer (or no-op if skip_ccl)
     TRISC: RMSNorm compute
+
+    When skip_ccl=True, the operation runs on a single device without CCL broadcast,
+    effectively performing only the RMSNorm computation.
     """
 
     @staticmethod
@@ -40,7 +43,7 @@ class BroadcastRMSNorm:
         gamma_tensor,
         sender_coord,
         output_tensor,
-        semaphores,
+        semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=None,
         topology=None,
@@ -49,7 +52,15 @@ class BroadcastRMSNorm:
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
+        skip_ccl=False,
     ):
+        """
+        Execute fused Broadcast+RMSNorm operation.
+
+        Args:
+            skip_ccl: If True, skip CCL broadcast and run RMSNorm only (single-device mode).
+                      In this mode, semaphores and sender_coord are ignored.
+        """
         if topology is None:
             topology = ttnn.Topology.Linear
 
@@ -69,13 +80,17 @@ class BroadcastRMSNorm:
 
         grid = mesh_device.compute_with_storage_grid_size()
 
-        out_ready_semaphore = semaphores[0]
-        barrier_semaphore = semaphores[1]
-        secondary_sync_semaphore = semaphores[2]
-
-        out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
-        barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
-        secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
+        # Semaphore addresses (only needed for CCL mode)
+        out_ready_sem_addr = 0
+        barrier_sem_addr = 0
+        secondary_sync_sem_addr = 0
+        if not skip_ccl and semaphores is not None:
+            out_ready_semaphore = semaphores[0]
+            barrier_semaphore = semaphores[1]
+            secondary_sync_semaphore = semaphores[2]
+            out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
+            barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
+            secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
 
         # Calculate packet size and page info
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
@@ -139,9 +154,18 @@ class BroadcastRMSNorm:
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
-                is_sender = (row == sender_row) and (col == sender_col)
-                is_secondary_sender = secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
-                is_receiver = not is_sender and not is_secondary_sender
+
+                # CCL role calculation (only matters if not skipping CCL)
+                if skip_ccl:
+                    is_sender = False
+                    is_secondary_sender = False
+                    is_receiver = False
+                else:
+                    is_sender = (row == sender_row) and (col == sender_col)
+                    is_secondary_sender = (
+                        secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
+                    )
+                    is_receiver = not is_sender and not is_secondary_sender
 
                 # Get the device's input and output tensors
                 device_idx = row * mesh_cols + col
@@ -179,47 +203,57 @@ class BroadcastRMSNorm:
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
 
-                # Named compile-time args for NCRISC (bcast reader + rmsnorm reader)
+                rmsnorm_input_source_cb = input_cb
+
                 ncrisc_named_compile_time_args = [
-                    ("cb0_id", interm_cb),
-                    ("packet_size_in_pages", num_pages_per_packet),
-                    ("tensor0_page_size", page_size_bytes),
-                    ("is_sender", int(is_sender)),
-                    ("core_noc_x", core_noc_x),
-                    ("core_noc_y", core_noc_y),
-                    ("is_secondary_sender", int(is_secondary_sender)),
-                    ("is_active_broadcaster", int(is_sender or is_secondary_sender)),
-                    # RMSNorm reader specific CTArgs
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    # CCL broadcast reader args (dummy values when skip_ccl)
+                    ("cb0_id", interm_cb if not skip_ccl else 0),
+                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
+                    ("is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
+                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
+                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
+                    ("is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
+                    # RMSNorm reader args (always valid)
                     ("rmsnorm_num_faces", num_faces),
                     ("rmsnorm_scalars_cb", scalars_cb),
+                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
+                    ("rmsnorm_num_tiles", num_tiles),
                 ]
 
-                # Named compile-time args for BRISC (bcast writer)
                 brisc_named_compile_time_args = [
-                    ("cb0_id", interm_cb),
-                    ("packet_size_in_pages", num_pages_per_packet),
-                    ("tensor0_page_size", page_size_bytes),
-                    ("num_targets_forward_direction", num_targets_forward),
-                    ("num_targets_backward_direction", num_targets_backward),
-                    ("is_sender", int(is_sender)),
-                    ("core_noc_x", core_noc_x),
-                    ("core_noc_y", core_noc_y),
-                    ("is_secondary_sender", int(is_secondary_sender)),
-                    ("has_secondary_target", int(has_secondary_target)),
-                    ("has_reverse_secondary_connection", int(has_reverse_secondary_connection)),
-                    ("start_distance_in_hops_forward", start_distance_forward),
-                    ("range_hops_forward", range_hops_forward),
-                    ("start_distance_in_hops_backward", start_distance_backward),
-                    ("range_hops_backward", range_hops_backward),
-                    ("using_persistent_buffers", 1 if using_persistent_buffers else 0),
-                    ("intermediate_cb", input_cb),
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    # CCL broadcast writer args (dummy values when skip_ccl)
+                    ("cb0_id", interm_cb if not skip_ccl else 0),
+                    ("packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
+                    ("tensor0_page_size", page_size_bytes if not skip_ccl else 0),
+                    ("num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
+                    ("num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
+                    ("is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("core_noc_x", core_noc_x if not skip_ccl else 0),
+                    ("core_noc_y", core_noc_y if not skip_ccl else 0),
+                    ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
+                    ("has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
+                    ("has_reverse_secondary_connection", int(has_reverse_secondary_connection) if not skip_ccl else 0),
+                    ("start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
+                    ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
+                    ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
+                    ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
+                    ("using_persistent_buffers", (1 if using_persistent_buffers else 0) if not skip_ccl else 0),
+                    # RMSNorm/common args (always valid)
+                    # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
+                    # writes to CB 0 which is backed by intermediate_tensor_mesh
+                    ("intermediate_cb", input_cb if not skip_ccl else interm_cb),
                     ("gamma_cb", gamma_cb),
                     ("num_tiles", num_tiles),
                 ]
 
                 # Named compile-time args for TRISC (rmsnorm compute)
                 trisc_named_compile_time_args = [
-                    ("rmsnorm_input_cb", input_cb),
+                    ("skip_ccl", 1 if skip_ccl else 0),
+                    ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_scalars_cb", scalars_cb),
                     ("rmsnorm_interm_cb", interm_cb),
                     ("rmsnorm_gamma_cb", gamma_cb),
@@ -231,69 +265,86 @@ class BroadcastRMSNorm:
 
                 # Reader runtime args
                 reader_rt_args = ttnn.RuntimeArgs()
-                reader_rt_args[worker_core.x][worker_core.y] = [
-                    int(scalar_packed),
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
+                if skip_ccl:
+                    # Single-device mode: just scalar
+                    reader_rt_args[worker_core.x][worker_core.y] = [
+                        int(scalar_packed),
+                    ]
+                else:
+                    # Multi-device mode: CCL reader args
+                    reader_rt_args[worker_core.x][worker_core.y] = [
+                        int(scalar_packed),
+                        int(input_tensor_device.buffer_address()),  # tensor_address0
+                        tile_id_start,  # tile_id_start
+                        input_num_pages,  # tile_id_end
+                    ]
 
                 # Writer runtime args
-                wait_output_semaphore = is_secondary_sender or is_receiver
-                reset_global_semaphore = is_secondary_sender or is_receiver
-                out_ready_sem_wait_value = 1 * num_links
-
                 writer_rt_args = ttnn.RuntimeArgs()
-                writer_rt_args[worker_core.x][worker_core.y] = [
-                    int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                    int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                    int(wait_output_semaphore),  # wait_output_semaphore
-                    int(reset_global_semaphore),  # reset_global_semaphore
-                    core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
-                    core_noc_y,  # out_ready_sem_noc0_y
-                    out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                    int(barrier_sem_addr),  # barrier_sem
-                    core_noc_x,  # barrier_sem_noc0_x
-                    core_noc_y,  # barrier_sem_noc0_y
-                    ring_index,
-                    int(secondary_sync_sem_addr),  # secondary_sync_sem
-                ]
+                if skip_ccl:
+                    # Single-device mode: no writer args needed
+                    writer_rt_args[worker_core.x][worker_core.y] = []
+                else:
+                    # Multi-device mode: CCL writer args
+                    wait_output_semaphore = is_secondary_sender or is_receiver
+                    reset_global_semaphore = is_secondary_sender or is_receiver
+                    out_ready_sem_wait_value = 1 * num_links
 
-                # Determine fabric connections
-                fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    writer_rt_args[worker_core.x][worker_core.y] = [
+                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
+                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
+                        tile_id_start,  # tile_id_start
+                        input_num_pages,  # tile_id_end
+                        int(wait_output_semaphore),  # wait_output_semaphore
+                        int(reset_global_semaphore),  # reset_global_semaphore
+                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
+                        core_noc_y,  # out_ready_sem_noc0_y
+                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
+                        int(barrier_sem_addr),  # barrier_sem
+                        core_noc_x,  # barrier_sem_noc0_x
+                        core_noc_y,  # barrier_sem_noc0_y
+                        ring_index,
+                        int(secondary_sync_sem_addr),  # secondary_sync_sem
+                    ]
+
+                # Determine fabric connections and append num_connections BEFORE creating program
+                # (must match order in original op.py)
+                fabric_node_id = None
                 dst_nodes = []
+                num_connections = 0
+                if not skip_ccl:
+                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
 
-                # Primary axis connections (forward and backward in column)
-                if num_targets_forward > 0:
-                    forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                    dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
+                    # Primary axis connections (forward and backward in column)
+                    if num_targets_forward > 0:
+                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
 
-                if num_targets_backward > 0:
-                    backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                    dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
+                    if num_targets_backward > 0:
+                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
 
-                # Secondary axis connection (for sender to secondary sender)
-                if has_secondary_target:
-                    secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
-                    dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
+                    # Secondary axis connection (for sender to secondary sender)
+                    if has_secondary_target:
+                        secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
+                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
 
-                # Reverse secondary connection (for secondary sender back to sender when we need to sync)
-                if has_reverse_secondary_connection and not using_persistent_buffers:
-                    sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                    dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
+                    # Reverse secondary connection (for secondary sender back to sender when we need to sync)
+                    if has_reverse_secondary_connection and not using_persistent_buffers:
+                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
 
-                num_connections = len(dst_nodes)
-
-                writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
+                    num_connections = len(dst_nodes)
+                    writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
 
                 # Create circular buffer descriptors
-                # CB 0: Input (created from sharded tensor mesh)
-                in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, intermediate_tensor_mesh)
+                # CB 0: In multi-device mode, backed by intermediate_tensor_mesh (broadcast destination)
+                #       In single-device mode, backed by input_tensor_mesh (direct input)
+                cb0_backing_tensor = input_tensor_mesh if skip_ccl else intermediate_tensor_mesh
+                in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, cb0_backing_tensor)
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
@@ -375,8 +426,8 @@ class BroadcastRMSNorm:
                     compute_rt_args[worker_core.x][worker_core.y] = [int(epsilon_packed)]
                     program.kernels[2].runtime_args = compute_rt_args
 
-                # Append fabric connection args to writer kernel if there are connections
-                if num_connections > 0:
+                # Append fabric connection args to writer kernel if there are connections (CCL mode only)
+                if not skip_ccl and num_connections > 0:
                     # writer kernel is index 1 in the unified kernel descriptor list
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(
