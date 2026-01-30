@@ -251,9 +251,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/galaxy-model-perf-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: wh_galaxy
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-model-perf || 'all' }}
-      topology: 'topology-6u'

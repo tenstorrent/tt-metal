@@ -12,161 +12,69 @@ on:
       docker-image:
         required: true
         type: string
+      enabled-skus:
+        required: true
+        type: string
       model:
         required: false
         type: string
         default: "all"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "topology-6u"
 
 jobs:
-  generate-matrix:
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.apply-model-filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_model_perf_tests.yaml
     steps:
-      - name: Generate Matrix
-        id: set-matrix
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
         run: |
-          # Create matrix in two parts: disabled and active models
-          DISABLED_MODELS=$(jq -n '[
-            {
-              "name": "Galaxy CNN model perf tests",
-              "model-type": "CNN",
-              "model-name": "cnn",
-              "arch": "wormhole_b0",
-              "save-perf-data": false,
-              "timeout": 50,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
-            }, # Pavle Josipovic
-            {
-              "name": "Galaxy Llama 70B model perf tests",
-              "model-type": "Llama-70B",
-              "model-name": "llama70b",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 60,
-              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
-            {
-              "name": "Llama Galaxy Perf Unit Tests",
-              "model-name": "llama_unit_tests",
-              "arch": "wormhole_b0",
-              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
-              "timeout": 100,
-              "tracy": true,
-              "save-perf-data": true,
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
-            {
-              "name": "Galaxy Llama 70B prefill perf tests",
-              "model-type": "Llama-70B",
-              "model-name": "llama70b_prefill",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 60,
-              "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
-              "owner_id": "U03PUAKE719"
-            }, # Miguel Tairum
-            {
-              "name": "Galaxy Sentence Bert tests",
-              "arch": "wormhole_b0",
-              "model-type": "sentence_bert",
-              "model-name": "sentence_bert",
-              "save-perf-data": false,
-              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
-              "timeout": 30,
-              "owner_id": "U088413NP0Q"
-            } # Ashai Reddy
-          ]' --compact-output)
-
-          ACTIVE_MODELS=$(jq -n '[
-            {
-              "name": "Galaxy DiT SD3.5 model perf tests",
-              "model-type": "SD3.5",
-              "model-name": "sd35",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 50,
-              "cmd": "pytest models/experimental/tt_dit/tests/models/sd35/test_performance_sd35.py -k \"4x8cfg1sp0tp1\"",
-              "owner_id": "U03FJB5TM5Y"
-            }, # Colman Glagovich
-            {
-              "name": "Galaxy DiT Flux.1 model perf tests",
-              "model-type": "Flux.1-Dev",
-              "model-name": "flux1-dev",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 50,
-              "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"wh_4x8sp0tp1\"",
-              "owner_id": "U08TED0JM9D"
-            }, # Samuel Adesoye
-            {
-              "name": "Galaxy DiT Motif model perf tests",
-              "model-type": "Motif",
-              "model-name": "motif",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 15,
-              "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/motif/test_performance_motif.py -k \"4x8cfg1sp0tp1\"",
-              "owner_id": "U08TED0JM9D"
-            }, # Samuel Adesoye
-            {
-              "name": "Galaxy DiT Wan2.2 model perf tests",
-              "model-type": "Wan2.2",
-              "model-name": "wan2-2",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 35,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"wh_4x8sp1tp0 and resolution_720p\"",
-              "owner_id": "U03FJB5TM5Y"
-            }, # Colman Glagovich
-            {
-              "name": "Galaxy Mochi model perf tests",
-              "model-type": "mochi",
-              "model-name": "mochi",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 50,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
-              "owner_id": "U09ELB03XRU"
-            }, # Stephen Osborne
-            {
-              "name": "Galaxy DiT Qwen-Image model perf tests",
-              "model-type": "QwenImage",
-              "model-name": "qwenimage",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 20,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
-              "owner_id": "U08TED0JM9D"
-            } # Samuel Adesoye
-          ]' --compact-output)
-
-          # Combine both arrays into full matrix
-          FULL_MATRIX=$ACTIVE_MODELS
-
-          # Filter matrix based on model selection
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "perf"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Apply model filter
+        id: apply-model-filter
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           if [ "${{ inputs.model }}" = "all" ]; then
-            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]' --compact-output)
-            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
 
   galaxy-model-perf-tests:
-    needs: generate-matrix
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     env:
       ARCH_NAME: ${{ matrix.test-group.arch }}
@@ -174,10 +82,7 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       TT_METAL_HOME: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
