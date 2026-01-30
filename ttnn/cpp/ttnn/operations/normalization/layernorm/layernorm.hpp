@@ -19,6 +19,7 @@ Tensor layer_norm(
     const std::optional<const Tensor>& residual_input_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const prim::LayerNormProgramConfig>& program_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const Tensor>& recip_tensor = std::nullopt);
 
 }  // namespace ttnn
