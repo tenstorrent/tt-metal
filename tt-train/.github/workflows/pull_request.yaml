@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     # container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
     env:
+      CC: clang-20
+      CXX: clang++-20
       ARCH_NAME: wormhole_b0
       TT_METAL_HOME: ${{ github.workspace }}/3rd_party/tt-metal
       PYTHONPATH: ${{ github.workspace }}/3rd_party/tt-meta
@@ -51,10 +53,10 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-17 libc++-17-dev libc++abi-17-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 libc++-20-dev libc++abi-20-dev
         sudo DEBIAN_FRONTEND=noninteractive apt-get install python3-dev python3-numpy
         source ~/.bashrc
-        # sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
+        # sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
 
     - name: Prepare compile_commands.json
       run: |
@@ -66,7 +68,7 @@ jobs:
 
     - name: Analyze
       run: |
-        git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | python3 /usr/bin/clang-tidy-diff-17.py -p1 -path build -export-fixes clang-tidy-result/fixes.yml -j4
+        git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | python3 /usr/bin/clang-tidy-diff-20.py -p1 -path build -export-fixes clang-tidy-result/fixes.yml -j4
       timeout-minutes: 10
       continue-on-error: true
 

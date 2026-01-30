@@ -537,6 +537,7 @@ Tensor run_remainder(
             FusedActivations{},
             FusedActivations{},
             false,
+            std::nullopt,
             sub_core_grids),
         std::nullopt,
         output_mem_config,
