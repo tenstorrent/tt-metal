@@ -101,7 +101,8 @@ bool run_multicast_atomic_test(
             physical_dst_start.x,
             physical_dst_start.y,
             physical_dst_end.x,
-            physical_dst_end.y};
+            physical_dst_end.y,
+            test_config.test_id};
 
         CreateKernel(
             program,
@@ -121,7 +122,7 @@ bool run_multicast_atomic_test(
 
     CoreRangeSet dst_core_range_set({CoreRange(test_config.dst_grid_start, dst_grid_end)});
 
-    vector<uint32_t> receiver_compile_args = {semaphore_addr, expected_value};
+    vector<uint32_t> receiver_compile_args = {semaphore_addr, expected_value, test_config.test_id};
 
     CreateKernel(
         program,
