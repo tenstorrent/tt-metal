@@ -7,7 +7,7 @@ import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
 
 # Import helper functions from 1D test file
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_reduce_to_one import (
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_deepseek_b1_reduce_to_one import (
     run_reduce_to_one,
     run_reduce_to_one_with_trace,
 )

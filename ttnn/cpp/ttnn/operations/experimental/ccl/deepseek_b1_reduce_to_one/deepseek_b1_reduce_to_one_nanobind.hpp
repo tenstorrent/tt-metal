@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-void bind_reduce_to_one(nanobind::module_& module);
+void bind_deepseek_b1_reduce_to_one(nanobind::module_& module);
 
 }  // namespace ttnn::operations::experimental::ccl

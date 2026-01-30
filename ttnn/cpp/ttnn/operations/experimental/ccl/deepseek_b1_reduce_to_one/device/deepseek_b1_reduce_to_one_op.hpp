@@ -14,7 +14,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ReduceToOneOp {
+struct DeepseekB1ReduceToOneOp {
     struct operation_attributes_t {
         const MeshCoordinate& root_coord;
         const MeshCoordinate& exit_coord;
@@ -35,7 +35,7 @@ struct ReduceToOneOp {
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
     using tensor_return_value_t = std::array<std::vector<ttnn::Tensor>, 2>;
 
-    struct ReduceToOne {
+    struct DeepseekB1ReduceToOne {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle send_reader_kernel_id;
             tt::tt_metal::KernelHandle send_worker_writer_kernel_id;  // worker_writer for all shard cores
@@ -90,10 +90,10 @@ struct ReduceToOneOp {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<ReduceToOne>;
+    using program_factory_t = std::variant<DeepseekB1ReduceToOne>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return ReduceToOne{};
+        return DeepseekB1ReduceToOne{};
     };
 
     static void validate_on_program_cache_miss(
@@ -114,20 +114,21 @@ private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
 
-device_operation::CachedProgram<ReduceToOneOp::ReduceToOne::shared_variables_t> reduce_to_one_program_factory(
-    const ReduceToOneOp::tensor_args_t& tensor_args,
-    const ReduceToOneOp::operation_attributes_t& operation_attributes,
+device_operation::CachedProgram<DeepseekB1ReduceToOneOp::DeepseekB1ReduceToOne::shared_variables_t>
+deepseek_b1_reduce_to_one_program_factory(
+    const DeepseekB1ReduceToOneOp::tensor_args_t& tensor_args,
+    const DeepseekB1ReduceToOneOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& exit_coord,
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
-    ReduceToOneOp::tensor_return_value_t& output_tensors,
+    DeepseekB1ReduceToOneOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::experimental::ccl
 
 namespace prim {
-ttnn::operations::experimental::ccl::ReduceToOneOp::tensor_return_value_t reduce_to_one(
+ttnn::operations::experimental::ccl::DeepseekB1ReduceToOneOp::tensor_return_value_t deepseek_b1_reduce_to_one(
     const Tensor& input_tensor,
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,

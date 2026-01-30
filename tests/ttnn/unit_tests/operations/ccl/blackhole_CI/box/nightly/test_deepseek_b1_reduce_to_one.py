@@ -254,7 +254,7 @@ def run_reduce_to_one(mesh_device, topology):
 
     # Run reduce_to_one
     print("Running reduce_to_one...")
-    output_tensor = ttnn.experimental.reduce_to_one(
+    output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
         config["input_tensor"],
         root_coord=ttnn.MeshCoordinate(config["root_coord"]),
         exit_coord=ttnn.MeshCoordinate(config["exit_coord"]),
@@ -301,7 +301,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
 
     # Run once to compile
     print("Running reduce_to_one (compiling)...")
-    output_tensor = ttnn.experimental.reduce_to_one(
+    output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
         input_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         exit_coord=ttnn.MeshCoordinate(exit_coord),
@@ -326,7 +326,7 @@ def run_reduce_to_one_with_trace(mesh_device, topology):
     # Helper to run reduce_to_one with all_reduce sync every 4 iterations
     def run_with_sync(num_iters, sem_offset=0):
         for i in range(num_iters):
-            output_tensor = ttnn.experimental.reduce_to_one(
+            output_tensor = ttnn.experimental.deepseek_b1_reduce_to_one(
                 input_tensor,
                 root_coord=ttnn.MeshCoordinate(root_coord),
                 exit_coord=ttnn.MeshCoordinate(exit_coord),
