@@ -672,6 +672,221 @@ void populate_sharded_buffer_write_dispatch_cmds(
     command_sequence.align_write_offset();
 }
 
+// Issue dispatch commands for writing sharded buffer data from pinned memory
+void issue_sharded_buffer_pinned_dispatch_command_sequence(
+    const void* src,
+    Buffer& buffer,
+    ShardedBufferWriteDispatchParams& dispatch_params,
+    const BufferCorePageMapping& core_page_mapping,
+    const CoreCoord& core,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    uint32_t num_worker_counters = sub_device_ids.size();
+    
+    const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
+    const uint64_t pinned_src_addr_base = dispatch_params.pinned_src_addr;
+    const uint32_t pinned_src_noc_xy = dispatch_params.pinned_src_noc_xy;
+    
+    // Build sub-commands on the fly with coalescing
+    std::vector<CQDispatchWritePackedLargeUnicastSubCmd> write_sub_cmds;
+    std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
+    
+    const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
+    const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
+    
+    // Calculate base destination address for this core
+    uint32_t dst_base_address = buffer.address() + 
+                               core_page_mapping.device_start_page * buffer.aligned_page_size();
+    if (buffer.is_dram()) {
+        dst_base_address += buffer.device()->allocator()->get_bank_offset(
+            BufferType::DRAM, 
+            buffer.device()->dram_channel_from_logical_core(core));
+    }
+    
+    // Helper lambda to emit a command pair
+    auto emit_command_pair = [&]() {
+        if (write_sub_cmds.empty() && relay_sub_cmds.empty()) {
+            return;
+        }
+        
+        // Calculate total relay length for the command
+        uint32_t total_relay_length = 0;
+        for (const auto& relay_sub_cmd : relay_sub_cmds) {
+            total_relay_length += relay_sub_cmd.length;
+        }
+        
+        // Use calculator to compute command sequence size
+        DeviceCommandCalculator calculator;
+        if (dispatch_params.issue_wait) {
+            for (int i = 0; i < num_worker_counters; ++i) {
+                calculator.add_dispatch_wait();
+            }
+            dispatch_params.issue_wait = false;  // Only issue wait for first command pair
+        }
+        
+        calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
+        calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
+        
+        const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+        
+        // Add wait commands if needed
+        if (num_worker_counters > 0 && dispatch_params.total_pages_written == 0) {
+            for (const auto& sub_device_id : sub_device_ids) {
+                auto offset_index = *sub_device_id;
+                command_sequence.add_dispatch_wait(
+                    CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+                    0,
+                    MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                    dispatch_params.expected_num_workers_completed[offset_index]);
+            }
+            num_worker_counters = 0;  // Only add waits once
+        }
+        
+        // Add write packed large unicast command
+        command_sequence.add_dispatch_write_packed_large_unicast(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_NONE,
+            l1_alignment,
+            write_sub_cmds.size(),
+            write_sub_cmds,
+            nullptr,
+            0);
+        
+        // Add relay linear packed command
+        command_sequence.add_prefetch_relay_linear_packed(
+            pinned_src_noc_xy,
+            total_relay_length,
+            relay_sub_cmds,
+            relay_sub_cmds.size(),
+            0);
+        
+        TT_ASSERT(
+            command_sequence.write_offset_bytes() == cmd_sequence_sizeB,
+            "Command sequence size mismatch, calculator: {}, command sequence: {}",
+            cmd_sequence_sizeB,
+            command_sequence.write_offset_bytes());
+        
+        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+        
+        // Clear for next batch
+        write_sub_cmds.clear();
+        relay_sub_cmds.clear();
+    };
+    
+    // Iterate through host ranges and build sub-commands
+    uint32_t current_dst_offset = 0;
+    for (const auto& host_range : core_page_mapping.host_ranges) {
+        uint64_t src_offset = static_cast<uint64_t>(host_range.host_page_start) * buffer.page_size();
+        const uint8_t* src_region_start = src_ptr + src_offset;
+        uint64_t src_pinned_addr = pinned_src_addr_base + src_offset;
+        
+        uint32_t dst_addr = dst_base_address + 
+                          (host_range.device_page_offset - core_page_mapping.device_start_page) * 
+                          buffer.aligned_page_size();
+        uint32_t data_length = host_range.num_pages * buffer.page_size();
+        
+        // Assert alignments (should have been checked in write_to_device_buffer)
+        TT_ASSERT(
+            reinterpret_cast<uintptr_t>(src_region_start) % l1_alignment == 0,
+            "Source address {:#x} must be L1-aligned to {} bytes",
+            reinterpret_cast<uintptr_t>(src_region_start),
+            l1_alignment);
+        TT_ASSERT(
+            dst_addr % l1_alignment == 0,
+            "Destination address {:#x} must be L1-aligned to {} bytes",
+            dst_addr,
+            l1_alignment);
+        
+        // Align source address to PCIe alignment if needed
+        uint64_t aligned_src_addr = src_pinned_addr;
+        uint32_t padding_bytes = 0;
+        if (src_pinned_addr % pcie_alignment != 0) {
+            padding_bytes = src_pinned_addr % pcie_alignment;
+            aligned_src_addr = src_pinned_addr - padding_bytes;
+        }
+        
+        uint32_t total_read_length = padding_bytes + data_length;
+        
+        // Determine if relay or write can be coalesced
+        bool can_coalesce_relay = false;
+        if (!relay_sub_cmds.empty()) {
+            auto& last_relay = relay_sub_cmds.back();
+            if (last_relay.addr + last_relay.length == aligned_src_addr) {
+                can_coalesce_relay = true;
+            }
+        }
+        
+        bool can_coalesce_write = false;
+        if (padding_bytes == 0 && !write_sub_cmds.empty()) {
+            auto& last_write = write_sub_cmds.back();
+            if (last_write.noc_xy_addr == noc_xy_addr &&
+                last_write.addr != CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD &&
+                last_write.addr + last_write.length == dst_addr) {
+                can_coalesce_write = true;
+            }
+        }
+        
+        // Calculate new counts after adding this range
+        uint32_t new_relay_count = relay_sub_cmds.size() + (can_coalesce_relay ? 0 : 1);
+        uint32_t new_write_count = write_sub_cmds.size() + 
+                                  (padding_bytes > 0 ? 1 : 0) +  // discard command if padding
+                                  (can_coalesce_write ? 0 : 1);   // data command
+        
+        // Check if either would exceed limits
+        if (new_relay_count > CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS ||
+            new_write_count > CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS) {
+            // Emit command pair before adding new commands
+            emit_command_pair();
+            // After emitting, we can't coalesce with previous commands (vectors are now empty)
+            can_coalesce_relay = false;
+            can_coalesce_write = false;
+        }
+        
+        // Add or coalesce relay sub-command
+        if (can_coalesce_relay) {
+            auto& last_relay = relay_sub_cmds.back();
+            last_relay.length += total_read_length;
+        } else {
+            CQPrefetchRelayLinearPackedSubCmd relay_sub_cmd;
+            relay_sub_cmd.addr = aligned_src_addr;
+            relay_sub_cmd.length = total_read_length;
+            relay_sub_cmds.push_back(relay_sub_cmd);
+        }
+        
+        // Add discard sub-command if padding was needed
+        if (padding_bytes > 0) {
+            CQDispatchWritePackedLargeUnicastSubCmd discard_sub_cmd;
+            discard_sub_cmd.noc_xy_addr = noc_xy_addr;
+            discard_sub_cmd.addr = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD;
+            discard_sub_cmd.length = padding_bytes;
+            write_sub_cmds.push_back(discard_sub_cmd);
+        }
+        
+        // Add or coalesce write sub-command
+        if (can_coalesce_write) {
+            auto& last_write = write_sub_cmds.back();
+            last_write.length += data_length;
+        } else {
+            CQDispatchWritePackedLargeUnicastSubCmd write_sub_cmd;
+            write_sub_cmd.noc_xy_addr = noc_xy_addr;
+            write_sub_cmd.addr = dst_addr;
+            write_sub_cmd.length = data_length;
+            write_sub_cmds.push_back(write_sub_cmd);
+        }
+    }
+    
+    // Emit final command pair with remaining sub-commands
+    emit_command_pair();
+}
+
 // Issue dispatch commands for writing buffer data
 template <typename T>
 void issue_buffer_dispatch_command_sequence(
@@ -849,15 +1064,17 @@ void write_sharded_buffer_to_core(
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
 
-    DeviceCommandCalculator calculator;
-    calculator.add_dispatch_write_linear<true, false>(0);
-    uint32_t data_offset_bytes = calculator.write_offset_bytes();
     dispatch_params.calculate_issue_wait();
-    update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
     if (use_pinned_memory) {
-        issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+        issue_sharded_buffer_pinned_dispatch_command_sequence(
+            src, buffer, dispatch_params, core_page_mapping, core, sub_device_ids);
     } else {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_linear<true, false>(0);
+        uint32_t data_offset_bytes = calculator.write_offset_bytes();
+        update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
+        
         while (dispatch_params.core_num_pages_remaining_to_write != 0) {
             const int32_t num_pages_available_in_cq =
                 calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
@@ -940,6 +1157,74 @@ bool write_to_device_buffer(
         }
     }
     if (is_sharded(buffer.buffer_layout())) {
+        // Check alignment for sharded buffer pinned transfer
+        if (has_pinned_inputs && is_unpadded && !use_pinned_transfer) {
+            auto device_id = buffer.device()->id();
+            auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
+            if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
+                const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
+                const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
+                const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
+                const uint64_t pinned_size = pinned_memory->get_buffer_size();
+                
+                // Get L1 alignment requirement
+                const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+                
+                // Check all source and destination addresses for L1 alignment
+                bool all_aligned = true;
+                auto buffer_page_mapping = buffer.get_buffer_page_mapping();
+                const std::vector<CoreCoord>& cores = buffer_page_mapping->all_cores;
+                
+                for (uint32_t core_id = 0; core_id < buffer.num_cores() && all_aligned; ++core_id) {
+                    for (const BufferCorePageMapping& core_page_mapping : 
+                         buffer_page_mapping->core_page_mappings[core_id]) {
+                        // Check destination L1 address alignment
+                        uint32_t dst_address = buffer.address() + 
+                                             core_page_mapping.device_start_page * buffer.aligned_page_size();
+                        if (buffer.is_dram()) {
+                            dst_address += buffer.device()->allocator()->get_bank_offset(
+                                BufferType::DRAM, 
+                                buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                        }
+                        if (dst_address % l1_alignment != 0) {
+                            all_aligned = false;
+                            break;
+                        }
+                        
+                        // Check source address alignment for each host range
+                        for (const auto& host_range : core_page_mapping.host_ranges) {
+                            uint64_t src_offset = static_cast<uint64_t>(host_range.host_page_start) * 
+                                                buffer.page_size();
+                            const uint8_t* src_region_start = src_ptr + src_offset;
+                            
+                            // Check if within pinned region
+                            if (src_region_start < pinned_host_base || 
+                                src_region_start >= pinned_host_base + pinned_size) {
+                                all_aligned = false;
+                                break;
+                            }
+                            
+                            // Check L1 alignment of source
+                            if (reinterpret_cast<uintptr_t>(src_region_start) % l1_alignment != 0) {
+                                all_aligned = false;
+                                break;
+                            }
+                        }
+                        
+                        if (!all_aligned) {
+                            break;
+                        }
+                    }
+                }
+                
+                if (all_aligned) {
+                    pinned_src_addr = pinned_noc_base;
+                    pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
+                    use_pinned_transfer = true;
+                }
+            }
+        }
+        
         ShardedBufferWriteDispatchParams dispatch_params(
             &buffer,
             buffer.size() / buffer.page_size(),
