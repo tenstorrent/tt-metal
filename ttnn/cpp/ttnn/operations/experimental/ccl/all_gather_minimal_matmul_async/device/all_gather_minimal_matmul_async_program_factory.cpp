@@ -136,10 +136,10 @@ void fabric_mux_connection_rt_args(
 // Append tensor accessors in a consistent order
 static inline void append_accessors(
     std::vector<uint32_t>& args,
-    const Tensor& main_tensor,
-    const Tensor& output_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const Tensor& ag_input_tensor,
+    const ttnn::Tensor& main_tensor,
+    const ttnn::Tensor& output_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const ttnn::Tensor& ag_input_tensor,
     bool is_injector_core = false) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
