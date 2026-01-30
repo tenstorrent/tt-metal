@@ -43,14 +43,22 @@ void bind_index_fill_operation(nb::module_& mod) {
                 * - BFLOAT16, FLOAT32, INT32
                     - ROW_MAJOR
 
+            .. list-table:: index tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - UINT32
+                    - ROW_MAJOR
+                * - UINT32
+                    - TILE
+
             Memory Support:
                 - Interleaved: DRAM and L1
 
             Limitations:
-                -  2D and ND Sharded tensors are not supported.
                 -  The input tensor must be on the device.
-                -  The input tensor must be in ROW_MAJOR layout.
-                -  The index tensor must be on the device and must be a 1D tensor with dtype INT32.
+                -  The index tensor must be on the device and must be a 1D tensor.
                 -  The `dim` must be less than the number of dimensions of the input tensor and >= 0.
                 -  The value must be a float or int and must match the dtype of the input tensor.
     )doc";

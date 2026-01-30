@@ -47,9 +47,7 @@ void bind_uniform_operation(nb::module_& mod) {
                 - Height, Width, Block, and ND Sharded: DRAM and L1
 
             Limitations:
-                -  The input tensor must be in TILE layout and have a datatype of Bfloat16 or Float32.
                 -  The input tensor must be on the device.
-                -  The `from` and `to` parameters must be floats.
                 -  The `from` parameter must be less than the `to` parameter.
         )doc";
 

@@ -47,8 +47,8 @@ void bind_bernoulli_operation(nb::module_& mod) {
                 - Height, Width, Block, and ND Sharded: DRAM and L1
 
             Limitations:
-                -  The input tensor must be on the device, must be in TILE layout, and must have a datatype of Bfloat16 or Float32.
-                -  If provided, the output tensor must be on the device, must be in TILE layout, must have the same shape as the input tensor, and must have a datatype of Float32 or Bfloat16.
+                -  The input tensor must be on the device.
+                -  If provided, the output tensor must be on the device and must have the same shape as the input tensor.
 
         )doc";
 
