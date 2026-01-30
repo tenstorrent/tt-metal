@@ -9,8 +9,7 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_mask = tt::CBIndex::c_1;
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
@@ -167,4 +166,3 @@ void MAIN {
 #endif
     }
 }
-}  // namespace NAMESPACE
