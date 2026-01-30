@@ -18,11 +18,13 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include <fmt/format.h>
 #include <set>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include <fmt/format.h>
@@ -465,24 +467,23 @@ void TopologyMapper::build_mapping() {
         }
 
         // Build logical and physical adjacency maps
-        auto adjacency_map_logical = build_adjacency_graph_logical(mesh_graph_);
-        auto adjacency_map_physical = build_adjacency_graph_physical(physical_system_descriptor_, asic_id_to_mesh_rank);
+        auto adjacency_map_logical_multi_mesh =
+            tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
+        auto adjacency_map_physical_multi_mesh =
+            tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                physical_system_descriptor_, asic_id_to_mesh_rank);
 
-        print_logical_adjacency_map(adjacency_map_logical);
-        print_physical_adjacency_map(adjacency_map_physical);
+        print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
+        print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
 
         // Use sat solver algo to preserve the logical connectivity in the physical topology
         // Note: physical_chip_id is filled in during populate_fabric_node_id_to_asic_id_mappings
         // for ASICs that belong to this host, so no separate loop is needed here
-        // Iterate over all meshes including switches (switches also need topology mapping)
-        for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
-            populate_fabric_node_id_to_asic_id_mappings(
-                mesh_id,
-                adjacency_map_physical.at(mesh_id),
-                adjacency_map_logical.at(mesh_id),
-                asic_id_to_mesh_rank.at(mesh_id),
-                fabric_node_id_to_mesh_rank.at(mesh_id));
-        }
+        populate_fabric_node_id_to_asic_id_mappings(
+            adjacency_map_physical_multi_mesh,
+            adjacency_map_logical_multi_mesh,
+            asic_id_to_mesh_rank,
+            fabric_node_id_to_mesh_rank);
 
         // Broadcast the mapping to all hosts (all mapped ASICs)
         if (!generate_mapping_locally_) {
@@ -621,217 +622,73 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
 }
 
 void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
-    const MeshId mesh_id,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
-    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
-    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-    const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
+    const tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& adjacency_map_physical,
+    const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& adjacency_map_logical,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
     using namespace ::tt::tt_fabric;
+    using namespace ::tt::tt_metal::experimental::tt_fabric;
 
-    // Build constraints
-    MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
+    // Build TopologyMappingConfig from PhysicalSystemDescriptor and pinning constraints
+    TopologyMappingConfig config;
 
-    // Add mesh host rank constraints (trait-based constraint)
-    constraints.add_required_trait_constraint(fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
-
-    // Collect pinnings for this mesh
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> mesh_pinnings;
-    for (const auto& [fabric_node, positions] : fixed_asic_position_pinnings_) {
-        if (fabric_node.mesh_id == mesh_id) {
-            mesh_pinnings.emplace_back(fabric_node, positions);
-        }
-    }
-
-    // Handle pinning constraints if any
-    if (!mesh_pinnings.empty()) {
-        const auto& logical_nodes = adjacency_map_logical.get_nodes();
-        const auto& physical_nodes = adjacency_map_physical.get_nodes();
-        std::unordered_set<FabricNodeId> logical_node_set(logical_nodes.begin(), logical_nodes.end());
-
-        // Build reverse map: position -> set of ASIC IDs
-        std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> position_to_asics;
-        for (const auto& asic_id : physical_nodes) {
-            AsicPosition pos = std::make_pair(
+    // Populate asic_positions map from all ASICs in the physical graphs
+    for (const auto& [mesh_id, physical_graph] : adjacency_map_physical.mesh_adjacency_graphs_) {
+        for (const auto& asic_id : physical_graph.get_nodes()) {
+            config.asic_positions[asic_id] = std::make_pair(
                 physical_system_descriptor_.get_tray_id(asic_id),
                 physical_system_descriptor_.get_asic_location(asic_id));
-            position_to_asics[pos].insert(asic_id);
-        }
-
-        // Convert all pinnings to ASIC ID constraints
-        for (const auto& [fabric_node, positions] : mesh_pinnings) {
-            if (!logical_node_set.contains(fabric_node)) {
-                TT_FATAL(false, "Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
-            }
-
-            std::set<tt::tt_metal::AsicID> valid_asic_ids;
-            for (const auto& pos : positions) {
-                auto it = position_to_asics.find(pos);
-                if (it == position_to_asics.end()) {
-                    TT_FATAL(
-                        false,
-                        "No ASICs found at position (tray {}, loc {}) for fabric node {} in mesh {}",
-                        *pos.first,
-                        *pos.second,
-                        fabric_node,
-                        mesh_id.get());
-                }
-                valid_asic_ids.insert(it->second.begin(), it->second.end());
-            }
-            constraints.add_required_constraint(fabric_node, valid_asic_ids);
         }
     }
 
-    // Validate constraints and provide detailed error if validation fails
-    try {
-        // This will call validate_and_throw() internally if there are issues
-        // We catch it here to add context before rethrowing
-        const auto& all_valid_mappings = constraints.get_valid_mappings();
-
-        // Check for overconstrained nodes before validation
-        std::vector<FabricNodeId> overconstrained_nodes;
-        for (const auto& [fabric_node, valid_set] : all_valid_mappings) {
-            if (valid_set.empty()) {
-                overconstrained_nodes.push_back(fabric_node);
-            }
+    // Convert fixed_asic_position_pinnings_ from (fabric_node -> positions) to (position -> fabric_node) format
+    for (const auto& [fabric_node, positions] : fixed_asic_position_pinnings_) {
+        for (const auto& position : positions) {
+            config.pinnings.emplace_back(position, fabric_node);
         }
-
-        if (!overconstrained_nodes.empty()) {
-            // Log detailed constraint information before throwing
-            log_error(tt::LogFabric, "Constraint validation will fail for mesh_id={}", mesh_id.get());
-            log_error(tt::LogFabric, "Overconstrained fabric nodes: {}", overconstrained_nodes.size());
-
-            // Show host rank constraints
-            log_error(tt::LogFabric, "Host rank constraints applied:");
-            for (const auto& [fabric_node, host_rank] : fabric_node_id_to_mesh_rank) {
-                if (fabric_node.mesh_id == mesh_id) {
-                    auto it = all_valid_mappings.find(fabric_node);
-                    size_t valid_count = (it != all_valid_mappings.end()) ? it->second.size() : SIZE_MAX;
-                    log_error(
-                        tt::LogFabric,
-                        "  FabricNode {} -> host_rank {}, valid ASIC mappings: {}",
-                        fabric_node,
-                        host_rank.get(),
-                        valid_count == SIZE_MAX ? "unconstrained" : std::to_string(valid_count));
-                }
-            }
-
-            // Show pinning constraints if any
-            if (!mesh_pinnings.empty()) {
-                log_error(tt::LogFabric, "Pinning constraints applied:");
-                for (const auto& [fabric_node, positions] : mesh_pinnings) {
-                    auto it = all_valid_mappings.find(fabric_node);
-                    size_t valid_count = (it != all_valid_mappings.end()) ? it->second.size() : SIZE_MAX;
-                    std::string pos_str;
-                    for (size_t i = 0; i < positions.size(); ++i) {
-                        if (i > 0) {
-                            pos_str += ", ";
-                        }
-                        pos_str += fmt::format("(tray={}, loc={})", *positions[i].first, *positions[i].second);
-                    }
-                    log_error(
-                        tt::LogFabric,
-                        "  FabricNode {} -> positions [{}], valid ASIC mappings: {}",
-                        fabric_node,
-                        pos_str,
-                        valid_count == SIZE_MAX ? "unconstrained" : std::to_string(valid_count));
-                }
-            }
-        }
-    } catch (...) {
-        // Re-throw after logging - the validate_and_throw() will provide detailed error
-        throw;
     }
 
-    if (!mesh_pinnings.empty()) {
-        // Log pinnings
-        std::vector<std::string> pinning_strs;
-        for (const auto& [fabric_node, positions] : mesh_pinnings) {
-            if (positions.size() == 1) {
-                pinning_strs.push_back(fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    *positions[0].first,
-                    *positions[0].second));
-            } else {
-                std::string pos_str;
-                for (size_t i = 0; i < positions.size(); ++i) {
-                    if (i > 0) {
-                        pos_str += ", ";
-                    }
-                    pos_str += fmt::format("(tray={}, loc={})", *positions[i].first, *positions[i].second);
-                }
-                pinning_strs.push_back(fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC positions [{}]",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    pos_str));
-            }
-        }
-        std::string pinnings_combined;
-        for (size_t i = 0; i < pinning_strs.size(); ++i) {
-            if (i > 0) {
-                pinnings_combined += ", ";
-            }
-            pinnings_combined += pinning_strs[i];
-        }
-        log_info(
-            tt::LogFabric,
-            "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
-            mesh_pinnings.size(),
-            mesh_id.get(),
-            pinnings_combined);
+    // Build mesh validation modes based on mesh graph channel policy and populate config
+    for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
+        bool is_relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
+        config.mesh_validation_modes[mesh_id] =
+            is_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
     }
 
-    // Determine connection validation mode
-    ConnectionValidationMode validation_mode = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id)
-                                                   ? ConnectionValidationMode::RELAXED
-                                                   : ConnectionValidationMode::STRICT;
+    // Get inter-mesh validation mode from graph topology policy and populate config
+    bool inter_mesh_is_relaxed = mesh_graph_.is_inter_mesh_policy_relaxed();
+    config.inter_mesh_validation_mode =
+        inter_mesh_is_relaxed ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
 
-    // Solve using topology solver directly
-    auto solver_result =
-        solve_topology_mapping(adjacency_map_logical, adjacency_map_physical, constraints, validation_mode);
+    // Use the new utility function to perform the multi-mesh mapping
+    auto mapping_result = map_multi_mesh_to_physical(
+        adjacency_map_logical, adjacency_map_physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
-    // Build informative error message with MGD path and details
-    std::string mgd_path_info;
-    auto mgd_path_opt = mesh_graph_.get_mesh_graph_descriptor_path();
-    if (mgd_path_opt.has_value()) {
-        const auto& mgd_path = mgd_path_opt.value();
-        mgd_path_info = fmt::format("The Mesh Graph Descriptor (MGD) file is located at: {}. ", mgd_path.string());
-    } else {
-        mgd_path_info = "The Mesh Graph Descriptor (MGD) was generated programmatically (not from a file). ";
-    }
-
+    // If the mapping failed, throw an error
     TT_FATAL(
-        solver_result.success,
-        "The logical graph specified in the Mesh Graph Descriptor (MGD) could not fit in the discovered physical "
-        "topology for mesh {}.\n"
-        "{}\n"
-        "{}\n"
-        "Expected: The logical graph topology from the MGD.\n"
-        "Found: The physical topology discovered from the system.\n"
-        "Either relax pinnings in the MGD or modify the MGD to match the physical topology.\n"
-        "To debug this issue, you can run with TT_METAL_LOGGER_LEVEL=debug to view the logical and physical adjacency "
-        "graphs.\n"
-        "If this is unexpected, run ./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
-        mesh_id.get(),
-        mgd_path_info,
-        solver_result.error_message);
+        mapping_result.success, "Topology solver failed to find a valid mapping: {}", mapping_result.error_message);
 
-    // Update MappedChipInfo entries from the result
-    for (const auto& [fabric_node, asic] : solver_result.target_to_global) {
-        auto it = asic_id_to_mapping_.find(asic);
-        TT_FATAL(it != asic_id_to_mapping_.end(), "ASIC id {} not found in chip_topology_mapping_", asic);
-        MappedChipInfo& info = *it->second;
+    // Group mappings by mesh_id and process each mesh
+    std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id].emplace_back(fabric_node, asic);
+    }
 
-        info.fabric_node_id = fabric_node;
-        info.mesh_coord = mesh_graph_.chip_to_coordinate(mesh_id, fabric_node.chip_id);
-        if (asic_id_to_mesh_rank.contains(asic)) {
-            info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
+    // Process results and update MappedChipInfo entries for each mesh
+    for (const auto& [logical_mesh_id, mesh_mappings] : mappings_by_mesh) {
+        const auto& mesh_asic_id_to_mesh_rank = asic_id_to_mesh_rank.at(logical_mesh_id);
+        for (const auto& [fabric_node, asic] : mesh_mappings) {
+            auto it = asic_id_to_mapping_.find(asic);
+            TT_FATAL(it != asic_id_to_mapping_.end(), "ASIC id {} not found in chip_topology_mapping_", asic);
+            MappedChipInfo& info = *it->second;
+
+            info.fabric_node_id = fabric_node;
+            info.mesh_coord = mesh_graph_.chip_to_coordinate(logical_mesh_id, fabric_node.chip_id);
+            if (mesh_asic_id_to_mesh_rank.contains(asic)) {
+                info.mesh_host_rank = mesh_asic_id_to_mesh_rank.at(asic);
+            }
+            info.is_mapped = true;
         }
-        info.is_mapped = true;
     }
 
     // Rebuild lookup maps after updating entries
@@ -1554,10 +1411,27 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
 }
 
 void TopologyMapper::print_logical_adjacency_map(
-    const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>>& adj_map) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
-    for (const auto& [mesh_id, graph] : adj_map) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
+    const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const {
+    log_debug(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
+
+    // Print mesh-level connectivity
+    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
+    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
+        std::string neigh_str;
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            neigh_str += fmt::format("{}", neighbors[i].get());
+            if (i < neighbors.size() - 1) {
+                neigh_str += ", ";
+            }
+        }
+        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
+    }
+
+    // Print internal mesh connectivity
+    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
         for (const auto& node : graph.get_nodes()) {
             const auto& neighbors = graph.get_neighbors(node);
             std::string neigh_str;
@@ -1573,10 +1447,27 @@ void TopologyMapper::print_logical_adjacency_map(
 }
 
 void TopologyMapper::print_physical_adjacency_map(
-    const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Physical Adjacency Map:");
-    for (const auto& [mesh_id, graph] : adj_map) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
+    const tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const {
+    log_debug(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
+
+    // Print mesh-level connectivity
+    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
+    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
+        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
+        std::string neigh_str;
+        for (size_t i = 0; i < neighbors.size(); ++i) {
+            neigh_str += fmt::format("{}", neighbors[i].get());
+            if (i < neighbors.size() - 1) {
+                neigh_str += ", ";
+            }
+        }
+        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
+    }
+
+    // Print internal mesh connectivity
+    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
         for (const auto& node : graph.get_nodes()) {
             const auto& neighbors = graph.get_neighbors(node);
             std::string neigh_str;

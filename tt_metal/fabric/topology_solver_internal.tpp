@@ -908,6 +908,43 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             if (global_it != graph_data.global_to_idx.end()) {
                 size_t global_idx = global_it->second;
 
+                // Check if this global node is already used by another pre-assigned target node
+                if (state_.used[global_idx]) {
+                    // Find which target node is already mapped to this global node
+                    size_t conflicting_target_idx = SIZE_MAX;
+                    for (size_t j = 0; j < i; ++j) {
+                        if (state_.mapping[j] == static_cast<int>(global_idx)) {
+                            conflicting_target_idx = j;
+                            break;
+                        }
+                    }
+                    std::string error_msg;
+                    if (conflicting_target_idx != SIZE_MAX) {
+                        error_msg = fmt::format(
+                            "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                            "but target node {} is already mapped to the same global node {}. "
+                            "Multiple target nodes cannot map to the same global node.",
+                            target_node,
+                            required_global,
+                            graph_data.target_nodes[conflicting_target_idx],
+                            required_global);
+                    } else {
+                        error_msg = fmt::format(
+                            "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                            "but this global node is already used by another pre-assignment. "
+                            "Multiple target nodes cannot map to the same global node.",
+                            target_node,
+                            required_global);
+                    }
+                    if (quiet_mode) {
+                        log_debug(tt::LogFabric, "{}", error_msg);
+                    } else {
+                        log_error(tt::LogFabric, "{}", error_msg);
+                    }
+                    state_.error_message = error_msg;
+                    return false;
+                }
+
                 // Validate that this pre-assignment is consistent with already-assigned neighbors
                 for (size_t neighbor : graph_data.target_adj_idx[i]) {
                     if (state_.mapping[neighbor] != -1) {
@@ -1126,6 +1163,41 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
         return false;
     }
 
+    // Validate that no two target nodes map to the same global node
+    std::map<size_t, std::vector<size_t>> global_to_targets;
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        size_t global_idx = static_cast<size_t>(mapping[i]);
+        global_to_targets[global_idx].push_back(i);
+    }
+
+    for (const auto& [global_idx, target_indices] : global_to_targets) {
+        if (target_indices.size() > 1) {
+            // Multiple target nodes map to the same global node - this is invalid
+            std::string conflicting_targets;
+            for (size_t target_idx : target_indices) {
+                if (!conflicting_targets.empty()) {
+                    conflicting_targets += ", ";
+                }
+                conflicting_targets += fmt::format("{}", graph_data.target_nodes[target_idx]);
+            }
+            std::string error_msg = fmt::format(
+                "Mapping validation failed: {} target node(s) map to the same global node {}: {}. "
+                "Each global node can only be mapped to one target node.",
+                target_indices.size(),
+                graph_data.global_nodes[global_idx],
+                conflicting_targets);
+            if (quiet_mode) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            } else {
+                log_error(tt::LogFabric, "{}", error_msg);
+            }
+            if (warnings != nullptr) {
+                warnings->push_back(error_msg);
+            }
+            return false;
+        }
+    }
+
     // Validate that all edges exist in the global graph
     for (size_t i = 0; i < mapping.size(); ++i) {
         size_t global_idx = static_cast<size_t>(mapping[i]);
@@ -1222,24 +1294,44 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
 
-    // Always build bidirectional mappings, even if validation fails
-    // This allows users to see the closest/best mapping found for debugging
-    size_t mapped_count = 0;
-    for (size_t i = 0; i < mapping.size(); ++i) {
-        if (mapping[i] != -1) {
-            size_t global_idx = static_cast<size_t>(mapping[i]);
-            const TargetNode& target_node = graph_data.target_nodes[i];
-            const GlobalNode& global_node = graph_data.global_nodes[global_idx];
-
-            result.target_to_global[target_node] = global_node;
-            result.global_to_target.emplace(global_node, target_node);
-            mapped_count++;
-        }
-    }
-
-    // Validate mapping and collect detailed error messages
+    // Validate mapping first to determine if it's valid
+    // Only count nodes as "mapped" if the mapping is valid
     std::vector<std::string> validation_warnings;
     bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings, quiet_mode);
+
+    // Build bidirectional mappings - only if validation passes, or save partial mapping for debugging
+    size_t mapped_count = 0;
+    if (valid) {
+        // Valid mapping - count all mapped nodes
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                mapped_count++;
+            }
+        }
+    } else {
+        // Invalid mapping - only count nodes that are part of a valid partial mapping
+        // For now, if validation fails, we don't count any nodes as successfully mapped
+        // This is because the mapping is invalid and shouldn't be used
+        // Still save the mapping for debugging purposes, but don't count it as "mapped"
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                // Save for debugging, but don't count as successfully mapped
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                // mapped_count stays 0 - invalid mappings don't count as "mapped"
+            }
+        }
+    }
 
     if (!valid) {
         result.success = false;
