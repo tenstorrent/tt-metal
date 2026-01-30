@@ -304,7 +304,7 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
     }
 
     // Initialize debug tools, reset cores, init FW
@@ -369,7 +369,7 @@ void MetalContext::teardown() {
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(false);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), false);
     }
 
     if (data_collector_) {
