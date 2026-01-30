@@ -269,10 +269,7 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-    if os.getenv('FORCE_MESH') == None:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
-    else:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
