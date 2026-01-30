@@ -160,11 +160,17 @@ def decode_forward(
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    tt_out_was_tiled = tt_out.layout == ttnn.TILE_LAYOUT
+    if tt_out_was_tiled:
+        tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
     tt_out = ttnn.reshape(
         tt_out,
         (1, 1, batch_size, hidden_size),
         (1, 1, 32, hidden_size),
     )
+    if tt_out_was_tiled:
+        tt_out = ttnn.to_layout(tt_out, ttnn.TILE_LAYOUT)
     # tt_out = ttnn.unsqueeze(tt_out, 0)
 
     # Tensor parallel allreduce

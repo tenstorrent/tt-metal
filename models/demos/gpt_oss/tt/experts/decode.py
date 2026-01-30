@@ -58,7 +58,16 @@ def decode_forward(
 
     # EP-specific routing remap for sparsity
     if ep > 1:
-        sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
+        # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+        sparsity_was_tiled = sparsity.layout == ttnn.TILE_LAYOUT
+        if sparsity_was_tiled:
+            sparsity_temp = ttnn.to_layout(sparsity, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            sparsity_temp = sparsity
+        sparsity_reshaped = ttnn.reshape(sparsity_temp, (1, sparsity_temp.shape[-1]))
+        if sparsity_was_tiled:
+            sparsity_reshaped = ttnn.to_layout(sparsity_reshaped, ttnn.TILE_LAYOUT)
+        sparsity = ttnn.moe_routing_remap(sparsity_reshaped, 4, 4, 0)
         routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
     num_experts_per_tok = config.num_experts_per_tok // ep
@@ -76,9 +85,21 @@ def decode_forward(
         dtype=activation_dtype,
     )
     # Note: reshape/transpose operations return views - do not deallocate originals
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    gate_was_tiled = gate.layout == ttnn.TILE_LAYOUT
+    if gate_was_tiled:
+        gate = ttnn.to_layout(gate, ttnn.ROW_MAJOR_LAYOUT)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
+    if gate_was_tiled:
+        gate = ttnn.to_layout(gate, ttnn.TILE_LAYOUT)
     gate = ttnn.transpose(gate, 1, 2)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    gate_was_tiled2 = gate.layout == ttnn.TILE_LAYOUT
+    if gate_was_tiled2:
+        gate = ttnn.to_layout(gate, ttnn.ROW_MAJOR_LAYOUT)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
+    if gate_was_tiled2:
+        gate = ttnn.to_layout(gate, ttnn.TILE_LAYOUT)
     gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
 
     # Up projection
@@ -94,16 +115,34 @@ def decode_forward(
     )
     hidden_states.deallocate(True)
     # Note: reshape/transpose operations return views - do not deallocate originals
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    up_was_tiled = up.layout == ttnn.TILE_LAYOUT
+    if up_was_tiled:
+        up = ttnn.to_layout(up, ttnn.ROW_MAJOR_LAYOUT)
     up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
+    if up_was_tiled:
+        up = ttnn.to_layout(up, ttnn.TILE_LAYOUT)
     up = ttnn.transpose(up, 1, 2)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    up_was_tiled2 = up.layout == ttnn.TILE_LAYOUT
+    if up_was_tiled2:
+        up = ttnn.to_layout(up, ttnn.ROW_MAJOR_LAYOUT)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
+    if up_was_tiled2:
+        up = ttnn.to_layout(up, ttnn.TILE_LAYOUT)
     up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
 
     # Apply SwiGLU activation (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
     # Note: transpose/reshape operations return views - do not deallocate originals
     down_input = ttnn.transpose(down_input, 1, 0)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    down_input_was_tiled = down_input.layout == ttnn.TILE_LAYOUT
+    if down_input_was_tiled:
+        down_input = ttnn.to_layout(down_input, ttnn.ROW_MAJOR_LAYOUT)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    if down_input_was_tiled:
+        down_input = ttnn.to_layout(down_input, ttnn.TILE_LAYOUT)
     # Down projection
     down = ttnn.sparse_matmul(
         down_input,
@@ -122,10 +161,22 @@ def decode_forward(
     # Apply bias and routing weights
     # Note: permute/reshape operations return views - do not deallocate originals
     next_states = ttnn.permute(down, (0, 2, 1, 3))
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    next_states_was_tiled = next_states.layout == ttnn.TILE_LAYOUT
+    if next_states_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.ROW_MAJOR_LAYOUT)
     next_states = ttnn.reshape(next_states, (batch_size, config.num_experts, config.hidden_size))
+    if next_states_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.TILE_LAYOUT)
     next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
     routing_weights = ttnn.permute(routing_weights, (1, 0))
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    routing_weights_was_tiled = routing_weights.layout == ttnn.TILE_LAYOUT
+    if routing_weights_was_tiled:
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
+    if routing_weights_was_tiled:
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.TILE_LAYOUT)
 
     next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
     routing_weights.deallocate(True)
@@ -151,10 +202,16 @@ def decode_forward(
 
     # Final reshape
     # Note: reshape typically returns a view, so we don't deallocate the original
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    next_states_final_was_tiled = next_states.layout == ttnn.TILE_LAYOUT
+    if next_states_final_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.ROW_MAJOR_LAYOUT)
     next_states = ttnn.reshape(
         next_states,
         (1, batch_size, seq_len, config.hidden_size),
         (1, batch_size, max(32, seq_len), config.hidden_size),
     )
+    if next_states_final_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.TILE_LAYOUT)
 
     return next_states

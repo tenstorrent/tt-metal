@@ -124,7 +124,13 @@ def decode_forward(
     tokens_per_device = input_shape[0] * input_shape[2]  # B * S
 
     # Reshape hidden states: put all tokens on dim -2
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    hidden_states_was_tiled = hidden_states.layout == ttnn.TILE_LAYOUT
+    if hidden_states_was_tiled:
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
+    if hidden_states_was_tiled:
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
     # typecast creates new tensors - safe to deallocate originals
     topk_expert_indices_orig = topk_expert_indices
@@ -132,11 +138,23 @@ def decode_forward(
     ttnn.deallocate(topk_expert_indices_orig)
 
     # Reshape indices: put all tokens on dim -2
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    topk_expert_indices_was_tiled = topk_expert_indices.layout == ttnn.TILE_LAYOUT
+    if topk_expert_indices_was_tiled:
+        topk_expert_indices = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    if topk_expert_indices_was_tiled:
+        topk_expert_indices = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
     topk_expert_indices_u32 = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
     ttnn.deallocate(topk_expert_indices_u32)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    topk_expert_weights_was_tiled = topk_expert_weights.layout == ttnn.TILE_LAYOUT
+    if topk_expert_weights_was_tiled:
+        topk_expert_weights = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    if topk_expert_weights_was_tiled:
+        topk_expert_weights = ttnn.to_layout(topk_expert_weights, ttnn.TILE_LAYOUT)
 
     num_dispatch_devices = (
         mesh_device.shape[dispatch_config.cluster_axis]
@@ -154,11 +172,13 @@ def decode_forward(
     hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(hidden_states)
     # Shape is already [1, 1, tokens_per_device, H], just ensure it's correct
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs (already in ROW_MAJOR)
     hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
 
     # Expert indices: [1, 1, tokens_per_device, K]
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs (already in ROW_MAJOR)
     topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
 
     # ==========================================================================
@@ -195,7 +215,13 @@ def decode_forward(
     # -> repeat to [1, dispatch_rows, tokens_per_device, num_experts]
     # -> reshape to [1, 1, total_tokens, num_experts] to match dispatch_metadata batch/seq dims
     remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    remap_mask_was_tiled = remap_mask.layout == ttnn.TILE_LAYOUT
+    if remap_mask_was_tiled:
+        remap_mask = ttnn.to_layout(remap_mask, ttnn.ROW_MAJOR_LAYOUT)
     remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
+    if remap_mask_was_tiled:
+        remap_mask = ttnn.to_layout(remap_mask, ttnn.TILE_LAYOUT)
     # moe_expert_token_remap returns:
     #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
     #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
@@ -220,6 +246,7 @@ def decode_forward(
     # The sparse matmul operates on blocks of tokens, with sparsity indicating
     # which (token_block, expert) pairs need computation.
     # Note: reshape returns view, but to_layout creates new tensor
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs (dispatch_output is ROW_MAJOR)
     post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, config.hidden_size))
     post_dispatch_rm = post_dispatch
     post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
@@ -228,10 +255,18 @@ def decode_forward(
     # Reshape to sparse block format for matmul
     # Note: reshape returns a view - don't deallocate post_dispatch separately
     num_sparse_blocks = total_tokens // config.sparsity_block_size
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    post_dispatch_was_tiled = post_dispatch.layout == ttnn.TILE_LAYOUT
+    if post_dispatch_was_tiled:
+        post_dispatch_temp = ttnn.to_layout(post_dispatch, ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        post_dispatch_temp = post_dispatch
     expert_input = ttnn.reshape(
-        post_dispatch,
+        post_dispatch_temp,
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
     )
+    if post_dispatch_was_tiled:
+        expert_input = ttnn.to_layout(expert_input, ttnn.TILE_LAYOUT)
 
     memory_config = dispatch_config.memory_config
 
@@ -326,10 +361,16 @@ def decode_forward(
     ttnn.deallocate(expert_output_sparse)
     # Note: reshape returns a view, to_layout creates new tensor
     # With tokens on dim -2: [experts_per_device, 1, total_tokens, H]
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    expert_output_was_tiled = expert_output.layout == ttnn.TILE_LAYOUT
+    if expert_output_was_tiled:
+        expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
     expert_output = ttnn.reshape(
         expert_output,
         shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size),
     )
+    if expert_output_was_tiled:
+        expert_output = ttnn.to_layout(expert_output, ttnn.TILE_LAYOUT)
     expert_output_tiled = expert_output
     expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(expert_output_tiled)  # Deallocates the permute output via its reshape view

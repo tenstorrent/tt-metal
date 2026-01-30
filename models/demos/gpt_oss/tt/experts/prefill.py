@@ -59,7 +59,13 @@ def _process_prefill_chunk(
     # Reshape for prefill (group tokens into tiles)
     # Note: unsqueeze_to_4D/reshape operations return views - do not deallocate originals
     hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    hidden_states_4D_was_tiled = hidden_states_4D.layout == ttnn.TILE_LAYOUT
+    if hidden_states_4D_was_tiled:
+        hidden_states_4D = ttnn.to_layout(hidden_states_4D, ttnn.ROW_MAJOR_LAYOUT)
     hidden_states_4D = ttnn.reshape(hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, config.hidden_size))
+    if hidden_states_4D_was_tiled:
+        hidden_states_4D = ttnn.to_layout(hidden_states_4D, ttnn.TILE_LAYOUT)
     group_size = seq_len // TILE_SIZE
 
     # Prepare sparsity
@@ -82,7 +88,13 @@ def _process_prefill_chunk(
     )
     # Note: transpose/reshape operations return views - do not deallocate originals
     gate = ttnn.transpose(gate, 1, 3)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    gate_was_tiled = gate.layout == ttnn.TILE_LAYOUT
+    if gate_was_tiled:
+        gate = ttnn.to_layout(gate, ttnn.ROW_MAJOR_LAYOUT)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    if gate_was_tiled:
+        gate = ttnn.to_layout(gate, ttnn.TILE_LAYOUT)
     bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
     gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
 
@@ -103,18 +115,38 @@ def _process_prefill_chunk(
 
     # Note: transpose/reshape operations return views - do not deallocate originals
     up = ttnn.transpose(up, 1, 3)
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    up_was_tiled = up.layout == ttnn.TILE_LAYOUT
+    if up_was_tiled:
+        up = ttnn.to_layout(up, ttnn.ROW_MAJOR_LAYOUT)
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    if up_was_tiled:
+        up = ttnn.to_layout(up, ttnn.TILE_LAYOUT)
     bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
     up = ttnn.add(up, bias_transposed, output_tensor=up)
 
     # Apply SwiGLU (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
     # Note: reshape returns a view - do not deallocate original
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    down_input_was_tiled = down_input.layout == ttnn.TILE_LAYOUT
+    if down_input_was_tiled:
+        down_input = ttnn.to_layout(down_input, ttnn.ROW_MAJOR_LAYOUT)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    if down_input_was_tiled:
+        down_input = ttnn.to_layout(down_input, ttnn.TILE_LAYOUT)
 
     # Update routing weights and sparsity for down projection
     num_experts_per_tok = config.num_experts // ep
-    prefill_sparsity_reshaped = ttnn.reshape(prefill_sparsity, (1, config.num_experts))
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    prefill_sparsity_was_tiled = prefill_sparsity.layout == ttnn.TILE_LAYOUT
+    if prefill_sparsity_was_tiled:
+        prefill_sparsity_temp = ttnn.to_layout(prefill_sparsity, ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        prefill_sparsity_temp = prefill_sparsity
+    prefill_sparsity_reshaped = ttnn.reshape(prefill_sparsity_temp, (1, config.num_experts))
+    if prefill_sparsity_was_tiled:
+        prefill_sparsity_reshaped = ttnn.to_layout(prefill_sparsity_reshaped, ttnn.TILE_LAYOUT)
     routing_weights = ttnn.mul(
         routing_weights,
         prefill_sparsity_reshaped,
@@ -123,7 +155,13 @@ def _process_prefill_chunk(
 
     # Note: permute/reshape operations return views - do not deallocate originals
     routing_weights = ttnn.permute(routing_weights, (1, 0))
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    routing_weights_was_tiled = routing_weights.layout == ttnn.TILE_LAYOUT
+    if routing_weights_was_tiled:
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
+    if routing_weights_was_tiled:
+        routing_weights = ttnn.to_layout(routing_weights, ttnn.TILE_LAYOUT)
 
     # Process down projection in splits if needed
     split_size = program_config.down_split_size
@@ -157,7 +195,13 @@ def _process_prefill_chunk(
         # Apply bias and routing weights
         split_seq_len = seq_len if seq_len < split_size else split_size
         # Note: reshape returns a view - do not deallocate original
+        # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+        down_was_tiled = down.layout == ttnn.TILE_LAYOUT
+        if down_was_tiled:
+            down = ttnn.to_layout(down, ttnn.ROW_MAJOR_LAYOUT)
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
+        if down_was_tiled:
+            next_states = ttnn.to_layout(next_states, ttnn.TILE_LAYOUT)
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
@@ -284,10 +328,16 @@ def prefill_forward(
         next_states = apply_sequence_parallel_allgather(next_states, mesh_config, ccl_manager)
 
     # Final reshape
+    # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+    next_states_final_was_tiled = next_states.layout == ttnn.TILE_LAYOUT
+    if next_states_final_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.ROW_MAJOR_LAYOUT)
     next_states = ttnn.reshape(
         next_states,
         (1, batch_size, seq_len_global, config.hidden_size),
         (1, batch_size, max(32, seq_len_global), config.hidden_size),
     )
+    if next_states_final_was_tiled:
+        next_states = ttnn.to_layout(next_states, ttnn.TILE_LAYOUT)
 
     return next_states

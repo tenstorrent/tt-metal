@@ -146,7 +146,13 @@ class TopKRouter:
         # )
         mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+        # DEBUG: Convert to ROW_MAJOR before reshape to diagnose potential reshape bugs
+        hidden_states_was_tiled = hidden_states.layout == ttnn.TILE_LAYOUT
+        if hidden_states_was_tiled:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
+        if hidden_states_was_tiled:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,
