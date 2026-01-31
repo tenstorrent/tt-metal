@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -687,6 +687,10 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // manage this complexity.
     uint8_t padding0[18];
 
+    // Type alias for Sparse Multicast Routing Command Header
+    // NOTE: Sparse multicast is not currently supported for Dynamic 1D Packet Headers, tracked in issue #36581
+    using SPARSE_MCAST_ROUTING_CMD_HDR_TYPE = SparseMulticastRoutingCommandHeader<PacketHeader>;
+
     static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
     }
@@ -712,6 +716,14 @@ public:
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
+    void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for Dynamic 1D Packet Headers, tracked in issue #36581
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         this->chip_send_type = CHIP_UNICAST;
@@ -721,6 +733,15 @@ public:
         this->chip_send_type = CHIP_MULTICAST;
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
+    }
+    void to_chip_sparse_multicast_impl(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for Dynamic 1D Packet Headers, tracked in issue #36581
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
     }
 };
 
@@ -993,11 +1014,34 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
     };
     uint8_t is_mcast_active;
 
+    // Type alias for Sparse Multicast Routing Command Header
+    // NOTE: Sparse multicast is not currently supported for 2D routing, tracked in issue #35604
+    using SPARSE_MCAST_ROUTING_CMD_HDR_TYPE =
+        SparseMulticastRoutingCommandHeader<HybridMeshPacketHeaderT<RouteBufferSize>>;
+
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+    void to_chip_sparse_multicast_impl(const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+    void to_chip_sparse_multicast_impl(
+        const SPARSE_MCAST_ROUTING_CMD_HDR_TYPE& chip_sparse_multicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // Sparse multicast is not supported for 2D routing, tracked in issue #35604
+        ASSERT(false);
+#else
+        TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
+
 } __attribute__((packed, aligned(16)));
 
 // Validate expected sizes for max-capacity tiers only (one per header size)
