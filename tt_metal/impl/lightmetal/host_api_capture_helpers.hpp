@@ -13,7 +13,7 @@
 namespace tt::tt_metal {
 
 // Many forward decls and aliases to reduce includes.
-class CommandQueue;
+class HWCommandQueue;
 struct DataMovementConfig;
 struct ComputeConfig;
 struct EthernetConfig;
@@ -70,7 +70,7 @@ namespace tt::tt_metal {
 // Per Command type capture helper functions
 void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, bool blocking);
 
-void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
+void CaptureEnqueueTrace(HWCommandQueue& cq, uint32_t trace_id, bool blocking);
 
 void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id);
 
@@ -91,18 +91,18 @@ void CaptureBufferDeallocate(const Buffer& buffer);
 void CaptureBufferDelete(const Buffer& buffer);
 
 void CaptureEnqueueWriteBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking);
 
 void CaptureEnqueueReadBuffer(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     bool blocking);
 
-void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
+void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
 void CaptureProgramConstructor(Program& program);
 
 void CaptureCreateKernel(
@@ -131,7 +131,7 @@ void CaptureCreateCircularBuffer(
     const CircularBufferConfig& config);
 
 void CaptureLightMetalCompare(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* golden_data,
     bool is_user_data);

@@ -556,7 +556,7 @@ void DeviceManager::activate_device(ChipId id) {
             worker_core_thread_core,
             completion_queue_reader_core,
             this->worker_l1_size_);
-        devices_.emplace_back(std::unique_ptr<IDevice>(device));
+        devices_.emplace_back(std::unique_ptr<Device>(device));
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
@@ -581,7 +581,7 @@ bool DeviceManager::is_device_active(ChipId id) const {
     return device->is_initialized();
 }
 
-IDevice* DeviceManager::get_device(ChipId id) const {
+Device* DeviceManager::get_device(ChipId id) const {
     auto it = std::find_if(devices_.begin(), devices_.end(), [&id](const auto& device) { return device->id() == id; });
     if (it == devices_.end()) {
         return nullptr;
@@ -801,12 +801,14 @@ DeviceManager::DeviceManager() {
     log_debug(tt::LogMetal, "DeviceManager constructor");
 }
 
-IDevice* DeviceManager::get_active_device(ChipId device_id) const {
+Device* DeviceManager::get_active_device_internal(ChipId device_id) const {
     auto* device = get_device(device_id);
     TT_ASSERT(device != nullptr, "DeviceManager does not contain device {}", device_id);
     TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
     return device;
 }
+
+IDevice* DeviceManager::get_active_device(ChipId device_id) const { return get_active_device_internal(device_id); }
 
 std::vector<IDevice*> DeviceManager::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
@@ -862,16 +864,13 @@ void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_clo
 
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
-        auto* dev = this->get_active_device(dev_id);
+        auto* dev = this->get_active_device_internal(dev_id);
         if (!this->using_fast_dispatch_) {
             continue;
         }
 
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
             auto& cq = dev->command_queue(cq_id);
-            if (cq.sysmem_manager().get_bypass_mode()) {
-                cq.record_end();
-            }
             cq.terminate();
         }
     }
