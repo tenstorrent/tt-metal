@@ -53,6 +53,8 @@ def run_test_linear_impl(
     use_persistent_buffers=True,
     use_non_fused=False,
     force_transpose=True,
+    sp_axis=0,
+    tp_axis=1,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -171,7 +173,9 @@ def run_test_linear_impl(
     tt_output = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            device, mesh_shape=tuple(device.shape), dims=[2, 3] if use_non_fused else [0, 1]
+            device,
+            mesh_shape=tuple(device.shape),
+            dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
         ),
     )
     check_result = []
@@ -181,13 +185,13 @@ def run_test_linear_impl(
                 tt_device_output = tt_output[
                     :,
                     :,
-                    i * torch_output.shape[2] : (i + 1) * torch_output.shape[2],
-                    j * torch_output.shape[3] : (j + 1) * torch_output.shape[3],
+                    i * torch_output.shape[sp_axis + 2] : (i + 1) * torch_output.shape[sp_axis + 2],
+                    j * torch_output.shape[tp_axis + 2] : (j + 1) * torch_output.shape[tp_axis + 2],
                 ]
             else:
                 tt_device_output = tt_output[
-                    i * torch_output.shape[0] : (i + 1) * torch_output.shape[0],
-                    j * torch_output.shape[1] : (j + 1) * torch_output.shape[1],
+                    i * torch_output.shape[sp_axis] : (i + 1) * torch_output.shape[sp_axis],
+                    j * torch_output.shape[tp_axis] : (j + 1) * torch_output.shape[tp_axis],
                 ]
             check_result.append(assert_quality(torch_output, tt_device_output))
 
@@ -217,6 +221,8 @@ def run_test_linear(
     bias_dtype=None,
     use_non_fused=False,
     force_transpose=True,
+    sp_axis=0,
+    tp_axis=1,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -241,7 +247,9 @@ def run_test_linear(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            device, mesh_shape=tuple(device.shape), dims=[None, 3] if use_non_fused else [None, 1]
+            device,
+            mesh_shape=tuple(device.shape),
+            dims=[sp_axis + 2, tp_axis + 2] if use_non_fused else [sp_axis, tp_axis],
         ),
     )
 
@@ -275,19 +283,31 @@ def run_test_linear(
         num_workers_per_link=num_workers_per_link,
         use_non_fused=use_non_fused,
         force_transpose=force_transpose,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link",
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis",
     [
-        [(1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring, 1, 4],
+        [
+            (1, 8),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            1,
+            4,
+            0,
+            1,
+        ],
         [
             (8, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
             ttnn.Topology.Ring,
             1,
             8,
+            0,
+            1,
         ],
         [
             (8, 4),
@@ -295,6 +315,8 @@ def run_test_linear(
             ttnn.Topology.Ring,
             2,
             4,
+            0,
+            1,
         ],
         [
             (8, 4),
@@ -302,6 +324,8 @@ def run_test_linear(
             ttnn.Topology.Ring,
             4,
             2,
+            0,
+            1,
         ],
     ],
     ids=[
@@ -315,12 +339,18 @@ def run_test_linear(
 @pytest.mark.parametrize(
     "M, K, N, core_grid_x, core_grid_y, force_transpose",
     [
-        (4096, 4096, 4096, 4, 4, True),
-        (4096, 4096, 4096, 8, 8, True),
+        (32768, 4096, 4096, 4, 4, True),
+        (32768, 4096, 4096, 8, 8, True),
+        (75776, 5120, 3840, 8, 8, True),
+        (75776, 5120, 1280, 8, 8, True),
+        (75776, 5120, 3456, 8, 8, True),
     ],
     ids=[
         "4K4K4Ksmallgrid",
         "4K4K4Kfullgrid",
+        "QKV",
+        "denseout",
+        "ff1",
     ],
 )
 @pytest.mark.parametrize(
@@ -352,6 +382,8 @@ def test_linear(
     num_links,
     use_non_fused,
     force_transpose,
+    sp_axis,
+    tp_axis,
 ):
     assert (num_links * num_workers_per_link) == core_grid_y
     check_result = run_test_linear(
@@ -370,6 +402,8 @@ def test_linear(
         num_links=num_links,
         use_non_fused=use_non_fused,
         force_transpose=force_transpose,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
     for i in range(mesh_device.get_num_devices()):
         assert check_result[i]["pcc"] > 0.999_500
