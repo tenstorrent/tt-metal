@@ -24,6 +24,7 @@ from loguru import logger
 
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -400,7 +401,7 @@ def run_prefetcher_all_matmuls(
     )
 
     # Initialize prefetcher for decode mode
-    prefetcher.init(mode="decode")
+    prefetcher.init(mode=Mode.DECODE)
 
     # Get worker sub device id
     worker_sub_device_id = prefetcher.worker_sub_device_id
