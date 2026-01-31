@@ -6,9 +6,15 @@
 ARG UBUNTU_VERSION=22.04
 ARG PYTHON_VERSION=3.10
 
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+ENV PATH="/usr/local/bin:$PATH"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -16,9 +22,6 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 #############################################################
 
@@ -77,7 +80,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && \
-    uv python install "$PYTHON_VERSION" && \
+    UV_PYTHON_BIN_DIR=/usr/local/share/uv uv python install "$PYTHON_VERSION" && \
     uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
