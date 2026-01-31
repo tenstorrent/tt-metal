@@ -31,7 +31,7 @@ namespace ttnn::operations::conv::conv_transpose2d {
 using ttnn::operations::conv::conv2d::Conv2dWeightsBiasPrepConfig;
 using ttnn::prim::conv_op_l1_usage;
 
-ResultWithOptions result_to_result_with_options(
+ConvTranspose2dResultWithOptions result_to_result_with_options(
     const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
     if (return_output_dim && return_weights_and_bias) {
         return std::make_tuple(
@@ -48,7 +48,7 @@ ResultWithOptions result_to_result_with_options(
     return std::get<0>(result);
 }
 
-Result conv_transpose2d_L1(
+ConvTranspose2dResult conv_transpose2d_L1(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -362,7 +362,7 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     DataType output_dtype;
     Tensor& weight_tensor;
     OptionalRefTensor bias_tensor;
-    conv2d::Conv2dConfig conv_config;
+    Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
     bool mirror_kernel;
@@ -387,7 +387,7 @@ public:
         DataType output_dtype,
         Tensor& weight_tensor,
         OptionalRefTensor bias_tensor,
-        const conv2d::Conv2dConfig& conv_config,
+        const Conv2dConfig& conv_config,
         const DeviceComputeKernelConfig& compute_config,
         MeshDevice* device,
         bool mirror_kernel) :
@@ -1009,7 +1009,7 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     DataType conv_output_dtype,
     Tensor& weight_tensor,
     std::optional<std::reference_wrapper<Tensor>> bias_tensor,
-    const conv2d::Conv2dConfig& conv_config_,
+    const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device,
     bool mirror_kernel) {
@@ -1034,7 +1034,11 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
         device,
         mirror_kernel));
 }
-ResultWithOptions ConvTranpose2dOperation::invoke(
+}  // namespace ttnn::operations::conv::conv_transpose2d
+
+namespace ttnn {
+
+ConvTranspose2dResultWithOptions conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -1058,6 +1062,7 @@ ResultWithOptions ConvTranpose2dOperation::invoke(
     bool mirror_kernel,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    using namespace operations::conv::conv_transpose2d;
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(input_tensor, dram_slice_config_);
 
@@ -1116,4 +1121,4 @@ ResultWithOptions ConvTranpose2dOperation::invoke(
         return_weights_and_bias);
 }
 
-}  // namespace ttnn::operations::conv::conv_transpose2d
+}  // namespace ttnn
