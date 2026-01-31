@@ -34,10 +34,6 @@
 #include "tt_metal/test_utils/comparison.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using namespace tt;
 
