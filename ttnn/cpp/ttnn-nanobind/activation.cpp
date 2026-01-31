@@ -13,6 +13,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 
+#include <fmt/ranges.h>
+
 #include "export_enum.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -52,10 +54,9 @@ void py_module(nb::module_& mod) {
         .def("__repr__", [](const UnaryWithParam& param) {
             if (param.params.empty()) {
                 return fmt::format("UnaryWithParam(op_type={})", param.op_type);
-            } else {
-                return fmt::format(
-                    "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
             }
+            return fmt::format("UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
+
         });
 
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it

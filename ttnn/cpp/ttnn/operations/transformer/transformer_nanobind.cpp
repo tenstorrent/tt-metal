@@ -37,7 +37,8 @@ void py_module(nb::module_& mod) {
         .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
-                "SDPAProgramConfig(compute_with_storage_grid_size={}, q_chunk_size={}, k_chunk_size={})",
+                "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
+                "k_chunk_size={}, exp_approx_mode={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,

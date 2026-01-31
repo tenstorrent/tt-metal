@@ -25,10 +25,6 @@
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;

@@ -77,14 +77,15 @@ def test_pipeline_inference(
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    pipeline = WanPipeline(
+    pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        vae_parallel_config=vae_parallel_config,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         num_links=num_links,
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
     )
 
     # Run inference
