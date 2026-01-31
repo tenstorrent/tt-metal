@@ -332,8 +332,6 @@ Tensor ExecuteDiv::invoke(
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    // Only force legacy mode if rounding_mode is set and inputs are not of INT32 dtype
-    const auto has_legacy_only_args = (rounding_mode.has_value() && !is_int32);
 
     if (is_int32) {
         TT_FATAL(
@@ -389,10 +387,35 @@ Tensor ExecuteDiv::invoke(
     }
 
     if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
-        TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
+                     : binary::is_legacy_only(
+                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+        // Build post_activations with rounding mode if specified
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> combined_post_activations(
+            post_activations.begin(), post_activations.end());
+        if (rounding_mode == "floor") {
+            combined_post_activations.push_back(unary::EltwiseUnaryWithParam(unary::UnaryOpType::FLOOR));
+        } else if (rounding_mode == "trunc") {
+            combined_post_activations.push_back(unary::EltwiseUnaryWithParam(unary::UnaryOpType::TRUNC));
+        }
+
+        // For bf16 with rounding mode, typecast to fp32 to avoid inf/nan handling issues
+        if (rounding_mode.has_value() && input_dtype == DataType::BFLOAT16) {
+            Tensor a_fp32 = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor b_fp32 = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor result = BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+                a_fp32,
+                b_fp32,
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                combined_post_activations,
+                lhs_activations,
+                rhs_activations,
+                use_legacy,
+                fast_and_approximate_mode,
+                sub_core_grids);
+            return typecast(result, DataType::BFLOAT16, output_mem_config, output_tensor, sub_core_grids);
+        }
 
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input_a,
@@ -400,7 +423,7 @@ Tensor ExecuteDiv::invoke(
             std::nullopt,
             output_mem_config,
             output_tensor,
-            post_activations,
+            combined_post_activations,
             lhs_activations,
             rhs_activations,
             use_legacy,

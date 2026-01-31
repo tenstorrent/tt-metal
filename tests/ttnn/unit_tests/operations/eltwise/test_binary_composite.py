@@ -122,6 +122,7 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
+@pytest.mark.parametrize("use_legacy", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -131,7 +132,7 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, device):
+def test_binary_div_ttnn(fast_and_approximate_mode, use_legacy, rounding_mode, input_shapes, device):
     if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
@@ -140,7 +141,11 @@ def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes,
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -120, 200, device)
 
     output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
+        input_tensor1,
+        input_tensor2,
+        fast_and_approximate_mode=fast_and_approximate_mode,
+        rounding_mode=rounding_mode,
+        use_legacy=use_legacy,
     )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, in_data2, rounding_mode)
@@ -150,6 +155,7 @@ def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes,
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
+@pytest.mark.parametrize("use_legacy", [True, False])
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -159,7 +165,7 @@ def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes,
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shapes, device):
+def test_binary_div_ttnn_ci(fast_and_approximate_mode, use_legacy, rounding_mode, input_shapes, device):
     if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
@@ -168,7 +174,11 @@ def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shap
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 2e6, device)
 
     output_tensor = ttnn.div(
-        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode
+        input_tensor1,
+        input_tensor2,
+        fast_and_approximate_mode=fast_and_approximate_mode,
+        rounding_mode=rounding_mode,
+        use_legacy=use_legacy,
     )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, in_data2, rounding_mode)

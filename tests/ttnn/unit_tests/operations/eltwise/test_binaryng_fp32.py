@@ -432,3 +432,38 @@ def test_subalpha_fp32(alpha, device):
     z_tt_out = ttnn.subalpha(x_tt, y_tt, alpha)
     assert_with_ulp(z_tt_out, z_torch)
     assert_with_pcc(ttnn.to_torch(z_tt_out), z_torch)
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_div_rounding_mode_binaryng(device, rounding_mode, dtype):
+    """
+    Test division with rounding modes (floor/trunc) using binary_ng path.
+    This tests the post-activation fusion of FLOOR/TRUNC with DIV.
+    """
+    torch_dtype_map = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
+    torch_dtype = torch_dtype_map[dtype]
+
+    # Test values including positive, negative, and mixed signs
+    x_torch = torch.tensor(
+        [[7.5, -7.5, 7.5, -7.5, 10.0, -10.0, 0.0, 15.3, -15.3, 100.7]],
+        dtype=torch_dtype,
+    )
+    y_torch = torch.tensor(
+        [[2.0, 2.0, -2.0, -2.0, 3.0, 3.0, 5.0, 4.0, -4.0, 7.0]],
+        dtype=torch_dtype,
+    )
+
+    # PyTorch reference
+    z_torch = torch.div(x_torch, y_torch, rounding_mode=rounding_mode)
+
+    # TT implementation with use_legacy=False to force binary_ng path
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.divide(x_tt, y_tt, rounding_mode=rounding_mode, use_legacy=None)
+    tt_out = ttnn.to_torch(z_tt)
+
+    if dtype == ttnn.float32:
+        assert_allclose(z_torch, tt_out, atol=1e-5, rtol=1e-5)
+    else:
+        assert_with_pcc(tt_out, z_torch, pcc=0.999)
