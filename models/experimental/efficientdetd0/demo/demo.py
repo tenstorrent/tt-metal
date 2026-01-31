@@ -47,7 +47,6 @@ def run_efficient_det_demo(
     iou_threshold=0.5,
     weights_path=None,
     output_dir=None,
-    use_torch_maxpool=False,
 ):
     """
     Run EfficientDet demo on Tenstorrent device.
@@ -121,7 +120,6 @@ def run_efficient_det_demo(
         module_args=module_args,
         num_classes=num_classes,
         compound_coef=0,
-        use_torch_maxpool=use_torch_maxpool,
     )
 
     # Convert inputs to TTNN format
@@ -329,12 +327,6 @@ def main():
         default=None,
         help="Directory to save output images with bounding boxes (default: demo/output/)",
     )
-    parser.add_argument(
-        "--use_torch_maxpool",
-        type=bool,
-        default=True,
-        help="Run MaxPool in torch (default: True)",
-    )
 
     args = parser.parse_args()
 
@@ -354,7 +346,6 @@ def main():
             iou_threshold=args.iou_threshold,
             weights_path=args.weights_path,
             output_dir=args.output_dir,
-            use_torch_maxpool=args.use_torch_maxpool,
         )
     finally:
         ttnn.close_device(device)
