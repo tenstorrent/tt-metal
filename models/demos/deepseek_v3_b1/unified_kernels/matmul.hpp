@@ -96,8 +96,13 @@ struct Matmul {
             constexpr uint32_t out_subblock_h = 1;
             constexpr uint32_t out_subblock_w = 1;
             constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
-            constexpr bool transpose = false;
             constexpr uint32_t out_w = CTArgs::out_w;
+            constexpr bool transpose = false;
+            constexpr bool split_acc = true;
+            constexpr bool dense_packing = true;
+            constexpr bool finalize = split_acc && true;
+            constexpr bool read_transposed = transpose && false;
+            constexpr const char* version_str = "split";
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
@@ -106,9 +111,9 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w == 1) {
+            if constexpr (out_w <= 16) {
                 // Use optimized custom_mm API for single output tile with K-dimension reduction
-                custom_mm_block_init<false, true>(args.in0, args.in1, args.out);
+                custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
                 tile_regs_acquire();
 
@@ -156,20 +161,24 @@ struct Matmul {
                 uint64_t start = ckernel::read_wall_clock();
 
                 // Single call handles all K tiles internally via MOP replay
-                custom_mm_block(args.in0, args.in1, 0, 0, 0, args.k_num_tiles);
+                custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tensix_sync();
                 uint64_t end = ckernel::read_wall_clock();
                 uint64_t kernel_runtime = (end - start);
-                DPRINT << "craqmm_block kernel_runtime: " << kernel_runtime << ENDL();
+                UNPACK(
+                    (DPRINT << "version " << version_str << " " << get_operand_face_r_dim(args.in0) << " "
+                            << args.k_num_tiles << " " << out_w << " " << kernel_runtime << ENDL()));
 
                 tile_regs_commit();
 
                 tile_regs_wait();
-                for (uint32_t w = 0; w < out_w; w++) {
-                    pack_tile(w, args.out, w);
+                for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
+                    pack_tile(dst_idx, args.out, dst_idx);
                 }
                 tile_regs_release();
+
+                custom_mm_block_uninit<dense_packing>();
             } else {
                 // Use optimized custom_mm API with blocking for out_w > 8
                 // Process in blocks of 8 tiles (half-DST with SyncHalf mode)
