@@ -16,41 +16,39 @@ namespace sfpu {
 
 template <bool IS_MAX_OP = true, int ITERATIONS = 8>
 inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    /*
-    #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            // size of each tile in Dest is 64 rows
-            constexpr uint dst_tile_size = 64;
+    uint offset0 = (dst_index_in0 * 32) << 1;
+    uint offset1 = (dst_index_in1 * 32) << 1;
+    uint offset2 = (dst_index_out * 32) << 1;
 
-            TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in0 * dst_tile_size);  // a
-            TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in1 * dst_tile_size);  // b
+    constexpr int a0 = p_sfpu::LREG0;
+    constexpr int a1 = p_sfpu::LREG1;
+    constexpr int b = p_sfpu::LREG2;
+    constexpr int c = p_sfpu::LREG3;
 
-            // Swap and store maximum in lreg1, minimum in lreg0
-            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    load_replay_buf(0, 6, [offset0, offset1, offset2] {
+        // first iteration, with a0, b, c
+        TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a0 >> 2));
+        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
+        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
 
-            if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32) {
-                // The values are two's complement signed integers, but SFPSWAP
-                // treats them as sign-magnitude.  The result is still correct
-                // unless both values are negative, in which case the result simply
-                // needs to be inverted via unconditional swap.
+        // second iteration, with a1, b, c
+        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a1 >> 2));
+        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
+        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
+    });
 
-                TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-                TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+#pragma GCC unroll 4
+    for (int i = 0; i < ITERATIONS / 2; ++i) {
+        lltt::replay(0, 6);
+    }
 
-                // If a < 0 and b < 0, then invert the result.
-                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP);
+    if constexpr (ITERATIONS & 1) {
+        lltt::replay(0, 3);
+    }
 
-                TTI_SFPENCC(0, 0, 0, 0);
-            }
-
-            if constexpr (IS_MAX_OP) {
-                TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_out * dst_tile_size);
-            } else {
-                TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_out * dst_tile_size);
-            }
-            dst_reg++;
-        }
-    */
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
@@ -60,41 +58,62 @@ inline void calculate_binary_max_min_int32(
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        constexpr int a = 0;
-        constexpr int b = 1;
-        constexpr int c = 2;
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), 10 /* MOD0_FMT_INT32_ALL */, ADDR_MOD_7, offset0 | (a >> 2));
-        TT_SFPLOADMACRO((1 << 2) | (b & 3), 10 /* MOD0_FMT_INT32_ALL */, ADDR_MOD_7, offset1 | (b >> 2));
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TTI_SFPNOP;
-        TT_SFPLOADMACRO((2 << 2) | (c & 3), 10 /* MOD0_FMT_INT32_ALL */, ADDR_MOD_6, offset2 | (c >> 2));
+    constexpr int a0 = p_sfpu::LREG0;
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int a1 = p_sfpu::LREG2;
+    constexpr int b1 = p_sfpu::LREG3;
+    constexpr int c = p_sfpu::LREG7;
+
+    load_replay_buf(0, 10, [offset0, offset1, offset2] {
+        // first iteration, with a0, b0, c
+        TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset0 | (a0 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset1 | (b0 >> 2));
+        TTI_SFPSETCC(0, a1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset2 | (c >> 2));
+
+        // second iteration, with a1, b1, c
+        TT_SFPLOADMACRO((1 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset0 | (a1 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, offset1 | (b1 >> 2));
+        TTI_SFPSETCC(0, a0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset2 | (c >> 2));
+    });
+
+#pragma GCC unroll 4
+    for (int i = 0; i < ITERATIONS / 2; ++i) {
+        lltt::replay(0, 10);
     }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+
+    if constexpr (ITERATIONS & 1) {
+        lltt::replay(0, 5);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        lltt::replay(5 + 2, 2);
+    } else {
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        lltt::replay(2, 2);
+    }
+
     TTI_SFPNOP;
 }
 
 template <bool IS_MAX_OP = true>
-inline void binary_max_min_init() {}
+inline void binary_max_min_init() {
+    constexpr int b = p_sfpu::LREG2;
 
-template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
-inline void binary_max_min_int32_init() {
     // InstructionTemplate[0]
-    TTI_SFPSETCC(0, 0, 12, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPSWAP(0, b, 12, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
 
     // InstructionTemplate[1]
-    TTI_SFPENCC(0, 0, 13, 0);
-
-    // InstructionTemplate[2]
-    TTI_SFPSHFT2(0, 0, 14, 6);  // SFPSHFT2_MOD1_SHFT_IMM
+    TTI_SFPSHFT2(0, 0, 13, 6);  // SFPSHFT2_MOD1_SHFT_IMM
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (3 << 3) | 4;
+        constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
         constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (3 << 3) | 6;
+        constexpr uint round_bits = 0x80 | 0x40 | (3 << 3) | 5;
         constexpr uint store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
@@ -104,9 +123,60 @@ inline void binary_max_min_int32_init() {
 
     // Macro 1
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (3 << 3) | 4;
+        constexpr uint simple_bits = 0;
         constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (4 << 3) | 6;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: DEFAULT,
+    //   UsesLoadMod0ForStore: {1,1},
+    //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0x330, 8, 1);
+}
+
+template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
+inline void binary_max_min_int32_init() {
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int b1 = p_sfpu::LREG3;
+
+    // InstructionTemplate[0]
+    TTI_SFPSWAP(
+        0, b0, 12, IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+
+    // InstructionTemplate[1]
+    TTI_SFPSWAP(
+        0, b1, 13, IS_MAX_OP ^ IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+
+    // InstructionTemplate[2]
+    TTI_SFPSETCC(0, 0, 14, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+
+    // InstructionTemplate[3]
+    TTI_SFPSHFT2(0, 0, 15, 6);  // SFPSHFT2_MOD1_SHFT_IMM
+
+    // Macro 0
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 4;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
+        constexpr uint store_bits = 0;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+    }
+
+    // Macro 1
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (3 << 3) | 5;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (5 << 3) | 7;
         constexpr uint store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
@@ -116,18 +186,34 @@ inline void binary_max_min_int32_init() {
 
     // Macro 2:
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (1 << 3) | 5;
+        constexpr uint simple_bits = 0x00 | 0x00 | (4 << 3) | 6;
         constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr uint round_bits = 0x80 | 0x40 | (6 << 3) | 7;
+        constexpr uint store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 2, 0);
     }
 
-    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
-    TTI_SFPCONFIG(0x770, 8, 1);
+    // Macro 3:
+    {
+        constexpr uint simple_bits = 0;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (4 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: DEFAULT,
+    //   UsesLoadMod0ForStore: {1,1,1,1},
+    //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0xff0, 8, 1);
 }
 
 }  // namespace sfpu
