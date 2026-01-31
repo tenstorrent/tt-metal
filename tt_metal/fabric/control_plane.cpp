@@ -2857,6 +2857,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
 
+    if (requested_intermesh_connections.empty() && requested_intermesh_ports.empty()) {
+        return intermesh_connections;
+    }
+
     TT_FATAL(
         requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
         "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
