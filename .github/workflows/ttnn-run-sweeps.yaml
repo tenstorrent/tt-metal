@@ -759,6 +759,7 @@ jobs:
           echo "Branch/Ref: ${{ github.ref_name }}"
           echo "::endgroup::"
   build-artifact:
+    needs: test-database-connection
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -771,6 +772,7 @@ jobs:
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
+    needs: test-database-connection
     runs-on: ubuntu-latest
     if: |
       github.event.inputs.use_database == 'true' ||
