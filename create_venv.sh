@@ -292,6 +292,19 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
 uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+
+# Create pip shim to warn users to use 'uv pip' instead of 'pip'
+# uv-created venvs don't include pip, and system pip causes installation failures
+cat > "$PYTHON_ENV_DIR/bin/pip" << 'PIPSHIM'
+#!/bin/bash
+echo "ERROR: pip is not available in this virtual environment."
+echo ""
+echo "Please use 'uv pip' instead of 'pip'."
+exit 1
+PIPSHIM
+chmod +x "$PYTHON_ENV_DIR/bin/pip"
+ln -sf "$PYTHON_ENV_DIR/bin/pip" "$PYTHON_ENV_DIR/bin/pip3"
+
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # PyTorch CPU index URL for all uv pip commands
