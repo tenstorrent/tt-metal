@@ -4,5 +4,9 @@
 
 #pragma once
 
-// Forward header - actual implementation is in tt-metalium experimental tensor.
+// NOLINTBEGIN(misc-include-cleaner)
+// Needs shape.hpp to export ttnn::Shape alias to tt_metal::Shape.
+#include "ttnn/tensor/shape/shape.hpp"
+// Forward include - re-exports tt-metalium tensor_attributes APIs for TTNN users.
 #include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+// NOLINTEND(misc-include-cleaner)
