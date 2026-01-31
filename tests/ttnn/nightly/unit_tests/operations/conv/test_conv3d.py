@@ -41,7 +41,7 @@ def compute_conv3d_tensor_2d_shape(input_shape):
     return height, width
 
 
-def create_sharded_memory_config(layout_type, grid_size, input_shape):
+def create_sharded_memory_config(layout_type, grid_size, input_shape, min_shard_width=ALIGNMENT):
     """Create a sharded memory configuration for Conv3D testing.
 
     Args:
@@ -119,12 +119,16 @@ def create_sharded_memory_config(layout_type, grid_size, input_shape):
         max_cores_y = min(grid_size.y, 8)
 
         # Find best core grid that evenly divides both dimensions
-        # For BLOCK_SHARDED: cores_x divides width, cores_y divides height
+        # For BLOCK_SHARDED: cores_x divides width, cores_y divides height.
+        # Also keep shard_width aligned to ALIGNMENT to avoid invalid layouts.
         cores_x = 1
         cores_y = 1
         for cy in range(1, max_cores_y + 1):
             for cx in range(1, max_cores_x + 1):
                 if height % cy == 0 and width % cx == 0:
+                    shard_width_candidate = width // cx
+                    if shard_width_candidate < min_shard_width or shard_width_candidate % min_shard_width != 0:
+                        continue
                     if cx * cy > cores_x * cores_y:
                         cores_x = cx
                         cores_y = cy
@@ -168,6 +172,7 @@ def run_conv3d_with_memory_config(
     padding_mode,
     input_mem_config=None,
     output_mem_config=None,
+    C_in_block=0,
 ):
     """Run conv3d test with specified memory configurations.
 
@@ -188,7 +193,7 @@ def run_conv3d_with_memory_config(
     C = input_shape[1]
 
     # Prepare weights and bias (always interleaved for simplicity)
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
 
     # Convert input to specified memory config if provided
     if input_mem_config is not None:
@@ -199,7 +204,7 @@ def run_conv3d_with_memory_config(
 
     # Create config
     grid_size = device.compute_with_storage_grid_size()
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
+    config = create_conv3d_config(C_in_block=C_in_block, compute_with_storage_grid_size=grid_size)
 
     # Run conv3d
     conv3d_kwargs = {
@@ -492,11 +497,19 @@ def test_conv3d_sharded_layouts(
     grid_size = device.compute_with_storage_grid_size()
 
     # Create input memory config
+    C_in_block = 0
+    min_shard_width = ALIGNMENT
     if input_layout == "interleaved":
         input_mem_config = None  # Use default interleaved
     else:
         try:
-            input_mem_config = create_sharded_memory_config(input_layout, grid_size, input_shape)
+            if input_layout == "block_sharded":
+                # Ensure shard width can hold a full C_in_block row
+                C_in_block = ALIGNMENT
+                min_shard_width = C_in_block
+            input_mem_config = create_sharded_memory_config(
+                input_layout, grid_size, input_shape, min_shard_width=min_shard_width
+            )
         except Exception as e:
             pytest.skip(f"Cannot create {input_layout} config for shape {input_shape}: {e}")
 
@@ -510,6 +523,7 @@ def test_conv3d_sharded_layouts(
         padding,
         padding_mode,
         input_mem_config=input_mem_config,
+        C_in_block=C_in_block,
     )
 
     # Validate results
