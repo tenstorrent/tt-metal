@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,9 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <ttnn/tensor/host_buffer/functions.hpp>
+#include <ttnn/tensor/storage.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
 namespace tt::tt_metal::host_buffer {
 
