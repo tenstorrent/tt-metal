@@ -20,7 +20,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([True, False]),
+    ([False]),
 )
 @pytest.mark.parametrize(
     "seq_len",
@@ -85,10 +85,9 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
-        memory_config=model_args.get_lm_head_input_mem_config("decode", prefetcher),
+        memory_config=model_args.get_lm_head_input_mem_config(Mode.PREFILL, prefetcher),
         layout=ttnn.TILE_LAYOUT,
     )
-
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output,

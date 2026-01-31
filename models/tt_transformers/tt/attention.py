@@ -252,12 +252,12 @@ class Attention(LightweightModule):
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
 
-        def norm_reshard(x, norm, mode):
+        def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
             if mode == Mode.DECODE:
                 mem_cfg = x.memory_config()
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
-            x = norm(x, mode)
+            x = norm(x, mode, norm_config=norm_config)
             if mode == Mode.DECODE:
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
@@ -276,9 +276,9 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
-            self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
+            self.q_norm = lambda x, mode, norm_config: norm_reshard(x, fn_q_norm, mode, norm_config)
         else:
-            self.q_norm = lambda x, mode: x
+            self.q_norm = lambda x, mode, norm_config: x
 
         if f"{k_norm_str}.weight" in state_dict:
             fn_k_norm = RMSNorm(
@@ -294,9 +294,9 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
             )
-            self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
+            self.k_norm = lambda x, mode, norm_config: norm_reshard(x, fn_k_norm, mode, norm_config)
         else:
-            self.k_norm = lambda x, mode: x
+            self.k_norm = lambda x, mode, norm_config: x
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
@@ -308,19 +308,20 @@ class Attention(LightweightModule):
 
         self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
 
-        self.wo_sharded_ring = ttnn.as_tensor(
-            pt_wo,
-            dtype=self.wo_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=self.args.get_sharded_wo_ring_mem_config(),
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=self.shard_wo_dims,
-                mesh_shape=configuration.cluster_shape,
-            ),
-            cache_file_name=(cache_name("wo_sharded_ring")),
-        )
+        if self.prefetcher is not None:
+            self.wo_sharded_ring = ttnn.as_tensor(
+                pt_wo,
+                dtype=self.wo_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=self.args.get_sharded_wo_ring_mem_config(),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=self.shard_wo_dims,
+                    mesh_shape=configuration.cluster_shape,
+                ),
+                cache_file_name=(cache_name("wo_sharded_ring")),
+            )
 
         def get_wo_memory_config():
             if self.use_fused_all_gather_matmul or self.TG:
@@ -556,8 +557,9 @@ class Attention(LightweightModule):
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
         )
-        q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE)
-        k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE)
+        norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
+        q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
+        k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE, norm_config=norm_config)
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
@@ -839,8 +841,9 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL)
-        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL)
+        norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
+        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
+        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
 
         ttnn.deallocate(xqkv_fused)
 

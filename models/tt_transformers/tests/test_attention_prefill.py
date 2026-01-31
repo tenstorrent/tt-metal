@@ -55,7 +55,7 @@ from models.tt_transformers.tt.rope import get_rot_mats
 )
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([True, False]),
+    ([False]),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(

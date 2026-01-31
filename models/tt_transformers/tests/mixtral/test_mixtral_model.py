@@ -280,7 +280,7 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_residual_mem_config("decode"),
+            model_args.get_residual_mem_config(Mode.DECODE, None),
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -291,7 +291,7 @@ def test_model_inference(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table_tt,
         )
 

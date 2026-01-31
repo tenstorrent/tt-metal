@@ -195,6 +195,9 @@ class Prefetcher(LightweightModule):
         Prefetcher class that prefetches tensors from DRAM to
         """
         ### Device, Global CB, Parameters
+        assert (
+            is_blackhole()
+        ), "Prefetcher is currently only supported on Tenstorrent Blackhole devices. Support for wormhole devices is WIP."
         self.global_cb = None
         self.mesh_device = mesh_device
         self.num_tensors = num_tensors

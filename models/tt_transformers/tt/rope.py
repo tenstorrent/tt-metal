@@ -392,12 +392,13 @@ class RotarySetup(LightweightModule):
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
-        rot_mats_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
+
         self.use_qk_fused = use_qk_fused
         self.original_batch_size = batch_size
+        self.prefetcher = prefetcher
 
         # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
         # we need to double the batch size in order to replicate the transformation matrix on double the batch size number of cores
@@ -458,7 +459,7 @@ class RotarySetup(LightweightModule):
             self.core_grid,
             self.start_core,
             self.batch_size_per_device_group,
-            prefetcher,
+            self.prefetcher,
         )
 
         # Generate the transformation matrix
@@ -556,7 +557,6 @@ class RotarySetup(LightweightModule):
         self,
         position_idxs: Union[torch.Tensor, ttnn.Tensor],
         return_rot_idxs: bool = False,
-        prefetcher: Optional[Prefetcher] = None,
     ) -> List[ttnn.Tensor]:
         device = self.device
 
@@ -572,11 +572,11 @@ class RotarySetup(LightweightModule):
 
         embedding_layout = ttnn.TILE_LAYOUT
 
-        if prefetcher is not None:
+        if self.prefetcher is not None:
             trans_mat_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core,
                 self.batch_size_per_device_group,
-                prefetcher.all_worker_cores_range_set,
+                self.prefetcher.all_worker_cores_range_set,
                 row_wise=True,
             )
             mem_config = ttnn.create_sharded_memory_config(
@@ -597,14 +597,14 @@ class RotarySetup(LightweightModule):
             rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
 
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE == 0 and prefetcher is not None:
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE == 0 and self.prefetcher is not None:
             cos = self.get_trans_mat_on_sub_core_grids(cos, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
             sin = self.get_trans_mat_on_sub_core_grids(sin, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        if prefetcher is None:
+        if self.prefetcher is None:
             cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
             sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 

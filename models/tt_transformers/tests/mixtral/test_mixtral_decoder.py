@@ -9,6 +9,7 @@ from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer, Mi
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
@@ -123,7 +124,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_residual_mem_config("decode"),
+            model_args.get_residual_mem_config(Mode.DECODE, None),
         )
 
         rot_mats = rope_setup.get_rot_mats(start_pos_ids)
@@ -133,7 +134,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
         )
         tt_out = (
             ttnn.to_torch(

@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([True, False]),
+    ([False]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -72,7 +72,6 @@ def test_decoder_inference(
     use_prefetcher,
 ):
     dtype = ttnn.bfloat8_b
-    dummy_weights = False  # Use random/dummy weights to match test_model.py quick test
     mode = Mode.DECODE
     num_tensors = 5 if use_prefetcher else 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
@@ -86,7 +85,6 @@ def test_decoder_inference(
         max_seq_len=max_seq_len,
         cache_hf=True,
         prefetcher=prefetcher,
-        dummy_weights=dummy_weights,
     )
     model_args.n_layers = 1
 
@@ -112,7 +110,6 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
         model_args.use_qk_fused,
-        rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
         prefetcher=prefetcher,
     )
 
@@ -208,11 +205,11 @@ def test_decoder_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_residual_mem_config(mode, prefetcher if use_prefetcher else None),
+            model_args.get_residual_mem_config(mode, prefetcher),
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
+        rot_mats = rope_setup.get_rot_mats(current_pos)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
 
         # Run TT model

@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_single_rot_mat
+from models.tt_transformers.tt.common import Mode, get_single_rot_mat
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
@@ -145,8 +145,8 @@ def test_cross_attention_transformer_text_inference(
 
     for i in range(n_iter):
         # Test prefill and decode
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode = Mode.PREFILL if i == 0 else Mode.DECODE
+        seq_len = text_seq_len if mode == Mode.PREFILL else 1
         cur_pos = seq_len + prev_pos
 
         # Prepare pytorch inputs
@@ -198,7 +198,7 @@ def test_cross_attention_transformer_text_inference(
         )
 
         # Prepare TT inputs
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
@@ -265,7 +265,7 @@ def test_cross_attention_transformer_text_inference(
         else:
             tt_h = model_args.prepare_residual_tensor_decode(
                 h,
-                model_args.get_residual_mem_config("decode"),
+                model_args.get_residual_mem_config(Mode.DECODE, None),
             )
             position_ids = position_ids.reshape(1).expand(batch)
             tt_position_id = ttnn.from_torch(

@@ -64,8 +64,6 @@ def test_rms_norm_inference(
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
-        sharded_program_config=model_args.get_norm_attn_prgm_cfg(),
-        sharded_output_config=model_args.get_attn_input_mem_config(mode),
         tt_ccl=tt_ccl,
     )
 
@@ -92,7 +90,8 @@ def test_rms_norm_inference(
         memory_config=(model_args.get_residual_mem_config(mode)),
     )
 
-    tt_output = tt_model(tt_input, mode=mode)
+    norm_config = model_args.get_norm_config("attention_norm", mode, None)
+    tt_output = tt_model(tt_input, mode=mode, norm_config=norm_config)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(
