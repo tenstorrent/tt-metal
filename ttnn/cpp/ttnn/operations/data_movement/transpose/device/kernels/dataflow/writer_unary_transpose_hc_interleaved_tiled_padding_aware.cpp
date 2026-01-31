@@ -128,7 +128,7 @@ void kernel_main() {
                     uint32_t linear_idx = base_linear_idx + output_h_face_line * C_t * W_t;
 
                     // Compute the write address
-                    uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
+                    uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
 
                     // Perform asynchronous write
                     noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
@@ -177,20 +177,19 @@ void kernel_main() {
 
                 // Sub-tile/face line where our padded data starts
                 uint8_t sub_tile_line_start = face_c == face_c_start ? C_in_tile % FACE_HEIGHT : 0;
-                if (sub_tile_line_start == 0) {
-                    uint32_t offset = face_c_offset * element_size;
-                    uint32_t write_size = SUBTILE_LINE_BYTES * FACE_HEIGHT * NUM_FACES_W;
-                    uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
-                    noc_async_write(l1_read_ptr, write_noc_base_addr, write_size);
-                } else {
-                    for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-                        // Offset to the start of the current face along the width of the tile
-                        uint32_t face_w_offset = face_w * face_height_width;
-                        uint32_t offset =
-                            (face_c_offset + face_w_offset + sub_tile_line_start * FACE_WIDTH) * element_size;
-                        uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
-                        uint32_t write_size = SUBTILE_LINE_BYTES * (FACE_HEIGHT - sub_tile_line_start);
-                        noc_async_write(l1_read_ptr, write_noc_base_addr, write_size);
+
+                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                    // Offset to the start of the current face along the width of the tile
+                    uint32_t face_w_offset = face_w * face_height_width;
+                    for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+                        // offset to the start of the current sub-tile line
+                        uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line * FACE_WIDTH) * element_size;
+
+                        // Compute the write address
+                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+
+                        // Perform asynchronous write
+                        noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
                     }
                 }
             }
