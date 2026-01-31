@@ -299,6 +299,8 @@ tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
 Common options:
 - `--dry-run`: Preview generated MPI command without execution
 - `--verbose`: Enable detailed logging
+- `--multihost`: tag-output and tcp
+- `--tcp-interface: restricts interface. Implies --multihost.
 - `--mpi-args`: Pass additional MPI arguments (rankfiles, network options, etc.)
 
 #### 2.4.3 Usage Patterns
@@ -358,7 +360,7 @@ For multi-host clusters, combine rank bindings with MPI rankfiles to specify phy
 # rank 1=host2 slot=0
 
 tt-run --rank-binding config.yaml \
-       --mpi-args "--rankfile hosts.txt --mca btl tcp" \
+       --multihost --mpi-args "--rankfile hosts.txt" \
        python distributed_workload.py
 ```
 

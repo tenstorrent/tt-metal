@@ -115,6 +115,10 @@ jobs:
           run_args: |
             # Setup shared venv for multi-host access (handles race conditions)
             ./tests/scripts/multihost/setup_shared_venv.sh
+            # Deactivate any currently active venv before activating the shared venv
+            deactivate 2>/dev/null || true
+            # Activate the shared venv before running tests
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -168,6 +172,10 @@ jobs:
           run_args: |
             # Setup shared venv for multi-host access (handles race conditions)
             ./tests/scripts/multihost/setup_shared_venv.sh
+            # Deactivate any currently active venv before activating the shared venv
+            deactivate 2>/dev/null || true
+            # Activate the shared venv before running tests
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -221,4 +229,8 @@ jobs:
           run_args: |
             # Setup shared venv for multi-host access (handles race conditions)
             ./tests/scripts/multihost/setup_shared_venv.sh
+            # Deactivate any currently active venv before activating the shared venv
+            deactivate 2>/dev/null || true
+            # Activate the shared venv before running tests
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh

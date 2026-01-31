@@ -246,14 +246,13 @@ The `mesh_id` in rank bindings must match a `mesh_id` defined in your MGD. If yo
 ### 4.3 Running with tt-run
 
 ```bash
-tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
+tt-run --multihost --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
 ```
 
 Example:
 
 ```bash
-tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml \
-       --mpi-args "--tag-output" \
+tt-run --multihost --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml \
        python3 my_multi_mesh_workload.py
 ```
 
@@ -516,8 +515,7 @@ Let's put everything together with a complete working example. This demonstrates
 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 
 # Run with tt-run on a Galaxy system
-tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml \
-       --mpi-args "--tag-output" \
+tt-run --multihost --rank-binding 4x4_multi_mesh_rank_binding.yaml \
        python3 tests/ttnn/distributed/test_multi_mesh.py
 ```
 
@@ -620,7 +618,7 @@ if __name__ == "__main__":
 ### Debugging Tips
 
 1. **Start with one rank**: Debug your workload with one process before scaling
-2. **Use `--tag-output`**: Pass `--mpi-args "--tag-output"` to `tt-run` to prefix output with rank numbers
+2. **Use `--multihost`**: Passes "--tag-output"` to mpi to prefix output with rank numbers
 3. **Check device visibility**: Print `TT_VISIBLE_DEVICES` at script start to verify configuration
 4. **Barrier before close**: Always call `ttnn.distributed_context_barrier()` before closing devices
 

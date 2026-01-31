@@ -19,6 +19,9 @@ OPTIONS:
     --force               Overwrite existing virtual environment without prompting.
                           By default, warns and prompts for confirmation if the
                           target directory exists and is not empty.
+    --bundle-python       Deep-copy the Python interpreter into the venv instead of
+                          using symlinks. This makes the venv fully self-contained
+                          and portable, at the cost of increased disk space.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -57,6 +60,7 @@ EOF
 ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
+BUNDLE_PYTHON="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -83,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_OVERWRITE="true"
+            shift
+            ;;
+        --bundle-python)
+            BUNDLE_PYTHON="true"
             shift
             ;;
         --help|-h)
@@ -123,7 +131,7 @@ validate_python_version() {
     minor=$((10#$minor))
 
     # Require Python 3.10+
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 10 ]]; }; then
         echo "Error: Python version must be 3.10 or higher (got: $version)" >&2
         echo "Supported versions: 3.10, 3.11, etc." >&2
         exit 1
@@ -291,8 +299,13 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
-uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
 source "$PYTHON_ENV_DIR/bin/activate"
+
+# Install uv into the venv at the same version as the invoking uv
+UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
+echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
+uv pip install "uv==${UV_CURRENT_VERSION}"
 
 # PyTorch CPU index URL for all uv pip commands
 PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
@@ -320,5 +333,34 @@ if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
 else
     echo "In worktree: not generating git hooks"
 fi
+
+# Bundle Python interpreter into the venv if requested
+if [[ "$BUNDLE_PYTHON" == "true" ]]; then
+    echo "Bundling Python interpreter into venv..."
+
+    # Get the real path to the Python interpreter
+    REAL_PYTHON_PATH=$(readlink -f "$PYTHON_ENV_DIR/bin/python")
+    echo "  Python interpreter: $REAL_PYTHON_PATH"
+
+    # Extract the cpython installation directory (parent of bin/python)
+    # Path is in form: <prefix>/python/cpython<version>/bin/python
+    CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
+    echo "  CPython directory: $CPYTHON_DIR"
+
+    # Remove python symlinks in venv (they may not match the interpreter's structure)
+    echo "  Removing venv python symlinks..."
+    rm -f "$PYTHON_ENV_DIR/bin/python"*
+
+    # Copy the cpython directory contents into the venv
+    echo "  Copying Python interpreter files into venv..."
+    cp -r "$CPYTHON_DIR"/* "$PYTHON_ENV_DIR/"
+
+    echo "  Python interpreter bundled successfully"
+fi
+
+# Compile bytecode at the end to take advantage of parallelism
+echo "Compiling bytecode (for improved startup performance)..."
+python -m compileall -j 0 -q "$PYTHON_ENV_DIR/lib" 2>/dev/null || true
+echo "Bytecode compilation completed"
 
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"

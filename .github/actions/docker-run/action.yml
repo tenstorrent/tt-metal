@@ -122,12 +122,14 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          set -eu
+          set -eo pipefail
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
-            uv pip install "$WHEEL_FILENAME"
+            if uv pip install "$WHEEL_FILENAME"; then
+              echo "INFO: Successfully installed wheel into /opt/venv"
+            fi
           fi
 
           ${{ inputs.run_args }}
