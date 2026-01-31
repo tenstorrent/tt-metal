@@ -174,7 +174,7 @@ def test_patchtsmixer_mlp(device, reset_seeds):
     tt_mlp = TtPatchTSMixerMLP(device=device, base_address=base, parameters=parameters)
 
     # input rank-4 last dim = in_features
-    B, C, Np = 1, 2, 32
+    B, C, Np = 1, 2, 64
     x = torch.randn(B, C, Np, in_features)
 
     torch_out = torch_mlp(x)
