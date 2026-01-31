@@ -37,24 +37,28 @@ public:
         uint32_t shard_id = 0,
         uint32_t start_page_offset = 0,
         uint32_t end_page_offset = 0,
-        uint8_t noc = noc_index) :
+        uint8_t noc = noc_index,
+        bool skip_padding = true) :
         accessor(accessor),
         current_page_id_in_shard(start_page_offset),
         end_page_id_in_shard(end_page_offset),
         current_shard_id(shard_id),
-        noc(noc) {
+        noc(noc),
+        skip_padding(skip_padding) {
         auto inside_tensor = calculate_current_location(shard_id, start_page_offset);
 
-        // If starting page is outside logical tensor bounds, advance to next valid page
-        if (current_page_id_in_shard < end_page_id_in_shard && !inside_tensor) {
-            // Starting page is invalid, advance to next valid page or end
-            do {
-                current_page_id_in_shard++;
-                if (current_page_id_in_shard >= end_page_id_in_shard) {
-                    current_page_id_in_shard = end_page_id_in_shard;
-                    break;
-                }
-            } while (!update_local_global_page_coord());
+        if (skip_padding) {
+            // If starting page is outside logical tensor bounds, advance to next valid page
+            if (current_page_id_in_shard < end_page_id_in_shard && !inside_tensor) {
+                // Starting page is invalid, advance to next valid page or end
+                do {
+                    current_page_id_in_shard++;
+                    if (current_page_id_in_shard >= end_page_id_in_shard) {
+                        current_page_id_in_shard = end_page_id_in_shard;
+                        break;
+                    }
+                } while (!update_local_global_page_coord());
+            }
         }
 
         // Calculate NOC address for the final position
@@ -76,6 +80,17 @@ public:
         return page_id;
     }
 
+    bool is_padding() const {
+        const auto& dspec = accessor.dspec();
+        for (uint32_t i = 0; i < dspec.rank(); ++i) {
+            // Check bounds - some shards at edges might have fewer pages (in case of padding)
+            if (global_page_coord[i] >= dspec.tensor_shape()[i]) {
+                return true;  // Page is outside logical tensor bounds
+            }
+        }
+        return false;
+    }
+
     reference operator*() const { return current_page; }
     pointer operator->() const { return &current_page; }
 
@@ -92,7 +107,7 @@ public:
                 current_page_id_in_shard = end_page_id_in_shard;
                 break;
             }
-        } while (!update_local_global_page_coord());
+        } while (!update_local_global_page_coord() && skip_padding);
         update_current_page();
         return *this;
     }
@@ -116,7 +131,7 @@ public:
                 current_page_id_in_shard = end_page_id_in_shard;
                 break;
             }
-        } while (!update_local_global_page_coord(steps));
+        } while (!update_local_global_page_coord(steps) && skip_padding);
         update_current_page();
         return *this;
     }
@@ -159,16 +174,17 @@ private:
     uint32_t current_shard_id = 0;
     uint64_t current_noc_addr = 0;
     uint8_t noc = noc_index;
+    bool skip_padding = true;
 
     ArrayU32 local_page_coord = {};
     ArrayU32 global_page_coord = {};
     ArrayU32 shard_coord = {};
 
-    mutable Page current_page{0, 0};
+    mutable Page current_page{0, 0, false};
 
     void update_current_page() {
         if (current_page_id_in_shard < end_page_id_in_shard) {
-            current_page = Page(current_noc_addr, page_id());
+            current_page = Page(current_noc_addr, page_id(), is_padding());
         }
     }
 
@@ -256,19 +272,23 @@ public:
         uint32_t shard_id,
         uint32_t start_page_offset,
         uint32_t end_page_offset,
-        uint8_t noc = noc_index) :
+        uint8_t noc = noc_index,
+        bool skip_padding = true) :
         accessor_(accessor),
         shard_id_(shard_id),
         start_page_offset_(start_page_offset),
         end_page_offset_(end_page_offset),
-        noc_(noc) {}
+        noc_(noc),
+        skip_padding_(skip_padding) {}
 
     iterator begin() const {
-        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, start_page_offset_, end_page_offset_, noc_);
+        return ShardPagesAddressIterator<Accessor>(
+            accessor_, shard_id_, start_page_offset_, end_page_offset_, noc_, skip_padding_);
     }
 
     iterator end() const {
-        return ShardPagesAddressIterator<Accessor>(accessor_, shard_id_, end_page_offset_, end_page_offset_, noc_);
+        return ShardPagesAddressIterator<Accessor>(
+            accessor_, shard_id_, end_page_offset_, end_page_offset_, noc_, skip_padding_);
     }
 
     const_iterator cbegin() const { return begin(); }
@@ -280,5 +300,6 @@ private:
     uint32_t start_page_offset_;
     uint32_t end_page_offset_;
     uint8_t noc_;
+    bool skip_padding_;
 };
 }  // namespace tensor_accessor

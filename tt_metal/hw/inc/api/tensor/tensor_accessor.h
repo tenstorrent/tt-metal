@@ -223,11 +223,17 @@ public:
         uint32_t shard_id,
         uint32_t start_page_offset = 0,
         uint32_t end_page_offset = 0,
-        uint8_t noc = noc_index) const {
+        uint8_t noc = noc_index,
+        bool skip_padding = true) const {
         static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
         uint32_t actual_end_page_offset = (end_page_offset == 0) ? dspec().shard_volume() : end_page_offset;
         return tensor_accessor::ShardPages<TensorAccessor>(
-            *this, shard_id, start_page_offset, actual_end_page_offset, noc);
+            *this, shard_id, start_page_offset, actual_end_page_offset, noc, skip_padding);
+    }
+
+    // Overload for case where only shard_id and skip_padding are provided
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(uint32_t shard_id, bool skip_padding) const {
+        return shard_pages(shard_id, 0, 0, noc_index, skip_padding);
     }
 
     // Returns a proxy for pages iterator (iterates over all pages in the tensor)
@@ -363,11 +369,17 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         uint32_t shard_id,
         uint32_t start_page_offset = 0,
         uint32_t end_page_offset = 0,
-        uint8_t noc = noc_index) const {
+        uint8_t noc = noc_index,
+        bool skip_padding = true) const {
         static_assert(
             tensor_accessor::detail::always_false_v<TensorAccessor>,
             "TensorAccessor::shard_pages is not supported by the interleaved tensor accessor");
         return {};
+    }
+
+    // Overload for case where only shard_id and skip_padding are provided
+    tensor_accessor::ShardPages<TensorAccessor> shard_pages(uint32_t shard_id, bool skip_padding) const {
+        return shard_pages(shard_id, 0, 0, noc_index, skip_padding);
     }
 
     // Returns a proxy for pages iterator (iterates over all pages in the tensor)
