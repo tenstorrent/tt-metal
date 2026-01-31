@@ -89,6 +89,8 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::bernoulli::BernoulliDeviceOperation;
+    TT_FATAL(input.device() != nullptr, "Bernoulli: Input tensor needs to be on device");
+
     auto operation_attributes = OperationType::operation_attributes_t{
         seed,
         dtype.value_or(DataType::FLOAT32),
