@@ -24,6 +24,7 @@
 #include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "models/qwen3.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -217,7 +218,11 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
 struct ModelConfig {
     std::string model_type = "gpt2";
     std::string model_path = "";
-    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
+    std::variant<
+        ttml::models::gpt2::TransformerConfig,
+        ttml::models::llama::LlamaConfig,
+        ttml::models::qwen3::Qwen3Config>
+        transformer_config;
 };
 
 ModelConfig parse_model_config(const YAML::Node &yaml_config) {
@@ -230,6 +235,8 @@ ModelConfig parse_model_config(const YAML::Node &yaml_config) {
         config.transformer_config = ttml::models::gpt2::read_config(model_config);
     } else if (config.model_type == "llama") {
         config.transformer_config = ttml::models::llama::read_config(model_config);
+    } else if (config.model_type == "qwen3") {
+        config.transformer_config = ttml::models::qwen3::read_config(model_config);
     } else {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
@@ -543,6 +550,8 @@ int main(int argc, char **argv) {
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::qwen3::Qwen3Config>) {
+                return ttml::models::qwen3::create(arg);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));

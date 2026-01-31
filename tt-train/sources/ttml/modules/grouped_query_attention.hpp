@@ -40,10 +40,6 @@ public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
-
-    // Forward with KV cache for inference
-    [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& x,
         const autograd::TensorPtr& mask,
         std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,

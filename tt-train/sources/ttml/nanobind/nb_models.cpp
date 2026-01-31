@@ -22,6 +22,7 @@
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
 #include "models/mlp.hpp"
+#include "models/qwen3.hpp"
 #include "modules/module_base.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
@@ -136,6 +137,15 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
         py_llama_module.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
             return models::llama::create(config);
+        });
+    }
+
+    {
+        auto py_qwen3_module = m.def_submodule("qwen3");
+        nb::class_<models::qwen3::Qwen3Config>(py_qwen3_module, "Qwen3Config");
+        nb::class_<models::qwen3::Qwen3, models::BaseTransformer>(py_qwen3_module, "Qwen3");
+        py_qwen3_module.def("create_qwen3_model", [](const models::qwen3::Qwen3Config& config) {
+            return models::qwen3::create(config);
         });
     }
 
@@ -308,6 +318,66 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama.def(
             "get_original_vocab_size",
             &models::llama::Llama::get_original_vocab_size,
+            "Get the original vocabulary size");
+    }
+
+    {
+        auto py_qwen3_module = static_cast<nb::module_>(m.attr("qwen3"));
+
+        auto py_qwen3_config = static_cast<nb::class_<models::qwen3::Qwen3Config>>(py_qwen3_module.attr("Qwen3Config"));
+        py_qwen3_config.def(nb::init<>());
+        py_qwen3_config.def_rw("num_heads", &models::qwen3::Qwen3Config::num_heads, "Number of heads");
+        py_qwen3_config.def_rw("num_groups", &models::qwen3::Qwen3Config::num_groups, "Number of groups");
+        py_qwen3_config.def_rw("embedding_dim", &models::qwen3::Qwen3Config::embedding_dim, "Embedding dimensions");
+        py_qwen3_config.def_rw("head_dim", &models::qwen3::Qwen3Config::head_dim, "Head dimension");
+        py_qwen3_config.def(
+            "set_intermediate_dim",
+            [](models::qwen3::Qwen3Config& c, uint32_t v) { c.intermediate_dim = std::make_optional(v); },
+            "Set intermediate dimensions");
+        py_qwen3_config.def_rw("dropout_prob", &models::qwen3::Qwen3Config::dropout_prob, "Dropout probability");
+        py_qwen3_config.def_rw("theta", &models::qwen3::Qwen3Config::theta, "Theta");
+        py_qwen3_config.def_rw("rms_norm_eps", &models::qwen3::Qwen3Config::rms_norm_eps, "RMS norm epsilon");
+        py_qwen3_config.def_rw("num_blocks", &models::qwen3::Qwen3Config::num_blocks, "Number of blocks");
+        py_qwen3_config.def_rw("vocab_size", &models::qwen3::Qwen3Config::vocab_size, "Vocabulary size");
+        py_qwen3_config.def_rw(
+            "max_sequence_length", &models::qwen3::Qwen3Config::max_sequence_length, "Max sequence length");
+        py_qwen3_config.def_rw("runner_type", &models::qwen3::Qwen3Config::runner_type, "Runner type");
+        py_qwen3_config.def_rw("weight_tying", &models::qwen3::Qwen3Config::weight_tying, "Weight tying");
+        py_qwen3_config.def_rw("scaling_factor", &models::qwen3::Qwen3Config::scaling_factor, "Scaling factor");
+        py_qwen3_config.def_rw(
+            "high_freq_factor", &models::qwen3::Qwen3Config::high_freq_factor, "High frequency factor");
+        py_qwen3_config.def_rw("low_freq_factor", &models::qwen3::Qwen3Config::low_freq_factor, "Low frequency factor");
+        py_qwen3_config.def_rw(
+            "original_context_length", &models::qwen3::Qwen3Config::original_context_length, "Original context length");
+
+        auto py_qwen3 = static_cast<nb::class_<models::qwen3::Qwen3>>(py_qwen3_module.attr("Qwen3"));
+        py_qwen3.def(nb::init<models::qwen3::Qwen3Config>());
+
+        py_qwen3.def(
+            "__call__",
+            [](models::qwen3::Qwen3& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) { return self(tensor, mask); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass without KV cache.");
+
+        py_qwen3.def(
+            "__call__",
+            [](models::qwen3::Qwen3& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask,
+               std::shared_ptr<models::common::transformer::KvCache> kv_cache,
+               uint32_t new_tokens) { return self(tensor, mask, kv_cache, new_tokens); },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            nb::arg("kv_cache"),
+            nb::arg("new_tokens"),
+            "Model forward pass with KV cache for inference.");
+
+        py_qwen3.def(
+            "get_original_vocab_size",
+            &models::qwen3::Qwen3::get_original_vocab_size,
             "Get the original vocabulary size");
     }
 
