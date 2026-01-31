@@ -287,7 +287,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Compute grid and worker distribution using helper structs
     auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
     auto workers = WorkerDistribution::compute(grid, block_ht);
-    auto core_ranges = compute_core_ranges(grid, workers);
+    auto core_ranges = CoreRanges::compute(grid, workers);
 
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
@@ -489,7 +489,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
 
-    auto runtime_args = build_all_runtime_args(cores, rt_ctx, device);
+    auto runtime_args = RuntimeArgsResult::build(cores, rt_ctx, device);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors

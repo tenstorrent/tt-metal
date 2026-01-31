@@ -84,23 +84,9 @@ struct CoreRanges {
     CoreRangeSet not_all_to_all_workers{};
     uint32_t num_cores_x_mcast = 0;
     uint32_t num_cores_y_mcast = 0;
+
+    static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers);
 };
-
-//////////////////////////////////////////////////////////////////////////////
-// Core range computation
-//////////////////////////////////////////////////////////////////////////////
-
-CoreRangeSet apply_grid_offset(const CoreRangeSet& input_set, const CoreCoord& offset);
-
-CoreRanges compute_core_ranges_mcast_1d_row_wise(
-    const GridParams& grid, const WorkerDistribution& workers, CoreCoord start_core);
-
-CoreRanges compute_core_ranges_mcast_1d_col_wise(
-    const GridParams& grid, const WorkerDistribution& workers, CoreCoord start_core);
-
-CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistribution& workers, CoreCoord start_core);
-
-CoreRanges compute_core_ranges(const GridParams& grid, const WorkerDistribution& workers);
 
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
@@ -413,6 +399,9 @@ struct CoreIndices {
     uint32_t num_reduce_tiles_per_block_h = 0;
 
     static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
+
+    // Returns true if this core is an all-to-all worker based on its indices
+    bool is_all_to_all(const RuntimeArgsContext& ctx) const;
 };
 
 // Struct to hold all runtime args output
@@ -424,30 +413,8 @@ struct RuntimeArgsResult {
     KernelDescriptor::RuntimeArgs writer_receiver;
     KernelDescriptor::RuntimeArgs compute_all_to_all;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all;
+
+    static RuntimeArgsResult build(const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device);
 };
-
-bool is_all_to_all_worker(const CoreIndices& idx, const RuntimeArgsContext& ctx);
-
-std::vector<uint32_t> build_compute_args(
-    const CoreIndices& idx, const RuntimeArgsContext& ctx, bool& is_all_to_all_out);
-
-std::vector<uint32_t> build_reader_sender_args(
-    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx, IDevice* device);
-
-std::vector<uint32_t> build_reader_receiver_all_to_all_args(
-    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx);
-
-std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx);
-
-std::vector<uint32_t> build_write_back_args(
-    const RuntimeArgsContext& ctx, uint32_t& current_storage_core, uint32_t& current_storage_core_offset);
-
-std::vector<uint32_t> build_writer_args(
-    const CoreIndices& idx,
-    const RuntimeArgsContext& ctx,
-    const std::vector<uint32_t>& write_back_args,
-    bool is_all_to_all);
-
-RuntimeArgsResult build_all_runtime_args(const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device);
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers
