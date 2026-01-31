@@ -235,6 +235,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper ? "not null" : "null",
         pad_value,
         preserve_nan_values);
+
+    std::replace(args_str.begin(), args_str.end(), '\n', '\t');
+    log_info(tt::LogAlways, "{}", args_str);
     ZoneText(args_str.c_str(), args_str.size());
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
