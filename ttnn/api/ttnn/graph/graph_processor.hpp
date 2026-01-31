@@ -117,6 +117,8 @@ private:
 
     void track_function_end_impl();
 
+    void begin_capture_impl(RunMode mode);
+
     void clean_hook();
 
 public:
