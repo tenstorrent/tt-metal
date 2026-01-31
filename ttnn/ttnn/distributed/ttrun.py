@@ -258,6 +258,14 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         }
     )
 
+    # Pass PATH and VIRTUAL_ENV for venv-aware execution on remote hosts.
+    # This ensures pytest and other venv tools are found when MPI spawns processes
+    # on remote hosts in multi-host scenarios.
+    if os.environ.get("PATH"):
+        env["PATH"] = os.environ["PATH"]
+    if os.environ.get("VIRTUAL_ENV"):
+        env["VIRTUAL_ENV"] = os.environ["VIRTUAL_ENV"]
+
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
         env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
@@ -510,6 +518,8 @@ def main(
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+        - PATH: Passed through from caller (enables venv tools like pytest on remote hosts)
+        - VIRTUAL_ENV: Passed through from caller (enables venv-aware execution)
 
         Default values for the following environment variables will be used if not set when calling tt-run:
         - TT_METAL_HOME: Launch directory (where tt-run was invoked)
