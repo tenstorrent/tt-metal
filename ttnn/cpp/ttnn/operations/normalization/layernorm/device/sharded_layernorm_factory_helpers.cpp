@@ -63,6 +63,9 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::D
     return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format};
 }
 
+namespace {
+
+// Internal helper: determines if two-stage reduce optimization should be used
 bool should_use_two_stage_reduce(
     bool mcast_1d, bool row_wise, CoreCoord grid_size, CoreCoord compute_with_storage_grid_size) {
     if (mcast_1d) {
@@ -76,6 +79,7 @@ bool should_use_two_stage_reduce(
     return false;
 }
 
+// Internal helper: computes number of blocks based on grid configuration
 uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
     if (mcast_1d) {
         return shard_spec.num_cores();
@@ -85,6 +89,8 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
     }
     return grid_size.y;
 }
+
+}  // namespace
 
 //////////////////////////////////////////////////////////////////////////////
 // Grid and worker distribution
