@@ -113,7 +113,7 @@ bool chip_to_chip_dram_buffer_transfer(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
 
     fixture->WriteBuffer(sender_mesh_device, input_dram_buffer, inputs);
-    uint32_t MAX_BUFFER = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+    uint32_t MAX_BUFFER = tt::tt_metal::get_hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
     uint32_t num_loops = (uint32_t)(byte_size / MAX_BUFFER);
@@ -379,8 +379,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     auto* const sender_device = sender_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -429,8 +428,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     auto* const sender_device = sender_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -477,15 +475,14 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
     auto* const sender_device = sender_mesh_device->get_devices()[0];
     auto* const receiver_device = receiver_mesh_device->get_devices()[0];
     uint32_t MAX_BUFFER_SIZE =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     if (sender_device->get_ethernet_sockets(receiver_device->id()).empty()) {
         GTEST_SKIP() << "No connected ethernet sockets";
     }
 
     for (const auto& sender_eth_core : sender_device->get_ethernet_sockets(receiver_device->id())) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -557,7 +554,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
 TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_mesh_device : devices_) {
@@ -568,16 +565,15 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                        sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
-                const auto num_eriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                    HalProgrammableCoreType::ACTIVE_ETH);
+                const auto num_eriscs =
+                    tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                     log_info(
@@ -647,8 +643,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
         GTEST_SKIP() << "See GH Issue #18384";
     }
 
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -658,8 +653,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                        sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -719,12 +713,11 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
 
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -734,8 +727,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                        sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::get_cluster().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);

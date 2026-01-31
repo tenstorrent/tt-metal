@@ -79,8 +79,8 @@ DeviceProgress TestProgressMonitor::poll_device_senders(
     DeviceProgress progress;
     progress.device_id = test_device.get_node_id();
 
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt::tt_metal::get_cluster();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(progress.device_id);
 
     auto* device_info = ctx_->get_device_info_provider();

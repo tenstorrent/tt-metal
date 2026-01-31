@@ -21,7 +21,7 @@ namespace tt::tt_metal::distributed {
 
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map() {
     static tt::stl::Indestructible<MeshContainer<PhysicalMeshCoordinate>> kTranslationMap([]() {
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& control_plane = tt::tt_metal::get_control_plane();
 
         const auto mesh_ids = control_plane.get_user_physical_mesh_ids();
         TT_FATAL(!mesh_ids.empty(), "There are no user physical meshes in the system found by control plane.");

@@ -70,7 +70,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 
 // ----------------------------------- program -----------------------------------
 void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const AddrgenTestParams& p) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& cp = tt::tt_metal::get_control_plane();
 
     // Check if fabric is 2D and create defines map
     const auto& fabric_context = cp.get_fabric_context();
@@ -206,7 +206,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
     // Calculate aligned page sizes for source (DRAM) and destination (DRAM or L1)
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);  // Source is always DRAM
     uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
                                             : hal.get_alignment(tt::tt_metal::HalMemType::L1);

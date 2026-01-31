@@ -16,14 +16,14 @@
 namespace tt::tt_metal::tools::mem_bench {
 
 void* get_hugepage(int device_id, uint32_t base_offset) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
     auto channel = cluster.get_assigned_channel_for_device(device_id);
     return (void*)(cluster.host_dma_address(base_offset, mmio_device_id, channel));
 }
 
 uint32_t get_hugepage_size(int device_id) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
     auto channel = cluster.get_assigned_channel_for_device(device_id);
     return cluster.get_host_channel_size(mmio_device_id, channel);
@@ -45,7 +45,7 @@ double get_current_time_seconds() {
 }
 
 std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto pcie_devices = cluster.number_of_pci_devices();
     std::vector<int> device_ids;
 
@@ -67,7 +67,7 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
 }
 
 std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto pcie_devices = cluster.number_of_pci_devices();
     std::vector<int> device_ids;
     std::unordered_set<uint32_t> numa_nodes;
@@ -86,12 +86,12 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
 }
 
 int get_number_of_mmio_devices() {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     return cluster.number_of_pci_devices();
 }
 
 bool is_valid_mmio_device(int device_id) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cluster = tt::tt_metal::get_cluster();
     const auto pcie_devices = cluster.number_of_pci_devices();
 
     if (device_id < 0 || device_id >= pcie_devices) {

@@ -75,7 +75,7 @@ struct FabricBandwidthTelemetryFixture : public MeshDeviceFixtureBase {
         return const_cast<tt::umd::Cluster&>(*metal_ctx.get_cluster().get_driver());
     }
 
-    const Hal& get_hal() { return tt::tt_metal::MetalContext::instance().hal(); }
+    const Hal& get_hal() { return tt::tt_metal::get_hal(); }
 };
 
 // Read TX counters from a channel (only if has valid cycles)
@@ -120,7 +120,7 @@ ValidationMetrics run_bandwidth_validation(
     tt::tt_fabric::MeshId mesh_id_0 = tt::tt_fabric::MeshId(0);
 
     // Convert logical to physical chip ID for reading back telemetry (which requires a physical, not logical, chip ID)
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     tt::tt_fabric::FabricNodeId src_fabric_node_id(mesh_id_0, src_chip);
     int src_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
@@ -155,7 +155,7 @@ ValidationMetrics run_bandwidth_validation(
     log_info(tt::LogTest, "Reading baseline counters...");
     ChannelCounters baseline = sum_all_tx_counters(fixture.get_cluster(), fixture.get_hal(), src_physical_chip_id);
 
-    float aiclk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(src_physical_chip_id);
+    float aiclk_mhz = tt::tt_metal::get_cluster().get_device_aiclk(src_physical_chip_id);
     log_info(tt::LogTest, "Using AICLK = {:.1f} MHz", aiclk_mhz);
 
     // Run measured transfers

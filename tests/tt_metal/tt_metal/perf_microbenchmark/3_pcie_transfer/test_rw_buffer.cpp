@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
-        if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
+        if (device_id >= tt::tt_metal::get_cluster().number_of_devices()) {
             log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
             return 1;
         }
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         device_is_mmio = device->get_devices()[0]->is_mmio_capable();
 
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        if (!tt::tt_metal::get_rtoptions().get_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
             return 1;
         }

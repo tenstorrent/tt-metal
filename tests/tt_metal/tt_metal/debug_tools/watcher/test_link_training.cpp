@@ -46,7 +46,7 @@ static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribut
     }
 
     for (auto core : device->get_active_ethernet_cores(true)) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), core)) {
+        if (tt::tt_metal::get_cluster().is_ethernet_link_up(device->id(), core)) {
             logical_core = core;
             break;
         }
@@ -65,10 +65,10 @@ static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribut
 
     auto x = MetalContext::instance().watcher_server()->exception_message();
     // read out link status from L1
-    auto link_up_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto link_up_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
     uint32_t link_status_rd;
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    tt::tt_metal::get_cluster().read_core(
         &link_status_rd, sizeof(uint32_t), tt_cxy_pair(device->id(), virtual_core.x, virtual_core.y), link_up_addr);
 
     if (x.empty()) {
@@ -89,17 +89,16 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     auto mesh_device = this->devices_[0];
     auto* device = mesh_device->get_devices()[0];
     vector<uint32_t> reset_val = {0x1};
-    uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    uint32_t retrain_force_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
             continue;
         }
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                device->id(), virtual_core, reset_val, retrain_force_addr);
+            tt::tt_metal::get_cluster().write_core(device->id(), virtual_core, reset_val, retrain_force_addr);
         }
     }
 
@@ -107,7 +106,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     std::this_thread::sleep_for(std::chrono::seconds(5));
     vector<std::string> expected_strings;
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
-        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+        if (not tt::tt_metal::get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
             continue;
         }
         CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);

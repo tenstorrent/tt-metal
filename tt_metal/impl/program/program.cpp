@@ -101,10 +101,9 @@ using namespace tt::tt_metal;
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator_impl()->get_config().l1_unreserved_base -
-               MetalContext::instance().hal().get_dev_addr(
-                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+               get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
-    return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    return get_hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
@@ -175,7 +174,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
+        tt::tt_metal::get_rtoptions().get_compile_hash_string());
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG
@@ -203,8 +202,8 @@ std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 detail::ProgramImpl::ProgramImpl() :
 
     cached_device_hash_(std::nullopt),
-    programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
+    programmable_core_count_(get_hal().get_programmable_core_type_count()),
+    max_cbs_(get_hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -345,7 +344,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = get_hal().get_programmable_core_type_index(programmable_core_type);
 
     auto new_kernel_core_type = kernel->get_kernel_programmable_core_type();
     auto new_kernel_processor_class = kernel->get_kernel_processor_class();
@@ -429,7 +428,7 @@ KernelGroup::KernelGroup(
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         kernel_config.kernel_config_base()[index] =
             hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
@@ -499,9 +498,7 @@ KernelGroup::KernelGroup(
     this->go_msg.view().signal() = dev_msgs::RUN_MSG_GO;
 }
 
-CoreType KernelGroup::get_core_type() const {
-    return MetalContext::instance().hal().get_core_type(this->programmable_core_type_index);
-};
+CoreType KernelGroup::get_core_type() const { return get_hal().get_core_type(this->programmable_core_type_index); };
 
 std::vector<std::shared_ptr<KernelGroup>>& detail::ProgramImpl::get_kernel_groups(
     uint32_t programmable_core_type_index) {
@@ -578,7 +575,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         core_to_kernel_group_index_table_[programmable_core_type_index].resize(
             grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y,
             core_to_kernel_group_invalid_index);
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = get_hal();
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
@@ -635,9 +632,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                         logged.insert(cb_tuple);
                                         // This code should be modified to log the core type index if it isn't obvious.
                                         TT_ASSERT(
-                                            programmable_core_type_index ==
-                                            MetalContext::instance().hal().get_programmable_core_type_index(
-                                                HalProgrammableCoreType::TENSIX));
+                                            programmable_core_type_index == get_hal().get_programmable_core_type_index(
+                                                                                HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
                                         for (uint32_t i = 0; i < max_cbs_; i++) {
@@ -949,14 +945,14 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     uint64_t kernel_config_base =
         hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
-    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
+    CoreType core_type = get_hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             device.id(),
             device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
@@ -1100,7 +1096,7 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -1187,7 +1183,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     }
 
     std::uint32_t num_active_cores = 0;
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kernel_group : this->get_kernel_groups(index)) {
@@ -1263,7 +1259,7 @@ const ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmab
 }
 
 void detail::ProgramImpl::set_launch_msg_sem_offsets() {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
         for (auto& kg : this->get_kernel_groups(kg_type_index)) {
             auto sem_offset = kg->launch_msg.view().kernel_config().sem_offset();
@@ -1295,12 +1291,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
         }
         std::unordered_set<SubDeviceId> used_sub_device_ids;
         auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
-            auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
+            auto core_type_index = get_hal().get_programmable_core_type_index(core_type);
             if (core_type_index == -1) {
                 return;
             }
-            const auto& program_kgs =
-                this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
+            const auto& program_kgs = this->get_kernel_groups(get_hal().get_programmable_core_type_index(core_type));
             uint32_t num_intersections = 0;
             uint32_t num_cores = 0;
             for (const auto& kg : program_kgs) {
@@ -1350,7 +1345,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
+    if (not get_hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
         ttsl::hash::hash_combine(device_hash, device->id());
@@ -1392,7 +1387,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
+    if (not get_hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
         device_hash = (device_hash << 32) | (device->id());
@@ -1471,13 +1466,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
+                    if (tt::tt_metal::get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
                         kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
 
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
+                    bool is_mock = tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
                     if (detail::HashLookup::inst().add(kernel_hash)) {
                         if (!is_mock) {
@@ -1499,8 +1492,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     sync_build_steps(events);
 
     // Mock devices don't have binaries to read
-    bool is_mock =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    bool is_mock = tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
@@ -1526,17 +1518,15 @@ void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .sem_offset;
+    return base_addr +
+           this->get_program_config(get_hal().get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .cb_offset;
+    return base_addr +
+           this->get_program_config(get_hal().get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
 void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
@@ -1550,7 +1540,7 @@ CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = get_hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
 }
@@ -1558,7 +1548,7 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = get_hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
 }
@@ -1566,18 +1556,16 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
+        get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        not this->get_kernel_groups(get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
-        not this->get_kernel_groups(
-                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
+        get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
+        not this->get_kernel_groups(get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
                 .empty());
 }
 
@@ -1585,9 +1573,8 @@ bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
     // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
     // that big of a ringbuffer.
     return !(
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
+        get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        not this->get_kernel_groups(get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
 }
 
@@ -1743,7 +1730,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);

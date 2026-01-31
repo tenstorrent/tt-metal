@@ -58,7 +58,7 @@ TEST(BigMeshDualRankTest, DistributedContext) {
 
 TEST(BigMeshDualRankTest, LocalRankBinding) {
     const auto& global_context = MetalContext::instance().global_distributed_context();
-    auto& control_plane = MetalContext::instance().get_control_plane();
+    auto& control_plane = get_control_plane();
 
     tt_fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
     if (global_context.rank() == multihost::Rank(0)) {
@@ -147,7 +147,7 @@ TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
 }
 
 TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device_->get_view());
     auto rank = control_plane.get_local_host_rank_id_binding();

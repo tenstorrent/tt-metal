@@ -102,7 +102,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
         syncer_core_physical.y,
         tensix_waiter_core_physical.x,
         tensix_waiter_core_physical.y,
-        MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)
+        get_hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)
     };
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 

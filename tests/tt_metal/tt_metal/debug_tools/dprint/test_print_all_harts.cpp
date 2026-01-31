@@ -208,20 +208,17 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
     // failing test cases, although all three kernels simply print.
     CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     CreateKernel(
         program_,
-        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
+        tt_metal::get_rtoptions().get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
         ComputeConfig{});
 
@@ -247,20 +244,18 @@ private:
 protected:
     void ExtraSetUp() override {
         DPrintSeparateFilesFixture::ExtraSetUp();
-        original_enabled_processors_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
-            tt::llrt::RunTimeDebugFeatureDprint);
+        original_enabled_processors_ =
+            tt::tt_metal::get_rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
         HalProcessorSet processor_set;
         for (const auto& proc : GetParam().enabled_processors) {
             processor_set.add(
                 proc.core_type,
-                tt::tt_metal::MetalContext::instance().hal().get_processor_index(
-                    proc.core_type, proc.processor_class, proc.processor_type));
+                tt::tt_metal::get_hal().get_processor_index(proc.core_type, proc.processor_class, proc.processor_type));
         }
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
-            tt::llrt::RunTimeDebugFeatureDprint, processor_set);
+        tt::tt_metal::get_rtoptions().set_feature_processors(tt::llrt::RunTimeDebugFeatureDprint, processor_set);
     }
     void ExtraTearDown() override {
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
+        tt::tt_metal::get_rtoptions().set_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint, original_enabled_processors_);
         DPrintSeparateFilesFixture::ExtraTearDown();
     }

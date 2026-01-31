@@ -135,7 +135,7 @@ public:
 
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto& rtoptions = tt::tt_metal::get_rtoptions();
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // Additional defines on Wormhole for active ETH cores
             if (rtoptions.get_erisc_iram_enabled()) {
@@ -177,7 +177,7 @@ public:
     }
 
     std::string linker_script(const Params& params) const override {
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto& rtoptions = tt::tt_metal::get_rtoptions();
         const std::string_view path = "runtime/hw/toolchain/wormhole";
         std::string_view fork = params.is_fw ? "firmware" : "kernel";
         switch (params.core_type) {

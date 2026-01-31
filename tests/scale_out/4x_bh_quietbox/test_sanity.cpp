@@ -20,7 +20,7 @@ TEST(Sanity, CorrectPCIeToBusIdMapping) {
     // constexpr static std::array<uint16_t, 4> EXPECTED_PCI_ID_TO_BUS_ID = {0xc1, 0x01, 0x41, 0x42};
     constexpr static std::array<uint16_t, 4> PCI_ID_TO_CHIP_ID = {0, 2, 1, 3};
 
-    const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt_metal::get_cluster();
     const auto& cluster_desc = cluster.get_cluster_desc();
 
     auto chip_ids = cluster.all_chip_ids();
@@ -44,7 +44,7 @@ TEST(Sanity, CorrectPCIeToBusIdMapping) {
 }
 
 TEST(Sanity, ValidateInternalEthernetLinksTrained) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
     log_info(LogTest, "Number of chips with Active Ethernet links: {}", eth_connections.size());
 
@@ -63,7 +63,7 @@ TEST(Sanity, ValidateInternalEthernetLinksTrained) {
 }
 
 TEST(Sanity, ReportIntermeshLinks) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     auto all_intermesh_links = cluster.get_ethernet_connections_to_remote_devices();
 
     // Check if cluster supports intermesh links

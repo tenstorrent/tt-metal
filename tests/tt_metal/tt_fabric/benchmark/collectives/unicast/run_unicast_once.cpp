@@ -97,7 +97,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 
 // ----------------------------------- program -----------------------------------
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& cp = tt::tt_metal::get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};

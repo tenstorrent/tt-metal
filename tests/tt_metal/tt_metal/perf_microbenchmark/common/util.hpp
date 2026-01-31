@@ -21,13 +21,13 @@
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
     uint64_t t0_to_any_riscfw_end = 0;
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+    if (!tt::tt_metal::get_rtoptions().get_profiler_enabled()) {
         return t0_to_any_riscfw_end;
     }
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
         program.impl()
             .logical_cores()[hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
@@ -48,8 +48,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
-            profile_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
+            profile_buffer =
+                tt::tt_metal::get_cluster().read_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
@@ -83,7 +83,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::IDevice* device) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    return tt::tt_metal::get_cluster().get_device_aiclk(device->id());
 }
 
 template <typename T>

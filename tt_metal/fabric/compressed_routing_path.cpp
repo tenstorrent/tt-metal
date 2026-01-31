@@ -18,7 +18,7 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     std::memset(&paths, 0, sizeof(paths));
 
     // Query FabricContext to determine routing mode (16-hop vs 32-hop)
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
     uint32_t extension_words = fabric_context.get_1d_pkt_hdr_extension_words();
 
@@ -52,7 +52,7 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     const auto& src_chip_id = src_fabric_node_id.chip_id;
     const auto& mesh_id = src_fabric_node_id.mesh_id;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     std::vector<chan_id_t> candidate_src_chan_ids;
     for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {

@@ -53,7 +53,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     }
 
     // Get PCIe core coordinates
-    const metal_SocDescriptor& soc_d = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_d = get_cluster().get_soc_desc(device_id);
     vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_FATAL(!pcie_cores.empty(), "No PCIe cores found");
 
@@ -61,7 +61,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     uint32_t packed_subordinate_core_coordinates = pcie_cores[0].x << 16 | (pcie_cores[0].y & 0xFFFF);
 
     // Get PCIe memory addresses
-    uint64_t dev_pcie_base = MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device_id);
+    uint64_t dev_pcie_base = get_cluster().get_pcie_base_addr_from_device(device_id);
     constexpr uint64_t PCIE_OFFSET_BYTES = 1024 * 1024 * 50;  // 50MB offset to avoid conflicts
     uint64_t pcie_offset = PCIE_OFFSET_BYTES;
     uint64_t pcie_l1_local_addr = dev_pcie_base + pcie_offset;

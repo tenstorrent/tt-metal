@@ -460,7 +460,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
     for (auto* device : mesh_device_->get_devices()) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        tt::tt_metal::get_cluster().write_core(
             device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
 
@@ -483,7 +483,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto* device : mesh_device_->get_devices()) {
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            tt::tt_metal::get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();

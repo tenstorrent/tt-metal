@@ -30,12 +30,11 @@ protected:
         }
 
         // Check if this is T3k
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-            tt::tt_metal::ClusterType::N300_2x2) {
+        if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::N300_2x2) {
             GTEST_SKIP() << "This test is only for N300 2x2";
         }
 
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane = tt::tt_metal::get_control_plane();
         if (control_plane.is_local_host_on_switch_mesh()) {
             // setup tt-switch manager
             tt::tt_fabric::FabricSwitchManager::instance().setup(tt::tt_fabric::FabricConfig::FABRIC_2D);
@@ -45,7 +44,7 @@ protected:
     }
 
     void TearDown() override {
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane = tt::tt_metal::get_control_plane();
         if (control_plane.is_local_host_on_switch_mesh()) {
             tt::tt_fabric::FabricSwitchManager::instance().teardown();
         } else {
@@ -55,7 +54,7 @@ protected:
 };
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     auto mesh_id_val = 0;
@@ -93,7 +92,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Get chip IDs for mesh_id 0
@@ -141,7 +140,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     auto mesh_id_val = 0;
@@ -188,7 +187,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
             EXPECT_EQ(unit_mesh->shape(), tt::tt_metal::distributed::MeshShape(1, 1)) << "Unit mesh should be 1x1";
 
             // Verify fabric node ID is correctly mapped
-            auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+            auto& control_plane = tt::tt_metal::get_control_plane();
             auto expected_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device_id);
             auto actual_fabric_node_id = unit_mesh->get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(0, 0));
             EXPECT_EQ(actual_fabric_node_id.mesh_id, expected_fabric_node_id.mesh_id)

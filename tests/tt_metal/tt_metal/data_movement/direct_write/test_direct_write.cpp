@@ -117,7 +117,7 @@ bool run_dm(
     uint32_t init_words = test_config.same_destination ? 1 : test_config.num_writes;
     std::vector<uint32_t> init_data(init_words, 0x00000000);  // Initialize to zero
     tt_metal::detail::WriteToDeviceL1(device, test_config.receiver_core_coord, l1_base_address, init_data);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     // Launch the program - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();

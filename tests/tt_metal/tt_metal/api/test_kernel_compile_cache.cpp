@@ -45,8 +45,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
         detail::CompileProgram(device, program);
 
-        const uint32_t tensix_core_type =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t tensix_core_type = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         const int riscv_0_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(config_riscv_1.processor);

@@ -119,7 +119,7 @@ void get_mcast_receivers(
     std::vector<ChipId>& mcast_receiver_physical_device_ids,
     RoutingDirection trunk_direction,
     RoutingDirection branch_direction) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     if (mcast_ref.contains(branch_direction)) {
         auto node_ids = mcast_ref[branch_direction];
         for (auto node : node_ids) {
@@ -139,7 +139,7 @@ void get_mcast_receivers(
 }
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info) {
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     bool system_accommodates_mcast = false;
     for (const auto& mesh : user_meshes) {
@@ -234,7 +234,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     CoreCoord receiver_virtual_core = mcast_start_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::get_hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     auto mesh_shape = control_plane.get_physical_mesh_shape(sender_id.mesh_id);
 
@@ -348,7 +348,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
@@ -546,7 +546,7 @@ void run_unicast_test_bw_chips(
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
@@ -639,7 +639,7 @@ void run_unicast_test_bw_chips(
             worker_mem_map.notification_mailbox_address,
             zeros,
             CoreType::WORKER);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
+        tt::tt_metal::get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
     }
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
@@ -701,7 +701,7 @@ void run_unicast_test_bw_chips(
 }
 
 void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool use_dram_dst) {
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
@@ -751,7 +751,7 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
 
 void RunTestUnicastRaw2D(
     BaseFabricFixture* fixture, uint32_t ns_hops, RoutingDirection ns_dir, uint32_t ew_hops, RoutingDirection ew_dir) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // use control plane to find a mesh with (ns_hops + 1) * (ew_hops + 1) devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
@@ -834,7 +834,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
         GTEST_SKIP();
     }
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         log_info(tt::LogTest, "This test is only for TG");
         GTEST_SKIP();
     }
@@ -844,8 +844,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     // are 'normal' and covered in other tests
     const std::vector<ChipId> mmio_chip_ids = {0, 1, 2, 3};
     for (const auto& mmio_chip_id : mmio_chip_ids) {
-        const auto& tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
+        const auto& tunnels_from_mmio = tt::tt_metal::get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
         for (const auto& tunnel : tunnels_from_mmio) {
             // idx 0 in the tunnel is the mmio chip itself
             const auto remote_chip_id = tunnel[1];
@@ -866,7 +865,7 @@ void RunTestMCastConnAPI(
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
@@ -1122,7 +1121,7 @@ void RunTest2DMCastConnAPI(
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
@@ -1372,7 +1371,7 @@ void RunTest2DMCastConnAPI(
     CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::get_hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
     // test parameters
     auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
@@ -1655,7 +1654,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
@@ -1913,7 +1912,7 @@ void RunEDMConnectionStressTest(
     size_t num_workers,
     size_t test_rows) {
     log_info(tt::LogTest, "Starting EDM connection stress test");
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     log_debug(tt::LogTest, "Control plane found");
 
     // use control plane to find a mesh with 3 devices
@@ -2116,12 +2115,12 @@ void FabricUnicastCommon(
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     std::vector<std::tuple<RoutingDirection, uint32_t>> dir_configs = pair_ordered_dirs;
     if (topology == Topology::Mesh) {
-        const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        const auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
         size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
         if (dir_configs.size() > max_dirs) {
             dir_configs.resize(max_dirs);
@@ -2306,7 +2305,7 @@ void UDMFabricUnicastCommon(
     // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
     auto noc_mode = dual_risc ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Determine source and destination based on routing_info variant
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
@@ -2641,7 +2640,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     // Each receiver core receives from N-1 senders (one from each other device)
     // Each sender writes to a different L1 address offset on the receiver based on sender_device_idx
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
 
@@ -3095,7 +3094,7 @@ void Fabric2DMulticastCommon(
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     TT_FATAL(!connection_configs.empty(), "Must have at least 1 connection configuration");
@@ -3390,11 +3389,11 @@ void FabricMulticastCommon(
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
     // Limit directions per cluster (T3K: up to 3, TG: up to 4) and force range=1
-    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    const auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
     size_t max_dirs = (cluster_type == tt::tt_metal::ClusterType::T3K) ? 3 : 4;
     std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>> dir_configs = pair_ordered_dir_configs;
     if (dir_configs.size() > max_dirs) {

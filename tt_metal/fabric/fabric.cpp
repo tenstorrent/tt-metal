@@ -37,16 +37,14 @@ namespace {
 // checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
 bool is_TG_gateway_connection(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id, const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         return false;
     }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     tt::ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
     tt::ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-    const auto mmio_chip_id1 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
-    const auto mmio_chip_id2 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dst_chip_id);
+    const auto mmio_chip_id1 = tt::tt_metal::get_cluster().get_associated_mmio_device(src_chip_id);
+    const auto mmio_chip_id2 = tt::tt_metal::get_cluster().get_associated_mmio_device(dst_chip_id);
 
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
@@ -58,34 +56,34 @@ bool is_TG_gateway_connection(
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
 size_t get_tt_fabric_packet_header_size_bytes() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_fabric_context().get_fabric_packet_header_size_bytes();
 }
 
 size_t get_tt_fabric_max_payload_size_bytes() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 }
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, routing_direction);
 }
 
 std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     std::unordered_map<MeshId, MeshShape> mesh_shapes;
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     for (auto mesh_id : control_plane.get_user_physical_mesh_ids()) {
         mesh_shapes[mesh_id] = control_plane.get_physical_mesh_shape(mesh_id);
     }
@@ -107,7 +105,7 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
@@ -213,8 +211,7 @@ void append_fabric_connection_rt_args(
         ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
         CoreCoord fabric_router_virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                src_chip_id, fabric_router_channel);
+            tt::tt_metal::get_cluster().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
         auto* channel_allocator = edm_config.channel_allocator.get();
@@ -273,7 +270,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     std::vector<FabricNodeId> dst_nodes;
     std::unordered_set<RoutingDirection> used_directions;
@@ -323,7 +320,7 @@ void append_routing_plane_connection_manager_rt_args(
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
     // TODO: Remove this restriction once multiple ethernet cores per direction are supported
@@ -412,7 +409,7 @@ void append_routing_plane_connection_manager_rt_args(
 
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     // find the forwarding direction b/w src and dest chip
     const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -425,7 +422,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 
@@ -451,7 +448,7 @@ void SetFabricConfig(
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto routing_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     if (!routing_direction.has_value()) {
         return std::nullopt;
@@ -474,14 +471,14 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 
 // TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196
 size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     return control_plane.get_num_available_routing_planes_in_direction(fabric_node_id, routing_direction);
 }
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Get any device from the cluster to determine fabric node
     // For now, use chip 0 as a representative device

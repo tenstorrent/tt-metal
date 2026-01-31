@@ -153,13 +153,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
 
     if (test_config.read_kernel) {
         detail::WriteToBuffer(input_buffer, packed_input);
-        MetalContext::instance().get_cluster().dram_barrier(device->id());
+        get_cluster().dram_barrier(device->id());
     } else {
         for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             // If not reading, write to L1 directly
             detail::WriteToDeviceL1(device, core_list[i], l1_addrs[i], packed_input);
         }
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
     }
 
     auto mesh_workload = distributed::MeshWorkload();

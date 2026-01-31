@@ -24,9 +24,8 @@
 using namespace tt::tt_metal;
 
 ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel : tt::tt_metal::get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // MMIO device doesn't have an upsream, just return itself
@@ -39,8 +38,8 @@ ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
 }
 
 ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_id);
+    auto tunnels = tt::tt_metal::get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
     if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
         TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
     }
@@ -64,9 +63,8 @@ ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
 }
 
 uint32_t FDKernel::GetTunnelStop(ChipId device_id) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel : tt::tt_metal::get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 return idx;
@@ -114,21 +112,18 @@ uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type,
     // CoreType
     uint32_t programmable_core_type_index;
     if (dispatch_core_type == CoreType::WORKER) {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        programmable_core_type_index = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     } else if (is_active_eth_core) {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        programmable_core_type_index = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     } else {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        programmable_core_type_index = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
     }
 
     return programmable_core_type_index;
 }
 
 CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     return cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
 }
 
@@ -149,7 +144,7 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& rt_options = tt::tt_metal::get_rtoptions();
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
@@ -158,7 +153,7 @@ KernelHandle FDKernel::configure_kernel_variant(
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
-    if (MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    if (get_cluster().is_galaxy_cluster()) {
         // TG specific fabric routing
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
         defines["GALAXY_CLUSTER"] = "1";

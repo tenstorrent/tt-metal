@@ -35,7 +35,7 @@ struct InputArgs {
 };
 
 std::filesystem::path generate_output_dir() {
-    const auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rt_options = tt::tt_metal::get_rtoptions();
     std::filesystem::path output_dir_path = rt_options.get_root_dir() + "fabric_manager_logs/";
     std::filesystem::create_directories(output_dir_path);
     return output_dir_path;

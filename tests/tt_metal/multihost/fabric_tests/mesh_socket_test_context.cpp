@@ -42,7 +42,7 @@ void MeshSocketTestContext::initialize() {
     log_info(tt::LogTest, "local_rank {}", *local_rank_);
 
     setup_fabric_configuration();
-    control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+    control_plane_ptr_ = &tt::tt_metal::get_control_plane();
 
     const auto mesh_shape = control_plane_ptr_->get_physical_mesh_shape(
         control_plane_ptr_->get_user_physical_mesh_ids()[0], MeshScope::GLOBAL);
@@ -106,7 +106,7 @@ const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& MeshSocketTestCont
 void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
     const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
 
     // ethernet coordinate chip mapping, which should be migrated away from
     std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;

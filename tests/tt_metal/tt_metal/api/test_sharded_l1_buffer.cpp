@@ -106,7 +106,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 
     tt::tt_metal::detail::WriteToBuffer(buffer, input);
 
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    tt::tt_metal::get_cluster().l1_barrier(device->id());
     return std::move(std::pair(buffer, input));
 }
 
@@ -200,7 +200,7 @@ TEST_F(MeshDeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
     }
 
@@ -239,11 +239,11 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
         tt::tt_metal::detail::WriteToBuffer(buffer, input);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        tt::tt_metal::get_cluster().l1_barrier(device->id());
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
-            auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device->id(), physical_core, buffer->address(), page_size);
+            auto readback =
+                tt::tt_metal::get_cluster().read_core(device->id(), physical_core, buffer->address(), page_size);
             EXPECT_TRUE(std::equal(input_it, input_it + tt::constants::TILE_HW, readback.begin()));
             input_it += tt::constants::TILE_HW;
         }

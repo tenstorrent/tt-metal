@@ -32,19 +32,16 @@ using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator
 inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
-    CoreCoord logical_grid_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord logical_grid_size = tt::tt_metal::get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             all_cores.insert({{x, y}, CoreType::WORKER});
         }
     }
-    for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
+    for (const auto& logical_core : tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
-    for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core : tt::tt_metal::get_control_plane().get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -67,7 +64,7 @@ inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
 }
 
 inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
-    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    uint64_t addr = tt::tt_metal::get_hal().get_dev_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
