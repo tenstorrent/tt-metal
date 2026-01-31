@@ -285,10 +285,61 @@ Tensor AddcmulOperation::invoke(
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
-    // Use HLK implementation - pass value as scalar parameter
-    log_debug(tt::LogOp, "Addcmul HLK - TTT");
+    // Use LLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::ADDCMUL,
+        input_a,
+        input_b,
+        input_c,
+        value,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        output,
+        std::nullopt);
+}
+
+Tensor AddcdivOperation::invoke(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcdiv LLK - TTT");
+
+    TT_FATAL(
+        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+            input_c.storage_type() == StorageType::DEVICE,
+        "Addcdiv operation requires all input tensors to be on Device.");
+
+    // Only TTT variant is supported for addcdiv
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    bool is_any_input_block_format =
+        is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_input_int32 = (input_a.dtype() == DataType::INT32) && (input_b.dtype() == DataType::INT32) &&
+                          (input_c.dtype() == DataType::INT32);
+
+    TT_FATAL(
+        !is_input_int32,
+        "Addcdiv operation does not support INT32 data type. All input tensors must be floating-point types.");
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+        log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
+        // Fall back to composite implementation for unsupported cases
+        // For block-format ROW bcast of ttnn.div, legacy binary bcast implementation is used.
+        return _addcdiv(input_a, input_b, input_c, value, memory_config);
+    }
+
+    // Use LLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcdiv LLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCDIV,
         input_a,
         input_b,
         input_c,

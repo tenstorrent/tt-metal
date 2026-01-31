@@ -141,4 +141,5 @@ enum class SfpuType {
     rdiv,
     typecast,
     addcmul,
+    addcdiv,
 };
