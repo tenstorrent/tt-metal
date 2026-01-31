@@ -110,7 +110,7 @@ ttnn::device_operation::CachedProgram<SocketForwardSharedVariables> SocketForwar
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
-    constexpr uint32_t barrier_address = 1572032;
+    constexpr uint32_t barrier_address = 639680;
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,

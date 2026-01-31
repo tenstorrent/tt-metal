@@ -124,7 +124,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
 
-    constexpr uint32_t barrier_address = 1572032;
+    constexpr uint32_t barrier_address = 639680;
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,             // cb0_id
         packet_header_cb_index,    // fabric_packet_header_cb_id
