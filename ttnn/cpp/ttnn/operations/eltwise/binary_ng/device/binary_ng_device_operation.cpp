@@ -237,7 +237,10 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash()
         subtile_broadcast_type,
         is_sfpu,
         is_quant_op,
-        is_where_op);
+        is_where_op,
+        input_layout_a,
+        input_layout_b,
+        output_layout);
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -279,7 +282,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "First operand to eltwise binary must be tilized");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+        input_tensor_a.layout());
 
     bool tensor_a_sharded = input_tensor_a.memory_config().is_sharded();
     if (not tensor_a_sharded) {
@@ -302,7 +308,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.device() == input_tensor_b->device(),
             "Operands to eltwise binary need to be on the same device!");
-        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
+        TT_FATAL(
+            input_tensor_b->layout() == Layout::TILE || input_tensor_b->layout() == Layout::ROW_MAJOR,
+            "Second operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
+            input_tensor_b->layout());
 
         if (not tensor_b_sharded) {
             TT_FATAL(
@@ -433,11 +442,15 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return TensorSpec(
             output_shape,
             TensorLayout(
-                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+                output_dtype,
+                PageConfig(attributes.output_layout),
+                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
+    return TensorSpec(
+        output_shape,
+        TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
@@ -538,6 +551,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
+        
+    auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
+    if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR &&
+        input_tensor_b.layout() == Layout::ROW_MAJOR) {
+        output_layout = Layout::ROW_MAJOR;
+    }
 
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
@@ -613,7 +632,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         subtile_broadcast_type,
         is_sfpu_op,
         is_quant_op,
-        is_where_op};
+        is_where_op,
+        input_tensor_a.layout(),
+        input_tensor_b.layout(),
+        output_layout};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -656,7 +678,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
         is_sfpu_op,
         is_quant_op,
-        false};
+        false,
+        input_tensor_a.layout(),
+        Layout::INVALID,
+        output_tensor ? output_tensor->layout() : Layout::TILE};
+
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
