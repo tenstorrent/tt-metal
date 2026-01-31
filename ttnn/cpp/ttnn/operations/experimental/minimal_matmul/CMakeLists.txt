@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_minimal_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::MinimalMatmul ALIAS ttnn_op_experimental_minimal_matmul)
 
-target_precompile_headers(ttnn_op_experimental_minimal_matmul REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_minimal_matmul REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_minimal_matmul)
 
 target_sources(
