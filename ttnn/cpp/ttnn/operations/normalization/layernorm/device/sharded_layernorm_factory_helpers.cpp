@@ -373,13 +373,16 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     }
 
     // Apply grid offset if needed
+    // Note: all_cores comes from grid.shard_spec.grid which already has the offset embedded,
+    // so we don't apply the offset to it. Other ranges are computed from (0,0)-based
+    // coordinates and need the offset applied.
     if (grid.grid_offset.has_value()) {
         const auto& offset = grid.grid_offset.value();
         cr.start_core = {cr.start_core.x + offset.x, cr.start_core.y + offset.y};
         cr.sender_cores = {
             {cr.sender_cores.start_coord.x + offset.x, cr.sender_cores.start_coord.y + offset.y},
             {cr.sender_cores.end_coord.x + offset.x, cr.sender_cores.end_coord.y + offset.y}};
-        cr.all_cores = apply_grid_offset(cr.all_cores, offset);
+        // Don't apply offset to all_cores - it comes from shard_spec.grid which already has the offset
         cr.all_to_all_cores = apply_grid_offset(cr.all_to_all_cores, offset);
         cr.all_to_all_workers_except_sender = apply_grid_offset(cr.all_to_all_workers_except_sender, offset);
         cr.not_all_to_all_workers = apply_grid_offset(cr.not_all_to_all_workers, offset);
@@ -1059,7 +1062,7 @@ void add_cb_descriptors(
             tt::CBIndex::c_17,
             cb_config.out_data_format,
             cb_config.out_single_tile_size,
-            cb_config.output_buffer));
+            cb_config.output_reshard_buffer));
     }
 }
 

@@ -52,13 +52,11 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     // Compute grid and worker distribution
     auto grid = GridParams::compute(a, block_ht, a.device()->compute_with_storage_grid_size());
     auto workers = WorkerDistribution::compute(grid, block_ht);
+    auto core_ranges = CoreRanges::compute(grid, workers);
 
     // Determine if reader_receiver_all_to_all kernel is present
-    bool has_reader_receiver_all_to_all =
-        grid.use_mcast &&
-        (workers.num_rows_per_all_to_all_worker_last != workers.num_rows_per_all_to_all_worker ||
-         workers.num_none_all_to_all_workers > 0) &&
-        workers.num_cores_all_to_all > 1;
+    // This must match add_kernel_descriptors(): grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty()
+    bool has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
 
     // Calculate kernel handle indices based on conditional kernel ordering:
     // 0: reader_sender (always)
@@ -80,21 +78,28 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     }
 
     // Build cores vector and writer_kernel_ids
-    auto all_cores_vec = corerange_to_cores(grid.shard_spec.grid, grid.shard_spec.num_cores(), grid.row_wise);
+    // Must use the same core set as in create_descriptor() to match kernel assignments
+    auto all_cores_vec = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
     std::vector<CoreCoord> cores;
     std::vector<KernelHandle> writer_kernel_ids;
     cores.reserve(all_cores_vec.size());
     writer_kernel_ids.reserve(all_cores_vec.size());
 
     for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
-        cores.push_back(all_cores_vec[i]);
-        bool is_all_to_all_worker = (i < workers.num_cores_all_to_all);
+        const CoreCoord& core = all_cores_vec[i];
+        cores.push_back(core);
+        // Determine if this core is an all-to-all worker by checking if it's in the all_to_all_cores range
+        bool is_all_to_all_worker = core_ranges.all_to_all_cores.contains(core);
         writer_kernel_ids.push_back(
             is_all_to_all_worker ? writer_mcast_sender_kernels_id : writer_mcast_receiver_kernels_id);
     }
 
+    // Determine if resharding is being used (CB 17 has the output buffer)
+    // Resharding happens when: is_post_all_gather AND output shard spec differs from input
+    bool uses_reshard = !is_pre_all_gather && !(tensor_return_value.shard_spec().value() == a.shard_spec().value());
+
     // Find CB handles by buffer index
-    CBHandle cb_in0 = 0, cb_in1 = 0, cb_stats = 0, cb_add_out = 0, cb_output = 0;
+    CBHandle cb_in0 = 0, cb_in1 = 0, cb_stats = 0, cb_add_out = 0, cb_output = 0, cb_output_reshard = 0;
     for (const auto& cb : program.circular_buffers()) {
         const auto& indices = cb->buffer_indices();
         if (indices.contains(tt::CBIndex::c_0)) {
@@ -112,6 +117,9 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
         if (indices.contains(tt::CBIndex::c_16)) {
             cb_output = cb->id();
         }
+        if (indices.contains(tt::CBIndex::c_17)) {
+            cb_output_reshard = cb->id();
+        }
     }
 
     return cached_program_t{
@@ -122,11 +130,13 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
             .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
             .num_none_all_to_all_workers = workers.num_none_all_to_all_workers,
             .is_pre_all_gather = is_pre_all_gather,
+            .uses_reshard = uses_reshard,
             .cb_in0 = cb_in0,
             .cb_in1 = cb_in1,
             .cb_stats = cb_stats,
             .cb_add_out = cb_add_out,
             .cb_output = cb_output,
+            .cb_output_reshard = cb_output_reshard,
             .cores = cores}};
 }
 
@@ -157,7 +167,13 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
         UpdateDynamicCircularBufferAddress(program, capture.cb_stats, *stats_tensor.value().buffer());
     }
 
-    UpdateDynamicCircularBufferAddress(program, capture.cb_output, *dst_buffer);
+    // Update the correct output CB based on whether resharding is used
+    // When resharding: CB 17 has the output buffer; When not resharding: CB 16 has the output buffer
+    if (capture.uses_reshard) {
+        UpdateDynamicCircularBufferAddress(program, capture.cb_output_reshard, *dst_buffer);
+    } else {
+        UpdateDynamicCircularBufferAddress(program, capture.cb_output, *dst_buffer);
+    }
 
     auto& writer_sender_args_by_core = GetRuntimeArgs(program, capture.writer_mcast_sender_kernels_id);
     auto& writer_receiver_args_by_core = capture.num_none_all_to_all_workers > 0
@@ -169,7 +185,6 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
 
     for (uint32_t i = 0; i < capture.cores.size(); ++i) {
         const CoreCoord& core = capture.cores[i];
-
         const auto writer_kernel_id = capture.writer_kernel_ids.at(i);
 
         if (writer_kernel_id == capture.writer_mcast_sender_kernels_id) {
@@ -528,8 +543,17 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CB Descriptors
     ////////////////////////////////////////////////////////////////////////////
+    // When resharding (is_post_all_gather && !skip_write_back):
+    //   CB 16 is intermediate (no buffer), CB 17 is the final resharded output
+    // Otherwise:
+    //   CB 16 is the output, CB 17 is not used
     Buffer* output_buffer = nullptr;
-    if (!is_post_all_gather || skip_write_back) {
+    Buffer* output_reshard_buffer = nullptr;
+    if (is_post_all_gather && !skip_write_back) {
+        // Resharding case: CB 17 needs the output buffer
+        output_reshard_buffer = output.buffer();
+    } else {
+        // Normal case: CB 16 needs the output buffer
         output_buffer = output.buffer();
     }
 
@@ -571,6 +595,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.stats_buffer = stats.has_value() ? stats.value().buffer() : nullptr;
     cb_config.recip_buffer = recip_tensor.has_value() ? recip_tensor.value().buffer() : nullptr;
     cb_config.output_buffer = output_buffer;
+    cb_config.output_reshard_buffer = output_reshard_buffer;
     cb_config.has_b = b.has_value();
     cb_config.has_gamma = gamma.has_value();
     cb_config.has_beta = beta.has_value();
