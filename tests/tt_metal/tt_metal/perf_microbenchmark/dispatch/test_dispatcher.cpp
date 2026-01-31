@@ -752,7 +752,7 @@ TEST_P(DispatchPackedWriteTestFixture, WritePackedUnicast) {
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
 
-    const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = tt::tt_metal::get_hal().get_alignment(HalMemType::L1);
     const uint32_t packed_write_max_unicast_sub_cmds =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
 
@@ -807,7 +807,7 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedMulticast) {
         device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
 
     // Get alignment requirements
-    const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = tt::tt_metal::get_hal().get_alignment(HalMemType::L1);
 
     // PHASE 1: Generate packed-large write commands metadata
     auto commands_per_iteration = generate_packed_large_write_commands(worker_range, l1_alignment, device_data);

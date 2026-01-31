@@ -119,7 +119,7 @@ FabricStatus get_fabric_status() {
 
         // Print fabric node IDs
         auto& control_plane = context.get_control_plane();
-        const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt_metal::get_cluster();
 
         log_output_rank("Fabric Node IDs:");
         for (auto chip_id : cluster.all_chip_ids()) {

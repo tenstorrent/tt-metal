@@ -26,10 +26,9 @@ tt::tt_metal::DispatchCoreConfig dispatch_core_config() {
 tt_cxy_pair dispatch_core(uint8_t cq_id) {
     tt_cxy_pair dispatch_core = tt_cxy_pair(0, 0, 0);
     std::optional<tt_cxy_pair> first_dispatch_core = std::nullopt;
-    for (tt::ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id) {
+    for (tt::ChipId device_id : tt::tt_metal::get_cluster().all_chip_ids()) {
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_id);
+        if (tt::tt_metal::get_cluster().get_associated_mmio_device(device_id) == device_id) {
             // Dispatch core is not allocated on this MMIO device or this is a TG system, skip it
             // On TG, local dispatch cores are allocated on MMIO devices, but are not used
             // since programs are not run on these devices. The placement of these cores is
@@ -37,7 +36,7 @@ tt_cxy_pair dispatch_core(uint8_t cq_id) {
             // skipped.
             if (not tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().is_dispatcher_core_allocated(
                     device_id, channel, cq_id) or
-                tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+                tt::tt_metal::get_cluster().is_galaxy_cluster()) {
                 continue;
             }
             dispatch_core = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(
@@ -66,7 +65,7 @@ tt_cxy_pair dispatch_core(uint8_t cq_id) {
 template <typename F>
 std::vector<CoreCoord> get_consistent_logical_cores(
     uint8_t num_hw_cqs, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config, F&& func) {
-    auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    auto user_chips = tt::tt_metal::get_cluster().user_exposed_chip_ids();
     std::vector<CoreCoord> first_core_set;
     std::vector<CoreCoord> current_cores;
 

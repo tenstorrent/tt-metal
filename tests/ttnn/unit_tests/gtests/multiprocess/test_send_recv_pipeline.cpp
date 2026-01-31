@@ -35,7 +35,7 @@ struct LogicalPipelineStageConfig {
 // Determine how the Multi Mesh Coordinate system is instantiated on the physical cluster.
 std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_asic_id_to_mesh_coord_map(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
@@ -136,10 +136,10 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
 }
 
 PhysicalSystemDescriptor create_physical_system_descriptor() {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::get_hal();
+    const auto& rtoptions = tt::tt_metal::get_rtoptions();
     constexpr bool run_discovery = true;
     const auto& driver = cluster.get_driver();
 
@@ -153,7 +153,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - This data is streamed through the pipeline for 10 iterations
 // - Final pipeline stage validates data correctness
 TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
-    auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+    auto arch = tt::tt_metal::get_cluster().arch();
     if (arch != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "This test can only run on Blackhole systems";
     }

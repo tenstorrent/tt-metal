@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
     // no need to initialize for bandwidth measurement, saves test initialization time
     std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
-    auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
+    auto available_device_ids = get_cluster().all_chip_ids();
 
     TT_FATAL(available_device_ids.contains(0), "Device 0 not available");
     std::vector<ChipId> device_ids = {0};

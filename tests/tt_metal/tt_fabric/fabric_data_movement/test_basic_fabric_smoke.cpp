@@ -38,7 +38,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& devices = fixture->get_devices();
 
     // Need exactly 2 devices for smoke test

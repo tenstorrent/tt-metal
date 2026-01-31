@@ -125,13 +125,13 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardwareWithDeviceCreation) {
     // and reinitializes base objects (cluster_, hal_) with real hardware
     experimental::disable_mock_mode();
     EXPECT_FALSE(experimental::is_mock_mode_registered());
-    EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+    EXPECT_EQ(get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
 
     // Create real hardware device - verifies full reinitialization worked correctly
     // including cleanup and reinitialization of device-specific data structures
     {
         auto real_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
-        EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+        EXPECT_EQ(get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
         real_device->close();
         real_device.reset();
     }

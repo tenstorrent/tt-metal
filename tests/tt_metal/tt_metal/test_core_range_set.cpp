@@ -77,8 +77,7 @@ void check_semaphores_are_initialized(
                     program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
-                static uint32_t num_u32_to_skip =
-                    MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t);
+                static uint32_t num_u32_to_skip = get_hal().get_alignment(HalMemType::L1) / sizeof(uint32_t);
                 for (size_t i = 0; i < res.size(); i += num_u32_to_skip) {
                     filtered_res.push_back(res.at(i));
                 }

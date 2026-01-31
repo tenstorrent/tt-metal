@@ -38,7 +38,7 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+            if (tt::tt_metal::get_cluster().is_ubb_galaxy()) {
                 return FabricType::TORUS_XY;
             }
             return FabricType::MESH;
@@ -124,7 +124,7 @@ uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes) {
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);

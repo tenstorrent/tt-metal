@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
         TT_FATAL(input_size != 0, "--input-size should not be zero");
 
         if (use_device_profiler) {
-            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
+            bool device_profiler = tt::tt_metal::get_rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "

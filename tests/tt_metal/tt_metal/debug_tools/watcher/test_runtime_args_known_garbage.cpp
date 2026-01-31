@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 class RTATestFixture : public MeshWatcherFixture {
 protected:
     void SetUp() override {
-        bool watcher_assert_disabled = MetalContext::instance().rtoptions().watcher_assert_disabled();
+        bool watcher_assert_disabled = tt::tt_metal::get_rtoptions().watcher_assert_disabled();
         if (watcher_assert_disabled) {
             GTEST_SKIP() << "This test requires watcher assert checks (RTA/CRTA) to be enabled";
         }
@@ -42,7 +42,7 @@ protected:
 
     // Helper: Create CB config for RTA/CRTA tests
     CircularBufferConfig CreateArgCBConfig(uint32_t word_count) {
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        const uint32_t l1_alignment = tt::tt_metal::get_hal().get_alignment(HalMemType::L1);
         uint32_t cb_size = tt::align(word_count * sizeof(uint32_t), l1_alignment);
         return CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
     }
@@ -127,7 +127,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRangeSet core_range_set(std::vector{core_range});
 
         const uint32_t total_read_size = 2 * sizeof(uint32_t);
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        const uint32_t l1_alignment = tt::tt_metal::get_hal().get_alignment(HalMemType::L1);
         uint32_t cb_size = tt::align(total_read_size, l1_alignment);
         CircularBufferConfig cb0(cb_size, {{tt::CBIndex::c_0, tt::DataFormat::Float32}});
         cb0.set_page_size(tt::CBIndex::c_0, cb_size);

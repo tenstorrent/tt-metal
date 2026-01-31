@@ -63,11 +63,11 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        auto erisc_count =
+            tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         if (active_eth) {
-            erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+            erisc_count =
+                tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         }
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test {} ethernet DM{}", active_eth ? "active" : "idle", erisc_idx);
@@ -120,7 +120,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
+                tt::tt_metal::get_hal().noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -136,7 +136,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
+                tt::tt_metal::get_hal().noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,
@@ -163,7 +163,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
     if (!eth_cores.empty()) {
         const auto prog_core_type = this->slow_dispatch_ ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH
                                                          : tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(prog_core_type);
+        const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(prog_core_type);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             distributed::MeshWorkload workload;
             log_info(tt::LogTest, "Add ethernet DM{}", erisc_idx);
@@ -241,11 +241,10 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
         return;
     }
 
-    auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    auto erisc_count =
+        tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     if (is_idle_eth) {
-        erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
     }
     for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
         DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
@@ -307,8 +306,8 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             return;
         }
 
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        const auto erisc_count =
+            tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
@@ -355,8 +354,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             EXPECT_TRUE(program_.impl().get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
             // Skip L1 readback validation for mock devices (L1 memory not populated)
-            if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                tt::TargetDevice::Mock) {
+            if (tt::tt_metal::get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     device,
                     core_coord,
@@ -382,12 +380,12 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
 class EarlyReturnFixture : public MeshDispatchFixture {
     void SetUp() override {
-        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
+        tt::tt_metal::get_rtoptions().set_kernels_early_return(true);
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
+        tt::tt_metal::get_rtoptions().set_kernels_early_return(false);
     }
 };
 

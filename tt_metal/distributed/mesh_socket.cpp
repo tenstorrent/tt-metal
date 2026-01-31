@@ -32,7 +32,7 @@ void barrier_across_send_recv_ranks(
 void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
     bool is_sender = global_distributed_context->rank() == global_sender_rank;
     bool is_receiver = global_distributed_context->rank() == global_receiver_rank;
@@ -82,8 +82,7 @@ void MeshSocket::process_host_ranks() {
         rank_translation_table_[config_.sender_rank] = config_.sender_rank;
         rank_translation_table_[config_.receiver_rank] = config_.receiver_rank;
     }
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const auto& global_logical_bindings = tt::tt_metal::get_control_plane().get_global_logical_bindings();
     TT_FATAL(
         global_logical_bindings.contains(sender_rank) && global_logical_bindings.contains(receiver_rank),
         "Invalid socket sender rank {} or receiver rank {} specified.",
@@ -98,8 +97,7 @@ void MeshSocket::process_host_ranks() {
 }
 
 void MeshSocket::process_mesh_ids() {
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    const auto& global_logical_bindings = tt::tt_metal::get_control_plane().get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
@@ -170,7 +168,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     TT_FATAL(
         config_.sender_mesh_id.has_value() && config_.receiver_mesh_id.has_value(),
         "Unable to determine mesh ids for socket.");
-    auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    auto local_mesh_binding = tt::tt_metal::get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
     if (!(local_mesh_binding[0] == config_.sender_mesh_id.value() ||

@@ -425,7 +425,7 @@ void Buffer::allocate_impl() {
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
 #if defined(TRACY_ENABLE)
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+        if (tt::tt_metal::get_rtoptions().get_profiler_buffer_usage_enabled()) {
             TracyAllocN(
                 reinterpret_cast<const void*>(address_), size_, get_buffer_location_name(buffer_type_, device_->id()));
         }
@@ -457,7 +457,7 @@ void Buffer::deallocate_impl() {
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+            if (tt::tt_metal::get_rtoptions().get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
                     reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
             }

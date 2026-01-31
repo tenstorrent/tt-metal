@@ -108,8 +108,7 @@ FabricMuxConfig::FabricMuxConfig(
         max_buffer_size_bytes_full_size_channel,
         buffer_size_bytes_full_size_channel);
 
-    noc_aligned_address_size_bytes_ =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    noc_aligned_address_size_bytes_ = tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     buffer_size_bytes_header_only_channel_ = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -160,7 +159,7 @@ FabricMuxConfig::FabricMuxConfig(
 
     memory_map_end_address_ = header_only_channels_region_.get_end_address();
 
-    const auto& hal = tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt_metal::get_hal();
     tt_metal::HalProgrammableCoreType hal_core_type;
     if (core_type_ == CoreType::WORKER) {
         hal_core_type = tt_metal::HalProgrammableCoreType::TENSIX;
@@ -208,8 +207,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
-    const auto& builder_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
+    const auto& builder_context = tt::tt_metal::get_control_plane().get_fabric_context().get_builder_context();
     const auto& fabric_router_config = builder_context.get_fabric_router_config();
 
     bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=

@@ -121,7 +121,7 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
-    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    uint32_t max_cbs = get_hal().get_arch_num_circular_buffers();
     std::vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
@@ -173,7 +173,7 @@ void validate_sems(
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
         for (uint32_t i = 0; i < readback_sem_vals.size();
-             i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+             i += (get_hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
             EXPECT_EQ(readback_sem_vals[i], expected_semaphore_values[sem_idx]);
             sem_idx++;
         }

@@ -22,8 +22,7 @@ FabricSwitchManager& FabricSwitchManager::instance() {
 
 void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMode fabric_reliability_mode) {
     // Create devices for the switch mesh
-    const auto& switch_device_ids =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_switch_mesh_device_ids();
+    const auto& switch_device_ids = tt::tt_metal::get_control_plane().get_switch_mesh_device_ids();
 
     // Only create devices if there are switch devices
     if (switch_device_ids.empty()) {

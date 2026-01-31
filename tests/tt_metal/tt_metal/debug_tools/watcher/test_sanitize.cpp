@@ -70,7 +70,7 @@ tt::tt_metal::BufferType get_buffer_type_for_test(watcher_features_t feature) {
 }
 
 uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType type, bool high_address = false) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     if (use_eth_core) {
         const auto active_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, type);
         const auto idle_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, type);
@@ -490,8 +490,7 @@ void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::get_cluster().read_core(device->id(), core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());

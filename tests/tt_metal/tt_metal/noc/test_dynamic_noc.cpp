@@ -186,8 +186,8 @@ void build_and_run_program_ethernet(
     auto* device_0 = device->get_devices()[0];
 
     // Query the number of ethernet ERISCs
-    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count =
+        tt::tt_metal::get_hal().get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     // We need at least 2 ERISCs (ERISC0 and ERISC1) to run this test
     if (erisc_count < 2) {
@@ -289,7 +289,7 @@ void build_and_run_program_ethernet(
 
     // Get safe L1 address from HAL for ethernet cores
     uint32_t l1_unreserved_base =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     log_info(tt::LogTest, "Using L1 unreserved base address: 0x{:x}", l1_unreserved_base);
     log_info(

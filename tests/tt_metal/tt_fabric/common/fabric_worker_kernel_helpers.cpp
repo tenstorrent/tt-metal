@@ -24,8 +24,7 @@ constexpr uint32_t PACKET_PAYLOAD_SIZE_DEFAULT = 256;
 constexpr uint32_t SOURCE_BUFFER_SIZE = 0x1000;  // 4KB for source buffer
 
 WorkerMemoryLayout allocate_worker_memory() {
-
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
 
     // Get the unreserved L1 base address for Tensix cores from HAL
     uint32_t l1_unreserved_base = hal.get_dev_addr(
@@ -57,7 +56,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     CoreCoord remote_logical_core(0, 0);
 
     // Get remote buffer address from HAL (use unreserved L1 space on remote core)
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     uint32_t remote_buffer_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
 
@@ -129,11 +128,8 @@ void signal_worker_teardown(
     auto virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 
     // Use Cluster::write_core() to write to L1 on the device
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        data.data(),
-        sizeof(uint32_t),
-        tt_cxy_pair(device->id(), virtual_core),
-        teardown_signal_address);
+    tt::tt_metal::get_cluster().write_core(
+        data.data(), sizeof(uint32_t), tt_cxy_pair(device->id(), virtual_core), teardown_signal_address);
 }
 
 void wait_for_worker_complete(

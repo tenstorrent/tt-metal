@@ -23,7 +23,7 @@ void RecordDispatchData(
     uint32_t transaction_size,
     std::optional<HalProcessorIdentifier> processor) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::get_rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
     tt::tt_metal::MetalContext::instance().data_collector()->RecordData(program_id, type, transaction_size, processor);
@@ -31,7 +31,7 @@ void RecordDispatchData(
 
 void RecordKernelGroup(ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::get_rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -40,7 +40,7 @@ void RecordKernelGroup(ProgramImpl& program, HalProgrammableCoreType core_type, 
 
 void RecordProgramRun(uint64_t program_id) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::get_rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 

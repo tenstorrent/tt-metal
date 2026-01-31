@@ -154,7 +154,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(size_bytes, get_hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 BankManager::BankManager(
@@ -174,7 +174,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(size_bytes, get_hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }

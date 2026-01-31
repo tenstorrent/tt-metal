@@ -24,21 +24,20 @@ void RelayMux::GenerateStaticConfigs() {
     uint32_t l1_size = 0;
 
     if (GetCoreType() == CoreType::WORKER) {
-        l1_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        l1_base = tt::tt_metal::get_hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+        l1_size = tt::tt_metal::get_hal().get_dev_size(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
     } else {
-        l1_base = MetalContext::instance().hal().get_dev_addr(
+        l1_base = get_hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-        l1_size = MetalContext::instance().hal().get_dev_size(
+        l1_size = get_hal().get_dev_size(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
     }
     static_config_.buffer_base_address =
-        tt::align(l1_base, tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1));
+        tt::align(l1_base, tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::L1));
 
-    const uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    const uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_->id());
     logical_core_ = MetalContext::instance().get_dispatch_core_manager().fabric_mux_core(
         device_->id(), channel, this->cq_id_, tunnel_id_);
 
@@ -56,7 +55,7 @@ void RelayMux::GenerateStaticConfigs() {
     static_config_.num_full_size_channels = kernels_requiring_full_size_channel;
     static_config_.num_header_only_channels = kernels_requiring_header_only_channel;
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
     // Buffer size for the Mux must matching downstream fabric router size
@@ -169,8 +168,7 @@ void assemble_fabric_mux_client_config_args(
 }
 
 int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
-    const auto dev_mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
+    const auto dev_mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(mmio_dev_id);
 
     if (dev_mmio_device_id != mmio_dev_id) {
         TT_THROW(
@@ -179,8 +177,7 @@ int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
             dev_mmio_device_id);
     }
 
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_dev_id);
+    auto tunnels_from_mmio = tt::tt_metal::get_cluster().get_tunnels_from_mmio_device(mmio_dev_id);
 
     constexpr size_t k_MaxTunnelSize = 5;  // 4 remote + 1 mmio
     for (const auto& tunnel : tunnels_from_mmio) {
@@ -202,9 +199,9 @@ int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
 
 uint32_t RelayMux::get_dispatch_link_index(
     tt::tt_fabric::FabricNodeId src_fabric_node_id, tt::tt_fabric::FabricNodeId dst_fabric_node_id, IDevice* device) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable()) {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster() && device->is_mmio_capable()) {
         const auto forwarding_direction =
             control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
         TT_FATAL(

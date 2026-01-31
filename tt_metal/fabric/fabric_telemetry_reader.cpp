@@ -31,7 +31,7 @@ struct ChannelContext {
     const auto logical_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
     contexts.reserve(logical_cores.size());
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     const auto& chan_map = cluster.get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map;
 
     for (const auto& logical_core : logical_cores) {

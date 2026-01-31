@@ -83,7 +83,7 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
 }
 
 MeshId get_local_mesh_id() {
-    auto local_mesh_bindings = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    auto local_mesh_bindings = tt::tt_metal::get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_bindings.size() == 1, "Must only have a single local mesh binding.");
     return local_mesh_bindings[0];
 }
