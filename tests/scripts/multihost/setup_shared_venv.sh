@@ -7,7 +7,7 @@
 # the same shared workspace simultaneously by using file locking
 # and atomic directory creation.
 
-set -eo pipefail
+set -exo pipefail
 
 SOURCE_VENV="${1:-/opt/venv}"
 TARGET_VENV="${2:-./python_env}"
@@ -45,8 +45,33 @@ tmp_env_dir="${TARGET_VENV}.tmp.$$"
       echo "INFO: Python interpreter is symlinked, bundling into venv..."
 
       # Get the real path to the Python interpreter
-      REAL_PYTHON_PATH=$(readlink -f "$TARGET_VENV/bin/python")
+      # Note: If this fails with "Permission denied", the Docker image likely has
+      # Python installed in an inaccessible location (e.g., /root/.local/share/uv).
+      # Fix: Ensure Dockerfile sets UV_PYTHON_INSTALL_DIR=/usr/local/share/uv
+      # before running 'uv python install'.
+      SYMLINK_TARGET=$(readlink "$TARGET_VENV/bin/python")
+      echo "  Symlink target: $SYMLINK_TARGET"
+
+      if ! REAL_PYTHON_PATH=$(readlink -f "$TARGET_VENV/bin/python" 2>&1); then
+        echo "ERROR: Failed to resolve Python symlink" >&2
+        echo "  readlink error: $REAL_PYTHON_PATH" >&2
+        echo "  Symlink points to: $SYMLINK_TARGET" >&2
+        echo "" >&2
+        echo "This typically means Python was installed to an inaccessible location" >&2
+        echo "(e.g., /root/.local/share/uv/) during Docker image build." >&2
+        echo "" >&2
+        echo "Fix: Ensure the Dockerfile sets UV_PYTHON_INSTALL_DIR=/usr/local/share/uv" >&2
+        echo "before running 'uv python install' and rebuild the Docker image." >&2
+        exit 1
+      fi
       echo "  Python interpreter: $REAL_PYTHON_PATH"
+
+      # Verify the Python directory is accessible
+      if [ ! -r "$REAL_PYTHON_PATH" ]; then
+        echo "ERROR: Python interpreter is not readable: $REAL_PYTHON_PATH" >&2
+        echo "Check that UV_PYTHON_INSTALL_DIR was set correctly during Docker build." >&2
+        exit 1
+      fi
 
       # Extract the cpython installation directory (parent of bin/python)
       # Path is in form: <prefix>/python/cpython<version>/bin/python

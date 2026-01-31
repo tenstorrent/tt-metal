@@ -17,7 +17,7 @@ ENV PATH="/usr/local/bin:$PATH"
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
-ENV UV_PYTHON_BIN_DIR="/usr/local/share/uv"
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 RUN umask 000 && uv python install "$PYTHON_VERSION"
 
 # Install runtime deps

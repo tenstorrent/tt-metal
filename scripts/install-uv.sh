@@ -42,7 +42,7 @@ OPTIONS:
                 Does not require elevated permissions.
     --system    Install at system level (for Docker containers).
                 Installs uv binary to /usr/local/bin.
-                Sets UV_PYTHON_BIN_DIR to /usr/local/share/uv.
+                Sets UV_PYTHON_INSTALL_DIR to /usr/local/share/uv.
                 Requires appropriate permissions (use sudo if needed).
                 Does NOT modify shell profiles.
     --force     Reinstall uv even if already installed.
@@ -63,7 +63,7 @@ BEHAVIOR:
 
     --system:
         - Installs uv binary to /usr/local/bin via UV_INSTALL_DIR
-        - Configures UV_PYTHON_BIN_DIR to /usr/local/share/uv
+        - Configures UV_PYTHON_INSTALL_DIR to /usr/local/share/uv
         - Uses UV_NO_MODIFY_PATH to avoid shell profile modifications
         - Requires elevated permissions
 EOF
@@ -239,7 +239,7 @@ install_uv_standalone() {
         )
         echo "System installation:"
         echo "  UV_INSTALL_DIR=/usr/local/bin"
-        echo "  UV_PYTHON_BIN_DIR=/usr/local/share/uv (set in environment)"
+        echo "  UV_PYTHON_INSTALL_DIR=/usr/local/share/uv (set in environment)"
     fi
 
     # Execute the verified installer with appropriate environment
@@ -290,8 +290,8 @@ if command -v uv &>/dev/null; then
     echo "uv installed successfully: $(uv --version)"
     if [[ "$INSTALL_MODE" == "system" ]]; then
         echo ""
-        echo "For system installs, set UV_PYTHON_BIN_DIR in your environment:"
-        echo "  export UV_PYTHON_BIN_DIR=/usr/local/share/uv"
+        echo "For system installs, set UV_PYTHON_INSTALL_DIR in your environment:"
+        echo "  export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv"
     fi
 else
     echo "Error: uv not found after installation" >&2
