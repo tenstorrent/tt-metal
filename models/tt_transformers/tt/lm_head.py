@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.common import Mode
 
 
 class LMHead(LightweightModule):
@@ -22,6 +23,7 @@ class LMHead(LightweightModule):
         state_dict_prefix,
         weight_cache_path,
         max_columns_per_device,  # too many columns per device lead to L1 OOM
+        prefetcher=None,
     ):
         super().__init__()
         self.args = args
@@ -31,21 +33,29 @@ class LMHead(LightweightModule):
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
+        self.prefetcher = prefetcher
 
-        # Pad vocab_size to be divisible by 32
-        padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
-
+        # Pad vocab_size to be divisible by (32 * num_devices) so that:
+        # 1. vocab_size is tile-aligned (divisible by 32)
+        # 2. size_per_device is also tile-aligned after dividing by num_devices
+        # This ensures TILE concat doesn't have padding in the middle
+        tile_size = 32
+        padded_vocab_size = math.ceil(self.vocab_size / (tile_size)) * (tile_size)
         size_per_device = padded_vocab_size // self.num_devices
+
+        max_columns_per_device_decode = math.ceil((max_columns_per_device) / tile_size) * tile_size
+        max_columns_per_device_prefill = max_columns_per_device
 
         self.model_config = args.get_model_config()
 
-        if args.is_galaxy:
-            size_per_device = self.padded_vocab_size // self.num_devices
-        num_splits = math.ceil(size_per_device / max_columns_per_device)
+        num_splits_decode = math.ceil(size_per_device / max_columns_per_device_decode)
+        num_splits_prefill = math.ceil(size_per_device / max_columns_per_device_prefill)
 
-        split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
-        split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+        self.split_sizes_prefill = [min(size_per_device, max_columns_per_device_prefill)] * (num_splits_prefill - 1)
+        self.split_sizes_prefill.append(size_per_device - sum(self.split_sizes_prefill))  # remaining columns
 
+        self.split_sizes_decode = [min(size_per_device, max_columns_per_device_decode)] * (num_splits_decode - 1)
+        self.split_sizes_decode.append(size_per_device - sum(self.split_sizes_decode))  # remaining columns
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
 
@@ -60,31 +70,10 @@ class LMHead(LightweightModule):
                 dim=-1,
             )
 
-        self.output_weights = []
-        if args.is_galaxy:
-            cache_file_name = (
-                None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
-            )
-            padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
-            padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
+        self.output_weights_prefill = []
+        self.output_weights_decode = []
 
-            memory_config = (
-                ttnn.DRAM_MEMORY_CONFIG
-                if args.dim == 2048
-                else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
-            )
-            self.output_weights.append(  # (2k, 16k) 128* 1024
-                ttnn.as_tensor(
-                    padded_lm_head,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=dtype,
-                    memory_config=memory_config,
-                    cache_file_name=cache_file_name,
-                )
-            )
-        else:
+        for mode, split_sizes in enumerate([self.split_sizes_prefill, self.split_sizes_decode]):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
@@ -99,22 +88,45 @@ class LMHead(LightweightModule):
                 cache_file_name = (
                     None
                     if args.dummy_weights
-                    else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}_{combined_split.shape[-1]}"
+                    else weight_cache_path
+                    / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}"
                 )
-                memory_config = args.create_dram_sharded_mem_config(
-                    k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
-                )
-                self.output_weights.append(
-                    ttnn.as_tensor(
-                        combined_split,
-                        device=mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=dtype,
-                        memory_config=memory_config,
-                        cache_file_name=cache_file_name,
+
+                def pad_to_power_of_2(n):
+                    if n <= 0:
+                        return 1
+                    return 1 << (n - 1).bit_length()
+
+                if mode == 0:
+                    memory_config = args.create_dram_sharded_mem_config(
+                        k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
                     )
-                )
+                    self.output_weights_prefill.append(
+                        ttnn.as_tensor(
+                            combined_split,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=dtype,
+                            memory_config=memory_config,
+                            cache_file_name=cache_file_name,
+                        )
+                    )
+                else:
+                    memory_config = args.create_dram_sharded_mem_config(
+                        k=args.dim, n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices))
+                    )
+                    self.output_weights_decode.append(
+                        ttnn.as_tensor(
+                            combined_split,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=dtype,
+                            memory_config=memory_config,
+                            cache_file_name=cache_file_name,
+                        )
+                    )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -122,52 +134,60 @@ class LMHead(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        if args.is_galaxy:
-            self.program_configs = [
-                (
-                    None
-                    if args.dim == 2048
-                    else args.dram_matmul_config(
-                        args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
-                        args.dim // 4,
-                        16 * 1024,
-                        args.lm_head_core_grid.num_cores,
-                    )
-                )
-            ]
 
-        else:
-            self.program_configs = [
-                args.dram_matmul_config(
-                    args.tile_padded_batch_rows,
-                    args.dim,
-                    split_size,
-                    args.lm_head_core_grid.num_cores,
-                )
-                for split_size in split_sizes
-            ]
-
-    def forward(self, x: ttnn.Tensor):
+    def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
-        for weight, pc in zip(self.output_weights, self.program_configs):
+        use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
+        split_sizes = self.split_sizes_decode if use_prefetcher else self.split_sizes_prefill
+        program_configs = [
+            self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
+            for split_size in split_sizes
+        ]
+
+        output_weights = self.output_weights_decode if use_prefetcher else self.output_weights_prefill
+
+        self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
+            Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
+        )
+
+        for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
             output = ttnn.linear(
                 x,
                 weight,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                memory_config=self.lm_head_output_memory_config,
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
-            )
-            outputs.append(
-                ttnn.sharded_to_interleaved(
-                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-                )
+                sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
 
+            output = ttnn.to_memory_config(
+                output,
+                memory_config=self.args.get_lm_head_sharded_output_mem_config(
+                    self.prefetcher if use_prefetcher else None
+                ),
+            )
+
+            outputs.append(output)
+
+        ttnn.deallocate(x)
+        # Number of shards along width 126 must not exceed number of cores 32
         # Concatenate the outputs
+        # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
         output = ttnn.concat(
-            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+            outputs,
+            dim=-1,
+            memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
+
+        # Only use reshard mem config for decode mode
+        # Prefill has different tensor widths (32064 vs 32768) so use L1_MEMORY_CONFIG
+        if use_prefetcher:
+            output = ttnn.to_memory_config(
+                output,
+                memory_config=self.args.get_lm_head_reshard_mem_config(self.prefetcher),
+            )
 
         output = tt_all_reduce(
             output,
@@ -175,10 +195,11 @@ class LMHead(LightweightModule):
             self.tt_ccl,
             cluster_axis=1,
             dim=3 if self.args.is_galaxy else 0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=output.memory_config(),
             dtype=self.args.ccl_dtype,
             sharded=False,
             use_composite=True,
+            subdevice_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
         )
 
         return output

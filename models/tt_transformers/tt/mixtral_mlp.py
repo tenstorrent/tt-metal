@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import Mode
 
 
 class TtMixtralMLP(LightweightModule):
@@ -57,14 +58,14 @@ class TtMixtralMLP(LightweightModule):
             _, _, dim, hidden_dim = weight(name).shape
             return self.model_args.create_dram_sharded_mem_config(dim, hidden_dim)
 
-    def forward(self, x: ttnn.Tensor, mode="decode") -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             seq_len = x.shape[-2]
             original_shape = x.shape
             compute_kernel_config = self.prefill_mlp_config

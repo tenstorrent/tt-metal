@@ -54,7 +54,8 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {
@@ -65,5 +66,7 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+
 }  // namespace ttnn::operations::data_movement
