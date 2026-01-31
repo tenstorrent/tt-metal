@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/distributed/distributed_configs.hpp"
+#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal::distributed {
