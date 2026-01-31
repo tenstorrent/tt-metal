@@ -28,6 +28,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling],
         use_qk_fused: bool = False,
         datatype=ttnn.bfloat16,
+        prefetcher: Optional[Prefetcher] = None,
     ):
         super().__init__()
 

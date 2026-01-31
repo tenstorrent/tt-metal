@@ -326,6 +326,9 @@ class Prefetcher(LightweightModule):
         logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
         logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
         logger.info(f"  Number of layers: {self.num_layers}")
+        logger.warning(
+            "Prefetcher has only been thoroughly tested on Llama3.1-8B BH QB 2 and BH LB 1. If using for other models and other device types, expect potential errors."
+        )
         logger.info("=" * 50)
         self.init_done = True
 
