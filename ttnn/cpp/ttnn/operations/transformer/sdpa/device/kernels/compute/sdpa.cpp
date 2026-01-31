@@ -202,6 +202,9 @@ void MAIN {
                          *  cur_max = max(qk, dim=-1)
                          */
                         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                        UNPACK((DPRINT << "reduce_c: k_chunk = " << k_chunk << ENDL()));
+                        UNPACK((DPRINT << "Sq_chunk_t: " << Sq_chunk_t << ENDL()));
+                        UNPACK((DPRINT << "Sk_chunk_t: " << Sk_chunk_t << ENDL()));
                         reduce_c<
                             PoolType::MAX,
                             ReduceDim::REDUCE_ROW,

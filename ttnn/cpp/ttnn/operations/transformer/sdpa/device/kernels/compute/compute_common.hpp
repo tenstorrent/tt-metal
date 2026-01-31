@@ -81,6 +81,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     max_tile_init();
 
     uint32_t row_start_idx = 0;
+    UNPACK((DPRINT << "reduce_c: granularity = " << granularity << ENDL()));
+    UNPACK((DPRINT << "reduce_c: dst_tiles = " << dst_tiles << ENDL()));
+    UNPACK((DPRINT << "reduce_c: cols = " << cols << ENDL()));
     for (uint32_t g = 0; g < granularity; g++) {
         cb_wait_front(in0_cb, in0_wait_tiles);
         acquire_dst();
