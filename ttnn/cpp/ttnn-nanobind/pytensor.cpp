@@ -872,7 +872,7 @@ void pytensor_module(nb::module_& mod) {
              )doc")
         .def(
             "to",
-            nb::overload_cast<Layout>(&Tensor::to_layout, nb::const_),
+            [](const Tensor& self, Layout target_layout) { return ttnn::to_layout(self, target_layout); },
             nb::arg("target_layout").noconvert(),
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:

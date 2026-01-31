@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18...3.30)
+cmake_minimum_required(VERSION 3.18...4.2)
 
 project(
     ml-framework-cpp

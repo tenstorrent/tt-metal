@@ -348,6 +348,21 @@ jobs:
               "use-vllm-v1": true,
               "multimodal": false,
               "co-owner-1-id": "U08CEGF78ET"
+            },
+            {
+              "name": "[WH-N300][v1] NoOp test model (vLLM overhead)",
+              "model": "models/vllm_test_utils/no_op_test",
+              "server-timeout": 2,
+              "benchmark-timeout": 2,
+              "runner-label": "N300",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "N300",
+              "override-tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\"}",
+              "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0",
+              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+              "use-vllm-v1": true,
+              "multimodal": false,
+              "owner_id": "U08CEGF78ET"
             }
           ]'
 

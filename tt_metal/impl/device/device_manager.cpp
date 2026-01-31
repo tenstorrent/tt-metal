@@ -395,7 +395,7 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
     }
 }
 
-void DeviceManager::initialize_active_devices() {
+void DeviceManager::compile_and_load_fabric() {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
@@ -416,25 +416,22 @@ void DeviceManager::initialize_active_devices() {
                        tt::tt_metal::MetalContext::instance().get_fabric_manager(),
                        tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
             log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
-            for (auto* dev : active_devices) {
+            for (const auto& dev : active_devices) {
                 dev->compile_fabric();
             }
         } else {
             log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
         }
     }
+}
 
-    // Activate FD kernels
-    // Remaining steps are for setting up FD
-    if (!using_fast_dispatch_) {
-        return;
-    }
-
+void DeviceManager::configure_and_load_fast_dispatch_kernels() {
     // Mock devices don't have real command queues or sysmem managers, skip FD kernel setup
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
+    const auto& active_devices = this->get_all_active_devices();
     // Generate static args
     for (auto* dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -516,6 +513,17 @@ void DeviceManager::initialize_active_devices() {
     for (const auto& event : events) {
         event.get();
     }
+}
+
+void DeviceManager::initialize_active_devices() {
+    this->compile_and_load_fabric();
+    // Activate FD kernels
+    // Remaining steps are for setting up FD
+    if (!using_fast_dispatch_) {
+        return;
+    }
+    this->configure_and_load_fast_dispatch_kernels();
+
     dispatch_firmware_active_ = true;
 }
 

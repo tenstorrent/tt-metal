@@ -41,6 +41,10 @@ class CommandQueue;
 class SubDevice;
 class SystemMemoryManager;
 
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
+
 namespace program_cache::detail {
 struct ProgramCache;
 }  // namespace program_cache::detail
@@ -153,6 +157,8 @@ private:
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    friend class ::tt::tt_metal::experimental::DispatchContext;
 
 public:
     MeshDeviceImpl(
