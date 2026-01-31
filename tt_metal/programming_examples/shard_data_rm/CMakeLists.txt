@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22...3.30)
+cmake_minimum_required(VERSION 3.22...4.2)
 project(metal_example_shard_data_rm)
 
 add_executable(metal_example_shard_data_rm)
