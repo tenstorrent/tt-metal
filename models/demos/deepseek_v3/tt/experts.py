@@ -2,23 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import math
+import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
-    FromWeightConfig,
-    MeshDeviceStub,
-    MulConfig,
-    SparseMatmulConfig,
-)
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
-    SPARSITY_BLOCK_SIZE,
     dequantize,
     even_int_div,
     shard_and_save,
@@ -78,7 +73,7 @@ class Experts(AbstractModule):
                     .transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
@@ -103,29 +98,6 @@ class Experts(AbstractModule):
         return mesh_device.shape[1] == 8
 
     @classmethod
-    def _get_sparse_pc(cls, core_x: int, core_y: int, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        """Generate program config for sparse matmul.
-
-        Args:
-            core_x: Grid x dimension (from config)
-            core_y: Grid y dimension (from config)
-            n: Output feature dimension (from config)
-
-        Returns:
-            MatmulMultiCoreReuseMultiCast1DProgramConfig for sparse_matmul
-        """
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
-            in0_block_w=2,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=int(math.ceil(n / ttnn.TILE_SIZE)) // (core_x * core_y),
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-
     @classmethod
     def _create_model_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str
@@ -146,32 +118,21 @@ class Experts(AbstractModule):
 
         # Construct the config
         return {
-            "w1_experts": SparseMatmulConfig(
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
+            "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=8, n=moe_intermediate_size),
-                is_input_a_sparse=False,
-                is_input_b_sparse=True,
-                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
             ),
-            "w2_experts": SparseMatmulConfig(
+            "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=7, n=hidden_size),
-                is_input_a_sparse=True,
-                is_input_b_sparse=False,
-                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
             ),
-            "w3_experts": SparseMatmulConfig(
+            "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-                program_config=cls._get_sparse_pc(core_x=8, core_y=8, n=moe_intermediate_size),
-                is_input_a_sparse=False,
-                is_input_b_sparse=True,
-                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
             ),
             "mul_experts": MulConfig(
                 memory_config=output_memory_config,
@@ -209,30 +170,57 @@ class Experts(AbstractModule):
         return cls._create_model_config(hf_config, mesh_device, "prefill")
 
     @classmethod
-    def _forward(cls, x: ttnn.Tensor, sparsity: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+    def _forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         _, _, num_tokens, hidden_size = x.shape
-        num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
-        x = ttnn.reshape(x, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size))
+
+        debug_experts = os.getenv("DEEPSEEK_V3_DEBUG_EXPERTS") == "1" and num_tokens > 8192
+
+        def _log_expert_stats(name: str, tensor: ttnn.Tensor) -> None:
+            if not debug_experts:
+                return
+            try:
+                mesh_device = cfg.get("mesh_device")
+                if mesh_device is not None:
+                    tensor_torch = ttnn.to_torch(
+                        tensor,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape
+                        ),
+                    )
+                else:
+                    tensor_torch = ttnn.to_torch(tensor)
+                finite_mask = torch.isfinite(tensor_torch)
+                numel = tensor_torch.numel()
+                finite_count = finite_mask.sum().item()
+                nan_count = torch.isnan(tensor_torch).sum().item()
+                inf_count = torch.isinf(tensor_torch).sum().item()
+                logger.info(
+                    f"DEBUG experts {name}: shape={tensor_torch.shape}, "
+                    f"mean={tensor_torch.mean():.4f}, std={tensor_torch.std():.4f}, "
+                    f"max={tensor_torch.abs().max():.4f}, "
+                    f"finite={finite_count}/{numel}, nan={nan_count}, inf={inf_count}"
+                )
+            except Exception as exc:
+                logger.warning(f"DEBUG experts {name}: failed to extract stats: {exc}")
 
         # Gate and up projections
-        w1_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w1_experts"])
-        w3_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w3_experts"])
+        w1_out = ttnn.linear(x, **cfg["w1_experts"])
+        w3_out = ttnn.linear(x, **cfg["w3_experts"])
+        _log_expert_stats("w1_out", w1_out)
+        _log_expert_stats("w3_out", w3_out)
 
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
-
-        # Reshape for down projection
-        # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
-        activated = ttnn.squeeze(activated, 0)
-        activated = ttnn.squeeze(activated, 1)
+        _log_expert_stats("activated", activated)
 
         # Down projection
-        output = ttnn.sparse_matmul(activated, sparsity=sparsity, **cfg["w2_experts"])
+        output = ttnn.linear(activated, **cfg["w2_experts"])
         ttnn.deallocate(activated)
+        _log_expert_stats("w2_out", output)
 
         # Reshape for output
         output = ttnn.permute(output, (1, 0, 2, 3))
@@ -242,9 +230,9 @@ class Experts(AbstractModule):
         return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, sparsity: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls._forward(x, sparsity, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return cls._forward(x, cfg)
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, sparsity: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls._forward(x, sparsity, cfg)
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        return cls._forward(x, cfg)
