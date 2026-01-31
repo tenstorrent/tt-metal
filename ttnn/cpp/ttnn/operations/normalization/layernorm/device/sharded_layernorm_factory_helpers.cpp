@@ -352,7 +352,7 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
     return cr;
 }
 
-CoreRanges compute_core_ranges(const GridParams& grid, const WorkerDistribution& workers) {
+CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution& workers) {
     CoreCoord start_core = {0, 0};
     CoreRanges cr;
 
@@ -1098,17 +1098,17 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
     return idx;
 }
 
-bool is_all_to_all_worker(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+bool CoreIndices::is_all_to_all(const RuntimeArgsContext& ctx) const {
     if (ctx.grid.use_two_stage_reduce) {
-        return idx.width_index_two_stage < ctx.workers.num_cores_all_to_all_first_stage;
+        return width_index_two_stage < ctx.workers.num_cores_all_to_all_first_stage;
     }
-    return idx.width_index < ctx.workers.num_cores_all_to_all;
+    return width_index < ctx.workers.num_cores_all_to_all;
 }
 
 std::vector<uint32_t> build_compute_args(
     const CoreIndices& idx, const RuntimeArgsContext& ctx, bool& is_all_to_all_out) {
     std::vector<uint32_t> args{idx.num_reduce_tiles_per_block_h};
-    is_all_to_all_out = is_all_to_all_worker(idx, ctx);
+    is_all_to_all_out = idx.is_all_to_all(ctx);
 
     if (is_all_to_all_out) {
         uint32_t num_rows;
@@ -1314,7 +1314,7 @@ std::vector<uint32_t> build_writer_args(
     return args;
 }
 
-RuntimeArgsResult build_all_runtime_args(
+RuntimeArgsResult RuntimeArgsResult::build(
     const std::vector<CoreCoord>& cores, RuntimeArgsContext& ctx, IDevice* device) {
     RuntimeArgsResult result;
 
