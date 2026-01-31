@@ -1,4 +1,4 @@
-name: "(Galaxy) nightly tests"
+name: "(Galaxy) e2e tests"
 
 on:
   workflow_dispatch:
@@ -49,13 +49,31 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-  galaxy-nightly-tests:
+  galaxy-e2e-tests:
     needs: build-artifact
-    uses: ./.github/workflows/galaxy-nightly-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      blackhole: ${{ github.event.inputs.blackhole == 'true' || github.event_name == 'schedule' }}
-      wormhole: ${{ github.event.inputs.wormhole == 'true' || github.event_name == 'schedule' }}
+      # For scheduled runs: hardcode the full list of SKUs you want active.
+      # For workflow_dispatch: derive from checkboxes.
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_galaxy,bh_galaxy'
+            || (
+              inputs.wormhole && inputs.blackhole
+                && 'wh_galaxy,bh_galaxy'
+                || (
+                  inputs.wormhole
+                    && 'wh_galaxy'
+                    || (
+                      inputs.blackhole
+                        && 'bh_galaxy'
+                        || ''
+                    )
+                )
+            )
+        }}

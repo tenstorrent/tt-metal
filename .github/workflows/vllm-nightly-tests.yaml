@@ -20,6 +20,7 @@ on:
           - google/gemma-3-27b-it
           - openai/gpt-oss-120b
           - models/vllm_test_utils/t3000_multiproc_test
+          - models/vllm_test_utils/no_op_test
       platform:
         required: false
         type: choice
