@@ -335,6 +335,58 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     }
 }
 
+/**
+ * Canonical 1D sparse multicast routing pattern encoder
+ *
+ * Generates bit pattern for multicast routing based on a supplied hop mask
+ * Each bit in the hop mask represents a single hop in the target direction
+ * If the bit is 1, the router will perform the WRITE operation at that hop.
+ * If the bit is 0, the router will simply forward the packet to the next hop.
+ * This continues until the last set bit, which will perform a WRITE operation and not forward the packet any further.
+ * For instance, a hop mask of 0b1010 means that devices 2 and 4 hops away from sender will have the data written to
+ * them. This function converts the hop mask into a fabric multicast packet header routing field, following the 2-bit
+ * encoding shown in encode_1d_multicast.
+ *
+ * @param hop_mask Bitmask of hops to write
+ * @param buffer Output buffer (uint32_t, will be expanded into array in future)
+ *
+ * Example: hop mask 0b1010 would be converted into the following routing fields:
+ *   - Hop 0 (0): FORWARD_ONLY (0b10)
+ *   - Hop 1 (1): WRITE_AND_FORWARD (0b11)
+ *   - Hop 2 (0): FORWARD_ONLY (0b10)
+ *   - Hop 3 (1): WRITE_ONLY (0b01)
+ *   Resulting routing field: 0b01'10'11'10
+ *
+ * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
+ */
+inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+        const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+        buffer |= (field_value << bit_pos);
+    };
+
+    buffer = 0;
+    uint32_t hop_index = 0;
+    // Treat hop_mask like a shift register, checking LSB each time
+    while (hop_mask > 0) {
+        // Case 1: We've arrived at the last hop. Write and stop.
+        if (hop_mask == 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_ONLY);
+        }
+        // Case 2: This hop involves a write operation. Write and forward.
+        else if (hop_mask & 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_AND_FORWARD);
+        }
+        // Case 3: This hop does not involve a write operation. Forward only.
+        else {
+            set_hop_field(hop_index, LowLatencyFields::FORWARD_ONLY);
+        }
+        hop_index++;
+        hop_mask >>= 1;
+    }
+}
 //=============================================================================
 // 2D Routing Encoders
 //=============================================================================
@@ -509,10 +561,10 @@ enum class RouterCommand : std::uint32_t {
 };
 
 struct RouterStateManager {
-    RouterState state;  // 4B, written by device, read by host
-    uint8_t padding0[12];     //
-    RouterCommand command;    // 4B, written by host, read by device
-    uint8_t padding1[12];     //
+    RouterState state;      // 4B, written by device, read by host
+    uint8_t padding0[12];   //
+    RouterCommand command;  // 4B, written by host, read by device
+    uint8_t padding1[12];   //
 
     // template <bool ENABLE_RISC_CPU_DATA_CACHE>
     bool is_non_run_command_pending() const {
@@ -523,8 +575,8 @@ struct RouterStateManager {
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
-    uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
-    uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
+    uint16_t my_mesh_id = 0;             // Current mesh ID // 2 bytes
+    uint16_t my_device_id = 0;           // Current chip ID // 2 bytes
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
