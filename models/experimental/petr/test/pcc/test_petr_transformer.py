@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -10,7 +11,7 @@ from models.experimental.petr.tt.model_preprocessing import (
     create_petr_transformer_input_tensors,
     create_petr_transformer_model_parameters,
 )
-from models.experimental.petr.tt import ttnn_petr_transformer
+from models.experimental.petr.tt import tt_petr_transformer
 from loguru import logger
 
 
@@ -33,7 +34,7 @@ def test_petr_transformer(device, reset_seeds):
 
     parameters = create_petr_transformer_model_parameters(torch_model, x, mask, query_embed, pos_embed, device=device)
 
-    ttnn_model = ttnn_petr_transformer.TTPETRTransformer(device, parameters)
+    ttnn_model = tt_petr_transformer.TTPETRTransformer(device, parameters)
     ttnn_output, ttnn_memory = ttnn_model(device, ttnn_x, ttnn_mask, ttnn_query_embed, ttnn_pos_embed)
     ttnn_memory = ttnn_memory.reshape(torch_memory.shape)
     ttnn_memory = ttnn.to_torch(ttnn_memory)

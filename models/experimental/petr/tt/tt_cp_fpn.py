@@ -1,8 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.experimental.petr.tt.common import Conv
+from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
 
 
 class ttnn_ConvModule:
@@ -56,7 +57,6 @@ class ttnn_CPFPN:
             self.backbone_end_level = self.num_ins
             assert num_outs >= self.num_ins - start_level
         else:
-            # if end_level < inputs, no extra level is allowed
             self.backbone_end_level = end_level
             assert end_level <= len(in_channels)
             assert num_outs == end_level - start_level
@@ -66,7 +66,7 @@ class ttnn_CPFPN:
         assert isinstance(add_extra_convs, (str, bool))
         if isinstance(add_extra_convs, str):
             assert add_extra_convs in ("on_input", "on_lateral", "on_output")
-        elif add_extra_convs:  # True
+        elif add_extra_convs:
             self.add_extra_convs = "on_input"
 
         self.lateral_convs = []
@@ -106,17 +106,33 @@ class ttnn_CPFPN:
 
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
+            batch_size, input_height, input_width, channels = laterals[i].shape
+            input_tensor = laterals[i]
+            input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
             if "scale_factor" in self.upsample_cfg:
-                laterals[i - 1] += ttnn.upsample(laterals[i], **self.upsample_cfg)
-            else:
-                laterals[i - 1] += ttnn.to_layout(
-                    ttnn.upsample(
-                        ttnn.to_layout(laterals[i], layout=ttnn.ROW_MAJOR_LAYOUT),
-                        scale_factor=(2, 2),
-                        **self.upsample_cfg,
-                    ),
-                    layout=ttnn.TILE_LAYOUT,
+                upsample_config = UpsampleConfiguration(
+                    input_height=input_height,
+                    input_width=input_width,
+                    channels=channels,
+                    batch_size=batch_size,
                 )
+                upsample = TtUpsample(upsample_config, device)
+
+            else:
+                upsample_config = UpsampleConfiguration(
+                    input_height=input_height,
+                    input_width=input_width,
+                    channels=channels,
+                    batch_size=batch_size,
+                    scale_factor=(2, 2),
+                )
+
+                upsample = TtUpsample(upsample_config, device)
+
+            upsampled = upsample(input_tensor)
+            upsampled = ttnn.to_layout(upsampled, layout=ttnn.TILE_LAYOUT)
+            laterals[i - 1] += upsampled
 
         outs = [self.fpn_convs[i](device, laterals[i]) if i == 0 else laterals[i] for i in range(used_backbone_levels)]
 
