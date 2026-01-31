@@ -155,6 +155,7 @@ if(reflect_ADDED)
             BASE_DIRS ${reflect_SOURCE_DIR}
             FILES ${reflect_SOURCE_DIR}/reflect
     )
+    target_compile_definitions(reflect INTERFACE DISABLE_STATIC_ASSERT_TESTS)
 endif()
 
 ############################################################################################################################
