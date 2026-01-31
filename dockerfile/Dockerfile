@@ -8,13 +8,17 @@ ARG PYTHON_VERSION=3.10
 
 FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
 
-
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ARG PYTHON_VERSION
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/bin:$PATH"
 
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
-ENV PATH="/usr/local/bin:$PATH"
+
+ENV UV_PYTHON_BIN_DIR="/usr/local/share/uv"
+RUN umask 000 && uv python install "$PYTHON_VERSION"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -80,7 +84,6 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && \
-    UV_PYTHON_BIN_DIR=/usr/local/share/uv uv python install "$PYTHON_VERSION" && \
     uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
@@ -227,7 +230,7 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN uv pip install $WHEEL_FILENAME
+RUN umask 000 && uv pip install $WHEEL_FILENAME
 
 #############################################################
 
