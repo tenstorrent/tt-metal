@@ -22,10 +22,10 @@ pytestmark = pytest.mark.use_module_device
     "low, high",
     [
         (-2147483600, 2147483600),
-        (-2147483647, 2147483647),
+        (-2147483648, 2147483647),
     ],
 )
-@pytest.mark.parametrize("scalar", [-2, 0, 10, -16777216, 16777216, 2147483647, -2147483647])
+@pytest.mark.parametrize("scalar", [-2, 0, 10, -16777216, 16777216, 2147483647, -2147483648])
 def test_unary_max_int32(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
