@@ -1,6 +1,6 @@
 import ttnn
 
-from .patchtsmixer_utils import apply_linear_height_sharded
+from .patchtsmixer_utils import apply_linear_height_sharded, make_1d_mcast_prog_config_for_height_sharded
 
 
 class TtPatchTSMixerGatedAttention:
@@ -284,11 +284,20 @@ class TtPatchTSMixerMLP:
             compute_config=self.compute_config,
             min_K_tiles=self.min_k_tiles_fc1,
             return_sharded=True,  # Keep sharded for GELU
+            program_config_factory=lambda **kwargs: make_1d_mcast_prog_config_for_height_sharded(
+                nc=kwargs["nc"],
+                shard_shape=kwargs["shard_shape"],
+                out_k=kwargs["out_k"],
+                in0_block_w_tiles=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+            ),
+            fused_activation="gelu",
         )
 
-        y_gelu = ttnn.gelu(y)
-        ttnn.deallocate(y)
-        y = y_gelu
+        # y_gelu = ttnn.gelu(y)
+        # ttnn.deallocate(y)
+        # y = y_gelu
 
         y2 = apply_linear_height_sharded(
             y,
