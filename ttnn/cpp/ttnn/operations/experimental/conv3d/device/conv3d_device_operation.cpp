@@ -96,7 +96,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         args.dilation[0],
         args.dilation[1],
         args.dilation[2]);
-    auto effective_kernel = [](uint32_t k, uint32_t d) -> uint64_t { return static_cast<uint64_t>(d) * (k - 1) + 1; };
+    auto effective_kernel = [](uint32_t k, uint32_t d) -> uint64_t { return (static_cast<uint64_t>(d) * (k - 1)) + 1; };
     const uint64_t T_in = input_shape[1];
     const uint64_t H_in = input_shape[2];
     const uint64_t W_in = input_shape[3];
