@@ -48,10 +48,7 @@ class TtnnC3k:
         ttnn.deallocate(x1)
         k2 = self.k2(k1)
         ttnn.deallocate(k1)
-        if self.block_sharded:
-            x = concat(-1, False, k2, x2)
-        else:
-            x = concat(-1, True, x2, k2)
+        x = concat(-1, False, k2, x2)
         ttnn.deallocate(x2)
         ttnn.deallocate(k2)
 
