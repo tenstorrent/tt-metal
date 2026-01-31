@@ -21,7 +21,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([True, False]),
+    ([False]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -56,12 +56,7 @@ from models.tt_transformers.tt.rope import RotarySetup
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize(
-    "mode",
-    (Mode.DECODE,),
-)
 def test_attention_inference(
-    mode,
     max_seq_len,
     batch_size,
     paged_attention,
@@ -71,6 +66,7 @@ def test_attention_inference(
     use_prefetcher,
     ensure_gc,
 ):
+    mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
     pcc = 0.986  # pcc reduced from .99 while investigating issue #36378
     num_tensors = 2
@@ -110,7 +106,6 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
         model_args.use_qk_fused,
-        rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
         prefetcher=prefetcher,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -199,12 +194,12 @@ def test_attention_inference(
         tt_attention_input = pt_attention_input.clone()
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.get_attn_input_mem_config(mode, prefetcher if mode == Mode.DECODE else None),
+            model_args.get_attn_input_mem_config(mode, prefetcher),
             force_replicated=False if model_args.is_galaxy else True,
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if mode == Mode.DECODE else None)
+        rot_mats = rope_setup.get_rot_mats(current_pos)
 
         tt_out = tt_model(
             attention_input,

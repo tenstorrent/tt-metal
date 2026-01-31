@@ -40,7 +40,7 @@ class LMHead(LightweightModule):
         # 2. size_per_device is also tile-aligned after dividing by num_devices
         # This ensures TILE concat doesn't have padding in the middle
         tile_size = 32
-        padded_vocab_size = math.ceil(self.vocab_size / (tile_size * self.num_devices)) * (tile_size * self.num_devices)
+        padded_vocab_size = math.ceil(self.vocab_size / (tile_size)) * (tile_size)
         size_per_device = padded_vocab_size // self.num_devices
 
         max_columns_per_device_decode = math.ceil((max_columns_per_device) / tile_size) * tile_size
@@ -97,11 +97,10 @@ class LMHead(LightweightModule):
                         return 1
                     return 1 << (n - 1).bit_length()
 
-                memory_config = args.create_dram_sharded_mem_config(
-                    k=args.dim, n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices))
-                )
-
                 if mode == 0:
+                    memory_config = args.create_dram_sharded_mem_config(
+                        k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
+                    )
                     self.output_weights_prefill.append(
                         ttnn.as_tensor(
                             combined_split,
@@ -114,6 +113,9 @@ class LMHead(LightweightModule):
                         )
                     )
                 else:
+                    memory_config = args.create_dram_sharded_mem_config(
+                        k=args.dim, n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices))
+                    )
                     self.output_weights_decode.append(
                         ttnn.as_tensor(
                             combined_split,
@@ -178,9 +180,6 @@ class LMHead(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
-
-        for output_slice in outputs:
-            ttnn.deallocate(output_slice)
 
         # Only use reshard mem config for decode mode
         # Prefill has different tensor widths (32064 vs 32768) so use L1_MEMORY_CONFIG

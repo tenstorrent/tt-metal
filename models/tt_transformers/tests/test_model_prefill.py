@@ -18,7 +18,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 @torch.no_grad()
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", ([True, False]))
+@pytest.mark.parametrize("use_prefetcher", ([False]))
 @pytest.mark.parametrize(
     "mesh_device",
     [

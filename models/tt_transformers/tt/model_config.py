@@ -7,6 +7,7 @@ import json
 import math
 import os
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
@@ -603,10 +604,10 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
+            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -1075,6 +1076,7 @@ class ModelArgs:
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for decode residual tensors."""
         if mode == Mode.DECODE:
@@ -1114,6 +1116,7 @@ class ModelArgs:
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_mlp_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
@@ -1142,6 +1145,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
@@ -1192,6 +1196,7 @@ class ModelArgs:
                 else None,
             )
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
@@ -1242,6 +1247,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if self.prefetcher is not None:
@@ -1261,6 +1267,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1280,6 +1287,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1307,6 +1315,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_binary_mult_mem_config(self, mode: Mode):
         """Get the memory config for MLP binary mult (w2 input) - replaces SHARDED_MLP2_INPUT_MEMCFG."""
         if mode == Mode.DECODE:
@@ -1325,6 +1334,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1365,6 +1375,7 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
+    @lru_cache(maxsize=None)
     def get_mlp_act_mem_config(self, mode: Mode):
         """Get the memory config for MLP activation (TG specific)."""
         if mode == Mode.DECODE:
@@ -1392,6 +1403,7 @@ class ModelArgs:
     # ATTENTION PROGRAM AND MEMORY CONFIGS
     # =========================================================================
 
+    @lru_cache(maxsize=None)
     def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None):
         """Get the SDPA program config for prefill mode."""
         # Sequence length and chunk start index are both required for prefill
@@ -1426,10 +1438,11 @@ class ModelArgs:
             k_chunk_size=k_chunk,
         )
 
+    @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         """Get the SDPA program config for decode mode."""
         if prefetcher is not None:
-            sdpa_grid_size = (8, 4)
+            sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
             num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
             return ttnn.SDPAProgramConfig(
@@ -1449,6 +1462,7 @@ class ModelArgs:
                 k_chunk_size=0,
             )
 
+    @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
         self, mode: Mode, seq_len: int = 1, chunk_start_idx: int = None, prefetcher: Prefetcher = None
     ):
@@ -1460,6 +1474,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1500,6 +1515,7 @@ class ModelArgs:
     # ATTENTION PROGRAM AND MEMORY CONFIGS (continued)
     # QKV, WO, All-Reduce, All-Gather configs
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for the QKV matmul in attention."""
         if mode == Mode.DECODE:
@@ -1545,6 +1561,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_qkv_mm_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for QKV matmul output in attention."""
         if mode == Mode.DECODE:
@@ -1569,6 +1586,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_qkv_all_reduce_output_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
         """Get the memory config for QKV all-reduce output in attention."""
         if mode == Mode.DECODE:
@@ -1597,6 +1615,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_create_head_input_mem_config(self, mode: Mode):
         """Get the memory config for create_head input (TG specific)."""
         if mode == Mode.DECODE:
@@ -1606,6 +1625,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
@@ -1636,6 +1656,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
         self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None
     ):
@@ -1703,6 +1724,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_all_gather_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for attention all-gather output."""
         if mode == Mode.DECODE:
@@ -1736,6 +1758,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_all_gather_matmul_program_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the program config for fused all-gather matmul in attention."""
         if mode == Mode.DECODE:
@@ -1778,6 +1801,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_output_program_config(self, mode: Mode):
         """Get the program config for attention output matmul (replaces ATTN_OUTPUT_PROGCFG)."""
         if mode == Mode.DECODE:
@@ -1795,6 +1819,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for WO (dense output) matmul in attention."""
         if mode == Mode.DECODE:
@@ -1848,6 +1873,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_wo_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for WO matmul output in attention."""
         if mode == Mode.DECODE:
@@ -1869,6 +1895,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_dense_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for dense output (after all-reduce) in attention."""
         if mode == Mode.DECODE:
@@ -1896,6 +1923,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_all_reduce_output_mem_config(
         self, mode: Mode, hidden_size: int = 0, mesh_rows: int = 1, prefetcher: Prefetcher = None
     ):
@@ -1923,6 +1951,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_gather_users_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
         """Get the memory config for gather users in attention (TG path)."""
         if mode == Mode.DECODE:
@@ -1947,6 +1976,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_kv_prefill_mem_config(self, seq_len: int = 1):
         """Get the memory config for KV cache fill during prefill."""
         return ttnn.create_sharded_memory_config(
@@ -1960,6 +1990,7 @@ class ModelArgs:
     # =========================================================================
     #  NORM CONFIGS
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_norm_config(self, norm_type: str, mode: Mode, prefetcher: Prefetcher = None):
         """Get the norm config dict for attention, ff, or lm_head norms."""
         prefetcher_norm_grid = ttnn.CoreGrid(y=8, x=4)
@@ -2078,6 +2109,7 @@ class ModelArgs:
         else:
             return max_columns_per_device
 
+    @lru_cache(maxsize=None)
     def get_lm_head_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for LM head input."""
         if mode == Mode.DECODE:
@@ -2113,6 +2145,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_lm_head_program_config(self, split_size: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for LM head matmul."""
         if prefetcher is not None:
@@ -2134,6 +2167,7 @@ class ModelArgs:
                 self.lm_head_core_grid.num_cores,
             )
 
+    @lru_cache(maxsize=None)
     def get_lm_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for LM head output."""
         if mode == Mode.DECODE:
@@ -2154,6 +2188,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_lm_head_sharded_output_mem_config(self, prefetcher: Prefetcher = None):
         """Get the output memory config for LM head (after sharded_to_interleaved)."""
         if prefetcher is not None:
@@ -2161,6 +2196,7 @@ class ModelArgs:
         else:
             return ttnn.L1_MEMORY_CONFIG
 
+    @lru_cache(maxsize=None)
     def get_lm_head_reshard_mem_config(self, prefetcher: Prefetcher = None):
         """Get the memory config for LM head output resharding."""
         if prefetcher is None:
@@ -2334,12 +2370,14 @@ class ModelArgs:
             local_params = None
         return local_params
 
-    def is_distributed_norm(self, mode):
+    def is_distributed_norm(self, mode: Mode):
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
-        elif self.dim > 4096 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif (
+            self.dim > 4096 and mode == Mode.PREFILL
+        ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 

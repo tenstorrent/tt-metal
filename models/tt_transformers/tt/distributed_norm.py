@@ -51,9 +51,7 @@ class DistributedNorm(LightweightModule):
     def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
 
-        sharded_program_config = norm_config.get("sharded_program_config", None)
-        sharded_output_config = norm_config.get("sharded_output_config", None)
-        output_mem_config = norm_config.get("output_mem_config", None)
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
 
         if self.TG:
             if mode == Mode.DECODE:

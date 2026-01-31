@@ -45,7 +45,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     dtype = ttnn.bfloat8_b
     mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
-    # Setup prefetcher
+    # Setup prefetcher (FF1, FF2, FF3 weights are prefetched)
     num_tensors = 3 if mode == Mode.DECODE else 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
@@ -57,7 +57,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         max_batch_size=batch_size,
         max_seq_len=128,
         cache_hf=True,
-        prefetcher=prefetcher if use_prefetcher else None,
+        prefetcher=prefetcher,
     )
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
@@ -98,9 +98,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     )
     reference_output = reference_model(torch_input)
 
-    def get_input_memory_config():
-        return model_args.get_mlp_input_mem_config(mode, prefetcher)
-
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -110,7 +107,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
             mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
-        memory_config=get_input_memory_config(),
+        memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info("Run MLP")

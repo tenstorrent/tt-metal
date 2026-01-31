@@ -5,6 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
@@ -119,12 +120,12 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         full_text_row_masked_out_mask_11SD,
         full_text_row_masked_out_mask_1NSH,
         xattn_cache,
-        mode,
+        mode: Mode,
         user_id=0,
         vision_tokens=None,
         cross_page_table=None,
     ):
-        skip_mem_cfg = self.configuration.get_residual_mem_config(mode) if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        skip_mem_cfg = self.configuration.get_residual_mem_config(mode)
         assert (
             x_11SH.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x_11SH.memory_config()} != {skip_mem_cfg}"

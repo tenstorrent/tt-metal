@@ -72,7 +72,6 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
-            rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if prefetcher is not None else ttnn.TILE_LAYOUT,
             prefetcher=prefetcher,
         )
 
@@ -84,6 +83,7 @@ class Transformer(LightweightModule):
                 args.max_seq_len,
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
+                prefetcher=None,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -388,7 +388,7 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
-        decode_residual_mem_cfg = self.args.get_residual_mem_config("decode", self.prefetcher)
+        decode_residual_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher)
         tt_tokens = self.embd(
             tokens,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
@@ -514,7 +514,7 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs, prefetcher=self.prefetcher)
+        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
 
         x_embed = self._transform_decode_inputs_device(x)

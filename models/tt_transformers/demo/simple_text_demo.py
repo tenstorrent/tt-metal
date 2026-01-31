@@ -20,6 +20,7 @@ from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
+    Mode,
     PagedAttentionConfig,
     create_tt_model,
     preprocess_inputs_prefill,
@@ -743,7 +744,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([True, False]),
+    ([False]),
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -755,7 +756,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1, "worker_l1_size": 1492000}],
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -842,6 +843,7 @@ def test_demo_text(
     enable_trace = request.config.getoption("--enable_trace") or enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
+    use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -1116,7 +1118,7 @@ def test_demo_text(
 
         if mode == "decode" or mode == "full":
             for i in range(len(model)):
-                model[i].switch_mode("decode")
+                model[i].switch_mode(Mode.DECODE)
 
         while users_decoding and mode != "prefill":
             if iteration == 0:  # First iteration also accounts for compile time

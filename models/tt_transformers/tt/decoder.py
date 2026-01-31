@@ -227,7 +227,8 @@ class TransformerBlock(LightweightModule):
         )
 
         # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode, norm_config=self.args.get_norm_config("attn", mode, self.prefetcher))
+        attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
+        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
@@ -253,9 +254,9 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
         else:
             hidden_states = attn_out
-        hidden_states = self.ff_norm(
-            hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
-        )
+
+        ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+        hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
 
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
@@ -277,9 +278,8 @@ class TransformerBlock(LightweightModule):
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
-            hidden_states = self.pre_ff_norm(
-                hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
-            )
+            pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
 
         ttnn.deallocate(attn_out)
 
@@ -294,9 +294,8 @@ class TransformerBlock(LightweightModule):
         )
 
         if self.post_ff_norm is not None:
-            hidden_states = self.post_ff_norm(
-                hidden_states, mode, norm_config=self.args.get_norm_config("ff", mode, self.prefetcher)
-            )  # Gathered
+            post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
+            hidden_states = self.post_ff_norm(hidden_states, mode, norm_config=post_ff_norm_config)  # Gathered
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,

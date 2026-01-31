@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import Mode
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -121,16 +122,21 @@ class RMSNorm(LightweightModule):
     def forward(
         self,
         x: ttnn.Tensor,
-        mode,
+        mode: Mode | str,
         in_sharded=False,
         out_sharded=False,
         norm_config=None,
     ) -> ttnn.Tensor:
-        # If input is sharded do sharded RMSNorm and optionally return sharded output
-        sharded_program_config = norm_config.get("sharded_program_config", None)
-        sharded_output_config = norm_config.get("sharded_output_config", None)
-        output_mem_config = norm_config.get("output_mem_config", None)
+        if isinstance(mode, str) and mode in Mode.__members__:
+            mode = Mode[mode]
+        elif not isinstance(mode, Mode):
+            raise ValueError(f"Invalid mode: {mode}")
 
+        sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+        output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+
+        # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
@@ -156,7 +162,6 @@ class RMSNorm(LightweightModule):
         else:
             if output_mem_config is not None:
                 x = ttnn.to_memory_config(x, output_mem_config)
-
             return x
 
     def _distributed_rmsnorm(

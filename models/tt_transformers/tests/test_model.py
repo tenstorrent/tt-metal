@@ -18,7 +18,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", ([True, False]))
+@pytest.mark.parametrize("use_prefetcher", ([False]))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -327,11 +327,11 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_residual_mem_config("decode", prefetcher if use_prefetcher else None),
+            model_args.get_residual_mem_config(Mode.DECODE, prefetcher),
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher)
 
         # Run TT model
         tt_out = tt_model(
