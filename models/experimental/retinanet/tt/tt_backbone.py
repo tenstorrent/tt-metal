@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -9,7 +9,7 @@ from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisatio
 
 
 class TTBackbone:
-    def __init__(self, parameters, model_config, name="backbone"):
+    def __init__(self, parameters, model_config, device, model_args, name="backbone"):
         layers = [3, 4, 6, 3]
         self.inplanes = 64
         parameters_fpn = parameters.fpn
@@ -26,14 +26,17 @@ class TTBackbone:
 
         self.stem = resnet50Stem(
             parameters_body.stem,
-            stride=1,
+            device=device,
             model_config=model_config,
+            model_args=model_args["stem"],
             layer_optimisations=neck_optimisations,
         )
         # Four bottleneck stages (layer1, layer2, layer3, layer4)
 
         self.layer1 = self._make_layer(
             name=f"{name}.layer1",
+            device=device,
+            model_args=model_args["layer1"],
             parameters=parameters_body.layer1,
             planes=64,
             blocks=layers[0],
@@ -44,6 +47,8 @@ class TTBackbone:
         )
         self.layer2 = self._make_layer(
             name=f"{name}.layer2",
+            device=device,
+            model_args=model_args["layer2"],
             parameters=parameters_body.layer2,
             planes=128,
             blocks=layers[1],
@@ -54,6 +59,8 @@ class TTBackbone:
         )
         self.layer3 = self._make_layer(
             name=f"{name}.layer3",
+            device=device,
+            model_args=model_args["layer3"],
             parameters=parameters_body.layer3,
             planes=256,
             blocks=layers[2],
@@ -64,6 +71,8 @@ class TTBackbone:
         )
         self.layer4 = self._make_layer(
             name=f"{name}.layer4",
+            device=device,
+            model_args=model_args["layer4"],
             parameters=parameters_body.layer4,
             planes=512,
             blocks=layers[3],
@@ -74,7 +83,9 @@ class TTBackbone:
         )
         self.fpn = resnet50Fpn(
             parameters=parameters_fpn,
+            device=device,
             model_config=model_config,
+            model_args=model_args["fpn"],
             layer_optimisations=fpn_optimisations,
         )
 
@@ -82,6 +93,8 @@ class TTBackbone:
         self,
         name: str,
         parameters,
+        device,
+        model_args,
         planes: int,
         blocks: int,
         stride: int,
@@ -95,7 +108,9 @@ class TTBackbone:
         layers.append(
             TTBottleneck(
                 parameters=getattr(parameters, "0", None),
+                device=device,
                 downsample=stride != 1 or self.inplanes != planes * TTBottleneck.expansion,
+                model_args=model_args[0],
                 stride=stride,
                 model_config=model_config,
                 dilation=dilate_config[0],
@@ -108,7 +123,9 @@ class TTBackbone:
             layers.append(
                 TTBottleneck(
                     parameters=getattr(parameters, f"{block_num}", None),
+                    device=device,
                     downsample=False,
+                    model_args=model_args[block_num],
                     stride=1,
                     model_config=model_config,
                     dilation=dilate_config[block_num],
