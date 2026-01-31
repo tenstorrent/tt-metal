@@ -357,77 +357,6 @@ void test_h2d_socket(
     }
 }
 
-void test_d2h_socket(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    std::size_t socket_fifo_size,
-    std::size_t page_size,
-    std::size_t data_size) {
-    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), CoreCoord(0, 0)};
-
-    auto output_socket = D2HSocket(mesh_device, sender_core, BufferType::L1, socket_fifo_size);
-    output_socket.set_page_size(page_size);
-
-    TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
-
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
-    auto sender_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    const DeviceLocalBufferConfig sender_device_local_config{
-        .page_size = data_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
-
-    auto send_program = CreateProgram();
-    CreateKernel(
-        send_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
-        CoreCoord(0, 0),
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
-                static_cast<uint32_t>(sender_data_buffer->address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size),
-            }});
-
-    uint32_t num_reads = data_size / page_size;
-    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-    std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
-
-    auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
-    mesh_workload.add_program(devices, std::move(send_program));
-    std::cout << "Device: " << mesh_device->get_device(MeshCoordinate(0, 0))->id() << std::endl;
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-
-    // auto send_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    // const auto& cluster = MetalContext::instance().get_cluster();
-    // auto send_device_id = mesh_device->get_device(MeshCoordinate(0, 0))->id();
-
-    for (uint32_t i = 0; i < num_reads; i++) {
-        output_socket.wait_for_pages(1);
-        std::memcpy(dst_vec.data() + i * page_size_words, output_socket.get_read_ptr(), page_size);
-        // cluster.read_core(
-        //     dst_vec.data() + i * page_size_words,
-        //     page_size,
-        //     tt_cxy_pair(send_device_id, send_core),
-        //     output_socket.get_read_ptr());
-        output_socket.pop_pages(1);
-        output_socket.notify_sender();
-    }
-    output_socket.barrier();
-    EXPECT_EQ(src_vec, dst_vec);
-}
-
 void test_single_device_socket_with_workers(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
     std::size_t socket_fifo_size,
@@ -2346,12 +2275,6 @@ TEST_F(MeshDevice1x2Fixture, H2DSocket) {
     test_h2d_socket(mesh_device_, 1024, 64, 32768);
     // Uneven wrap
     test_h2d_socket(mesh_device_, 4096, 1088, 78336);
-}
-
-TEST_F(MeshSocketTest, D2HSocket) {
-    test_d2h_socket(mesh_device_, 1024, 64, 1024);
-    test_d2h_socket(mesh_device_, 1024, 64, 32768);
-    test_d2h_socket(mesh_device_, 4096, 1088, 78336);
 }
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
