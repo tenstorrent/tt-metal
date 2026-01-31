@@ -13,7 +13,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
 
     set_receiver_socket_page_size(receiver_socket, page_size);
 

@@ -176,7 +176,7 @@ void update_socket_config(const SocketSenderInterface& socket) {
     socket_config->write_ptr = socket.write_ptr;
 }
 
-SocketReceiverInterface create_receiver_socket_interface_2(uint32_t config_addr) {
+SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
     SocketReceiverInterface socket;
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);

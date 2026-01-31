@@ -160,6 +160,10 @@ H2DSocket::H2DSocket(
     for (const auto& recv_core : recv_cores_) {
         recv_device_range_set.merge(MeshCoordinateRange(recv_core.device_coord));
     }
+
+    const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
+
     bytes_acked_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
     host_data_buffer_ = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, 64>>>(
         fifo_size_ / sizeof(uint32_t), 0);
@@ -227,10 +231,10 @@ H2DSocket::H2DSocket(
     auto sub_device_id = SubDeviceId{0};
     auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    auto total_data_buffer_size = num_data_cores * fifo_size_;
+    auto total_data_buffer_size = num_data_cores * (fifo_size_ + pcie_alignment);
 
     DeviceLocalBufferConfig data_buffer_specs = {
-        .page_size = fifo_size_,
+        .page_size = fifo_size_ + pcie_alignment,
         .buffer_type = buffer_type_,
         .sharding_args = BufferShardingArgs(
             ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
@@ -257,8 +261,8 @@ H2DSocket::H2DSocket(
             auto& md = config_data[idx];
             md.bytes_sent = 0;
             md.bytes_acked = 0;
-            md.read_ptr = data_buffer_->address();
-            md.fifo_addr = data_buffer_->address();
+            md.read_ptr = tt::align(data_buffer_->address(), pcie_alignment);
+            md.fifo_addr = tt::align(data_buffer_->address(), pcie_alignment);
             md.fifo_total_size = fifo_size_;
             md.is_h2d = 1;
             md.h2d.bytes_acked_addr_lo = bytes_acked_addr_lo;
