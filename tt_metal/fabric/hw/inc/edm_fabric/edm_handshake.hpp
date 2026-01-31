@@ -46,21 +46,35 @@ static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 // Data-Structure used for EDM to EDM Handshaking.
 struct handshake_info_t {
     uint32_t local_value;  // Updated by remote
-    uint32_t padding[3];   // Ensures 16B alignment for scratch register
+    uint16_t mesh_id;
+    uint16_t neighbor_mesh_id;
+    uint8_t device_id;
+    uint8_t neighbor_device_id;
+    uint32_t padding[1];   // Ensures 16B alignment for scratch register
     uint32_t scratch[4];   // TODO: This can be removed if we use a stream register for handshaking.
 };
 
-FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(uint32_t handshake_register_address) {
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
+    uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
+    handshake_info->mesh_id = my_mesh_id;
+    handshake_info->device_id = my_device_id;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
+    handshake_info->scratch[1] = (static_cast<uint32_t>(my_mesh_id) << 16);
+    handshake_info->scratch[2] = (static_cast<uint32_t>(my_device_id) << 8);
+    handshake_info->scratch[3] = 0;
     return handshake_info;
 }
 
 FORCE_INLINE void sender_side_handshake(
-    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
-    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
+    uint32_t handshake_register_address,
+    uint16_t my_mesh_id,
+    uint8_t my_device_id,
+    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info =
+        init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
@@ -74,11 +88,17 @@ FORCE_INLINE void sender_side_handshake(
         }
         invalidate_l1_cache();
     }
+    handshake_info->mesh_id = my_mesh_id;
+    handshake_info->device_id = my_device_id;
 }
 
 FORCE_INLINE void receiver_side_handshake(
-    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
-    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
+    uint32_t handshake_register_address,
+    uint16_t my_mesh_id,
+    uint8_t my_device_id,
+    size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info =
+        init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
@@ -92,6 +112,8 @@ FORCE_INLINE void receiver_side_handshake(
         invalidate_l1_cache();
     }
     internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    handshake_info->mesh_id = my_mesh_id;
+    handshake_info->device_id = my_device_id;
 }
 
 namespace deprecated {
