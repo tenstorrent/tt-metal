@@ -27,7 +27,9 @@ void kernel_main() {
     constexpr uint32_t cb_query = tt::CBIndex::c_2;
     constexpr uint32_t cb_key = tt::CBIndex::c_3;
     constexpr uint32_t cb_value = tt::CBIndex::c_4;
+#ifdef USE_ATTN_MASK
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
+#endif
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
 
@@ -58,7 +60,9 @@ void kernel_main() {
     const auto query_address_generator = TensorAccessor(query_args, query_addr, tile_bytes);
     const auto key_address_generator = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value_address_generator = TensorAccessor(value_args, value_addr, tile_bytes);
+#ifdef USE_ATTN_MASK
     const auto mask_address_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
+#endif
     const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
 
     generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce (auto-detects data type)
@@ -81,9 +85,24 @@ void kernel_main() {
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
 
+        // k_row_tile = position within sequence (0 to Ht-1)
+        const uint32_t k_row_tile = global_row_idx % Ht;
+
+#ifdef CAUSAL_MASK
+        // For causal mask: only read Q rows from k_row_tile to Ht-1
+        // Q rows 0 to k_row_tile-1 have zero attention weights (can't attend to future keys)
+        const uint32_t q_start_tile = k_row_tile;
+        const uint32_t num_q_tiles_to_read = Ht - k_row_tile;
+#else
+        const uint32_t q_start_tile = 0;
+        const uint32_t num_q_tiles_to_read = Ht;
+#endif
+
+#ifdef USE_ATTN_MASK
         // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
-        // For KV kernel, we read column (global_row_idx % Ht) from each row h of the mask
-        const uint32_t mask_offset = (global_row_idx % Ht);
+        // For KV kernel, we read column k_row_tile from each row h of the mask
+        const uint32_t mask_offset = k_row_tile;
+#endif
 
         // add change here: multiply by num_of_interm_tiles because we need to read 2 tiles per head row
         uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
@@ -91,13 +110,18 @@ void kernel_main() {
         // TODO: add calculation for dO, O indexes because in forward pass they are stored with shape (B, 1, S,
         // qNH*qEmbd)
         for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
-            for (uint32_t h = 0; h < Ht; ++h) {
+            for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
+                const uint32_t h = q_start_tile + q_idx;  // actual Q row tile index
+
                 const uint32_t q_start_idx = q_offset + (q_head_idx * Ht + h) * qWt;
                 read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
+#ifdef USE_ATTN_MASK
                 // read one tile of attn_mask for current row of K and V
                 // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
                 read_one_tile(cb_attn_mask, mask_address_generator, mask_offset + h * Ht);
+#endif
+                // Note: For CAUSAL_MASK, the mask tile is generated once by writer and reused by compute
 
                 // Read intermediates - one tile per row (contains 1/sum_exp values from forward pass)
                 // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
