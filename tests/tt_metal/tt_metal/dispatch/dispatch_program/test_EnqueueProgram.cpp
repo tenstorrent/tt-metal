@@ -542,12 +542,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     constexpr uint32_t kCommonRTASeparation = 1024 * sizeof(uint32_t);
     constexpr uint32_t num_common_runtime_args = 13;
 
-    TT_FATAL(
-        program_config.cr_set.ranges().size() == 2,
-        "This test requires exactly 2 core ranges, got {}. "
-        "Function only provides RTA counts for cr0 and cr1.",
-        program_config.cr_set.ranges().size());
-
     // Extract the two core ranges to create separate kernels for each
     auto it = program_config.cr_set.ranges().begin();
     CoreRange core_range_0 = *it;
@@ -555,6 +549,12 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     CoreRange core_range_1 = *it;
     std::vector<CoreRange> ranges = {core_range_0, core_range_1};
     std::vector<uint32_t> num_rtas_per_range = {num_runtime_args_for_cr0, num_runtime_args_for_cr1};
+
+    TT_FATAL(
+        program_config.cr_set.ranges().size() == num_rtas_per_range.size(),
+        "This test requires exactly {} core ranges (RTA counts provided), got {}.",
+        num_rtas_per_range.size(),
+        program_config.cr_set.ranges().size());
 
     uint32_t rta_base_dm0 = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t rta_base_dm1 = rta_base_dm0 + (2048 * sizeof(uint32_t));

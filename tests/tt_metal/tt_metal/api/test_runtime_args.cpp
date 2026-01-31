@@ -99,11 +99,12 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::Program program = tt_metal::CreateProgram();
 
+    // Use unique_address (false) so kernel writes align with verify_results reads
     uint32_t rta_base_dm = get_runtime_arg_addr(
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::DM,
         0,
-        common_rtas);
+        false);
     std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
@@ -264,11 +265,20 @@ void verify_results(
 
         // Verify common RT Args (same for all cores) if they exist.
         if (!common_rt_args.empty()) {
-            auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-                kernel->get_kernel_processor_class(),
-                kernel->get_kernel_processor_type(0),
-                true);
+            // DM kernel writes common at base + kCommonRTASeparation
+            // Compute kernel writes common to a separate address via get_runtime_arg_addr()
+            uint32_t common_rt_args_base_addr = 0;
+            if (kernel->get_kernel_processor_class() == tt::tt_metal::HalProcessorClassType::COMPUTE) {
+                // Original behavior for compute kernel - use actual common address
+                common_rt_args_base_addr = get_runtime_arg_addr(
+                    device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                    kernel->get_kernel_processor_class(),
+                    kernel->get_kernel_processor_type(0),
+                    true);
+            } else {
+                // New fix for DM kernel - use fixed offset
+                common_rt_args_base_addr = rt_args_base_addr + 1024 * sizeof(uint32_t);
+            }
 
             for (auto& core_range : kernel->logical_coreranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -331,7 +341,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         std::vector<uint32_t> second_runtime_args = {0x12341234, 0xcafecafe};
-        std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
         SetRuntimeArgs(program, 0, first_core_range, second_runtime_args);
         detail::WriteRuntimeArgsToDevice(device, program);
         for (auto x = first_core_range.start_coord.x; x <= first_core_range.end_coord.x; x++) {
@@ -343,10 +352,11 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
+        // Set common runtime args, automatically sent to all cores used by kernel.
+        std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
         auto workload2 = unit_tests::runtime_args::initialize_program_data_movement_rta(
             mesh_device, core_range_set, 0, true, common_runtime_args.size());
         auto& program2 = workload2.get_programs().at(device_range);
-        // Set common runtime args, automatically sent to all cores used by kernel.
         SetCommonRuntimeArgs(program2, 0, common_runtime_args);
         detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
