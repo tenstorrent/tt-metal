@@ -189,6 +189,8 @@ jobs:
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         uses: docker/build-push-action@v6
         with:
@@ -200,6 +202,8 @@ jobs:
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         uses: docker/build-push-action@v6
         with:
@@ -211,6 +215,8 @@ jobs:
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         uses: docker/build-push-action@v6
         with:
@@ -222,6 +228,8 @@ jobs:
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         uses: docker/build-push-action@v6
         with:
@@ -233,6 +241,8 @@ jobs:
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -263,6 +273,8 @@ jobs:
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         uses: docker/build-push-action@v6
         with:
@@ -274,6 +286,8 @@ jobs:
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         uses: docker/build-push-action@v6
         with:
@@ -285,6 +299,8 @@ jobs:
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         uses: docker/build-push-action@v6
         with:
@@ -296,6 +312,8 @@ jobs:
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         uses: docker/build-push-action@v6
         with:
@@ -307,6 +325,8 @@ jobs:
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image
   build-manylinux:
@@ -335,6 +355,8 @@ jobs:
           tags: ${{ needs.check-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Update latest tags on main
   tag-latest:

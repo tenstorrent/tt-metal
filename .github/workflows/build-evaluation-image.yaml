@@ -192,3 +192,5 @@ jobs:
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
           push: true
+          outputs: |
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
