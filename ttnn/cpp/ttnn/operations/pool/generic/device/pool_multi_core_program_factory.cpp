@@ -855,6 +855,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             args.push_back((uint32_t)(start_col));
         }
         SetRuntimeArgs(program, reader0_kernel, core, args);
+        if (params.split_reader) {
+            SetRuntimeArgs(program, reader1_kernel, core, args);
+        }
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
