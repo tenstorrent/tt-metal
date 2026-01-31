@@ -8,14 +8,16 @@ TT-Train provides the ttml module (`ttml`), written using nanobind, which provid
 
 ### 1. Install Python Package
 
+> **Important:** tt-metal uses `uv` for virtual environment management. You must use `uv pip` instead of `pip`. See [INSTALLING.md](../INSTALLING.md) for details.
+
 ```bash
-pip install .
+uv pip install .
 ```
 
 Or for editable/development install:
 
 ```bash
-pip install --no-build-isolation -e .
+uv pip install --no-build-isolation -e .
 ```
 
 ## Verification

@@ -17,9 +17,10 @@ cd /path/to/tt-metal
 
 This script will:
 - Create a virtual environment in `python_env/`
-- Install the correct pip, setuptools, and wheel versions for your OS
 - Install development dependencies
 - Install tt-metal (ttnn) in editable mode
+
+> **Note:** The virtual environment is managed by [uv](https://github.com/astral-sh/uv) and does not include `pip`. You must use `uv pip` instead of `pip` for installing additional packages. See Step 2 below.
 
 Activate the environment:
 
@@ -88,18 +89,20 @@ source python_env/bin/activate
 
 ## Step 2: Install tt-train
 
-Once tt-metal is installed and your virtual environment is activated, install tt-train:
+Once tt-metal is installed and your virtual environment is activated, install tt-train using `uv pip`:
+
+> **Important:** tt-metal's virtual environment is created with `uv`, which does not include `pip` by default. You must use `uv pip` instead of `pip` for package installation. Using system `pip` will fail with errors like `canonicalize_name() got an unexpected keyword argument 'validate'`. See [issue #36208](https://github.com/tenstorrent/tt-metal/issues/36208) for details.
 
 **Regular installation:**
 
 ```bash
-pip install /path/to/tt-train/
+uv pip install /path/to/tt-train/
 ```
 
 **Editable installation (for development):**
 
 ```bash
-pip install -e /path/to/tt-train/
+uv pip install -e /path/to/tt-train/
 ```
 
 Use the editable installation (`-e`) if you plan to modify the tt-train source code and want changes to be reflected immediately without reinstalling.
