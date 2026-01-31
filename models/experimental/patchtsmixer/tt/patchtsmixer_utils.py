@@ -136,13 +136,16 @@ def apply_linear_height_sharded(
     *,
     use_sharding: bool = True,
     compute_config=None,
+    program_config=None,
+    fused_activation=None,
+    program_config_factory=None,
     min_tiles_per_core: int = 2,
     min_K_tiles: int = 1,
     return_sharded: bool = False,
     out_memory_config=None,
 ):
     """Apply linear with optional HEIGHT sharding and reshape to `out_shape`."""
-    # Normalize to matmul view (1,1,M,K) only if needed
+    # Normalize to matmul view (1,1,M,K) only if needed.
     if (
         len(x.shape) == 4
         and int(x.shape[0]) == 1
@@ -221,12 +224,27 @@ def apply_linear_height_sharded(
             out_shard_shape = [shard_shape[0], out_k_pad]
             out_cfg = make_height_sharded_mem_config(nc, out_shard_shape)
 
+    # Build a program_config using the callback.
+    if program_config_factory is not None:
+        out_k = int(out_shape[-1])
+        program_config = program_config_factory(
+            nc=nc, M=M, K=K, out_k=out_k, shard_shape=shard_shape, out_memory_config=out_cfg
+        )
+
+    if fused_activation is not None:
+        if program_config is None:
+            raise RuntimeError(
+                "fused_activation requires an explicit program_config  (e.g. MatmulMultiCoreReuseMultiCast1DProgramConfig)"
+            )
+        program_config.fused_activation = fused_activation
+
     out_sharded = ttnn.linear(
         x_sharded,
         weight,
         bias=bias,
         memory_config=out_cfg,
         compute_kernel_config=compute_config,
+        program_config=program_config,
     )
     ttnn.deallocate(x_sharded)
 
@@ -239,3 +257,46 @@ def apply_linear_height_sharded(
 
     out = ttnn.reshape(out_interleaved, out_shape)
     return out
+
+
+def make_1d_mcast_prog_config_for_height_sharded(
+    *,
+    nc: int,
+    shard_shape,
+    out_k: int,
+    fuse_batch: bool = True,
+    # fused_activation = None,
+    mcast_in0: bool = True,
+    in0_block_w_tiles: int = 1,
+    out_subblock_h: int = 1,
+    out_subblock_w: int = 1,
+):
+    # shard_shape is [rows, cols] in elements, already tile-aligned
+    shard_rows_elems, shard_cols_elems = shard_shape
+
+    per_core_M = shard_rows_elems // TILE_SIZE  # tiles along M per core
+    K_tiles = shard_cols_elems // TILE_SIZE  # tiles along K per core
+    out_k_pad = _to_tiles(out_k) * TILE_SIZE
+    per_core_N = out_k
+    # Wormhole grid is [x,y] in the constants, but TTNN CoreGrid often takes x,y separately.
+    # We already use num_cores_to_corerangeset(row_wise=True), so compute grid is essentially 1D.
+    # We'll use a 1D-ish compute_with_storage_grid_size = (1, nc) or (nc, 1) depending on row_wise.
+    # Since we used row_wise=True, cores are laid out row-wise (x changes first).
+    # The safest is to set grid_size to (WORMHOLE_GRID[0], WORMHOLE_GRID[1]) or (nc,1) if supported.
+    # Start with full chip grid and let corerangeset handle selection.
+
+    compute_grid = ttnn.CoreCoord(y=WORMHOLE_GRID[0], x=WORMHOLE_GRID[1])
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=compute_grid,
+        fuse_batch=fuse_batch,
+        mcast_in0=mcast_in0,
+        in0_block_w=in0_block_w_tiles,  # K blocking (tiles)
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        # fused_activation=fused_activation,
+        # You can add out_block_h/out_block_w later for more expliciticy.
+        # untilize_out=Fase is default; keep tiles output for the next matmul.
+    )
