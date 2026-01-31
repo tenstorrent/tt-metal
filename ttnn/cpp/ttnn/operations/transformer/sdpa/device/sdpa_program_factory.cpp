@@ -459,7 +459,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
-    defines["SDPA_KERNEL_TYPE_STANDARD"] = "1";
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 

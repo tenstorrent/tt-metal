@@ -409,7 +409,6 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    defines["SDPA_KERNEL_TYPE_JOINT"] = "1";
 
     auto reader_kernels_id = CreateKernel(
         program,

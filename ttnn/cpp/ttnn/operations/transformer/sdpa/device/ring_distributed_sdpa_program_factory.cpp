@@ -355,7 +355,6 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
-    defines["SDPA_KERNEL_TYPE_STANDARD"] = "1";
 
     auto reader_kernels_id = CreateKernel(
         program,

@@ -682,7 +682,7 @@ void calculate_exponential_polynomial() {
                                                 : 0.16792157982882225102649214918047336097544632172075f;
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        // Load polynomial coefficients. Use if constexpr to only compile the needed loads.
+        // Load polynomial coefficients.
         if constexpr (POLY_DEGREE >= 4) {
             TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
             TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
@@ -1137,7 +1137,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
 }
 
-void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+__attribute__((noinline)) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = in0_cb - in1_cb
 
     cb_wait_front(in0_cb, num_tiles);
@@ -1798,7 +1798,6 @@ void sdpa_inner_loop(
  *                          SDPA WRAPPER FUNCTIONS                            *
  ******************************************************************************/
 
-#ifdef SDPA_KERNEL_TYPE_STANDARD
 /**
  * Standard SDPA with optional causal masking, attention sink, and sliding window.
  */
@@ -1926,9 +1925,7 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out);
 }
-#endif  // SDPA_KERNEL_TYPE_STANDARD
 
-#ifdef SDPA_KERNEL_TYPE_JOINT
 /**
  * Joint SDPA for multi-modal attention.
  */
@@ -2048,9 +2045,7 @@ void sdpa_joint(
         0,  // cb_prev_out (not used)
         cb_out);
 }
-#endif  // SDPA_KERNEL_TYPE_JOINT
 
-#ifdef SDPA_KERNEL_TYPE_RING
 /**
  * Ring SDPA for distributed multi-device attention.
  */
@@ -2182,9 +2177,7 @@ void sdpa_ring(
         cb_prev_out,
         cb_out);
 }
-#endif  // SDPA_KERNEL_TYPE_RING
 
-#ifdef SDPA_KERNEL_TYPE_WINDOWED
 /**
  * Windowed SDPA with user-provided mask.
  */
@@ -2300,4 +2293,3 @@ void sdpa_windowed(
         0,  // cb_prev_out (not used)
         cb_out);
 }
-#endif  // SDPA_KERNEL_TYPE_WINDOWED
