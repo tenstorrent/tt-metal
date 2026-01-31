@@ -170,6 +170,26 @@ run_t3000_qwen3_tests() {
   fi
 }
 
+run_t3000_qwq3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_qwq3_tests"
+  qwq3=Qwen/QwQ-32B
+  tt_cache_qwq3=$TT_CACHE_HOME/$qwq3
+
+  # Run QwQ-32B with max_seq_len 32k
+  HF_MODEL=$qwq3 TT_CACHE_PATH=$tt_cache_qwq3 pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwq3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3_vision_tests() {
   # Record the start time
   fail=0
@@ -492,6 +512,9 @@ run_t3000_tests() {
 
   # Run qwen3 tests
   run_t3000_qwen3_tests
+
+  # Run qwq3 tests
+  run_t3000_qwq3_tests
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
