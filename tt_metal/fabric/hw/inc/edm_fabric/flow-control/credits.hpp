@@ -321,6 +321,24 @@ struct PackedCreditContainerTraits {
 };
 
 /**
+ * Helper: Construct a mask for the packed credit sum
+ * This is used to sum the packed credits in a single operation where the operation is
+ * sum = (packed_credit * mask) >> ((N_CREDITS - 1) * CREDIT_WIDTH_BITS);
+ *
+ * NOTE: this function computes the mask ONLY.
+ * <4, 8> -> 0x01010101
+ * <4, 6> -> 0x00041041
+ */
+template <size_t N_CREDITS, uint8_t CREDIT_WIDTH_BITS>
+constexpr uint32_t construct_packed_credit_sum_mask() {
+    uint32_t mask = 0;
+    for (uint8_t i = 0; i < N_CREDITS; i++) {
+        mask = mask | (1 << (i * CREDIT_WIDTH_BITS));
+    }
+    return mask;
+}
+
+/**
  * Credit packing policy - handles bit-level packing and unpacking of credits.
  * This is a stateless policy class containing only static methods.
  *
@@ -341,6 +359,9 @@ struct CreditPacking {
     static constexpr uint32_t CREDIT_MASK = (1u << CREDIT_WIDTH) - 1;
     static constexpr uint32_t TWO_CREDIT_WIDTHS = 2 * CREDIT_WIDTH;
     static constexpr uint32_t TOTAL_BITS = NUM_CHANNELS * CREDIT_WIDTH;
+    static constexpr uint32_t PACKED_CREDIT_SUM_MASK =
+        construct_packed_credit_sum_mask<NUM_CHANNELS, CREDIT_WIDTH_BITS>();
+    static constexpr uint32_t PACKED_CREDIT_SUM_SHIFT = (NUM_CHANNELS - 1) * CREDIT_WIDTH_BITS;
     static_assert(TOTAL_BITS <= 64, "Total packed bits exceeds 64-bit capacity");
 
     using PackedValueType = PackedCreditContainer<NUM_CHANNELS, CREDIT_WIDTH_BITS>;
@@ -363,7 +384,10 @@ private:
      */
     FORCE_INLINE static uint8_t sum_2_byte_aligned_channels(storage_type packed_value) {
         PackedDataView data{packed_value};
-        return data.bytes[0] + data.bytes[1];
+        // return data.bytes[0] + data.bytes[1];
+        // below is faster than doing byte sums like above
+        return static_cast<uint8_t>(
+            (static_cast<uint32_t>(packed_value) * PACKED_CREDIT_SUM_MASK) >> PACKED_CREDIT_SUM_SHIFT);
     }
 
     /**
@@ -376,13 +400,17 @@ private:
      * - Adding halfs gives: byte0 = (c0 + c2), byte1 = c1
      * - Final sum: (c0 + c2) + c1
      */
-    FORCE_INLINE static uint8_t sum_3_byte_aligned_channels(storage_type packed_value) {        
+    FORCE_INLINE static uint8_t sum_3_byte_aligned_channels(storage_type packed_value) {
         PackedDataView data{packed_value};
         // Sum upper and lower 16 bits
-        auto partial = PackedDataView{
-            .packed = static_cast<storage_type>((static_cast<uint32_t>(data.halfs[0]) + static_cast<uint32_t>(data.halfs[1])))};
-        // For 3 channels: partial.bytes[1] == data.bytes[1] (both are c1)
-        return partial.bytes[0] + data.bytes[1];
+        // auto partial = PackedDataView{
+        //     .packed = static_cast<storage_type>((static_cast<uint32_t>(data.halfs[0]) +
+        //     static_cast<uint32_t>(data.halfs[1])))};
+        // // For 3 channels: partial.bytes[1] == data.bytes[1] (both are c1)
+        // return partial.bytes[0] + data.bytes[1];
+        // below is faster than doing byte sums like above
+        return static_cast<uint8_t>(
+            (static_cast<uint32_t>(packed_value) * PACKED_CREDIT_SUM_MASK) >> PACKED_CREDIT_SUM_SHIFT);
     }
 
     /**
@@ -396,7 +424,8 @@ private:
      * - Final sum: (c0 + c2) + (c1 + c3)
      */
     FORCE_INLINE static uint8_t sum_4_byte_aligned_channels(const storage_type& packed_value) {
-        return static_cast<uint8_t>((static_cast<uint32_t>(packed_value) * 0x01010101u) >> 24);
+        return static_cast<uint8_t>(
+            (static_cast<uint32_t>(packed_value) * PACKED_CREDIT_SUM_MASK) >> PACKED_CREDIT_SUM_SHIFT);
     }
 
     /**
@@ -424,6 +453,7 @@ private:
      */
     FORCE_INLINE static uint32_t sum_4_non_byte_aligned_channels(storage_type packed_value) {
         static constexpr uint32_t MAX_CREDIT_VALUE = (1u << CREDIT_WIDTH) - 1;
+        // minimum number of bits needed to represent the max credit value
         static constexpr uint32_t MIN_BITS_NEEDED = log2_ceil(MAX_CREDIT_VALUE + 1);
         static constexpr uint32_t spare_bits_for_carry_over = CREDIT_WIDTH - MIN_BITS_NEEDED;
 
@@ -431,34 +461,44 @@ private:
         static constexpr uint32_t CREDIT_WIDTH_P1_MASK = (CREDIT_WIDTH_MASK << 1) | 1;
         static constexpr uint32_t CREDIT_WIDTH_P2_MASK = (CREDIT_WIDTH_P1_MASK << 1) | 1;
 
+        constexpr uint32_t sum_mask_trick_shift_amount = (NUM_CHANNELS - 1) * CREDIT_WIDTH_BITS;
+        constexpr uint32_t sum_mask_trick_sum_bits_needed = MIN_BITS_NEEDED + (NUM_CHANNELS - 1);
+        constexpr bool can_use_sum_mask_trick =
+            sum_mask_trick_shift_amount + sum_mask_trick_sum_bits_needed <= (sizeof(uint32_t) * 8);
         PackedDataView data{packed_value};
-
-        if constexpr (spare_bits_for_carry_over == 0) {
-            // No spare bits - must extract and add individually
-            constexpr uint32_t c0_shift = 0 * CREDIT_WIDTH;
-            constexpr uint32_t c1_shift = 1 * CREDIT_WIDTH;
-            constexpr uint32_t c2_shift = 2 * CREDIT_WIDTH;
-            constexpr uint32_t c3_shift = 3 * CREDIT_WIDTH;
-
-            uint32_t c0 = (data.packed >> c0_shift) & CREDIT_WIDTH_MASK;
-            uint32_t c1 = (data.packed >> c1_shift) & CREDIT_WIDTH_MASK;
-            uint32_t c2 = (data.packed >> c2_shift) & CREDIT_WIDTH_MASK;
-            uint32_t c3 = (data.packed >> c3_shift) & CREDIT_WIDTH_MASK;
-
-            return (c0 + c1) + (c2 + c3);
-
-        } else if constexpr (spare_bits_for_carry_over == 1) {
-            // 1 spare bit - need careful masking
-            auto sum_of_halfs_with_garbage_at_ends = data.packed + (data.packed >> TWO_CREDIT_WIDTHS);
-            auto final_sum_with_garbage_at_ends =
-                (sum_of_halfs_with_garbage_at_ends & CREDIT_WIDTH_P1_MASK) +
-                ((sum_of_halfs_with_garbage_at_ends >> CREDIT_WIDTH) & CREDIT_WIDTH_P1_MASK);
-            return final_sum_with_garbage_at_ends & CREDIT_WIDTH_P2_MASK;
+        if constexpr (can_use_sum_mask_trick) {
+            // even when dealing with 6-bits credit packing, we can still use this technique because we are summing into
+            // a 32-bit container
+            return ((static_cast<uint32_t>(packed_value) * PACKED_CREDIT_SUM_MASK) >> PACKED_CREDIT_SUM_SHIFT) &
+                   CREDIT_MASK;
         } else {
-            // >= 2 spare bits - only mask final result
-            auto sum_of_halfs = data.packed + (data.packed >> TWO_CREDIT_WIDTHS);
-            auto final_sum_with_garbage_at_ends = sum_of_halfs + (sum_of_halfs >> CREDIT_WIDTH);
-            return final_sum_with_garbage_at_ends & CREDIT_WIDTH_P2_MASK;
+            if constexpr (spare_bits_for_carry_over == 0) {
+                // No spare bits - must extract and add individually
+                constexpr uint32_t c0_shift = 0 * CREDIT_WIDTH;
+                constexpr uint32_t c1_shift = 1 * CREDIT_WIDTH;
+                constexpr uint32_t c2_shift = 2 * CREDIT_WIDTH;
+                constexpr uint32_t c3_shift = 3 * CREDIT_WIDTH;
+
+                uint32_t c0 = (data.packed >> c0_shift) & CREDIT_WIDTH_MASK;
+                uint32_t c1 = (data.packed >> c1_shift) & CREDIT_WIDTH_MASK;
+                uint32_t c2 = (data.packed >> c2_shift) & CREDIT_WIDTH_MASK;
+                uint32_t c3 = (data.packed >> c3_shift) & CREDIT_WIDTH_MASK;
+
+                return (c0 + c1) + (c2 + c3);
+
+            } else if constexpr (spare_bits_for_carry_over == 1) {
+                // 1 spare bit - need careful masking
+                auto sum_of_halfs_with_garbage_at_ends = data.packed + (data.packed >> TWO_CREDIT_WIDTHS);
+                auto final_sum_with_garbage_at_ends =
+                    (sum_of_halfs_with_garbage_at_ends & CREDIT_WIDTH_P1_MASK) +
+                    ((sum_of_halfs_with_garbage_at_ends >> CREDIT_WIDTH) & CREDIT_WIDTH_P1_MASK);
+                return final_sum_with_garbage_at_ends & CREDIT_WIDTH_P2_MASK;
+            } else {
+                // >= 2 spare bits means we don't need to worry about computing partials in a bigger container- only
+                // mask final result
+                return ((static_cast<uint32_t>(packed_value) * PACKED_CREDIT_SUM_MASK) >> PACKED_CREDIT_SUM_SHIFT) &
+                       CREDIT_MASK;
+            }
         }
     }
 
@@ -1047,10 +1087,10 @@ struct ConstMemoryStorage {
 template <uint8_t NUM_CHANNELS, uint8_t CREDIT_WIDTH_BITS, typename StorageBackend>
 class PackedCreditView {
 protected:
-    using Packing = CreditPacking<NUM_CHANNELS, CREDIT_WIDTH_BITS>;
     [[no_unique_address]] StorageBackend storage;
 
 public:
+    using Packing = CreditPacking<NUM_CHANNELS, CREDIT_WIDTH_BITS>;
     static constexpr uint8_t NUM_CHANNELS_VALUE = NUM_CHANNELS;
     static constexpr uint8_t CREDIT_WIDTH = CREDIT_WIDTH_BITS;
 
