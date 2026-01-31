@@ -39,8 +39,8 @@ bool can_exec_ops_on_device(DataType type) {
             // Conversion from bfloat16 to bfloat4_b or bfloat8_b loses precision.
             // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
             return false;
-        default: return true;
     }
+    return true;
 };
 
 // Check if the tensor with the specified memory config and tiling can be
@@ -142,8 +142,8 @@ Tensor create_tt_tensor_from_host_data(
         case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
         case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::BFLOAT16: return create_tensor_from_host_buffer.operator()<bfloat16>();
-        default: TT_THROW("Unsupported data type");
     }
+    TT_THROW("Unsupported data type");
 }
 
 DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, bool is_sharded) {

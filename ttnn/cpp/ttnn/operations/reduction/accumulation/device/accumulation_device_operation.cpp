@@ -76,10 +76,7 @@ AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::co
         output_layout = tensor_args.input_tensor.layout();
     }
 
-    const DataType dtype =
-        tensor_args.opt_output
-            ? tensor_args.opt_output->dtype()
-            : ((attributes.dtype == DataType::INVALID) ? tensor_args.input_tensor.dtype() : attributes.dtype);
+    const DataType dtype = tensor_args.opt_output ? tensor_args.opt_output->dtype() : attributes.dtype;
 
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
     return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};

@@ -199,7 +199,7 @@ struct Conv2dParams {
     Conv2dParallelizationConfig parallelization_config{};
     Conv2dBlockConfig block_config{};
     tt::tt_metal::MemoryConfig memory_config;
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+    std::optional<tt::tt_metal::DataType> dtype;
     std::array<std::uint32_t, 4> input_tensor_shape{};
     DeviceComputeKernelConfig compute_kernel_config;
     bool enable_act_double_buffer = false;
@@ -220,7 +220,7 @@ struct Conv2dHashableParams {
     Conv2dParallelizationConfig parallelization_config{};
     Conv2dBlockConfig block_config{};
     tt::tt_metal::MemoryConfig memory_config;
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+    std::optional<tt::tt_metal::DataType> dtype;
     std::array<std::uint32_t, 4> input_tensor_shape{};
     DeviceComputeKernelConfig compute_kernel_config;
     bool enable_act_double_buffer = false;

@@ -16,7 +16,7 @@ using ttnn::operations::unary::EltwiseUnaryWithParam;
 
 struct UnaryParams {
     const std::vector<EltwiseUnaryWithParam> op_chain;
-    const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    const std::optional<tt::tt_metal::DataType> output_dtype;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const bool fp32_dest_acc_en = false;
     const bool preserve_fp32_precision = false;

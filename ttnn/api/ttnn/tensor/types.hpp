@@ -52,7 +52,6 @@ enum class DataType {
     UINT8 = 5,
     UINT16 = 6,
     INT32 = 7,
-    INVALID = 8,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);

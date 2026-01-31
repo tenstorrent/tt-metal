@@ -16,7 +16,7 @@ struct InterleavedToShardedPartialParams {
     uint32_t num_slices{};
     uint32_t slice_index{};
     tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
+    std::optional<tt::tt_metal::DataType> output_dtype;
 };
 
 }  // namespace ttnn::prim

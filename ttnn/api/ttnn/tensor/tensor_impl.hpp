@@ -179,8 +179,8 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
             return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
         case DataType::BFLOAT4_B:
             return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
-        default: TT_THROW("Unsupported data type");
     }
+    TT_THROW("Unsupported data type");
 }
 
 }  // namespace tt::tt_metal::tensor_impl

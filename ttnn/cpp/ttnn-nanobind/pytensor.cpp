@@ -119,7 +119,7 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
     nb::ndarray<nb::array_api> contiguous_py_tensor;
-    DataType data_type = DataType::INVALID;
+    std::optional<DataType> data_type;
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
@@ -140,15 +140,14 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.device_type = nb::device::cpu::value;
 
     TT_FATAL(
-        data_type != DataType::INVALID || py_tensor.is_valid(),
-        "parse_py_tensor: DataType::INVALID!.\n\t"
+        py_tensor.is_valid(),
+        "parse_py_tensor: invalid tensor!.\n\t"
         "py_tensor: dtype.code: {}, dtype.bits: {}\n\t"
-        "optional_data_type::has_value: {}, value: {}\n\t"
+        "optional_data_type::has_value: {}\n\t"
         "data_type: dtype.code: {}, dtype.bits: {}\n\t",
         py_tensor.dtype().code,
         py_tensor.dtype().bits,
         optional_data_type.has_value(),
-        optional_data_type.value_or(DataType::INVALID),
         config.dtype.code,
         config.dtype.bits);
 
@@ -181,7 +180,7 @@ struct RowMajorHostBuffer {
 
     HostBuffer buffer;
     std::vector<uint32_t> shape;
-    ttnn::DataType data_type = ttnn::DataType::INVALID;
+    ttnn::DataType data_type;
 };
 
 // Converts a TT tensor to a RowMajorHostBuffer.
@@ -237,9 +236,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return dispatch_to_concrete.template operator()<float>(input_float_buffer);
             }
-            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
         }
-        TT_THROW("Unreachable");
+        TT_THROW("Unsupported DataType: {}", tt_dtype);
     };
 
     return convert_to_logical(std::visit(
@@ -289,9 +287,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
-        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
-    TT_THROW("Unreachable");
+    TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
 }
 
 template <typename Framework>
@@ -847,9 +844,8 @@ void pytensor_module(nb::module_& mod) {
                     case DataType::UINT32: return nb::cast(self.to_vector<uint32_t>()[0]);
                     case DataType::UINT16: return nb::cast(self.to_vector<uint16_t>()[0]);
                     case DataType::UINT8: return nb::cast(self.to_vector<uint8_t>()[0]);
-                    case DataType::INVALID: TT_THROW("Unsupported DataType");
                 }
-                TT_THROW("Unreachable");
+                TT_THROW("Unsupported DataType");
             },
             // nb::rv_policy::copy,
             R"doc(

@@ -58,7 +58,7 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
     TensorSpec tensor_spec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            operation_attributes.output_dtype,
+            operation_attributes.output_dtype.value(),
             tt::tt_metal::PageConfig(Layout::TILE),
             MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
 

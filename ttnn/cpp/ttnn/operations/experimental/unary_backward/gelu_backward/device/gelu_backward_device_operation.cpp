@@ -27,11 +27,7 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
     const auto& input_tensor = tensor_args.input;
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
-
-    if (output_datatype == DataType::INVALID) {
-        output_datatype = input_tensor.dtype();
-    }
+    auto output_datatype = args.output_dtype.value_or(input_tensor.dtype());
 
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
@@ -96,10 +92,7 @@ TensorSpec GeluBackwardDeviceOperation::compute_output_specs(
         output_layout = tensor_args.input.layout();
     }
 
-    DataType output_dtype = args.output_dtype;
-    if (output_dtype == DataType::INVALID) {
-        output_dtype = tensor_args.input.dtype();
-    }
+    DataType output_dtype = args.output_dtype.value_or(tensor_args.input.dtype());
 
     const auto output_shape = tensor_args.input.logical_shape();
     return TensorSpec(output_shape, TensorLayout(output_dtype, output_layout, args.output_memory_config));

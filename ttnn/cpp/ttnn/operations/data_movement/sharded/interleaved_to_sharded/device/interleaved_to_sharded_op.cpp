@@ -19,7 +19,7 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_mem_config = operation_attributes.output_mem_config;
-    const auto& output_dtype = operation_attributes.output_dtype;
+    const auto output_dtype = operation_attributes.output_dtype.value_or(input_tensor.dtype());
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
@@ -71,10 +71,10 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            operation_attributes.output_dtype.value_or(tensor_args.input_tensor.dtype()),
+            tt::tt_metal::PageConfig(tensor_args.input_tensor.layout()),
             operation_attributes.output_mem_config,
-            input_tensor.logical_shape(),
+            tensor_args.input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 }
 

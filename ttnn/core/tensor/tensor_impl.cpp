@@ -532,9 +532,8 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
         case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
-        case DataType::INVALID: TT_THROW("Invalid data type");
     }
-    TT_THROW("Unreachable");
+    TT_THROW("Invalid data type");
 }
 
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
@@ -1443,9 +1442,8 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
-                case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
             }
-            TT_THROW("Unreachable");
+            TT_THROW("Unsupported data type conversion requested.");
         };
 
         switch (src_type) {
@@ -1457,9 +1455,8 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
-            case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
         }
-        TT_THROW("Unreachable");
+        TT_THROW("Unsupported data type conversion requested.");
     }();
 
     const auto layout =

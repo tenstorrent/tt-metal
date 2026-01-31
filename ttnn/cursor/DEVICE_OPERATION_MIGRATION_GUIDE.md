@@ -59,7 +59,7 @@ The new TMP Device Operation is more verbose but allows precise input/output typ
 ```cpp
 struct operation_attributes_t {
     const std::vector<UnaryWithParam> op_chain;
-    const DataType output_dtype = DataType::INVALID;
+    const std::optional<DataType> output_dtype;
     const MemoryConfig output_memory_config;
     const bool fp32_dest_acc_en = false;
     const bool preserve_fp32_precision = false;

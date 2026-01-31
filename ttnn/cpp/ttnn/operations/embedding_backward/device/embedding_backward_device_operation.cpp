@@ -54,7 +54,7 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         grad_tensor.dtype() == DataType::BFLOAT16 or grad_tensor.dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");
     TT_FATAL(
-        grad_tensor.dtype() == operation_attributes.output_dtype,
+        grad_tensor.dtype() == operation_attributes.output_dtype.value_or(grad_tensor.dtype()),
         "Output and input gradient tensors must have the same dtype");
 
     TT_FATAL(
@@ -87,7 +87,9 @@ EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOpe
     return TensorSpec(
         output_shape,
         TensorLayout(
-            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
+            operation_attributes.output_dtype.value_or(tensor_args.grad_tensor.dtype()),
+            PageConfig(Layout::TILE),
+            operation_attributes.output_mem_config));
 }
 
 EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceOperation::create_output_tensors(

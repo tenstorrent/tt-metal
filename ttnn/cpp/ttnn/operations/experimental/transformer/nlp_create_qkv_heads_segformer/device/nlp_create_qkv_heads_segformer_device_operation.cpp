@@ -66,16 +66,9 @@ void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
 
 NlpCreateQkvHeadsSegformerResultSpec NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (args.output_mem_config.is_sharded()) {
-        TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_segformer");
-        TensorSpec spec(
-            ttnn::Shape({}),
-            tt::tt_metal::TensorLayout(
-                tt::tt_metal::DataType::INVALID,
-                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-                args.output_mem_config));
-        return {spec, spec, spec};
-    }
+    TT_FATAL(
+        !args.output_mem_config.is_sharded(),
+        "Sharded output memory config is not supported for nlp_create_qkv_heads_segformer");
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();

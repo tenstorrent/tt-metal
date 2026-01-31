@@ -17,7 +17,7 @@ struct ReduceParams {
     tt::tt_metal::ReduceOpDim dim{};
     float scaler{1.0f};
     tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
+    std::optional<tt::tt_metal::DataType> output_dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
