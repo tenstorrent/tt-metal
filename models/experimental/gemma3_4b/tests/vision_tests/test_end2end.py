@@ -14,11 +14,11 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
-from models.experimental.gemma3_4b.tt.gemma_model import TtGemma3Model
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.generator import Generator
 from models.common.utility_functions import skip_for_blackhole
 
-from models.experimental.gemma3_4b.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor
 
 import re
