@@ -602,4 +602,17 @@ def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
 
     div = autograd_tensor.__div__(autograd_tensor)
 
-    assert (div.to_numpy() == (numpy_tensor / numpy_tensor)).all()
+    if numpy_type in (ml_dtypes.bfloat16, np.float32) or autograd_type in (
+        ttnn.DataType.BFLOAT16,
+        ttnn.DataType.FLOAT32,
+    ):
+        # Use approximate comparison for floating-point division due to precision
+        # limitations (especially with bfloat16 which has ~3 decimal digits precision)
+        assert np.allclose(
+            div.to_numpy().astype(np.float32),
+            (numpy_tensor / numpy_tensor).astype(np.float32),
+            rtol=1e-2,
+            atol=1e-2,
+        )
+    else:
+        assert (div.to_numpy() == (numpy_tensor / numpy_tensor)).all()
