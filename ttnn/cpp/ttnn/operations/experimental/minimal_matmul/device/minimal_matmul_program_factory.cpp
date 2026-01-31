@@ -28,7 +28,16 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_b
 
     uint32_t subblock_h = 2;
     uint32_t subblock_w = 2;
-    if (!fp32_dest_acc_en) {
+    if (fp32_dest_acc_en) {
+        // Keep dest volume <= 4 without requiring dst_full_sync_en
+        if (N >= M) {
+            subblock_h = 1;
+            subblock_w = 4;
+        } else {
+            subblock_h = 4;
+            subblock_w = 1;
+        }
+    } else {
         if (N >= M) {
             subblock_h = 2;
             subblock_w = 4;
@@ -152,6 +161,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // Intermediate CB dataformat is the same datatype as DST register.
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
+    const bool use_intermediate_cb = use_bias || fused_activation.has_value();
 
     /**
      * in0: M_tiles x K_tiles
@@ -260,8 +270,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const uint32_t double_buffer_factor = 3;  // Triple buffering for better DM/compute overlap
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // Single buffer output to free L1 for other optimizations
+    // Output buffering: double-buffer when writing directly to output to avoid defer-write deadlock
     uint32_t out_cb_num_tiles = out_block_num_tiles;
+    if (!use_intermediate_cb) {
+        out_cb_num_tiles = out_block_num_tiles * 2;
+    }
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -293,9 +306,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
 
-    uint32_t intermediate_cb_id = tt::CBIndex::c_3;
-    tt::tt_metal::create_cb(
-        intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
+    if (use_intermediate_cb) {
+        uint32_t intermediate_cb_id = tt::CBIndex::c_3;
+        tt::tt_metal::create_cb(
+            intermediate_cb_id,
+            program,
+            core_grid,
+            intermediate_tile_size,
+            interm_cb_num_tiles,
+            intermediate_data_format);
+    }
 
     if (use_bias) {
         uint32_t in2_cb_id = tt::CBIndex::c_4;
@@ -305,7 +325,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     log_debug(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_debug(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
     log_debug(tt::LogOp, "out_cb_id: {}", out_cb_id);
-    log_debug(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
+    if (use_intermediate_cb) {
+        uint32_t intermediate_cb_id = tt::CBIndex::c_3;
+        log_debug(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
+    }
     log_debug(tt::LogOp, "M_tiles: {}", M_tiles);
     log_debug(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
     log_debug(tt::LogOp, "K_tiles: {}", K_tiles);
@@ -332,6 +355,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> in0_injector_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
+    }
+    if (!use_intermediate_cb) {
+        defines["DIRECT_OUTPUT"] = "1";
     }
 
     if (fuse_op) {

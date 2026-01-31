@@ -133,7 +133,11 @@ void MAIN {
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
+#ifdef DIRECT_OUTPUT
+    constexpr uint32_t intermediate_cb = out_cb;
+#else
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+#endif
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
 #endif
@@ -218,6 +222,7 @@ void MAIN {
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
+#ifndef DIRECT_OUTPUT
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             cb_reserve_back(out_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS
@@ -228,6 +233,7 @@ void MAIN {
             cb_pop_front(in2_cb, N_block_tiles);
 #endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
+#endif
         }
     }
 }

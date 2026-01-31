@@ -148,12 +148,12 @@ def run_test_linear(
     )
 
 
-# Experimentally found following optimal block sizes
-M_block_size = 8
-K_block_size = 4
+# Experimentally found following optimal block sizes (4k square, Blackhole)
+M_block_size = 5
+K_block_size = 8
 N_block_size = 16
-subblock_h = 2
-subblock_w = 2
+subblock_h = 1
+subblock_w = 4
 
 
 def test_correctness(device):
