@@ -23,6 +23,10 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
 
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
+
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
@@ -241,6 +245,8 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+
+    friend class experimental::DispatchContext;
 };
 
 }  // namespace tt::tt_metal
