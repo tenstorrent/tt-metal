@@ -37,11 +37,6 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::D
     const std::optional<const Tensor>& beta,
     bool fp32_dest_acc_en);
 
-bool should_use_two_stage_reduce(
-    bool mcast_1d, bool row_wise, CoreCoord grid_size, CoreCoord compute_with_storage_grid_size);
-
-uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec);
-
 //////////////////////////////////////////////////////////////////////////////
 // Grid and worker distribution structs
 //////////////////////////////////////////////////////////////////////////////
