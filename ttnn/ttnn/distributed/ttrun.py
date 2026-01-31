@@ -337,11 +337,11 @@ def build_mpi_command(
     if not bind_to_already_specified:
         cmd.extend(["--bind-to", "none"])
 
+    # Always enable tagged output for easier debugging (prefixes output with rank info)
+    cmd.extend(["--tag-output"])
+
     if mpi_args:
         cmd.extend(mpi_args)
-
-    if debug_gdbserver:
-        cmd.extend(["--tag-output"])
 
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
@@ -418,7 +418,7 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--multihost",
     is_flag=True,
-    help="Enable recommended MPI settings for multi-host clusters (TCP transport, tagged output, etc.)",
+    help="Enable recommended MPI settings for multi-host clusters (TCP transport, interface exclusions, etc.)",
 )
 @click.option(
     "--tcp-interface",
@@ -571,13 +571,18 @@ def main(
         Use --verbose to see path resolution diagnostics.
 
     \b
+    Tagged Output:
+        tt-run always enables --tag-output, which prefixes each output line with rank
+        information (e.g., [1,0]<stdout>:). This makes it easier to identify which rank
+        produced each line of output when debugging distributed applications.
+
+    \b
     Multi-Host Mode (--multihost):
         The --multihost flag enables recommended MPI settings for multi-host cluster environments.
         This adds the following MPI arguments:
 
         - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
         - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
-        - --tag-output: Prefix output lines with rank information for easier debugging
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
         instead of btl_tcp_if_exclude to explicitly select the network interface.
@@ -585,7 +590,6 @@ def main(
         These settings help avoid common MPI issues in multi-host environments:
         - Stale process connections from other nodes
         - Network interface selection problems (docker0, lo can't route inter-node traffic)
-        - Output interleaving from multiple ranks
 
         Example:
             tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
@@ -689,7 +693,6 @@ def main(
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
         # - Exclude loopback and docker0 (can't route inter-node traffic)
-        # - Tag output with rank info for easier debugging
         # Note: Exclude both 'lo' (loopback) and 'docker0' (Docker bridge) by default.
         # These interfaces cannot route traffic between hosts and can cause MPI
         # process discovery issues if selected. For specific interface control,
@@ -701,7 +704,6 @@ def main(
             "--mca",
             "btl_tcp_if_exclude",
             "docker0,lo",
-            "--tag-output",
         ]
 
         if tcp_interface:
@@ -713,7 +715,6 @@ def main(
                 "--mca",
                 "btl_tcp_if_include",
                 tcp_interface,
-                "--tag-output",
             ]
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
