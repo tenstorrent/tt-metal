@@ -93,6 +93,13 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
+run_phi3_func() {
+  phi3=microsoft/Phi-3-mini-128k-instruct
+  phi3_cache=$TT_CACHE_HOME/$phi3
+  HF_MODEL=$phi3 TT_CACHE_PATH=$phi3_cache $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
+  echo "LOG_METAL: Phi-3-Mini-128K-Instruct test completed"
+}
+
 run_phi4_func() {
   HF_MODEL=microsoft/phi-4 $PYTEST_CMD models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
 }
