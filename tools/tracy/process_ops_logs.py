@@ -338,8 +338,15 @@ def import_tracy_op_logs(
 
     try:
         df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+    except (ImportError, ValueError, Exception) as e:
+        # Handle CSV parsing errors (e.g., unquoted commas in function names)
+        try:
+            # Try with pandas python engine, which is more lenient with malformed CSV
+            df = pd.read_csv(tracyOpTimesLog, engine="python", on_bad_lines="warn")
+        except Exception as e2:
+            # Final fallback: skip bad lines to allow processing to continue
+            logger.warning(f"CSV parsing encountered errors, skipping malformed lines: {e2}")
+            df = pd.read_csv(tracyOpTimesLog, engine="python", on_bad_lines="skip")
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor

@@ -63,7 +63,8 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -93,7 +94,7 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):

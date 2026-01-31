@@ -116,7 +116,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshMapperConfig::Replicate>(mod, "PlacementReplicate");
     nb::class_<MeshMapperConfig::Shard>(mod, "PlacementShard");
 
-    nb::class_<MeshDevice>(mod, "MeshDevice");
+    nb::class_<MeshDevice>(mod, "MeshDevice", nb::dynamic_attr());
     nb::class_<MeshDeviceView>(mod, "MeshDeviceView");
     nb::class_<MeshShape>(mod, "MeshShape", "Shape of a mesh device.");
     nb::class_<MeshCoordinate>(mod, "MeshCoordinate", "Coordinate within a mesh device.");
