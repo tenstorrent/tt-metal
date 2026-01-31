@@ -45,9 +45,10 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles)
-    template <uint32_t out_w_>
+    template <uint32_t out_w_, bool transpose_>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
+        static constexpr bool transpose = transpose_;
     };
 
     // ========================================================================
@@ -97,11 +98,11 @@ struct Matmul {
             constexpr uint32_t out_subblock_w = 1;
             constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
             constexpr uint32_t out_w = CTArgs::out_w;
-            constexpr bool transpose = false;
+            constexpr bool transpose = CTArgs::transpose;
             constexpr bool split_acc = true;
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
-            constexpr bool read_transposed = transpose && false;
+            constexpr bool read_transposed = transpose && true;
             constexpr const char* version_str = "split";
 
             // Wait for all input tiles (both from sharded tensors in L1)
