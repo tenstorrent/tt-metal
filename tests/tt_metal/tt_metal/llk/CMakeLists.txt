@@ -1,3 +1,5 @@
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_llk ${UNIT_TESTS_LLK_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_llk)
