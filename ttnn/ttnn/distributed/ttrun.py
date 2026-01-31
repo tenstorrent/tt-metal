@@ -248,7 +248,6 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
             "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
-            "PYTHONHOME": os.environ.get("PYTHONHOME", str(ORIGINAL_CWD)),
             # 26640: TODO - Investigate why this needs to be set for multi-host CI environments
             "LD_LIBRARY_PATH": os.environ.get(
                 "LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD))
@@ -258,13 +257,21 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         }
     )
 
-    # Pass PATH and VIRTUAL_ENV for venv-aware execution on remote hosts.
-    # This ensures pytest and other venv tools are found when MPI spawns processes
-    # on remote hosts in multi-host scenarios.
-    if os.environ.get("PATH"):
-        env["PATH"] = os.environ["PATH"]
-    if os.environ.get("VIRTUAL_ENV"):
-        env["VIRTUAL_ENV"] = os.environ["VIRTUAL_ENV"]
+    # Pass critical shell/user environment variables.
+    # HOME and USER are required by OpenMPI for process management and state files.
+    # PATH enables finding executables (e.g., pytest in venv).
+    # VIRTUAL_ENV enables venv-aware execution on remote hosts.
+    for var in ("HOME", "USER", "PATH", "VIRTUAL_ENV"):
+        if os.environ.get(var):
+            env[var] = os.environ[var]
+
+    # PYTHONHOME: Only pass through if explicitly set. Do NOT default to ORIGINAL_CWD.
+    # Setting PYTHONHOME incorrectly causes Python to look for its standard library
+    # in the wrong location, resulting in "ModuleNotFoundError: No module named 'encodings'".
+    # When using a virtualenv, PYTHONHOME should not be set - Python determines the
+    # correct paths from the executable location.
+    if os.environ.get("PYTHONHOME"):
+        env["PYTHONHOME"] = os.environ["PYTHONHOME"]
 
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
@@ -514,18 +521,19 @@ def main(
         - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
-        - PYTHONHOME: Python installation directory
         - LD_LIBRARY_PATH: Library search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
+        - HOME: Passed through (required by OpenMPI for process management)
+        - USER: Passed through (required by OpenMPI for process identity)
         - PATH: Passed through from caller (enables venv tools like pytest on remote hosts)
         - VIRTUAL_ENV: Passed through from caller (enables venv-aware execution)
+        - PYTHONHOME: Passed through only if explicitly set (do not set when using virtualenvs)
 
         Default values for the following environment variables will be used if not set when calling tt-run:
         - TT_METAL_HOME: Launch directory (where tt-run was invoked)
         - TT_METAL_RUNTIME_ROOT: Same as TT_METAL_HOME
         - PYTHONPATH: Launch directory
-        - PYTHONHOME: Launch directory
         - LD_LIBRARY_PATH: `<LAUNCH_DIR>/build/lib`
 
         This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
@@ -568,7 +576,7 @@ def main(
         This adds the following MPI arguments:
 
         - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
-        - --mca btl_tcp_if_exclude lo: Exclude loopback interface (can't route inter-node traffic)
+        - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
         - --tag-output: Prefix output lines with rank information for easier debugging
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
@@ -576,14 +584,8 @@ def main(
 
         These settings help avoid common MPI issues in multi-host environments:
         - Stale process connections from other nodes
-        - Network interface selection problems
+        - Network interface selection problems (docker0, lo can't route inter-node traffic)
         - Output interleaving from multiple ranks
-
-        Note: Only loopback (lo) is excluded by default. Loopback must be excluded because it
-        can only communicate with the local machine, making it useless for inter-node MPI traffic.
-        Other interfaces like docker0 are not excluded to remain compatible with Docker containers
-        and other virtualized environments where network interface naming varies. For explicit
-        interface control, use --tcp-interface.
 
         Example:
             tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
@@ -686,18 +688,19 @@ def main(
     if multihost:
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
-        # - Exclude loopback (can't route inter-node traffic)
+        # - Exclude loopback and docker0 (can't route inter-node traffic)
         # - Tag output with rank info for easier debugging
-        # Note: Only exclude 'lo' to remain compatible with Docker containers
-        # and other virtualized environments. Users needing specific interface
-        # control should use --tcp-interface.
+        # Note: Exclude both 'lo' (loopback) and 'docker0' (Docker bridge) by default.
+        # These interfaces cannot route traffic between hosts and can cause MPI
+        # process discovery issues if selected. For specific interface control,
+        # use --tcp-interface.
         multihost_args = [
             "--mca",
             "btl",
             "self,tcp",
             "--mca",
             "btl_tcp_if_exclude",
-            "lo",
+            "docker0,lo",
             "--tag-output",
         ]
 
