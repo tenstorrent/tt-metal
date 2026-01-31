@@ -669,7 +669,7 @@ concurrency:
 jobs:
   test-database-connection:
     name: 🔍 Test Database Connection
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on:  tt-ubuntu-small-canary-yyz2
     steps:
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y netcat-openbsd postgresql-client
