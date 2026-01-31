@@ -275,4 +275,5 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
+    DPRINT << "MUX TERMINATED \n";
 }

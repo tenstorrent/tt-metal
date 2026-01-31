@@ -29,7 +29,11 @@ file(
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
+<<<<<<< HEAD
     deepseek_moe_reduce_scatter/device/kernels/*
+=======
+    moe/selective_reduce_combine/device/kernels/*
+>>>>>>> e892cd44a1 (docs, move to experimental namespace, test fixes, clean up)
 )
 
 target_sources(
@@ -126,6 +130,9 @@ target_sources(
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
+        moe/selective_reduce_combine/selective_reduce_combine.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

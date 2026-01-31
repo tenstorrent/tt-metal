@@ -2651,6 +2651,8 @@ FORCE_INLINE void teardown(
     if constexpr (IS_TEARDOWN_MASTER()) {
         *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
     }
+
+    DPRINT << "EDM TEARDOWN \n";
 }
 
 void initialize_state_for_txq1_active_mode() {
@@ -3430,6 +3432,9 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+
+    DPRINT << "EDM Running main loop \n";
+
     run_fabric_edm_main_loop<
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
