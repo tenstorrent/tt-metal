@@ -41,6 +41,11 @@ namespace tt::tt_metal {
 namespace fs = std::filesystem;
 
 namespace {
+// 341 = (4096/(3 * sizeof(uint32_t)), where
+// - 4096 - packet size in dispatch
+// - 3 - number of kernels per tensix
+constexpr uint32_t max_runtime_args = 341;
+
 // Kernel path resolve:
 //
 // If the path is not an absolute path, then it must be resolved relative to:
@@ -90,6 +95,9 @@ fs::path resolve_path(const fs::path& given_file_name) {
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
 }  // namespace
+
+// Returns the effective maximum number of runtime arguments, including any watcher count words.
+std::uint32_t get_effective_max_runtime_args() noexcept { return max_runtime_args; }
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
@@ -528,7 +536,8 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                 }
 
                 TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
-                core_to_runtime_args_data_[x][y].rt_args_count = count - watcher_count_word_offset_;
+                core_to_runtime_args_data_[x][y].rt_args_count =
+                    count > watcher_count_word_offset_ ? count - watcher_count_word_offset_ : 0;
             }
         }
     }
@@ -538,7 +547,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 
     this->common_runtime_args_count_ = count;
-    this->common_runtime_args_data_.rt_args_count = count - watcher_count_word_offset_;
+    this->common_runtime_args_data_.rt_args_count =
+        count > watcher_count_word_offset_ ? count - watcher_count_word_offset_ : 0;
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
