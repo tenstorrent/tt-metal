@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.experimental.gemma3_4b.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.gemma_image_block import TtGemmaImageTransformerBlock
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.gemma3_4b.tests.references import reference_vision_encoder_block
