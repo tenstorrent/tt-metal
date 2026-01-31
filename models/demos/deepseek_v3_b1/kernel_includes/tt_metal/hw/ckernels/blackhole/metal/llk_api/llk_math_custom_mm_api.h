@@ -6,15 +6,24 @@
 #include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_custom_mm.h"
 #include "llk_math_common_api.h"
 
-template <bool transpose = false, bool split_acc = false>
-inline void llk_math_custom_mm_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+inline void llk_math_custom_mm_init(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim = 1) {
     const std::uint32_t operandB_id = get_operand_id(operandA);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_custom_mm_init_<transpose, split_acc>(operandB_face_r_dim);
+    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
 }
 
 template <bool finalize = true>
-inline void llk_math_custom_mm(const uint dst_index, const std::uint32_t kt_dim = 1) {
-    _llk_math_custom_mm_<finalize>(dst_index, kt_dim);
+inline void llk_math_custom_mm(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t dst_index,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t operandB_id = get_operand_id(operandA);
+    const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+
+    _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }

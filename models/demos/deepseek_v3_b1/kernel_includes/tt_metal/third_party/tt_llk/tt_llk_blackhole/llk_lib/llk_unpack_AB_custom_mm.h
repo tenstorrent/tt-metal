@@ -17,15 +17,9 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
-    constexpr std::uint32_t replay_buf_full_len = 5;
-    constexpr std::uint32_t replay_buf_reuse_len = 3;
-    constexpr std::uint32_t replay_buf_ctx0_full = 0;
-    constexpr std::uint32_t replay_buf_ctx1_full = replay_buf_ctx0_full + replay_buf_full_len;
-    constexpr std::uint32_t replay_buf_ctx0_reuse = replay_buf_ctx1_full + replay_buf_full_len;
-    constexpr std::uint32_t replay_buf_ctx1_reuse = replay_buf_ctx0_reuse + replay_buf_reuse_len;
-    constexpr std::uint32_t replay_buf_prog_len = replay_buf_ctx1_reuse + replay_buf_reuse_len;
+    const std::uint32_t replay_buf_prog_len = ct_dim == 1 ? 10 : 32;
 
-    load_replay_buf(0, replay_buf_prog_len, [] {
+    load_replay_buf(0, replay_buf_prog_len, [ct_dim] {
         // === Context 0 full ===
         // Wait for context available
         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
@@ -40,67 +34,78 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
         // Signal context done
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        // === Context 1 full ===
-        // Wait for context available
-        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+        if (ct_dim == 1) {
+            // === Context 1 full ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-        // Unpack SrcA (in1/inB)
-        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+            // Unpack SrcA (in1/inB)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
 
-        // Unpack SrcB (in0/inA)
-        TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-        TTI_UNPACR_COMMON(SrcB, 0b00110001, 1);
+            // Unpack SrcB (in0/inA)
+            TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+            TTI_UNPACR_COMMON(SrcB, 0b00110001, 1);
 
-        // Signal context done
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+        } else {
+            // === Context 1 reuse ===
+            // Wait for context available
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-        // === Context 0 reuse ===
-        // Wait for context available
-        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+            // Unpack SrcA (in1/inB)
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
 
-        // Unpack SrcA (in1/inB)
-        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);
+            // Signal context done
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        // Signal context done
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+            for (std::uint32_t i = 0; i < 4; i++) {
+                // === Context 0 reuse ===
+                // Wait for context available
+                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
 
-        // === Context 1 reuse ===
-        // Wait for context available
-        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+                // Unpack SrcA (in1/inB)
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 0, 1);
 
-        // Unpack SrcA (in1/inB)
-        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+                // Signal context done
+                t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        // Signal context done
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+                // === Context 1 reuse ===
+                // Wait for context available
+                t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_SYNC);
+
+                // Unpack SrcA (in1/inB)
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00000000, 1, 1);
+
+                // Signal context done
+                t6_semaphore_get(semaphore::UNPACK_SYNC);
+            }
+        }
     });
 
-    constexpr uint32_t ctx0_full = lltt::replay_insn(replay_buf_ctx0_full, replay_buf_full_len);
-    constexpr uint32_t ctx1_full = lltt::replay_insn(replay_buf_ctx1_full, replay_buf_full_len);
-    constexpr uint32_t ctx0_reuse = lltt::replay_insn(replay_buf_ctx0_reuse, replay_buf_reuse_len);
-    constexpr uint32_t ctx1_reuse = lltt::replay_insn(replay_buf_ctx1_reuse, replay_buf_reuse_len);
-    constexpr uint32_t ctx0_split1 = lltt::replay_insn(replay_buf_ctx0_full, replay_buf_full_len - 2);
-    constexpr uint32_t ctx0_split2 = lltt::replay_insn(replay_buf_ctx0_full + 2, 2);
+    const std::uint32_t ctx0_full = lltt::replay_insn(0, 5);
+    const std::uint32_t ctx1_full = lltt::replay_insn(5, 5);
+    const std::uint32_t first_half = lltt::replay_insn(0, 2 + (ct_dim / 2) * 3);
+    const std::uint32_t second_half = lltt::replay_insn(ct_dim == 2 ? 5 : 8, (ct_dim / 2) * 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,                                    // Use UNPACR_B and SKIP_B instructions
-        false,                                   // Dont use UNPACR_A1/2/3 instructions
-        ctx0_full,                               // A0
-        0,                                       // A1 (not used)
-        0,                                       // A2 (not used)
-        0,                                       // A3 (not used)
-        ct_dim == 1 ? ctx0_split1 : ctx0_reuse,  // Skip A
-        ct_dim == 1 ? ctx1_full : ctx1_reuse,    // B
-        ct_dim == 1 ? ctx0_split2 : ctx1_reuse   // Skip B
+        ct_dim == 1,                           // Use UNPACR_B and SKIP_B instructions?
+        ct_dim != 1,                           // Use UNPACR_A1/2/3 instructions?
+        ct_dim == 1 ? ctx0_full : first_half,  // A0
+        ct_dim == 1 ? 0 : second_half,         // A1
+        ct_dim == 1 ? 0 : first_half,          // A2
+        ct_dim == 1 ? 0 : second_half,         // A3
+        0,                                     // Skip A
+        ct_dim == 1 ? ctx1_full : 0,           // B
+        0                                      // Skip B
     );
 
     tmp.program();
-    TT_MOP_CFG(0);
+    TTI_MOP_CFG(0);
 }
 
 template <bool transpose = false>
-inline void _llk_unpack_AB_custom_mm_init_(
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM, const std::uint32_t ct_dim = 1) {
+inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t ct_dim = 1) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
     constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
@@ -119,44 +124,85 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
-    const std::uint32_t kt_dim = 1,
+    const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     volatile uint* cfg = get_cfg_pointer();
+
+    const std::uint32_t full_superloops = kt_dim / 128;
+    const std::uint32_t remaining_kt = kt_dim % 128;
+    const std::uint32_t superloop_increment = 128 * (tile_size_b);
+    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
+    const std::uint32_t inner_increment = read_transposed ? tile_size_a : ct_dim * tile_size_a;
 
     std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
+    auto kc_loop = [&address_a, ct_dim, block_increment, inner_increment, cfg](const std::uint32_t max_k) {
+#pragma GCC unroll 8
+        for (std::uint32_t k = 0; k < max_k; k++) {
+            std::uint32_t block_start_address = address_a;
+#pragma GCC unroll 8
+            for (std::uint32_t ct = 0; ct < ct_dim; ct += 2) {
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+                wait_for_next_context(2);
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = block_start_address;
+                block_start_address += block_increment;
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
+            address_a += inner_increment;
+        }
+    };
+
+    auto k_loop = [&address_a, inner_increment, cfg](const std::uint32_t max_k) {
+#pragma GCC unroll 8
+        for (std::uint32_t k = 0; k < max_k; k += 2) {
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+            address_a += inner_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+            address_a += inner_increment;
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }
+    };
+
+    // We can issue mop only once for up to 256 kt_dim
+    TT_MOP(0, (kt_dim / 2) - 1, 0);
+
     // Need update SrcB base address for each superloop over 128 kt_dim
     // I guess its due to some counters being overflowed
-    for (std::uint32_t i = 0; i < kt_dim; i += 128) {
-        std::uint32_t superloop_kt_dim = kt_dim - i > 128 ? 128 : kt_dim - i;
-
+    for (std::uint32_t i = 0; i < full_superloops; i++) {
         // Wait for all contexts to be free
         wait_for_next_context(1);
         reset_config_context();
 
         // Configure SrcB base address, once per superblock as we use counters for SrcB
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b + (i * tile_size_b);
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+        address_b += superloop_increment;
 
-        TT_MOP(0, (superloop_kt_dim / 2) - 1, 0);
-
-#pragma GCC unroll 8
-        for (std::uint32_t k = 0; k < (superloop_kt_dim / 2); k++) {
-            wait_for_next_context(2);
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-            address_a += tile_size_a;
-            semaphore_post(semaphore::UNPACK_SYNC);
-            wait_for_next_context(2);
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-            address_a += tile_size_a;
-            semaphore_post(semaphore::UNPACK_SYNC);
+        if (ct_dim == 1) {
+            k_loop(128);
+        } else {
+            kc_loop(128);
         }
+    }
 
-        if ((superloop_kt_dim % 2) != 0) {
-            TTI_MOP(0, 0, 1);
-            wait_for_next_context(2);
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-            semaphore_post(semaphore::UNPACK_SYNC);
+    if (remaining_kt != 0) {
+        // Wait for all contexts to be free
+        wait_for_next_context(1);
+        reset_config_context();
+
+        // Configure SrcB base address, once per superblock as we use counters for SrcB
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+
+        if (ct_dim == 1) {
+            k_loop(remaining_kt);
+        } else {
+            kc_loop(remaining_kt);
         }
     }
 
