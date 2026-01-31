@@ -421,6 +421,8 @@ def run_benchmark(
     # Open TTNN device
     print(f"\n5. Setting up TTNN model on device {device_id}...")
     device = ttnn.open_device(device_id=device_id)
+    print(f"Device ID: {device.id()}")
+    print(f"Available compute cores: {device.compute_with_storage_grid_size()}")
 
     try:
         # Convert parameters
