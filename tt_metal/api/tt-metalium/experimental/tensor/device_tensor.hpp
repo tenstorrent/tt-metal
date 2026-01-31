@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -36,6 +37,7 @@ class MeshDevice;
  *
  */
 class DeviceTensor {
+    // TODO: internal constructor
 public:
     using volumn_type = std::uint64_t;
 
@@ -62,66 +64,82 @@ public:
     /**
      * Deallocate and release owned device memory.
      */
-    void deallocate(/* bool force = false */);
-
-    // reshape transformation, mutating version
-    // TODO: figure out what we will be doing for reshape
-    void reshape(/* */);
-
-    // ?
-    /* with_tensor_topology(TensorTopology tensor_topology) */
+    void deallocate() {
+        // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+        auto& device_storage = get_device_storage();
+        device_storage.mesh_buffer->deallocate();
+        device_storage.mesh_buffer.reset();
+        // GraphTracker::instance().track_function_end();
+    }
 
     // Getters
 
     /**
      * Get the device this DeviceTensor is on.
      *
-     * throws or nullptr when deallocated?
+     * nullptr when deallocated.
      */
-    distributed::MeshDevice& get_device() const;
+    // TODO: make this optional_ref?
+    distributed::MeshDevice* get_device() const {
+        if (const auto& mesh_buffer = get_device_storage().mesh_buffer; mesh_buffer != nullptr) {
+            return mesh_buffer->device();
+        }
+        return nullptr;
+    }
 
     // TODO: Should we make this mean something?
     std::string write_to_string() const;
 
-    // TODO(River): understand what is sharding better
-    bool is_sharded() const;
-    std::size_t element_size() const;
+    bool is_sharded() const { return memory_config().is_sharded(); }
+    std::size_t element_size() const {
+        switch (dtype()) {
+            case DataType::BFLOAT16: return sizeof(bfloat16);
+            case DataType::FLOAT32: return sizeof(float);
+            case DataType::INT32: return sizeof(int32_t);
+            case DataType::UINT32: return sizeof(uint32_t);
+            case DataType::UINT16: return sizeof(uint16_t);
+            case DataType::UINT8: return sizeof(uint8_t);
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B: return sizeof(std::byte);
+            default: TT_THROW("Unsupported data type");
+        }
+    }
 
     // "misc getters"
-    DataType dtype() const;
-    Layout layout() const;
-    const Shape& logical_shape() const;
-    const Shape& padded_shape() const;
+    DataType dtype() const { return tensor_spec().data_type(); }
+    Layout layout() const { return tensor_spec().layout(); }
+    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
+    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
 
-    const TensorSpec& tensor_spec() const;
+    const TensorSpec& tensor_spec() const { return impl->get_tensor_spec(); }
 
-    // Can't these be derived from other functions?
-    volumn_type logical_volume() const;
-    volumn_type physical_volume() const;
+    volumn_type logical_volume() const { return logical_shape().volume(); }
+    volumn_type physical_volume() const { return padded_shape().volume(); }
 
-    // Can't this be accessed from tensor_spec?
-    const MemoryConfig& memory_config() const;
+    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
 
     /**
      * From original Tensor:
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
      */
-    const TensorTopology& tensor_topology() const;
+    const TensorTopology& tensor_topology() const { return impl->get_tensor_topology(); }
 
-    // TODO(River): learn this
     // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec> shard_spec() const;
-    const std::optional<NdShardSpec> nd_shard_spec() const;
+    const std::optional<ShardSpec>& shard_spec() const { return memory_config().shard_spec(); }
+    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
 
-    // Shape is a weird class to return, isn't a vector sufficient?
-    Shape strides() const;
-    // Do we need this? This was meant to be pair with item() which is removed?
-    bool is_scalar() const;
+    Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
-    // TODO: Would this be better if it's called is_deallocated
-    bool is_allocated() const;
+    // TODO: this is implemented dependening on both if we have released the buffer and if the buffer is deallocated.
+    //     Who would dealloate the buffer?
+    bool is_allocated() const {
+        if (const auto& mesh_buffer = get_device_storage().mesh_buffer; mesh_buffer != nullptr) {
+            return mesh_buffer->is_allocated();
+        }
+        return false;
+    }
 
     // We prob need to leak this for compatability:
     //
@@ -133,6 +151,12 @@ public:
     //  *  Returns device `MeshBuffer`.
     //  */
     //  std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+
+private:
+    std::unique_ptr<TensorAttributes> impl;
+
+    const DeviceStorage& get_device_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
+    DeviceStorage& get_device_storage() { return std::get<DeviceStorage>(impl->get_storage()); }
 };
 
 }  // namespace tt::tt_metal
