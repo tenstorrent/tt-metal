@@ -78,6 +78,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint32_t sent_mask = 0;
 
+    DPRINT << "Aggregator started: buffer_base=" << buffer_base << ", offset=" << buffer_offset << ", sem=" << sem_addr
+           << ", total_slots=" << ct_total_slots << ", all_sent_mask=" << ct_all_sent_mask << ENDL();
+
     {
         DeviceZoneScopedN("AGG-FORWARD-LOOP");
 
@@ -92,6 +95,8 @@ void kernel_main() {
                 uint32_t slot = __builtin_ctz(pending);
                 uint32_t slot_addr = my_buffer_base + (slot * ct_slot_size);
 
+                DPRINT << "Aggregator forwarding slot " << slot << " at addr " << slot_addr << ENDL();
+
                 fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, ct_slot_size);
 
@@ -100,6 +105,8 @@ void kernel_main() {
             }
         } while (sent_mask != ct_all_sent_mask);
     }
+
+    DPRINT << "Aggregator complete: sent_mask=" << sent_mask << ENDL();
 
     // =========================================================================
     // Cleanup

@@ -33,11 +33,8 @@ struct ReduceToAllOp {
 
     struct tensor_args_t {
         const Tensor input_tensor_l;
-        const Tensor input_tensor_s;
-        const Tensor input_tensor_m;
+        const Tensor input_tensor_ms;  // Combined: col 0 = max, col 1 = sum
         const std::optional<Tensor> optional_output_tensor_l;
-        const std::optional<Tensor> optional_output_tensor_s;
-        const std::optional<Tensor> optional_output_tensor_m;
         const std::optional<Tensor> optional_fw_intermediate_tensor;
         const std::optional<Tensor> optional_bw_intermediate_tensor;
         const std::optional<Tensor> optional_coord_intermediate_tensor;
@@ -60,6 +57,18 @@ struct ReduceToAllOp {
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
             bool is_device_0_2;
             bool is_simplified = false;  // True for simplified 2-kernel design
+
+            // CB handles for aliased buffers (needed for UpdateDynamicCircularBufferAddressAndTotalSize in trace)
+            std::optional<tt::tt_metal::CBHandle> cb_local_l_handle;
+            std::optional<tt::tt_metal::CBHandle> cb_local_ms_handle;
+            std::optional<tt::tt_metal::CBHandle> cb_r1_neighbor_l_handle;
+            std::optional<tt::tt_metal::CBHandle> cb_r2_neighbor_l_handle;
+            std::optional<tt::tt_metal::CBHandle> cb_l_out_handle;
+
+            // Tile sizes for updating CB total sizes
+            uint32_t l_tile_size = 0;
+            uint32_t ms_tile_size = 0;
+            uint32_t out_tiles = 0;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -138,14 +147,11 @@ reduce_to_all_simplified_program_factory(
 namespace prim {
 ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
-    const Tensor& input_tensor_s,
-    const Tensor& input_tensor_m,
+    const Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
     float scale_fp32,
     const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
     const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,

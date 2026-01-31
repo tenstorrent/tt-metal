@@ -16,20 +16,34 @@ def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
     """
     Compute the online softmax reduction of two partial results.
     Returns (l_new, s_new, m_new)
+
+    Note: m1, m2, s1, s2 should be 1-column tensors [height, 1] containing the
+    max and sum values. These are broadcast across L width.
     """
     m_new = torch.maximum(m1, m2)
-    exp_m1 = torch.exp((m1 - m_new) * scale_value)[:, :1].expand(-1, l_width)
-    exp_m2 = torch.exp((m2 - m_new) * scale_value)[:, :1].expand(-1, l_width)
-    s_new = s1 * torch.exp((m1 - m_new) * scale_value) + s2 * torch.exp((m2 - m_new) * scale_value)
+    exp_m1 = torch.exp((m1 - m_new) * scale_value)
+    exp_m2 = torch.exp((m2 - m_new) * scale_value)
+    s_new = s1 * exp_m1 + s2 * exp_m2
     l_new = l1 * exp_m1 + l2 * exp_m2
     return l_new, s_new, m_new
 
 
 def compute_reference_reduce_to_all(
-    l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx=1, num_cores=8, scale_value=1.0
+    l_data_per_device,
+    s_data_per_device,
+    m_data_per_device,
+    root_device_idx=1,
+    num_cores=8,
+    scale_value=1.0,
+    l_width=128,
 ):
     """
     Compute the reference output for reduce_to_all operation.
+
+    Args:
+        l_data_per_device: List of L tensors per device, shape [batch, l_width * num_cores]
+        s_data_per_device: List of S tensors per device, shape [batch, num_cores] (one value per core)
+        m_data_per_device: List of M tensors per device, shape [batch, num_cores] (one value per core)
 
     Algorithm:
     Round 1: Neighbor exchange D0<->D1 and D2<->D3
@@ -44,42 +58,47 @@ def compute_reference_reduce_to_all(
     num_devices = len(l_data_per_device)
 
     def split_by_cores(tensor_list, num_cores):
+        """Split tensors into per-core chunks"""
         result = []
         for device_tensor in tensor_list:
             cores = torch.chunk(device_tensor, num_cores, dim=1)
             result.append(cores)
         return result
 
+    # Split L into per-core chunks of shape [batch, l_width]
     l_per_device_per_core = split_by_cores(l_data_per_device, num_cores)
-    s_per_device_per_core = split_by_cores(s_data_per_device, num_cores)
-    m_per_device_per_core = split_by_cores(m_data_per_device, num_cores)
 
+    # m and s are already [batch, num_cores], extract column slices as [batch, 1]
+    # These are broadcast across l_width during reduction
     l_final_cores = []
     s_final_cores = []
     m_final_cores = []
 
     for core_idx in range(num_cores):
         l_dev = [l_per_device_per_core[d][core_idx] for d in range(num_devices)]
-        s_dev = [s_per_device_per_core[d][core_idx] for d in range(num_devices)]
-        m_dev = [m_per_device_per_core[d][core_idx] for d in range(num_devices)]
+        # Extract single column for m and s, shape [batch, 1]
+        s_dev = [s_data_per_device[d][:, core_idx : core_idx + 1] for d in range(num_devices)]
+        m_dev = [m_data_per_device[d][:, core_idx : core_idx + 1] for d in range(num_devices)]
 
         # Round 1: D0<->D1 and D2<->D3 exchanges
         # D0 and D1 both compute reduction(D0, D1)
         l_r1_01, s_r1_01, m_r1_01 = compute_reduction(
-            l_dev[0], s_dev[0], m_dev[0], l_dev[1], s_dev[1], m_dev[1], scale_value
+            l_dev[0], s_dev[0], m_dev[0], l_dev[1], s_dev[1], m_dev[1], scale_value, l_width
         )
 
         # D2 and D3 both compute reduction(D2, D3)
         l_r1_23, s_r1_23, m_r1_23 = compute_reduction(
-            l_dev[2], s_dev[2], m_dev[2], l_dev[3], s_dev[3], m_dev[3], scale_value
+            l_dev[2], s_dev[2], m_dev[2], l_dev[3], s_dev[3], m_dev[3], scale_value, l_width
         )
 
         # Round 2: D0<->D3 and D1<->D2 exchanges
         # All devices compute final reduction of (D0+D1) with (D2+D3)
-        l_final, s_final, m_final = compute_reduction(l_r1_01, s_r1_01, m_r1_01, l_r1_23, s_r1_23, m_r1_23, scale_value)
+        l_final, s_final, m_final = compute_reduction(
+            l_r1_01, s_r1_01, m_r1_01, l_r1_23, s_r1_23, m_r1_23, scale_value, l_width
+        )
 
-        # Final division: l_out = l_final / s_final
-        l_out = l_final / s_final[:, :1].expand(-1, l_final.shape[1])
+        # Final division: l_out = l_final / s_final (s_final is [batch, 1], broadcast)
+        l_out = l_final / s_final.expand(-1, l_final.shape[1])
 
         l_final_cores.append(l_out)
         s_final_cores.append(s_final)
@@ -109,13 +128,12 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     root_device_idx = root_coord[0]
     num_cores = 8
     l_width = 128
-    s_m_width = 32
+    ms_width = 32  # Combined MS tile: col 0 = max, col 1 = sum
 
     batch_size = 8
     l_shape = [batch_size, l_width * num_cores]
-    s_shape = [batch_size, s_m_width * num_cores]
-    m_shape = [batch_size, s_m_width * num_cores]
-    intermediate_shape = [batch_size, 192 * num_cores]
+    ms_shape = [batch_size, ms_width * num_cores]  # Combined MS shape
+    intermediate_shape = [batch_size, 160 * num_cores]  # L + MS = 128 + 32 = 160
 
     scale_value = 1.0
     topology = ttnn.Topology.Torus
@@ -154,14 +172,14 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         }
     )
     shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_s = ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_int = ttnn.ShardSpec(shard_grid, [8, 192], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_ms = ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_int = ttnn.ShardSpec(shard_grid, [8, 160], ttnn.ShardOrientation.ROW_MAJOR)  # L + MS
 
     mem_config_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_l
     )
-    mem_config_s = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_s
+    mem_config_ms = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_ms
     )
     mem_config_int = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_int
@@ -180,8 +198,27 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # Create random input tensors
     torch.manual_seed(42)
     l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
-    s_data_per_device = [torch.rand(s_shape, dtype=torch.float32).to(torch.bfloat16) + 0.5 for _ in range(num_devices)]
-    m_data_per_device = [torch.randn(m_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
+    ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
+
+    m_data_per_device = []
+    s_data_per_device = []
+
+    for d in range(num_devices):
+        ms_device = ms_data_per_device[d]
+        m_device = torch.zeros((ms_shape[0], num_cores), dtype=torch.bfloat16)
+        s_device = torch.zeros((ms_shape[0], num_cores), dtype=torch.bfloat16)
+        for core_idx in range(num_cores):
+            # Set some meaningful values for m and s
+            m_device[:, core_idx] = torch.randn(ms_shape[0], dtype=torch.bfloat16) * 0.5 - 1.0  # max values
+            s_device[:, core_idx] = (
+                torch.abs(torch.randn(ms_shape[0], dtype=torch.bfloat16)) + 0.1
+            )  # sum values (positive)
+
+            # Overwrite the random MS data with our generated m and s values
+            ms_device[:, core_idx * ms_width + 0] = m_device[:, core_idx]  # max
+            ms_device[:, core_idx * ms_width + 1] = s_device[:, core_idx]  # sum
+        m_data_per_device.append(m_device)
+        s_data_per_device.append(s_device)
 
     # Compute reference (convert to float32 for accuracy)
     l_data_f32 = [t.float() for t in l_data_per_device]
@@ -189,14 +226,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     m_data_f32 = [t.float() for t in m_data_per_device]
 
     ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
-        l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value
+        l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value, l_width
     )
     ref_l = ref_l.to(torch.bfloat16)
 
     # Stack data for mesh tensor
     l_data_all = torch.stack(l_data_per_device, dim=0)
-    s_data_all = torch.stack(s_data_per_device, dim=0)
-    m_data_all = torch.stack(m_data_per_device, dim=0)
+    ms_data_all = torch.stack(ms_data_per_device, dim=0)
 
     # Create mesh tensors
     l_tensor = ttnn.from_torch(
@@ -208,22 +244,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         memory_config=mem_config_l,
         mesh_mapper=mesh_mapper,
     )
-    s_tensor = ttnn.from_torch(
-        s_data_all,
+    ms_tensor = ttnn.from_torch(
+        ms_data_all,
         device=submesh_device,
         layout=layout,
         tile=tile,
         dtype=dtype,
-        memory_config=mem_config_s,
-        mesh_mapper=mesh_mapper,
-    )
-    m_tensor = ttnn.from_torch(
-        m_data_all,
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_s,
+        memory_config=mem_config_ms,
         mesh_mapper=mesh_mapper,
     )
 
@@ -257,27 +284,26 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     )
 
     # Create aggregator scratch tensor for aggregator cores
-    # The aggregator needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + S + M packed
-    # Slot layout: [header (256B reserved)] [L payload] [S payload] [M payload]
+    # The aggregator needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + MS packed
+    # Slot layout: [header (256B reserved)] [L payload] [MS payload]
     # - Header: 256B reserved (actual header is smaller, but generous padding avoids overflow)
     # - L: 4 tiles * 256B = 1024B (128 elements width / 32 tile_width = 4 tiles)
-    # - S: 1 tile * 256B = 256B
-    # - M: 1 tile * 256B = 256B
-    # Total per slot: 256 + 1024 + 256 + 256 = 1792B
-    # 8 slots * 1792B = 14336B per core
+    # - MS: 1 tile * 256B = 256B (combined max/sum in single tile)
+    # Total per slot: 256 + 1024 + 256 = 1536B
+    # 8 slots * 1536B = 12288B per core
     #
     # In bfloat16 elements per core:
-    # - Payload: 192 * 4 = 768 columns (L+S+M per slot * 4 slots per round direction * 2 rounds)
+    # - Payload: 160 * 4 = 640 columns (L+MS per slot * 4 slots per round direction * 2 rounds)
     # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
-    # Total shard width: 768 + 128 = 896 columns
+    # Total shard width: 640 + 128 = 768 columns
     aggregator_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(mux_cores[0], mux_cores[1])})
     aggregator_shard_spec = ttnn.ShardSpec(
-        aggregator_shard_grid, [8, 192 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR
+        aggregator_shard_grid, [8, 160 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR
     )
     aggregator_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, aggregator_shard_spec
     )
-    aggregator_scratch_shape = [8, (192 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
+    aggregator_scratch_shape = [8, (160 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
     aggregator_scratch_tensor = ttnn.from_torch(
         torch.zeros(aggregator_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,
@@ -325,10 +351,9 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
 
     # Run once to compile
     print("Running reduce_to_all (compiling)...")
-    ttnn.reduce_to_all(
+    out_l_compile = ttnn.reduce_to_all(
         l_tensor,
-        s_tensor,
-        m_tensor,
+        ms_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
         scale_fp32=scale_value,
         fw_intermediate_tensor=fw_intermediate,
@@ -339,6 +364,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         extra_worker_cores=extra_worker_cores,
         aggregator_scratch_tensor=aggregator_scratch_tensor,
     )
+    ttnn.synchronize_device(submesh_device)
+
     # Also compile barrier if used
     if use_barrier:
         _ = ttnn.experimental.all_gather_async(
@@ -364,10 +391,9 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 multi_device_global_semaphore=barrier_semaphores,
                 topology=ttnn.Topology.Mesh,
             )
-        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
+        out_l_trace = ttnn.reduce_to_all(
             l_tensor,
-            s_tensor,
-            m_tensor,
+            ms_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,
@@ -401,10 +427,9 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
                 multi_device_global_semaphore=barrier_semaphores,
                 topology=ttnn.Topology.Mesh,
             )
-        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
+        out_l_trace = ttnn.reduce_to_all(
             l_tensor,
-            s_tensor,
-            m_tensor,
+            ms_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,

@@ -19,12 +19,14 @@ using cached_workload_t = device_operation::CachedProgram<ReduceToAllOp::ReduceT
 
 void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_l = tensor_args.input_tensor_l;
+    const auto& input_ms = tensor_args.input_tensor_ms;
 
     auto* mesh_device = input_l.device();
 
+    // Validate MS tensor has combined format (2 columns for max and sum)
+    TT_FATAL(input_ms.device() == mesh_device, "Input MS tensor must be on same mesh device as input L tensor");
+
     const auto& optional_output_tensor_l = tensor_args.optional_output_tensor_l;
-    const auto& optional_output_tensor_s = tensor_args.optional_output_tensor_s;
-    const auto& optional_output_tensor_m = tensor_args.optional_output_tensor_m;
     if (optional_output_tensor_l.has_value()) {
         const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
 
@@ -36,30 +38,6 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
 
         TT_FATAL(
             optional_output_tensor_l.value().device() == mesh_device,
-            "Output tensor must be allocated on same mesh device as input tensor");
-    }
-    if (optional_output_tensor_s.has_value()) {
-        const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
-        TT_FATAL(
-            output_spec[1] == optional_output_tensor_s.value().tensor_spec(),
-            "Optional output tensor spec {} does not match computed output spec {}",
-            optional_output_tensor_s.value().tensor_spec(),
-            output_spec[1]);
-
-        TT_FATAL(
-            optional_output_tensor_s.value().device() == mesh_device,
-            "Output tensor must be allocated on same mesh device as input tensor");
-    }
-    if (optional_output_tensor_m.has_value()) {
-        const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
-        TT_FATAL(
-            output_spec[2] == optional_output_tensor_m.value().tensor_spec(),
-            "Optional sparse output token tensor spec {} does not match computed output spec {}",
-            optional_output_tensor_m.value().tensor_spec(),
-            output_spec[2]);
-
-        TT_FATAL(
-            optional_output_tensor_m.value().device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -90,11 +68,10 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
 ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
     const operation_attributes_t& /* operation_attributes */, const tensor_args_t& tensor_args) {
     const auto& input_tensor_l = tensor_args.input_tensor_l;
-    const auto& input_tensor_s = tensor_args.input_tensor_s;
-    const auto& input_tensor_m = tensor_args.input_tensor_m;
+    const auto& input_tensor_ms = tensor_args.input_tensor_ms;
 
-    std::vector<TensorSpec> final_output_spec = {
-        input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
+    // Output: only normalized L (MS is intermediate only)
+    std::vector<TensorSpec> final_output_spec = {input_tensor_l.tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
     if (tensor_args.optional_fw_intermediate_tensor.has_value() &&
@@ -105,10 +82,10 @@ ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
         intermediate_specs.push_back(tensor_args.optional_coord_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
-    // intermediate shape is the shape of the 3 tensors combined so that we can send them all in a single packet
+    // Intermediate shape: combined L + MS payload
     uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
-                       (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
+                       input_tensor_ms.tensor_spec().memory_config().shard_spec()->shape[1];
     Shape intermediate_shape = Shape{shape_0, shape_1};
     TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
     for (auto j = 0; j < 3; j++) {
@@ -140,24 +117,15 @@ ReduceToAllOp::tensor_return_value_t ReduceToAllOp::create_output_tensors(
         coord_intermediate_output_tensor = tensor_args.optional_coord_intermediate_tensor.value();
     }
 
+    // Only L is final output (normalized); MS is intermediate only
     auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
     if (tensor_args.optional_output_tensor_l.has_value()) {
         final_output_tensor_l = tensor_args.optional_output_tensor_l.value();
     }
 
-    auto final_output_tensor_s = create_device_tensor(output_specs.at(1)[1], mesh_device);
-    if (tensor_args.optional_output_tensor_s.has_value()) {
-        final_output_tensor_s = tensor_args.optional_output_tensor_s.value();
-    }
-
-    auto final_output_tensor_m = create_device_tensor(output_specs.at(1)[2], mesh_device);
-    if (tensor_args.optional_output_tensor_m.has_value()) {
-        final_output_tensor_m = tensor_args.optional_output_tensor_m.value();
-    }
-
     intermediate_output_tensors = {
         fw_intermediate_output_tensor, bw_intermediate_output_tensor, coord_intermediate_output_tensor};
-    final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
+    final_output_tensors = {final_output_tensor_l};
 
     return {intermediate_output_tensors, final_output_tensors};
 }
@@ -236,14 +204,11 @@ cached_workload_t ReduceToAllOp::ReduceToAll::create_at(
 namespace ttnn::prim {
 ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
-    const Tensor& input_tensor_s,
-    const Tensor& input_tensor_m,
+    const Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const tt::tt_fabric::Topology& topology,
     const MeshCoordinate& root_coord,
     float scale_fp32,
     const std::optional<Tensor>& optional_output_tensor_l,
-    const std::optional<Tensor>& optional_output_tensor_s,
-    const std::optional<Tensor>& optional_output_tensor_m,
     const std::optional<Tensor>& optional_fw_intermediate_tensor,
     const std::optional<Tensor>& optional_bw_intermediate_tensor,
     const std::optional<Tensor>& optional_coord_intermediate_tensor,
@@ -258,14 +223,11 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
             topology,
             input_mux_cores,
             extra_worker_cores,
-            {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
+            {input_tensor_l.tensor_spec(), input_tensor_ms.tensor_spec()}},
         OperationType::tensor_args_t{
             input_tensor_l,
-            input_tensor_s,
-            input_tensor_m,
+            input_tensor_ms,
             optional_output_tensor_l,
-            optional_output_tensor_s,
-            optional_output_tensor_m,
             optional_fw_intermediate_tensor,
             optional_bw_intermediate_tensor,
             optional_coord_intermediate_tensor,

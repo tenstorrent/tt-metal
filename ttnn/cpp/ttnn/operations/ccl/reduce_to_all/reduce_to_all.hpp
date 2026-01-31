@@ -14,16 +14,13 @@ namespace ttnn {
 namespace operations::ccl {
 
 struct ExecuteReduceToAll {
-    static std::vector<ttnn::Tensor> invoke(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_l,
-        const ttnn::Tensor& input_tensor_s,
-        const ttnn::Tensor& input_tensor_m,
+        const ttnn::Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
         const MeshCoordinate& root_coord,
         float scale_fp32,
         tt::tt_fabric::Topology topology,
         const std::optional<ttnn::Tensor>& optional_output_tensor_l = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor_s = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor_m = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
@@ -32,10 +29,9 @@ struct ExecuteReduceToAll {
         const std::optional<ttnn::Tensor>& optional_aggregator_scratch_tensor = std::nullopt);
 };
 
-std::vector<ttnn::TensorSpec> reduce_to_all_tensor_spec(
+ttnn::TensorSpec reduce_to_all_tensor_spec(
     const ttnn::Tensor& input_tensor_l,
-    const ttnn::Tensor& input_tensor_s,
-    const ttnn::Tensor& input_tensor_m,
+    const ttnn::Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const MeshCoordinate& root_coord,
     float scale_fp32,
     tt::tt_fabric::Topology topology,

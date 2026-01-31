@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-// Simplified reader kernel for reduce_to_all operation.
+// Simplified reader kernel for reduce_to_all operation (combined MS format).
 // This kernel runs on SHARD CORES (data cores) - no mux connection needed.
 //
 // ZERO-COPY OPTIMIZATIONS:
@@ -10,14 +10,14 @@
 //    - Data already at CB address, just cb_push_back()
 //
 // 2. NEIGHBOR DATA (L only): CB aliased to MeshBuffer base (offset 0)
-//    - Sender packs [L|S|M] and sends to MeshBuffer address
+//    - Sender packs [L|MS] and sends to MeshBuffer address
 //    - L is at offset 0, so cb_r1_neighbor_l can be aliased directly
 //    - Wait for semaphore, then cb_push_back() - NO memcpy for L!
 //
-// 3. NEIGHBOR DATA (S and M): Small memcpy needed
-//    - CB aliasing doesn't support offsets, so S/M CBs are regular CBs
-//    - After packet arrives, we memcpy S and M from buffer to their CBs
-//    - S and M are tiny (~256 bytes each) - negligible overhead
+// 3. NEIGHBOR DATA (MS): Small memcpy needed
+//    - CB aliasing doesn't support offsets, so MS CB is regular CB
+//    - After packet arrives, we memcpy MS from buffer to its CB
+//    - MS is tiny (~512 bytes) - negligible overhead
 //
 // WHY SEPARATE BUFFERS FOR R1 AND R2:
 //    R1 and R2 have DIFFERENT neighbors (different senders).
@@ -32,7 +32,7 @@ using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
     // ==========================================================================
-    // Compile-time args
+    // Compile-time args (combined MS format)
     // ==========================================================================
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(0);
     constexpr uint32_t vDHt = get_compile_time_arg_val(1);
@@ -41,26 +41,21 @@ void kernel_main() {
 
     // CBs for local input (aliased to input tensor shard - zero-copy)
     constexpr uint32_t cb_local_l = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_local_s = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_local_m = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_local_ms = get_compile_time_arg_val(5);
 
     // CBs for R1 neighbor data
     // cb_r1_neighbor_l is ALIASED to R1 MeshBuffer (zero-copy for L)
-    // cb_r1_neighbor_s and cb_r1_neighbor_m are regular CBs (need memcpy)
-    constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_r1_neighbor_s = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_r1_neighbor_m = get_compile_time_arg_val(9);
+    // cb_r1_neighbor_ms is regular CB (need memcpy)
+    constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(7);
 
     // CBs for R2 neighbor data (separate buffer for race condition prevention)
-    constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_r2_neighbor_s = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_r2_neighbor_m = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(9);
 
     // Offsets and sizes for memcpy
-    constexpr uint32_t s_offset_in_buffer = get_compile_time_arg_val(13);  // payload_size_bytes
-    constexpr uint32_t s_size_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t m_size_bytes = get_compile_time_arg_val(15);
-    constexpr uint32_t m_offset_in_buffer = s_offset_in_buffer + s_size_bytes;
+    constexpr uint32_t ms_offset_in_buffer = get_compile_time_arg_val(10);  // payload_size_bytes
+    constexpr uint32_t ms_size_bytes = get_compile_time_arg_val(11);
 
     // Derived constants
     constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
@@ -83,23 +78,19 @@ void kernel_main() {
         cb_reserve_back(cb_local_l, out_tiles);
         cb_push_back(cb_local_l, out_tiles);
 
-        cb_reserve_back(cb_local_s, Sq_chunk_t);
-        cb_push_back(cb_local_s, Sq_chunk_t);
-
-        cb_reserve_back(cb_local_m, Sq_chunk_t);
-        cb_push_back(cb_local_m, Sq_chunk_t);
+        cb_reserve_back(cb_local_ms, 1);  // Single combined MS tile
+        cb_push_back(cb_local_ms, 1);
     }
 
     // R1 NEIGHBOR DATA:
     // - L: cb_r1_neighbor_l is aliased to R1 MeshBuffer base (zero-copy!)
-    // - S, M: Need memcpy from buffer offsets to CB addresses
+    // - MS: Need memcpy from buffer offset to CB address
     volatile tt_l1_ptr uint32_t* r1_neighbor_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_neighbor_sem_addr);
 
     // Reserve CB space
     cb_reserve_back(cb_r1_neighbor_l, out_tiles);
-    cb_reserve_back(cb_r1_neighbor_s, Sq_chunk_t);
-    cb_reserve_back(cb_r1_neighbor_m, Sq_chunk_t);
+    cb_reserve_back(cb_r1_neighbor_ms, 1);
 
     DPRINT << "Reader waiting for R1 neighbor data semaphore." << ENDL();
     {
@@ -111,18 +102,15 @@ void kernel_main() {
 
     DPRINT << "Reader R1 neighbor data semaphore acquired." << ENDL();
     {
-        DeviceZoneScopedN("R1-MEMCPY-SM");
+        DeviceZoneScopedN("R1-MEMCPY-MS");
         // L is zero-copy (aliased to buffer base), just push
         cb_push_back(cb_r1_neighbor_l, out_tiles);
 
-        // S and M need memcpy from buffer to CB
-        uint32_t r1_s_cb_addr = get_write_ptr(cb_r1_neighbor_s);
-        uint32_t r1_m_cb_addr = get_write_ptr(cb_r1_neighbor_m);
-        tt_memmove<true, false, false, 0>(r1_s_cb_addr, r1_recv_buffer_addr + s_offset_in_buffer, s_size_bytes);
-        tt_memmove<true, false, false, 0>(r1_m_cb_addr, r1_recv_buffer_addr + m_offset_in_buffer, m_size_bytes);
+        // MS needs memcpy from buffer to CB
+        uint32_t r1_ms_cb_addr = get_write_ptr(cb_r1_neighbor_ms);
+        tt_memmove<true, false, false, 0>(r1_ms_cb_addr, r1_recv_buffer_addr + ms_offset_in_buffer, ms_size_bytes);
 
-        cb_push_back(cb_r1_neighbor_s, Sq_chunk_t);
-        cb_push_back(cb_r1_neighbor_m, Sq_chunk_t);
+        cb_push_back(cb_r1_neighbor_ms, 1);
     }
 
     // =========================================================================
@@ -132,8 +120,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_neighbor_sem_addr);
 
     cb_reserve_back(cb_r2_neighbor_l, out_tiles);
-    cb_reserve_back(cb_r2_neighbor_s, Sq_chunk_t);
-    cb_reserve_back(cb_r2_neighbor_m, Sq_chunk_t);
+    cb_reserve_back(cb_r2_neighbor_ms, 1);
 
     DPRINT << "Reader waiting for R2 neighbor data semaphore." << ENDL();
     {
@@ -145,18 +132,15 @@ void kernel_main() {
 
     DPRINT << "Reader R2 neighbor data semaphore acquired." << ENDL();
     {
-        DeviceZoneScopedN("R2-MEMCPY-SM");
+        DeviceZoneScopedN("R2-MEMCPY-MS");
         // L is zero-copy
         cb_push_back(cb_r2_neighbor_l, out_tiles);
 
-        // S and M need memcpy
-        uint32_t r2_s_cb_addr = get_write_ptr(cb_r2_neighbor_s);
-        uint32_t r2_m_cb_addr = get_write_ptr(cb_r2_neighbor_m);
-        tt_memmove<true, false, false, 0>(r2_s_cb_addr, r2_recv_buffer_addr + s_offset_in_buffer, s_size_bytes);
-        tt_memmove<true, false, false, 0>(r2_m_cb_addr, r2_recv_buffer_addr + m_offset_in_buffer, m_size_bytes);
+        // MS needs memcpy
+        uint32_t r2_ms_cb_addr = get_write_ptr(cb_r2_neighbor_ms);
+        tt_memmove<true, false, false, 0>(r2_ms_cb_addr, r2_recv_buffer_addr + ms_offset_in_buffer, ms_size_bytes);
 
-        cb_push_back(cb_r2_neighbor_s, Sq_chunk_t);
-        cb_push_back(cb_r2_neighbor_m, Sq_chunk_t);
+        cb_push_back(cb_r2_neighbor_ms, 1);
     }
 
     DPRINT << "Reader finished processing R2 neighbor data." << ENDL();

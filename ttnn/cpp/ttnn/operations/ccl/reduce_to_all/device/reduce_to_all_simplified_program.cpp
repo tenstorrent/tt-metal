@@ -58,7 +58,6 @@ reduce_to_all_simplified_program_factory(
     // Setup
     // =========================================================================
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
-    auto* device = tensor_args.input_tensor_l.device();
 
     if (forward_coord.has_value()) {
         log_info(
@@ -95,12 +94,9 @@ reduce_to_all_simplified_program_factory(
     const bool is_even_device = (device_index % 2) == 0;
 
     const auto& input_tensor_l = tensor_args.input_tensor_l;
-    const auto& input_tensor_s = tensor_args.input_tensor_s;
-    const auto& input_tensor_m = tensor_args.input_tensor_m;
+    const auto& input_tensor_ms = tensor_args.input_tensor_ms;
 
-    const auto& output_tensor_l = output_tensors.at(1)[0];
-    const auto& output_tensor_s = output_tensors.at(1)[1];
-    const auto& output_tensor_m = output_tensors.at(1)[2];
+    const auto& output_tensor_l = output_tensors.at(1)[0];  // Only L output (normalized)
 
     // Use intermediate tensors as receive buffers.
     // These are MeshDevice tensors created ONCE at the mesh level, so they have
@@ -152,7 +148,18 @@ reduce_to_all_simplified_program_factory(
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
     const uint32_t payload_size_bytes = out_tiles * input_page_size_bytes;
-    const uint32_t total_packet_size = payload_size_bytes + 2 * aligned_page_size;  // L + S + M
+    const uint32_t ms_tile_size_bytes = aligned_page_size;                       // Single combined MS tile
+    const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
+
+    log_info(
+        tt::LogTest,
+        "input_page_size_bytes={}, aligned_page_size={}, payload_size_bytes={}, ms_tile_size_bytes={}, "
+        "total_packet_size={}",
+        input_page_size_bytes,
+        aligned_page_size,
+        payload_size_bytes,
+        ms_tile_size_bytes,
+        total_packet_size);
 
     // =========================================================================
     // Use intermediate tensors as receive buffers
@@ -183,46 +190,39 @@ reduce_to_all_simplified_program_factory(
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
     // =========================================================================
-    // Define CB indices
+    // Define CB indices (combined MS format)
     // =========================================================================
     // R1 local input (aliased to input tensor shard)
     constexpr auto cb_local_l = tt::CBIndex::c_0;
-    constexpr auto cb_local_s = tt::CBIndex::c_1;
-    constexpr auto cb_local_m = tt::CBIndex::c_2;
+    constexpr auto cb_local_ms = tt::CBIndex::c_1;  // Combined max/sum
 
     // R1 neighbor input (aliased to R1 MeshBuffer)
-    constexpr auto cb_r1_neighbor_l = tt::CBIndex::c_3;
-    constexpr auto cb_r1_neighbor_s = tt::CBIndex::c_4;
-    constexpr auto cb_r1_neighbor_m = tt::CBIndex::c_5;
+    constexpr auto cb_r1_neighbor_l = tt::CBIndex::c_2;
+    constexpr auto cb_r1_neighbor_ms = tt::CBIndex::c_3;  // Combined max/sum
 
     // R1 result / R2 local input (writer sends to R2 neighbor)
-    constexpr auto cb_r1_result_l = tt::CBIndex::c_6;
-    constexpr auto cb_r1_result_s = tt::CBIndex::c_7;
-    constexpr auto cb_r1_result_m = tt::CBIndex::c_8;
+    constexpr auto cb_r1_result_l = tt::CBIndex::c_4;
+    constexpr auto cb_r1_result_ms = tt::CBIndex::c_5;  // Combined max/sum
 
     // R2 neighbor input (aliased to R2 MeshBuffer)
-    constexpr auto cb_r2_neighbor_l = tt::CBIndex::c_9;
-    constexpr auto cb_r2_neighbor_s = tt::CBIndex::c_10;
-    constexpr auto cb_r2_neighbor_m = tt::CBIndex::c_11;
+    constexpr auto cb_r2_neighbor_l = tt::CBIndex::c_6;
+    constexpr auto cb_r2_neighbor_ms = tt::CBIndex::c_7;  // Combined max/sum
 
-    // Temp CBs for compute (some are ALIASED to output tensor shards!)
-    constexpr auto cb_exp_p1 = tt::CBIndex::c_12;
-    constexpr auto cb_exp_p2 = tt::CBIndex::c_13;
-    constexpr auto cb_m_out = tt::CBIndex::c_14;    // ALIASED to output_m
-    constexpr auto cb_s1_temp = tt::CBIndex::c_15;  // intermediate only
-    constexpr auto cb_s2_temp = tt::CBIndex::c_16;  // intermediate only
-    constexpr auto cb_l_out = tt::CBIndex::c_17;    // ALIASED to output_l
-    constexpr auto cb_l2_temp = tt::CBIndex::c_18;  // intermediate only
-    constexpr auto cb_s_out = tt::CBIndex::c_19;    // ALIASED to output_s
+    // Output CBs
+    constexpr auto cb_l_out = tt::CBIndex::c_8;   // ALIASED to output_l
+    constexpr auto cb_ms_out = tt::CBIndex::c_9;  // Intermediate MS (R1 output, not aliased)
 
     // Packet slot CB for writer (unified header + payload)
-    constexpr auto cb_packet_slot = tt::CBIndex::c_20;
+    constexpr auto cb_packet_slot = tt::CBIndex::c_10;
 
-    // Sync CB for coordination between Compute and Writer
-    constexpr auto cb_sync = tt::CBIndex::c_21;
+    // Sync CBs for coordination between Compute and Writer
+    // cb_sync: Compute -> Writer (R1 results ready)
+    // cb_sync_writer_done: Writer -> Compute (Writer finished reading R1 results)
+    constexpr auto cb_sync = tt::CBIndex::c_11;
+    constexpr auto cb_sync_writer_done = tt::CBIndex::c_12;
 
     // =========================================================================
-    // Create Circular Buffers
+    // Create Circular Buffers (combined MS format)
     // =========================================================================
     // Local input CBs - ALIASED to input tensor shards (zero-copy reads)
     tt::tt_metal::CircularBufferConfig cb_local_l_config =
@@ -230,21 +230,14 @@ reduce_to_all_simplified_program_factory(
             .set_page_size(cb_local_l, aligned_page_size)
             .set_tile_dims(cb_local_l, stats_tile)
             .set_globally_allocated_address(*input_tensor_l.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_local_l_config);
+    auto cb_local_l_handle = CreateCircularBuffer(program, shard_grid, cb_local_l_config);
 
-    tt::tt_metal::CircularBufferConfig cb_local_s_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_local_s, input_dataformat}})
-            .set_page_size(cb_local_s, aligned_page_size)
-            .set_tile_dims(cb_local_s, stats_tile)
-            .set_globally_allocated_address(*input_tensor_s.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_local_s_config);
-
-    tt::tt_metal::CircularBufferConfig cb_local_m_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_local_m, input_dataformat}})
-            .set_page_size(cb_local_m, aligned_page_size)
-            .set_tile_dims(cb_local_m, stats_tile)
-            .set_globally_allocated_address(*input_tensor_m.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_local_m_config);
+    tt::tt_metal::CircularBufferConfig cb_local_ms_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_local_ms, input_dataformat}})
+            .set_page_size(cb_local_ms, aligned_page_size)
+            .set_tile_dims(cb_local_ms, stats_tile)
+            .set_globally_allocated_address(*input_tensor_ms.buffer());
+    auto cb_local_ms_handle = CreateCircularBuffer(program, shard_grid, cb_local_ms_config);
 
     // R1 neighbor CBs - ALIASED to R1 receive tensor (direct fabric write, zero-copy receive)
     tt::tt_metal::CircularBufferConfig cb_r1_neighbor_l_config =
@@ -252,21 +245,15 @@ reduce_to_all_simplified_program_factory(
             .set_page_size(cb_r1_neighbor_l, aligned_page_size)
             .set_tile_dims(cb_r1_neighbor_l, stats_tile)
             .set_globally_allocated_address(*r1_recv_tensor.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_l_config);
+    auto cb_r1_neighbor_l_handle = CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_l_config);
 
-    // S and M CBs are NOT aliased - reader will memcpy from buffer after packet arrives
-    // (CB aliasing doesn't support offsets, and S/M are tiny - ~256 bytes each)
-    tt::tt_metal::CircularBufferConfig cb_r1_neighbor_s_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r1_neighbor_s, input_dataformat}})
-            .set_page_size(cb_r1_neighbor_s, aligned_page_size)
-            .set_tile_dims(cb_r1_neighbor_s, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_s_config);
-
-    tt::tt_metal::CircularBufferConfig cb_r1_neighbor_m_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r1_neighbor_m, input_dataformat}})
-            .set_page_size(cb_r1_neighbor_m, aligned_page_size)
-            .set_tile_dims(cb_r1_neighbor_m, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_m_config);
+    // MS CB is NOT aliased - reader will memcpy from buffer after packet arrives
+    // (CB aliasing doesn't support offsets, and MS is tiny - ~512 bytes)
+    tt::tt_metal::CircularBufferConfig cb_r1_neighbor_ms_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_r1_neighbor_ms, input_dataformat}})
+            .set_page_size(cb_r1_neighbor_ms, aligned_page_size)
+            .set_tile_dims(cb_r1_neighbor_ms, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_ms_config);
 
     // R1 result CBs (intermediate, not aliased)
     tt::tt_metal::CircularBufferConfig cb_r1_result_l_config =
@@ -275,17 +262,11 @@ reduce_to_all_simplified_program_factory(
             .set_tile_dims(cb_r1_result_l, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_r1_result_l_config);
 
-    tt::tt_metal::CircularBufferConfig cb_r1_result_s_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r1_result_s, input_dataformat}})
-            .set_page_size(cb_r1_result_s, aligned_page_size)
-            .set_tile_dims(cb_r1_result_s, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r1_result_s_config);
-
-    tt::tt_metal::CircularBufferConfig cb_r1_result_m_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r1_result_m, input_dataformat}})
-            .set_page_size(cb_r1_result_m, aligned_page_size)
-            .set_tile_dims(cb_r1_result_m, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r1_result_m_config);
+    tt::tt_metal::CircularBufferConfig cb_r1_result_ms_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_r1_result_ms, input_dataformat}})
+            .set_page_size(cb_r1_result_ms, aligned_page_size)
+            .set_tile_dims(cb_r1_result_ms, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_r1_result_ms_config);
 
     // R2 neighbor CBs - ALIASED to R2 receive tensor (direct fabric write, zero-copy receive)
     tt::tt_metal::CircularBufferConfig cb_r2_neighbor_l_config =
@@ -293,75 +274,29 @@ reduce_to_all_simplified_program_factory(
             .set_page_size(cb_r2_neighbor_l, aligned_page_size)
             .set_tile_dims(cb_r2_neighbor_l, stats_tile)
             .set_globally_allocated_address(*r2_recv_tensor.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_l_config);
+    auto cb_r2_neighbor_l_handle = CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_l_config);
 
-    tt::tt_metal::CircularBufferConfig cb_r2_neighbor_s_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r2_neighbor_s, input_dataformat}})
-            .set_page_size(cb_r2_neighbor_s, aligned_page_size)
-            .set_tile_dims(cb_r2_neighbor_s, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_s_config);
+    tt::tt_metal::CircularBufferConfig cb_r2_neighbor_ms_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_r2_neighbor_ms, input_dataformat}})
+            .set_page_size(cb_r2_neighbor_ms, aligned_page_size)
+            .set_tile_dims(cb_r2_neighbor_ms, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_ms_config);
 
-    tt::tt_metal::CircularBufferConfig cb_r2_neighbor_m_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_r2_neighbor_m, input_dataformat}})
-            .set_page_size(cb_r2_neighbor_m, aligned_page_size)
-            .set_tile_dims(cb_r2_neighbor_m, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_m_config);
-
-    // Temp / Output CBs for compute
-    // cb_l_out, cb_s_out, cb_m_out are ALIASED to output tensor shards!
-    tt::tt_metal::CircularBufferConfig cb_exp_p1_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_exp_p1, input_dataformat}})
-            .set_page_size(cb_exp_p1, aligned_page_size)
-            .set_tile_dims(cb_exp_p1, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_exp_p1_config);
-
-    tt::tt_metal::CircularBufferConfig cb_exp_p2_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_exp_p2, input_dataformat}})
-            .set_page_size(cb_exp_p2, aligned_page_size)
-            .set_tile_dims(cb_exp_p2, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_exp_p2_config);
-
-    // cb_m_out is ALIASED to output_tensor_m shard - compute writes directly to output!
-    tt::tt_metal::CircularBufferConfig cb_m_out_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_m_out, input_dataformat}})
-            .set_page_size(cb_m_out, aligned_page_size)
-            .set_tile_dims(cb_m_out, stats_tile)
-            .set_globally_allocated_address(*output_tensor_m.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_m_out_config);
-
-    tt::tt_metal::CircularBufferConfig cb_s1_temp_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_s1_temp, input_dataformat}})
-            .set_page_size(cb_s1_temp, aligned_page_size)
-            .set_tile_dims(cb_s1_temp, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_s1_temp_config);
-
-    tt::tt_metal::CircularBufferConfig cb_s2_temp_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_s2_temp, input_dataformat}})
-            .set_page_size(cb_s2_temp, aligned_page_size)
-            .set_tile_dims(cb_s2_temp, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_s2_temp_config);
-
+    // Output CBs
     // cb_l_out is ALIASED to output_tensor_l shard - compute writes directly to output!
     tt::tt_metal::CircularBufferConfig cb_l_out_config =
         tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_l_out, input_dataformat}})
             .set_page_size(cb_l_out, aligned_page_size)
             .set_tile_dims(cb_l_out, stats_tile)
             .set_globally_allocated_address(*output_tensor_l.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_l_out_config);
+    auto cb_l_out_handle = CreateCircularBuffer(program, shard_grid, cb_l_out_config);
 
-    tt::tt_metal::CircularBufferConfig cb_l2_temp_config =
-        tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_l2_temp, input_dataformat}})
-            .set_page_size(cb_l2_temp, aligned_page_size)
-            .set_tile_dims(cb_l2_temp, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_l2_temp_config);
-
-    // cb_s_out is ALIASED to output_tensor_s shard - compute writes directly to output!
-    tt::tt_metal::CircularBufferConfig cb_s_out_config =
-        tt::tt_metal::CircularBufferConfig(Sq_chunk_t * aligned_page_size, {{cb_s_out, input_dataformat}})
-            .set_page_size(cb_s_out, aligned_page_size)
-            .set_tile_dims(cb_s_out, stats_tile)
-            .set_globally_allocated_address(*output_tensor_s.buffer());
-    CreateCircularBuffer(program, shard_grid, cb_s_out_config);
+    // cb_ms_out is intermediate MS output from R1 (not aliased to final output)
+    tt::tt_metal::CircularBufferConfig cb_ms_out_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_ms_out, input_dataformat}})
+            .set_page_size(cb_ms_out, aligned_page_size)
+            .set_tile_dims(cb_ms_out, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_ms_out_config);
 
     // Packet slot CB for writer (unified header + payload in single buffer)
     // This enables single NOC transfer instead of separate header + payload writes
@@ -382,12 +317,21 @@ reduce_to_all_simplified_program_factory(
             .set_tile_dims(cb_packet_slot, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
 
-    // Sync CB (tiny, 1 tile size, can use 16B if supported but using aligned_page_size for safety)
+    // Sync CBs (tiny, 1 tile size each)
+    // cb_sync: Compute signals Writer that R1 results are ready
     tt::tt_metal::CircularBufferConfig cb_sync_config =
         tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_sync, tt::DataFormat::RawUInt32}})
             .set_page_size(cb_sync, aligned_page_size)
             .set_tile_dims(cb_sync, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_sync_config);
+
+    // cb_sync_writer_done: Writer signals Compute that it finished reading R1 results
+    // This prevents race where Compute pops R1 results while Writer still reading
+    tt::tt_metal::CircularBufferConfig cb_sync_writer_done_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_sync_writer_done, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_sync_writer_done, aligned_page_size)
+            .set_tile_dims(cb_sync_writer_done, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_sync_writer_done_config);
 
     // =========================================================================
     // Setup aggregator cores and config
@@ -450,35 +394,29 @@ reduce_to_all_simplified_program_factory(
     // Aggregator polls bit-packed semaphore and forwards any ready slots immediately.
     std::vector<uint32_t> aggregator_ct_args = {
         slots_per_direction,  // 0: Total slots per direction (R1 + R2 combined)
-        slot_size,            // 1: Total packet size (header + L + S + M)
+        slot_size,            // 1: Total packet size (header + L + MS)
     };
 
     // =========================================================================
-    // Create kernel compile-time args
+    // Create kernel compile-time args (combined MS format)
     // =========================================================================
 
     // Reader compile-time args
     // Note: cb_r1_neighbor_l and cb_r2_neighbor_l are aliased to receive buffers (zero-copy for L)
-    // But S and M need memcpy from buffer since we can't alias at offsets
-    const uint32_t s_tile_size_bytes = Sq_chunk_t * aligned_page_size;  // Size of S data
-    const uint32_t m_tile_size_bytes = Sq_chunk_t * aligned_page_size;  // Size of M data
+    // MS needs memcpy from buffer since we can't alias at offsets
     std::vector<uint32_t> reader_ct_args = {
         Sq_chunk_t,             // 0
         vDHt,                   // 1
         input_page_size_bytes,  // 2
         l1_alignment,           // 3
         cb_local_l,             // 4
-        cb_local_s,             // 5
-        cb_local_m,             // 6
-        cb_r1_neighbor_l,       // 7
-        cb_r1_neighbor_s,       // 8
-        cb_r1_neighbor_m,       // 9
-        cb_r2_neighbor_l,       // 10
-        cb_r2_neighbor_s,       // 11
-        cb_r2_neighbor_m,       // 12
-        payload_size_bytes,     // 13 - offset to S data in receive buffer
-        s_tile_size_bytes,      // 14 - size of S data to copy
-        m_tile_size_bytes,      // 15 - size of M data to copy
+        cb_local_ms,            // 5
+        cb_r1_neighbor_l,       // 6
+        cb_r1_neighbor_ms,      // 7
+        cb_r2_neighbor_l,       // 8
+        cb_r2_neighbor_ms,      // 9
+        payload_size_bytes,     // 10 - offset to MS data in receive buffer
+        ms_tile_size_bytes,     // 11 - size of MS data to copy
     };
 
     // Writer compile-time args (simplified for aggregator - no mux config needed)
@@ -488,56 +426,41 @@ reduce_to_all_simplified_program_factory(
         Sq_chunk_t,             // 0
         vDHt,                   // 1
         cb_local_l,             // 2
-        cb_local_s,             // 3
-        cb_local_m,             // 4
-        cb_r1_result_l,         // 5
-        cb_r1_result_s,         // 6
-        cb_r1_result_m,         // 7
-        cb_packet_slot,         // 8: Unified packet slot CB (header + payload)
-        l1_alignment,           // 9
-        input_page_size_bytes,  // 10
-        cb_sync,                // 11
-        slot_size,              // 12: Aggregator slot size (L1-aligned)
+        cb_local_ms,            // 3
+        cb_r1_result_l,         // 4
+        cb_r1_result_ms,        // 5
+        cb_packet_slot,         // 6: Unified packet slot CB (header + payload)
+        l1_alignment,           // 7
+        input_page_size_bytes,  // 8
+        cb_sync,                // 9: Compute -> Writer (R1 ready)
+        slot_size,              // 10: Aggregator slot size (L1-aligned)
+        cb_sync_writer_done,    // 11: Writer -> Compute (done reading R1 results)
     };
 
-    // Compute compile-time args (23 total)
-    // Layout matches compute.cpp expectations:
-    // - 0-2: Local input CBs
-    // - 3-5: R1 neighbor CBs
-    // - 6-8: R1 result CBs (sent to R2 neighbor by writer)
-    // - 9-11: R2 neighbor CBs
-    // - 12-13: Exponent temp CBs (P1, P2)
-    // - 14: cb_m_out (ALIASED to output_tensor_m shard - no move needed!)
-    // - 15-16: s temp CBs
-    // - 17: cb_l_out (ALIASED to output_tensor_l shard - no move needed!)
-    // - 18: l2_temp
-    // - 19: cb_s_out (ALIASED to output_tensor_s shard - no move needed!)
-    // - 20-22: scale, Sq_chunk_t, vDHt
+    // Compute compile-time args (15 total for optimized compute)
+    // Layout matches compute_optimized.cpp expectations:
+    // - 0-1: Local input CBs (L, MS)
+    // - 2-3: R1 neighbor CBs
+    // - 4-5: R1 result CBs
+    // - 6-7: R2 neighbor CBs
+    // - 8-9: Output CBs (L, MS intermediate)
+    // - 10-14: scale, block_size, num_blocks, cb_sync, cb_sync_writer_done
     std::vector<uint32_t> compute_ct_args = {
-        cb_local_l,        // 0
-        cb_local_s,        // 1
-        cb_local_m,        // 2
-        cb_r1_neighbor_l,  // 3
-        cb_r1_neighbor_s,  // 4
-        cb_r1_neighbor_m,  // 5
-        cb_r1_result_l,    // 6
-        cb_r1_result_s,    // 7
-        cb_r1_result_m,    // 8
-        cb_r2_neighbor_l,  // 9
-        cb_r2_neighbor_s,  // 10
-        cb_r2_neighbor_m,  // 11
-        cb_exp_p1,         // 12
-        cb_exp_p2,         // 13
-        cb_m_out,          // 14 - ALIASED to output_m
-        cb_s1_temp,        // 15
-        cb_s2_temp,        // 16
-        cb_l_out,          // 17 - ALIASED to output_l
-        cb_l2_temp,        // 18
-        cb_s_out,          // 19 - ALIASED to output_s
-        scale_val,         // 20
-        Sq_chunk_t,        // 21
-        vDHt,              // 22
-        cb_sync,           // 23
+        cb_local_l,           // 0
+        cb_local_ms,          // 1
+        cb_r1_neighbor_l,     // 2
+        cb_r1_neighbor_ms,    // 3
+        cb_r1_result_l,       // 4
+        cb_r1_result_ms,      // 5
+        cb_r2_neighbor_l,     // 6
+        cb_r2_neighbor_ms,    // 7
+        cb_l_out,             // 8 - ALIASED to output_l
+        cb_ms_out,            // 9 - intermediate MS
+        scale_val,            // 10
+        vDHt,                 // 11 - block_size (tiles per row)
+        Sq_chunk_t,           // 12 - num_blocks (number of rows)
+        cb_sync,              // 13 - Compute -> Writer (R1 ready)
+        cb_sync_writer_done,  // 14 - Writer -> Compute (done reading R1 results)
     };
 
     // =========================================================================
@@ -555,19 +478,15 @@ reduce_to_all_simplified_program_factory(
         shard_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    auto compute_kernel_configuration =
-        ttnn::init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_configuration);
-
     [[maybe_unused]] auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_optimized.cpp",
         shard_grid,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = math_approx_mode,
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = false,
+            .math_approx_mode = false,
             .compile_args = compute_ct_args,
         });
 
@@ -733,28 +652,27 @@ reduce_to_all_simplified_program_factory(
 
             // Writer runtime args (with slot indices for bit-packed semaphore signaling)
             std::vector<uint32_t> writer_rt_args = {
-                input_tensor_l.buffer()->address(),  // 0: Local L source address
-                input_tensor_s.buffer()->address(),  // 1: Local S source address
-                input_tensor_m.buffer()->address(),  // 2: Local M source address
-                *r1_dst_node_id.mesh_id,             // 3: R1 neighbor destination mesh ID
-                r1_dst_node_id.chip_id,              // 4: R1 neighbor destination chip ID
-                r1_recv_tensor.buffer()->address(),  // 5: R1 neighbor destination
-                r1_recv_sem.address(),               // 6: R1 neighbor semaphore
-                *r2_dst_node_id.mesh_id,             // 7: R2 neighbor destination mesh ID
-                r2_dst_node_id.chip_id,              // 8: R2 neighbor destination chip ID
-                r2_recv_tensor.buffer()->address(),  // 9: R2 neighbor destination
-                r2_recv_sem.address(),               // 10: R2 neighbor semaphore
-                core_noc.x,                          // 11: current_core_x
-                core_noc.y,                          // 12: current_core_y
+                input_tensor_l.buffer()->address(),   // 0: Local L source address
+                input_tensor_ms.buffer()->address(),  // 1: Local MS source address
+                *r1_dst_node_id.mesh_id,              // 2: R1 neighbor destination mesh ID
+                r1_dst_node_id.chip_id,               // 3: R1 neighbor destination chip ID
+                r1_recv_tensor.buffer()->address(),   // 4: R1 neighbor destination
+                r1_recv_sem.address(),                // 5: R1 neighbor semaphore
+                *r2_dst_node_id.mesh_id,              // 6: R2 neighbor destination mesh ID
+                r2_dst_node_id.chip_id,               // 7: R2 neighbor destination chip ID
+                r2_recv_tensor.buffer()->address(),   // 8: R2 neighbor destination
+                r2_recv_sem.address(),                // 9: R2 neighbor semaphore
+                core_noc.x,                           // 10: current_core_x
+                core_noc.y,                           // 11: current_core_y
                 // Aggregator-specific args
-                agg_core_noc.x,  // 13: aggregator_core_x
-                agg_core_noc.y,  // 14: aggregator_core_y
-                r1_slot_addr,    // 15: R1 aggregator slot address
-                r1_agg_sem,      // 16: R1 aggregator semaphore
-                r1_slot_idx,     // 17: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
-                r2_slot_addr,    // 18: R2 aggregator slot address
-                r2_agg_sem,      // 19: R2 aggregator semaphore
-                r2_slot_idx,     // 20: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
+                agg_core_noc.x,  // 12: aggregator_core_x
+                agg_core_noc.y,  // 13: aggregator_core_y
+                r1_slot_addr,    // 14: R1 aggregator slot address
+                r1_agg_sem,      // 15: R1 aggregator semaphore
+                r1_slot_idx,     // 16: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
+                r2_slot_addr,    // 17: R2 aggregator slot address
+                r2_agg_sem,      // 18: R2 aggregator semaphore
+                r2_slot_idx,     // 19: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
@@ -777,7 +695,16 @@ reduce_to_all_simplified_program_factory(
             .writer_kernel2 = 0,  // Not used in simplified design
             .semaphores = semaphores,
             .is_device_0_2 = is_even_device,
-            .is_simplified = true}};
+            .is_simplified = true,
+            // CB handles for trace replay (UpdateDynamicCircularBufferAddressAndTotalSize)
+            .cb_local_l_handle = cb_local_l_handle,
+            .cb_local_ms_handle = cb_local_ms_handle,
+            .cb_r1_neighbor_l_handle = cb_r1_neighbor_l_handle,
+            .cb_r2_neighbor_l_handle = cb_r2_neighbor_l_handle,
+            .cb_l_out_handle = cb_l_out_handle,
+            .l_tile_size = out_tiles * aligned_page_size,
+            .ms_tile_size = aligned_page_size,
+            .out_tiles = out_tiles}};
 }
 
 }  // namespace ttnn::operations::ccl

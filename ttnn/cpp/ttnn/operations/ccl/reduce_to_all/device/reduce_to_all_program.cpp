@@ -84,15 +84,12 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
     const auto& input_tensor_l = tensor_args.input_tensor_l;
-    const auto& input_tensor_s = tensor_args.input_tensor_s;
-    const auto& input_tensor_m = tensor_args.input_tensor_m;
+    const auto& input_tensor_ms = tensor_args.input_tensor_ms;  // Combined: col 0 = max, col 1 = sum
     const auto& fw_intermediate_tensor = output_tensors.at(0)[0];
     const auto& bw_intermediate_tensor = output_tensors.at(0)[1];
     const auto& round1_intermediate_tensor = output_tensors.at(0)[2];
 
-    const auto& output_tensor_l = output_tensors.at(1)[0];
-    const auto& output_tensor_s = output_tensors.at(1)[1];
-    const auto& output_tensor_m = output_tensors.at(1)[2];
+    const auto& output_tensor_l = output_tensors.at(1)[0];  // Normalized L (only output)
 
     constexpr auto num_links = 2;
     auto* device = input_tensor_l.device();
@@ -875,8 +872,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
-                        input_tensor_s.buffer()->address(),
-                        input_tensor_m.buffer()->address(),
+                        input_tensor_ms.buffer()->address(),  // Combined MS
                         core_noc_x,
                         core_noc_y,
                         current_core_x,
@@ -905,9 +901,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         core_noc_y,
                         current_core_x,
                         current_core_y,
-                        output_tensor_l.buffer()->address(),
-                        output_tensor_s.buffer()->address(),
-                        output_tensor_m.buffer()->address()};
+                        output_tensor_l.buffer()->address()};  // Only normalized L output
                     // Writer1 uses FORWARD mux (Round1: sends D0->D1, D2->D3)
                     // Use fwd_mux_term_master for forward mux termination coordination
                     fabric_mux_rt_args(
@@ -944,8 +938,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
-                        input_tensor_s.buffer()->address(),
-                        input_tensor_m.buffer()->address(),
+                        input_tensor_ms.buffer()->address(),  // Combined MS
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_bw.address(),
                         core_noc_x,
@@ -1016,8 +1009,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
-                        input_tensor_s.buffer()->address(),
-                        input_tensor_m.buffer()->address(),
+                        input_tensor_ms.buffer()->address(),  // Combined MS
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_fw.address(),
                         core_noc_x,
@@ -1076,8 +1068,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
-                        input_tensor_s.buffer()->address(),
-                        input_tensor_m.buffer()->address(),
+                        input_tensor_ms.buffer()->address(),  // Combined MS
                         core_noc_x,
                         core_noc_y,
                         current_core_x,
@@ -1107,9 +1098,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         core_noc_y,
                         current_core_x,
                         current_core_y,
-                        output_tensor_l.buffer()->address(),
-                        output_tensor_s.buffer()->address(),
-                        output_tensor_m.buffer()->address()};
+                        output_tensor_l.buffer()->address()};  // Only normalized L output
 
                     fabric_mux_rt_args(
                         c == bwd_mux_term_master,
@@ -1156,16 +1145,15 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        // Get the input tensors
+        // Get the input tensors (combined MS format)
         const auto& input_tensor_l = tensor_args.input_tensor_l;
-        const auto& input_tensor_s = tensor_args.input_tensor_s;
-        const auto& input_tensor_m = tensor_args.input_tensor_m;
+        const auto& input_tensor_ms = tensor_args.input_tensor_ms;
 
         // Get output tensors
         const auto& output_tensors_l = tensor_return_value[1];
         const auto& intermediate_tensors = tensor_return_value[0];
 
-        // Handle simplified program with different runtime args layout
+        // Handle simplified program with combined MS runtime args layout
         if (shared_variables.is_simplified) {
             for (const auto& core : shared_variables.cores1) {
                 // Simplified reader runtime args:
@@ -1179,36 +1167,73 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
                 reader_runtime_args[2] = intermediate_tensors[0].buffer()->address();  // R1 recv buffer
                 reader_runtime_args[3] = intermediate_tensors[1].buffer()->address();  // R2 recv buffer
 
-                // Simplified writer runtime args layout (from reduce_to_all_simplified_program.cpp):
-                // 0: input L, 1: input S, 2: input M
-                // 3: R1 mesh_id (static), 4: R1 chip_id (static)
-                // 5: R1 dest addr, 6: R1 sem addr
-                // 7: R2 mesh_id (static), 8: R2 chip_id (static)
-                // 9: R2 dest addr, 10: R2 sem addr
-                // 11-20: aggregator args (static)
+                // Simplified writer runtime args layout (combined MS format):
+                // 0: input L, 1: input MS
+                // 2: R1 mesh_id (static), 3: R1 chip_id (static)
+                // 4: R1 dest addr, 5: R1 sem addr
+                // 6: R2 mesh_id (static), 7: R2 chip_id (static)
+                // 8: R2 dest addr, 9: R2 sem addr
+                // 10-19: aggregator args (static)
                 auto& writer_runtime_args_by_core =
                     tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel1);
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
                 writer_runtime_args[0] = input_tensor_l.buffer()->address();
-                writer_runtime_args[1] = input_tensor_s.buffer()->address();
-                writer_runtime_args[2] = input_tensor_m.buffer()->address();
-                // Indices 3-4 (mesh_id, chip_id) are static - don't update
-                writer_runtime_args[5] = intermediate_tensors[0].buffer()->address();  // R1 dest
-                writer_runtime_args[6] = shared_variables.semaphores[0].address();     // R1 sem
-                // Indices 7-8 (mesh_id, chip_id) are static - don't update
-                writer_runtime_args[9] = intermediate_tensors[1].buffer()->address();  // R2 dest
-                writer_runtime_args[10] = shared_variables.semaphores[1].address();    // R2 sem
+                writer_runtime_args[1] = input_tensor_ms.buffer()->address();
+                // Indices 2-3 (mesh_id, chip_id) are static - don't update
+                writer_runtime_args[4] = intermediate_tensors[0].buffer()->address();  // R1 dest
+                writer_runtime_args[5] = shared_variables.semaphores[0].address();     // R1 sem
+                // Indices 6-7 (mesh_id, chip_id) are static - don't update
+                writer_runtime_args[8] = intermediate_tensors[1].buffer()->address();  // R2 dest
+                writer_runtime_args[9] = shared_variables.semaphores[1].address();     // R2 sem
             }
+
+            // Update CB addresses for aliased buffers (critical for trace replay)
+            // When trace replays, the CBs still point to old buffer addresses unless updated
+            if (shared_variables.cb_local_l_handle.has_value()) {
+                UpdateDynamicCircularBufferAddressAndTotalSize(
+                    program,
+                    shared_variables.cb_local_l_handle.value(),
+                    *input_tensor_l.buffer(),
+                    shared_variables.l_tile_size);
+            }
+            if (shared_variables.cb_local_ms_handle.has_value()) {
+                UpdateDynamicCircularBufferAddressAndTotalSize(
+                    program,
+                    shared_variables.cb_local_ms_handle.value(),
+                    *input_tensor_ms.buffer(),
+                    shared_variables.ms_tile_size);
+            }
+            if (shared_variables.cb_r1_neighbor_l_handle.has_value()) {
+                UpdateDynamicCircularBufferAddressAndTotalSize(
+                    program,
+                    shared_variables.cb_r1_neighbor_l_handle.value(),
+                    *intermediate_tensors[0].buffer(),
+                    shared_variables.l_tile_size);
+            }
+            if (shared_variables.cb_r2_neighbor_l_handle.has_value()) {
+                UpdateDynamicCircularBufferAddressAndTotalSize(
+                    program,
+                    shared_variables.cb_r2_neighbor_l_handle.value(),
+                    *intermediate_tensors[1].buffer(),
+                    shared_variables.l_tile_size);
+            }
+            if (shared_variables.cb_l_out_handle.has_value()) {
+                UpdateDynamicCircularBufferAddressAndTotalSize(
+                    program,
+                    shared_variables.cb_l_out_handle.value(),
+                    *output_tensors_l[0].buffer(),
+                    shared_variables.l_tile_size);
+            }
+
             continue;  // Skip original program logic
         }
 
         for (const auto& core : shared_variables.cores1) {
-            // Update reader1 runtime args
+            // Update reader1 runtime args (old program - deprecated but keeping for compatibility)
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel1);
             auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
-            reader_runtime_args[1] = input_tensor_s.buffer()->address();
-            reader_runtime_args[2] = input_tensor_m.buffer()->address();
+            reader_runtime_args[1] = input_tensor_ms.buffer()->address();  // Combined MS
             // D0/D2 uses fw_intermediate, D1/D3 uses bw_intermediate
             reader_runtime_args[7] = shared_variables.is_device_0_2 ? intermediate_tensors[0].buffer()->address()
                                                                     : intermediate_tensors[1].buffer()->address();
@@ -1228,17 +1253,14 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             writer_runtime_args[1] = shared_variables.is_device_0_2 ? shared_variables.semaphores[0].address()
                                                                     : shared_variables.semaphores[1].address();
             writer_runtime_args[6] = output_tensors_l[0].buffer()->address();
-            writer_runtime_args[7] = output_tensors_l[1].buffer()->address();
-            writer_runtime_args[8] = output_tensors_l[2].buffer()->address();
         }
 
         for (const auto& core : shared_variables.cores2) {
-            // Update reader2 runtime args
+            // Update reader2 runtime args (old program - deprecated but keeping for compatibility)
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel2);
             auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
             reader_runtime_args[0] = input_tensor_l.buffer()->address();
-            reader_runtime_args[1] = input_tensor_s.buffer()->address();
-            reader_runtime_args[2] = input_tensor_m.buffer()->address();
+            reader_runtime_args[1] = input_tensor_ms.buffer()->address();  // Combined MS
             // D0/D2 uses bw_intermediate, D1/D3 uses fw_intermediate
             reader_runtime_args[3] = shared_variables.is_device_0_2 ? intermediate_tensors[1].buffer()->address()
                                                                     : intermediate_tensors[0].buffer()->address();
