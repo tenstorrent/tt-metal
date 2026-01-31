@@ -56,7 +56,7 @@ jobs:
               ".github/workflows/galaxy-model-perf-tests.yaml",
               ".github/workflows/galaxy-demo-tests.yaml",
               ".github/workflows/galaxy-unit-tests.yaml",
-              ".github/workflows/galaxy-frequent-tests.yaml",
+              ".github/workflows/galaxy-integration-tests.yaml",
               ".github/workflows/galaxy-stress-tests.yaml",
               ".github/workflows/galaxy-e2e-tests.yaml",
               ".github/workflows/galaxy-quick.yaml",
