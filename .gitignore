@@ -57,6 +57,9 @@ docs/build
 docs/env
 docs/doxygen_build
 
+# CMake build artifacts
+__cmake_systeminformation/
+
 **~
 **.swp
 **.swo
