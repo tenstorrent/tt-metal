@@ -15,6 +15,12 @@ from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
 
+# Helper function to check if prefetcher is supported on the current device
+def is_prefetcher_supported(num_devices: int):
+    model_name = os.getenv("HF_MODEL", "")
+    return is_blackhole() and num_devices >= 4 and "Llama" in model_name and "8B" in model_name
+
+
 @dataclass
 class PrefetcherCoreConfig:
     """
@@ -195,9 +201,9 @@ class Prefetcher(LightweightModule):
         Prefetcher class that prefetches tensors from DRAM to
         """
         ### Device, Global CB, Parameters
-        assert (
-            is_blackhole()
-        ), "Prefetcher is currently only supported on Tenstorrent Blackhole devices. Support for wormhole devices is WIP."
+        assert is_prefetcher_supported(
+            mesh_device.get_num_devices()
+        ), "Prefetcher is currently only supported on Tenstorrent Blackhole devices for Llama-3.1-8B on BH QB 2 (4 devices) and BH LB 1 (8 device). Support for wormhole devices and other modelsis WIP."
         self.global_cb = None
         self.mesh_device = mesh_device
         self.num_tensors = num_tensors

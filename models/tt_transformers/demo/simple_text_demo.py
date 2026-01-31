@@ -28,6 +28,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
@@ -807,6 +808,7 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -844,6 +846,8 @@ def test_demo_text(
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    use_prefetcher = use_prefetcher and is_prefetcher_supported(num_devices)
+    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -858,9 +862,6 @@ def test_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
-    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
     hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
