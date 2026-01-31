@@ -154,7 +154,45 @@ def aligned_channels(channels):
     return channels
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT):
+def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, groups, ALIGNMENT=ALIGNMENT, prepare_weights_=True):
+    if not prepare_weights_:
+        tt_weight = ttnn.from_torch(weight, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+        if bias is not None:
+            tt_bias = ttnn.from_torch(
+                bias.reshape(1, -1),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=mesh_device,
+                mesh_mapper=None,
+                pad_value=0,
+            )
+        else:
+            tt_bias = None
+        return tt_weight, tt_bias
+
+    if groups > 1:
+        # Pad weights for grouped convolution to convert to a standard convolution.
+        # The weight tensor for grouped conv in PyTorch has shape (out_channels, C / groups, kD, kH, kW).
+        # We pad it to a dense tensor of shape (out_channels, C, kD, kH, kW) with zeros.
+        oc_per_group = weight.shape[0] // groups
+        ic_per_group = weight.shape[1] // groups
+        assert weight.shape[0] % groups == 0
+        assert weight.shape[1] % groups == 0
+        assert weight.shape[1] == ic_per_group
+
+        kD, kH, kW = weight.shape[2:]
+        padded_w = torch.zeros(weight.shape[0], weight.shape[1], kD, kH, kW, dtype=weight.dtype)
+
+        for g in range(groups):
+            oc_start, oc_end = g * oc_per_group, (g + 1) * oc_per_group
+            ic_start, ic_end = g * ic_per_group, (g + 1) * ic_per_group
+            # The weights for group `g` are in the `w` tensor at output channels [oc_start:oc_end]
+            weight_group_g = w[oc_start:oc_end]
+            # Place these weights in the correct "diagonal" block of the padded tensor
+            padded_w[oc_start:oc_end, ic_start:ic_end, :, :, :] = weight_group_g
+        w = padded_w
+
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
     w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan

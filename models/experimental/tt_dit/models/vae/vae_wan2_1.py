@@ -289,6 +289,7 @@ class WanCausalConv3d:
             padded_weight,
             padded_bias,
             self.conv_config,
+            groups=1,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
@@ -385,6 +386,7 @@ class WanCausalConv3d:
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.conv_weight,
+            device=self.mesh_device,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
             output_channels=self.out_channels,
@@ -683,6 +685,7 @@ class WanConv2d:
             reshaped_weight,
             state_dict["bias"],
             self.conv_config,
+            groups=1,
         )
 
     def get_cached_mask(self, x_BTHWC, logical_h):
