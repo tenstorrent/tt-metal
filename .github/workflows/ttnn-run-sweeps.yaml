@@ -679,7 +679,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Testing port connection to metal-pgsql.yyz2.tenstorrent.com:5432..."
-          timeout 10 nc -zv metal-pgsql.yyz2.tenstorrent.com 5432 || {
+          timeout 10 nc -zv metal-pg-civ2.yyz2.tenstorrent.com 5432 || {
             echo "❌ Port connection by hostname failed"
             exit 1
           }
