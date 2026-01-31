@@ -24,11 +24,13 @@ struct LayerNormShardedSharedVariables {
     tt::tt_metal::KernelHandle writer_mcast_receiver_kernels_id = {};
     uint32_t num_none_all_to_all_workers = 0;
     bool is_pre_all_gather = false;
+    bool uses_reshard = false;  // True when output needs resharding (CB 17 has output buffer)
     tt::tt_metal::CBHandle cb_in0{};
     tt::tt_metal::CBHandle cb_in1{};
     tt::tt_metal::CBHandle cb_stats{};
     tt::tt_metal::CBHandle cb_add_out{};
-    tt::tt_metal::CBHandle cb_output{};
+    tt::tt_metal::CBHandle cb_output{};          // CB 16
+    tt::tt_metal::CBHandle cb_output_reshard{};  // CB 17 (when resharding)
     std::vector<tt::tt_metal::CoreCoord> cores;
 };
 struct LayerNormShardedProgramFactory {

@@ -309,7 +309,8 @@ struct CBConfig {
     Buffer* beta_buffer = nullptr;
     Buffer* stats_buffer = nullptr;
     Buffer* recip_buffer = nullptr;
-    Buffer* output_buffer = nullptr;
+    Buffer* output_buffer = nullptr;          // CB 16 output buffer
+    Buffer* output_reshard_buffer = nullptr;  // CB 17 resharded output buffer
 
     // Flags
     bool has_b = false;
