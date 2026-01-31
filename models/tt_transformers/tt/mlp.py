@@ -319,5 +319,4 @@ class MLP(LightweightModule):
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),
             )
 
-        ttnn.deallocate(w2_out)
         return w2_out_reduced

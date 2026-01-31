@@ -613,7 +613,8 @@ class ModelArgs:
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
             self._use_fused_all_gather_matmul = (
-                os.getenv("ACTUAL_DEVICE", "") != "TG"
+                self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
                 and self.ccl_topology() == ttnn.Topology.Ring
