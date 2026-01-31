@@ -111,11 +111,9 @@ void kernel_main() {
     // Iterate through all shards and within each shard iterate through all pages (padding and non-padding). Process
     // only rows in the shards with non padding pages.
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
-        auto shard_pages = accessor_src.shard_pages(shard_id, false);
+        auto shard_pages = accessor_src.shard_pages(shard_id, false);  // false means do not skip padding pages
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();
              page_iter += num_tiles_per_input_block) {
-            DPRINT << "Loop inner page " << page_iter->page_id() << " in shard " << shard_id << ENDL();
-            DPRINT << "Page is padding: " << static_cast<uint32_t>(page_iter->is_padding()) << ENDL();
             if (page_iter->is_padding()) {
                 // Discard padding blocks, do not write to output
                 cb_wait_front(cb_id_out0, num_tiles_per_input_block);
