@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22...3.30)
+cmake_minimum_required(VERSION 3.22...4.2)
 project(ttnn_example_add)
 
 add_executable(ttnn_example_add)
