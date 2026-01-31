@@ -134,7 +134,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    if (in_use_) {
+    if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -144,22 +144,42 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         this->clear_expected_num_workers_completed();
     }
 
+    // Log warnings instead of aborting - destructors should never throw or abort.
+    // These conditions indicate a problem but the process should be allowed to continue
+    // so that subsequent tests can run and the device can be properly reset.
     if (!is_mock) {
-        TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
-
-        for (const auto& queue : read_descriptors_) {
-            TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
+        if (!completion_queue_reads_.empty()) {
+            log_warning(
+                LogMetal,
+                "FDMeshCommandQueue destructor: completion reader queue is not empty. "
+                "This may indicate a device hang or timeout occurred.");
+            completion_queue_reads_.clear();
         }
 
-        TT_FATAL(
-            num_outstanding_reads_ == 0,
-            "Mismatch between num_outstanding reads and number of entries in completion reader queue.");
+        for (const auto& queue : read_descriptors_) {
+            if (!queue.second->empty()) {
+                log_warning(
+                    LogMetal,
+                    "FDMeshCommandQueue destructor: buffer read requests still outstanding for device {}. "
+                    "This may indicate a device hang or timeout occurred.",
+                    queue.first);
+            }
+        }
+
+        if (auto reads = num_outstanding_reads_.exchange(0); reads != 0) {
+            log_warning(
+                LogMetal,
+                "FDMeshCommandQueue destructor: {} outstanding reads remaining. "
+                "This may indicate a device hang or timeout occurred.",
+                reads);
+        }
     }
 
+    // Signal reader thread to exit and wait for it to finish
     {
         std::lock_guard lock(reader_thread_cv_mutex_);
-        reader_thread_cv_.notify_one();
         exit_condition_ = true;
+        reader_thread_cv_.notify_one();
     }
     completion_queue_reader_thread_.join();
 }
