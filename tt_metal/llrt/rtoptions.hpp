@@ -592,6 +592,8 @@ public:
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
+    void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
     // Temporary API until all multi-device workloads are ported to run on fabric.
     // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
     // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
