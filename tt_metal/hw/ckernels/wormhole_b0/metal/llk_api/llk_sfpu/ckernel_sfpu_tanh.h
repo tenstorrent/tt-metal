@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
@@ -113,9 +114,9 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
         // SFPU microcode
         sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
         sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
@@ -154,9 +155,9 @@ inline void calculate_tanh() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
         uint imm0 = 0x1DFF;  // 0.90625*x
         uint imm1 = 0x481A;  // 0.09375*x + 0.8125
         uint imm2 = 0xFF00;  // 1
@@ -165,7 +166,7 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            sigmoid_init<false>();
+            sigmoid_init<ApproximationMode::Precise>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers

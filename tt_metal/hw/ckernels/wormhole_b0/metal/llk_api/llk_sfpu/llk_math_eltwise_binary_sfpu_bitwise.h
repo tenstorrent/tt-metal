@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "ckernel_sfpu_binary_bitwise.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
@@ -22,7 +23,10 @@ template <
 inline void llk_math_eltwise_binary_sfpu_bitwise(
     uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_binary_bitwise<APPROXIMATE, BITWISE_OP, INSTRUCTION_MODE>,
+        ckernel::sfpu::calculate_sfpu_binary_bitwise<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            BITWISE_OP,
+            INSTRUCTION_MODE>,
         dst_index0,
         dst_index1,
         odst,
