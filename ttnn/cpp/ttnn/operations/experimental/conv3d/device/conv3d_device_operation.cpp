@@ -271,13 +271,13 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .stride = stride_,
         .padding = padding_,
         .dilation =
-            (config.dilation != std::array<uint32_t, 3>{1, 1, 1} && dilation_ == std::array<uint32_t, 3>{1, 1, 1})
+            (config.dilation != std::array<uint32_t, 3>({1, 1, 1}) && dilation_ == std::array<uint32_t, 3>({1, 1, 1}))
                 ? config.dilation
                 : dilation_,
         .padding_mode = padding_mode_,
         .groups = groups_};
     TT_FATAL(
-        config.dilation == std::array<uint32_t, 3>{1, 1, 1} || dilation_ == std::array<uint32_t, 3>{1, 1, 1} ||
+        config.dilation == std::array<uint32_t, 3>({1, 1, 1}) || dilation_ == std::array<uint32_t, 3>({1, 1, 1}) ||
             config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
         config.dilation[0],
