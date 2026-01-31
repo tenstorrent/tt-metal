@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 
 namespace ttnn::prim {
 
-struct TilizeMultiCoreShardedProgramFactory {
+struct TilizeMultiCoreWidthShardedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
