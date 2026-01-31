@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24...4.2)
+cmake_minimum_required(VERSION 3.22...4.2)
 project(metal_example_matmul)
 
 add_subdirectory(matmul_common)
