@@ -305,7 +305,13 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
-    exp_tile_init<true, true, scale_fp32>();
+    // The exponential function uses clamp_negative=false for better performance. This version
+    // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
+    // Since exp(x) for x < -88 is ~0, the packer ReLU can be used to clamp these outputs to zero.
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, true>(
+        ckernel::sfpu::
+            _init_exponential_<true, true, scale_fp32, false /* clamp_negative -- if false, requires packer ReLU */>)));
+
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
     if constexpr (do_reduce) {
@@ -320,12 +326,27 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     uint32_t granularity = 1;
 #endif
 
+    // Enable packer ReLU to zero any negative values produced by the exponential approximation
+    // (see comment above regarding clamp_negative=false).
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile<true, true>(j, vector_mode);
+                // Use VectorMode::None and 32 iterations to more efficiently process the tile in one shot.
+                MATH((_llk_math_eltwise_unary_sfpu_params_<true>(
+                    ckernel::sfpu::_calculate_exponential_<
+                        true /* approximate */,
+                        true /* scale_en */,
+                        32 /* iterations */,
+                        true /* fast_and_approx */,
+                        true /* skip_positive_check */,
+                        false /* clamp negative -- if false, requires packer ReLU */>,
+                    j,
+                    VectorMode::None,
+                    0 /* scale set in init */)));
             }
             tile_regs_commit();
 
@@ -368,6 +389,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     if constexpr (do_reduce) {
         cb_push_back(reduce_cb, rows);
     }
+
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 }
 
 /**
