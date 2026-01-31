@@ -314,7 +314,10 @@ void create_and_cache_mesh_workload(
             emit_mesh_workload_annotation<mesh_device_operation_t>(
                 cached_workload.workload, operation_attributes, tensor_args);
 
-            if (program_cache.is_enabled()) {
+            // Don't cache programs during graph capture mode (when GraphTracker hook is set).
+            // Please refer to the documentation for more details.
+            bool should_cache = program_cache.is_enabled() && !tt::tt_metal::GraphTracker::instance().get_hook();
+            if (should_cache) {
                 program_cache.insert(
                     program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
                 auto& cached_program_factory = program_cache.get(program_hash);
