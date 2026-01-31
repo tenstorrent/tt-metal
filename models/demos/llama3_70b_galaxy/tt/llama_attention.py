@@ -79,6 +79,36 @@ class TtLlamaAttention(LightweightModule):
             )
             self.slice_size = 8  # Slice size is 8 since we are consuming 8 users per chip
 
+        # Column bounds for prefix caching: mask = (lower <= user_id < upper)
+        # Column 0: [0, 8), Column 1: [8, 16), Column 2: [16, 24), Column 3: [24, 32)
+        # Shape [8, 4, 1, 32]: last dim must be 32 for ttnn typecast compatibility (ROW_MAJOR requires %32)
+        # Use uint32 to match user_id dtype; ge/lt can be wrong when mixing uint32 and int32
+        if self.TG:
+            lower = torch.zeros(8, 4, 1, 32, dtype=torch.int32)
+            upper = torch.zeros(8, 4, 1, 32, dtype=torch.int32)
+            for col in range(4):
+                lower[:, col, :, :] = col * 8
+                upper[:, col, :, :] = (col + 1) * 8
+            self.column_lower = ttnn.from_torch(
+                lower,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=[8, 4]),
+            )
+            self.column_upper = ttnn.from_torch(
+                upper,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=[8, 4]),
+            )
+        else:
+            self.column_lower = None
+            self.column_upper = None
+
         self.dtype = dtype
         self.qk_norm = configuration.qk_norm
 
@@ -700,17 +730,15 @@ class TtLlamaAttention(LightweightModule):
         if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
+
+        user_id_for_mask = None  # Will be set if page_table is provided
         if page_table:
-            if isinstance(user_id, int):
-                user_id = ttnn.from_torch(
-                    torch.tensor([user_id], dtype=torch.int32),
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx_tensor=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx_tensor=user_id)
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+            # Each shard gets one row, which is locally at index 0
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, fill_page_table, batch_idx=0)
 
         else:
             ttnn.fill_cache(
@@ -730,31 +758,73 @@ class TtLlamaAttention(LightweightModule):
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
+
         if ring_distributed_sdpa:
-            # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
-            # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
-            # This ensures each device processes two complementary chunks of the attention matrix
+            k_tensor = k_heads_1KSD_8b
+            v_tensor = v_heads_1VSD_8b
+
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
+                k_tensor,
+                v_tensor,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](
+                    seq_len, chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0
+                ),
+                page_table=None,
+                chunk_start_idx=None,
             )
         else:
-            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
-                is_causal=True,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
-            )
+            # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors
+            if chunk_start_idx is not None and chunk_start_idx > 0:
+                assert page_table is not None, "page_table must be provided for prefix caching"
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=chunk_start_idx),
+                )
 
+                # Replicate active column's data to all columns for correct RMSNORM behavior
+                # Active column = user_id // 8. Zero inactive columns, then all-reduce to replicate.
+                if self.column_lower is not None:
+                    user_id_for_mask = ttnn.reshape(user_id, (1, 1, 1, 1))
+                    # Mask: (lower <= user_id) AND (user_id < upper) -> 1 for active column
+
+                    ge_lower = ttnn.ge(user_id_for_mask, self.column_lower)  # user_id >= lower
+                    lt_upper = ttnn.lt(user_id_for_mask, self.column_upper)  # user_id < upper
+                    cond = ttnn.logical_and(ge_lower, lt_upper)
+                    mask = ttnn.where(cond, 1.0, 0.0)  # Shape [1, 1, 1, 32]
+                    # Slice back to [1, 1, 1, 1] for broadcasting with attention output (all 32 values are identical)
+                    mask = ttnn.slice(mask, [0, 0, 0, 0], [1, 1, 1, 1])
+                    attn_output_84SD = ttnn.multiply(attn_output_84SD, mask)
+                    # All-reduce to replicate active column's data to all columns
+                    attn_output_84SD = self.tt_ccl.line_all_reduce(
+                        attn_output_84SD,
+                        cluster_axis=1,
+                        num_links=3,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        buffer_key="ATTN_REPLICATE",
+                    )
+
+                # Reshape from [1, 1, seq_len, head_dim] to [1, n_local_heads, seq_len, head_dim]
+                attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+            else:
+                attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
+                    q_heads_1QSD_8b,
+                    k_heads_1KSD_8b,
+                    v_heads_1VSD_8b,
+                    is_causal=True,
+                    scale=self.scale,
+                    compute_kernel_config=self.compute_kernel_config_hifi4,
+                    program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                )
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
         ttnn.deallocate(k_heads_1KSD_8b)
