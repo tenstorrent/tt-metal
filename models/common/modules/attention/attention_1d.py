@@ -17,6 +17,20 @@ Key design decisions:
   - No static branching on topology in forward() - TG excluded at module level
   - Paged vs non-paged KV cache selected at runtime based on page_table presence
   - Fused all-gather matmul used for Ring topology (T3K 1x8) when dimensions allow
+
+Weight format requirements:
+  Q and K weights MUST be in Meta format, not HuggingFace format. HuggingFace stores
+  Q/K weights with a different head layout that is incompatible with TTNN's RoPE
+  implementation. Use `reverse_permute` from `models.tt_transformers.tt.load_checkpoints`
+  to convert HF weights to Meta format before passing to Attention1D:
+
+    from models.tt_transformers.tt.load_checkpoints import reverse_permute
+    wq_meta = reverse_permute(wq_hf, n_heads, n_heads * head_dim, dim)
+    wk_meta = reverse_permute(wk_hf, n_kv_heads, n_kv_heads * head_dim, dim)
+
+  The `from_model_args` factory handles this automatically via `convert_hf_to_meta`.
+  When using `from_config` with weights extracted directly from HuggingFace models,
+  you must apply this transformation manually.
 """
 
 import math
@@ -32,6 +46,7 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import is_blackhole, nearest_32
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
 # =============================================================================
 # Constants
@@ -66,7 +81,10 @@ class Attention1DConfig:
     """
 
     # Required: weights (LazyWeight)
-    wqkv: LazyWeight  # Combined QKV projection weight
+    # IMPORTANT: Q and K weights must be in Meta format (not HuggingFace format).
+    # HF weights require `reverse_permute` transformation for RoPE compatibility.
+    # See module docstring for details.
+    wqkv: LazyWeight  # Combined QKV projection weight (Q/K in Meta format)
     wo: LazyWeight  # Output projection weight
 
     # Optional: Q/K normalization configs (e.g., for Qwen models)
@@ -135,6 +153,9 @@ class Attention1DConfig:
     use_fused_all_gather_matmul: bool | None = None  # None = auto-detect
     decode_all_gather_matmul_prg_config: "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None" = None
     decode_all_gather_matmul_memcfg: ttnn.MemoryConfig | None = None
+
+    # Separate all-gather (non-Ring topology or non-fused path)
+    decode_gather_users_memcfg: ttnn.MemoryConfig | None = None
 
     # Compute kernel configs
     li_qkv_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
@@ -473,13 +494,25 @@ class Attention1D(LightweightModule):
 
         ttnn.deallocate(attn_output_cat)
 
-        # --- STAGE 11: Final All-Reduce ---
-        dense_out_reduced = self._all_reduce_output_decode(dense_out)
+        # --- STAGE 11: Final All-Reduce (only for non-fused path) ---
+        # Fused path already has full output from all_gather_matmul_async, no reduction needed.
+        # Non-fused path has partial sums that need reduce-scatter.
+        if cfg.use_fused_all_gather_matmul and cfg.topology == ttnn.Topology.Ring:
+            # Fused path: output is already in correct memory config (set in _fused_all_gather_wo_decode)
+            return dense_out
+        else:
+            # Non-fused path: reduce-scatter the partial sums
+            dense_out_reduced = self._all_reduce_output_decode(dense_out)
 
-        # --- STAGE 12: Final Memory Config ---
-        dense_out_reduced = ttnn.to_memory_config(dense_out_reduced, cfg.decode_residual_memcfg)
+            # Only deallocate if a new tensor was created (multi-device case).
+            # For single device, _all_reduce_output_decode returns input unchanged.
+            if cfg.mesh_device.get_num_devices() > 1:
+                ttnn.deallocate(dense_out)
 
-        return dense_out_reduced
+            # --- STAGE 12: Final Memory Config ---
+            dense_out_reduced = ttnn.to_memory_config(dense_out_reduced, cfg.decode_residual_memcfg)
+
+            return dense_out_reduced
 
     def prefill_forward(
         self,
@@ -765,60 +798,60 @@ class Attention1D(LightweightModule):
     def _all_reduce_output_decode(self, output: ttnn.Tensor) -> ttnn.Tensor:
         """Final all-reduce for decode output."""
         cfg = self.config
+
+        # Single device: no all-reduce needed
         if cfg.mesh_device.get_num_devices() == 1:
             return output
 
-        # Reshape to (1, 1, batch * heads, dim)
-        original_shape = output.shape
-        if original_shape[0] != 1 or original_shape[1] != 1:
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
-
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        # Use tt_all_reduce which handles all topologies correctly:
+        # - 1D topologies (1xN): does reduce_scatter only
+        # - TG topologies: does all_gather + reduce or reduce_scatter + all_gather
+        reduced = tt_all_reduce(
             output,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=cfg.num_reduce_scatter_links,
-            memory_config=cfg.decode_residual_memcfg,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cfg.mesh_device,
+            cfg.tt_ccl,
+            cluster_axis=0,
+            dim=3,  # For 1D non-TG (matches TTTv1)
+            num_reduce_scatter_links=cfg.num_reduce_scatter_links,
+            num_all_gather_links=cfg.num_all_gather_links,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            memory_config=cfg.decode_residual_memcfg,
+            sharded=True,
+            dtype=ttnn.bfloat16,
+            use_composite=False,
         )
-        output.deallocate(True)
+
+        # Ensure output is in correct memory config (matches TTTv1)
+        reduced = ttnn.to_memory_config(reduced, cfg.decode_residual_memcfg)
+
         return reduced
 
     def _all_reduce_output_prefill(self, output: ttnn.Tensor) -> ttnn.Tensor:
         """Final all-reduce for prefill output."""
         cfg = self.config
+
+        # Single device: no all-reduce needed
         if cfg.mesh_device.get_num_devices() == 1:
             return output
 
-        original_shape = output.shape
-        if original_shape[0] != 1 or original_shape[1] != 1:
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
-
-        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        # Use tt_all_reduce which handles all topologies correctly:
+        # - 1D topologies (1xN): does reduce_scatter only
+        # - TG topologies: does all_gather + reduce or reduce_scatter + all_gather
+        reduced = tt_all_reduce(
             output,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=cfg.num_reduce_scatter_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cfg.mesh_device,
+            cfg.tt_ccl,
+            cluster_axis=0,
+            dim=3,  # For 1D non-TG (matches TTTv1)
+            num_reduce_scatter_links=cfg.num_reduce_scatter_links,
+            num_all_gather_links=cfg.num_all_gather_links,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sharded=False,  # Prefill uses interleaved (not sharded)
+            dtype=ttnn.bfloat16,
+            use_composite=False,
         )
-        output.deallocate(True)
+
         return reduced
 
     def _fused_all_gather_wo_decode(self, attn_output_cat: ttnn.Tensor) -> ttnn.Tensor:
@@ -851,14 +884,35 @@ class Attention1D(LightweightModule):
         """Separate all-gather then WO matmul (non-Ring or when fused not available)."""
         cfg = self.config
 
-        # WO matmul
+        # Step 1: All-gather attention outputs across devices (for multi-device)
+        # For 1D topologies with cluster_axis=1, tt_all_gather returns input unchanged (no-op)
+        # but we call it for consistency with TTTv1 and future-proofing
+        if cfg.mesh_device.get_num_devices() > 1:
+            attn_output = tt_all_gather(
+                attn_output_cat,
+                cfg.mesh_device,
+                cfg.tt_ccl,
+                dim=2,
+                cluster_axis=1,
+                num_links=cfg.num_all_gather_links,
+                memory_config=cfg.decode_gather_users_memcfg,
+                sharded=True,
+            )
+        else:
+            attn_output = attn_output_cat
+
+        # Step 2: WO matmul
         dense_out = ttnn.linear(
-            attn_output_cat,
+            attn_output,
             self.wo,
             program_config=cfg.decode_attn_output_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
         )
+
+        # Deallocate input if we gathered (attn_output != attn_output_cat)
+        if cfg.mesh_device.get_num_devices() > 1:
+            attn_output_cat.deallocate(True)
 
         return dense_out
 
@@ -1018,11 +1072,13 @@ class Attention1D(LightweightModule):
                 mesh_shape_override=ttnn.MeshShape([num_devices]),
             ),
             cache_dir_weight_name=(
-                Path(weight_cache_path) / layer_name,
-                "wo_width_sharded" if use_fused_all_gather_matmul else "wo",
-            )
-            if weight_cache_path
-            else None,
+                (
+                    Path(weight_cache_path) / layer_name,
+                    "wo_width_sharded" if use_fused_all_gather_matmul else "wo",
+                )
+                if weight_cache_path
+                else None
+            ),
         )
 
         # Q/K norm configs (optional) - using RMSNorm1DConfig composition pattern
@@ -1481,6 +1537,19 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             use_height_and_width_as_shard_shape=True,
         )
 
+    # Separate all-gather memory config (non-Ring or non-fused path)
+    # Matches TTTv1 GATHER_USERS_MEMCFG: shape=(tile_size * mesh_cols, dim // 8 // users_core_grid.num_cores)
+    if not use_fused and config.decode_gather_users_memcfg is None and num_devices > 1:
+        mesh_cols = list(mesh_device.shape)[1]
+        users_core_grid = _dram_shard_core_grid(dim // 8)
+        to_set["decode_gather_users_memcfg"] = ttnn.create_sharded_memory_config(
+            (tile_size * mesh_cols, dim // 8 // users_core_grid.num_cores),
+            users_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     # --- Phase 6: Input/output memory configs ---
 
     if config.decode_input_memcfg is None:
@@ -1592,6 +1661,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         to_set["_wqkv_bias_prefill"] = wqkv_bias_prefill
 
         # Decode bias - one per batch size multiple
+        # Match TTTv1 pattern: 2D tensor (batch_size, qkv_size)
         wqkv_bias_decode = []
         for batch_size in range(tile_size, tile_padded_batch_rows + tile_size, tile_size):
             qkv_bias_decode = qkv_bias.unsqueeze(0).expand(batch_size, -1)
