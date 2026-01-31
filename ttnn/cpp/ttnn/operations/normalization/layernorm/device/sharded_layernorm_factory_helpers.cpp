@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/normalization/layernorm/device/factory_helpers.hpp"
+#include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -379,6 +380,314 @@ CoreRanges compute_core_ranges(const GridParams& grid, const WorkerDistribution&
     }
 
     return cr;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Kernel paths, defines, and compile-time args helpers
+//////////////////////////////////////////////////////////////////////////////
+
+KernelPaths KernelPaths::get(
+    bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford) {
+    KernelPaths paths;
+
+    constexpr const char* base_path = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/";
+
+    if (is_pre_all_gather) {
+        paths.reader_sender =
+            std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
+        paths.reader_receiver =
+            std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
+        paths.writer = std::string(base_path) + "dataflow/writer_unary_sharded_ln_pre_all_gather.cpp";
+        paths.compute = std::string(base_path) + "compute/layernorm_sharded_pre_allgather.cpp";
+    } else if (is_post_all_gather) {
+        paths.reader_sender =
+            std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
+        paths.reader_receiver =
+            std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
+        paths.writer = use_row_major_kernel ? std::string(base_path) + "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
+                                            : std::string(base_path) + "dataflow/writer_unary_sharded_ln.cpp";
+        paths.compute = std::string(base_path) + "compute/layernorm_sharded_post_allgather.cpp";
+    } else {
+        paths.reader_sender = std::string(base_path) + "dataflow/reader_mcast_sender_unary_sharded_ln.cpp";
+        paths.reader_receiver = std::string(base_path) + "dataflow/reader_mcast_receiver_unary_sharded_ln.cpp";
+        paths.writer = use_row_major_kernel ? std::string(base_path) + "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
+                                            : std::string(base_path) + "dataflow/writer_unary_sharded_ln.cpp";
+        paths.compute = use_welford ? std::string(base_path) + "compute/layernorm_sharded_welford.cpp"
+                                    : std::string(base_path) + "compute/layernorm_sharded.cpp";
+    }
+
+    return paths;
+}
+
+KernelDefines KernelDefines::build(
+    bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back) {
+    KernelDefines defines;
+
+    // Reader defines
+    if (has_b) {
+        defines.reader.emplace_back("FUSE_PRE_ADD", "1");
+    }
+    if (has_gamma) {
+        defines.reader.emplace_back("FUSE_GAMMA", "1");
+    }
+    if (has_beta) {
+        defines.reader.emplace_back("FUSE_BETA", "1");
+    }
+
+    // Writer defines
+    if (rms_norm) {
+        defines.writer.emplace_back("RMSNORM", "1");
+    }
+    if (skip_write_back) {
+        defines.writer.emplace_back("SKIP_WRITE_BACK", "1");
+    }
+
+    // Compute defines
+    if (has_b) {
+        defines.compute.emplace_back("FUSE_PRE_ADD", "1");
+    }
+    if (rms_norm && !use_welford) {
+        defines.compute.emplace_back("RMSNORM", "1");
+    }
+
+    return defines;
+}
+
+CBSizeParams::Sizes CBSizeParams::compute() const {
+    Sizes sizes;
+
+    uint32_t in0_block_tiles = block_wt * block_ht;
+
+    sizes.in0_CB_size = in0_block_tiles * in_single_tile_size;
+    sizes.in1_CB_size = sizes.in0_CB_size;
+    sizes.in2_CB_size = bfloat16_tile_size;
+    sizes.in3_CB_size = bfloat16_tile_size;
+    sizes.in5_CB_size = in0_block_tiles * gamma_single_tile_size / block_ht;
+    sizes.in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
+
+    sizes.x_CB_size = in0_block_tiles * single_tile_size;
+    sizes.xmm_CB_size = in0_block_tiles * single_tile_size;
+
+    sizes.ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    sizes.ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+
+    if (is_pre_all_gather || is_post_all_gather) {
+        sizes.ex_partial_CB_size = sizes.ex_partial_CB_size * pre_all_gather_stats_block_tiles;
+    }
+
+    sizes.ex_CB_size = sizes.ex_partial_CB_size;
+    sizes.ex_global_CB_size = sizes.ex_partial_CB_size;
+    sizes.ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
+
+    if (is_post_all_gather) {
+        sizes.stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        sizes.stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
+    }
+
+    if (is_pre_all_gather) {
+        sizes.out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
+    } else {
+        sizes.out_CB_size = in0_block_tiles * out_single_tile_size;
+    }
+
+    sizes.out_reshard_CB_size = sizes.out_CB_size;
+    if (is_post_all_gather && !skip_write_back) {
+        sizes.out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
+    }
+
+    // Update ex_external_CB_size based on configuration
+    if (use_two_stage_reduce) {
+        sizes.ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
+    }
+    if (is_pre_all_gather) {
+        sizes.ex_external_CB_size = sizes.ex_external_CB_size * pre_all_gather_stats_block_tiles;
+    }
+
+    if (use_welford) {
+        sizes.ex_external_CB_size *= 2;
+        sizes.ex_partial_CB_size *= 2;
+        sizes.ex_CB_size *= 2;
+        sizes.ex_global_CB_size *= 2;
+    }
+
+    return sizes;
+}
+
+CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
+    CompileTimeArgs args;
+
+    const auto& grid = *ctx.grid;
+    const auto& workers = *ctx.workers;
+    const auto& core_ranges = *ctx.core_ranges;
+
+    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
+
+    // Reader sender compile time args
+    args.reader_sender = {
+        ctx.reduce_receiver_semaphore_id,
+        ctx.reduce_sender_semaphore_id,
+        grid.num_blocks,
+        ctx.block_ht,
+        ctx.block_ht * ctx.single_tile_size,
+        workers.num_cores_all_to_all_first_stage,
+        workers.num_rows_per_all_to_all_worker,
+        workers.num_rows_per_all_to_all_worker * ctx.single_tile_size,
+        workers.num_rows_per_all_to_all_worker_last,
+        workers.num_rows_per_all_to_all_worker_last * ctx.single_tile_size,
+        (uint32_t)grid.row_wise,
+        core_ranges.num_cores_x_mcast,
+        core_ranges.num_cores_y_mcast,
+        (uint32_t)grid.use_two_stage_reduce,
+        workers.num_blocks_first_stage,
+        workers.num_blocks_second_stage,
+        ctx.reduce_second_stage_semaphore_id,
+        (uint32_t)ctx.rms_norm,
+        (uint32_t)ctx.use_welford};
+
+    // Reader receiver all-to-all compile time args
+    args.reader_receiver_all_to_all = {
+        ctx.reduce_receiver_semaphore_id,
+        ctx.reduce_sender_semaphore_id,
+        grid.num_blocks,
+        ctx.block_ht,
+        1,  // is_all_to_all_worker
+        workers.num_cores_all_to_all_first_stage,
+        workers.num_rows_per_all_to_all_worker,
+        workers.num_rows_per_all_to_all_worker_last,
+        (uint32_t)grid.row_wise,
+        core_ranges.num_cores_x_mcast,
+        core_ranges.num_cores_y_mcast,
+        (uint32_t)grid.use_two_stage_reduce,
+        workers.num_blocks_first_stage,
+        workers.num_blocks_second_stage,
+        ctx.reduce_second_stage_semaphore_id,
+        (uint32_t)ctx.rms_norm,
+        (uint32_t)ctx.use_welford};
+
+    // Reader receiver (not all-to-all) compile time args
+    args.reader_receiver = {
+        ctx.reduce_receiver_semaphore_id,
+        ctx.reduce_sender_semaphore_id,
+        grid.num_blocks,
+        ctx.block_ht,
+        0,  // is_all_to_all_worker
+        workers.num_cores_all_to_all_first_stage,
+        workers.num_rows_per_all_to_all_worker,
+        workers.num_rows_per_all_to_all_worker_last,
+        (uint32_t)grid.row_wise,
+        1,  // num_cores_x_mcast (dummy for non-all-to-all)
+        1,  // num_cores_y_mcast (dummy for non-all-to-all)
+        0,  // use_two_stage_reduce
+        0,  // num_blocks_first_stage
+        0,  // num_blocks_second_stage
+        ctx.reduce_second_stage_semaphore_id,
+        (uint32_t)ctx.rms_norm,
+        (uint32_t)ctx.use_welford};
+
+    // Writer sender compile time args
+    args.writer_sender = {
+        1,  // is_all_to_all_worker
+        (uint32_t)ctx.has_gamma,
+        (uint32_t)ctx.has_beta,
+        ctx.block_wt,
+        (uint32_t)ctx.use_welford};
+    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_sender);
+    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_sender);
+
+    // Writer receiver compile time args
+    args.writer_receiver = {
+        0,  // is_all_to_all_worker
+        (uint32_t)ctx.has_gamma,
+        (uint32_t)ctx.has_beta,
+        ctx.block_wt,
+        (uint32_t)ctx.use_welford};
+    tt::tt_metal::TensorAccessorArgs(ctx.gamma_buffer).append_to(args.writer_receiver);
+    tt::tt_metal::TensorAccessorArgs(ctx.beta_buffer).append_to(args.writer_receiver);
+
+    // Add stick size for row-major gamma/beta
+    if (ctx.gamma_is_row_major) {
+        args.writer_sender.push_back(ctx.gamma_stick_size);
+        args.writer_receiver.push_back(ctx.gamma_stick_size);
+    } else if (ctx.beta_is_row_major) {
+        args.writer_sender.push_back(ctx.beta_stick_size);
+        args.writer_receiver.push_back(ctx.beta_stick_size);
+    }
+
+    // Add data format flags
+    args.writer_sender.push_back(ctx.gamma_cb_data_format == tt::DataFormat::Float32);
+    args.writer_sender.push_back(ctx.beta_cb_data_format == tt::DataFormat::Float32);
+    args.writer_receiver.push_back(ctx.gamma_cb_data_format == tt::DataFormat::Float32);
+    args.writer_receiver.push_back(ctx.beta_cb_data_format == tt::DataFormat::Float32);
+
+    // Write-back compile time args
+    args.writer_sender.push_back(ctx.block_wt * ctx.out_single_tile_size);
+    args.writer_sender.push_back(ctx.block_wt_resharded * ctx.out_single_tile_size);
+    args.writer_sender.push_back(ctx.block_ht);
+
+    args.writer_receiver.push_back(ctx.block_wt * ctx.out_single_tile_size);
+    args.writer_receiver.push_back(ctx.block_wt_resharded * ctx.out_single_tile_size);
+    args.writer_receiver.push_back(ctx.block_ht);
+    args.writer_receiver.push_back(ctx.use_welford);
+
+    // Compute compile time args (all-to-all)
+    bool float32_reduction = ctx.fp32_dest_acc_en && !ctx.legacy_reduction;
+    args.compute_all_to_all = {
+        0,
+        (uint32_t)ctx.has_gamma,
+        (uint32_t)ctx.has_beta,
+        workers.num_blocks_first_stage,
+        ctx.block_ht,
+        ctx.block_wt,
+        ctx.subblock_wt,
+        num_subblocks_w,
+        1,  // is_all_to_all_worker
+        ctx.block_ht * ctx.block_wt,
+        (uint32_t)ctx.fp32_dest_acc_en,
+        (uint32_t)float32_reduction,
+        (uint32_t)ctx.legacy_rsqrt,
+        workers.num_blocks_second_stage};
+
+    // Compute compile time args (not all-to-all)
+    args.compute_not_all_to_all = {
+        0,
+        (uint32_t)ctx.has_gamma,
+        (uint32_t)ctx.has_beta,
+        workers.num_blocks_first_stage,
+        ctx.block_ht,
+        ctx.block_wt,
+        ctx.subblock_wt,
+        num_subblocks_w,
+        0,  // is_all_to_all_worker
+        ctx.block_ht * ctx.block_wt,
+        (uint32_t)ctx.fp32_dest_acc_en,
+        (uint32_t)float32_reduction,
+        (uint32_t)ctx.legacy_rsqrt,
+        workers.num_blocks_second_stage};
+
+    // Welford-specific compute args
+    if (ctx.use_welford) {
+        constexpr uint32_t tile_width = 32;  // TILE_WIDTH
+        uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
+        union {
+            float f;
+            uint32_t u;
+        } eps_union{};
+        eps_union.f = ctx.eps;
+
+        args.compute_all_to_all.push_back(tile_width);
+        args.compute_all_to_all.push_back(last_tile_W);
+        args.compute_all_to_all.push_back(ctx.K);
+        args.compute_all_to_all.push_back(eps_union.u);
+        args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
+
+        args.compute_not_all_to_all.push_back(tile_width);
+        args.compute_not_all_to_all.push_back(last_tile_W);
+        args.compute_not_all_to_all.push_back(ctx.K);
+        args.compute_not_all_to_all.push_back(eps_union.u);
+        args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
+    }
+
+    return args;
 }
 
 //////////////////////////////////////////////////////////////////////////////
