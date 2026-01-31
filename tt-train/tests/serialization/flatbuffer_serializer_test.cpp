@@ -500,12 +500,6 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     const TestParam& param = GetParam();
     const TensorTestCase& test_case = param;
 
-    // Skip FLOAT32 ROW_MAJOR tests (both DEVICE and HOST) - they fail with typecast errors
-    if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 && test_case.layout == tt::tt_metal::Layout::ROW_MAJOR) {
-        GTEST_SKIP() << "Skipping FLOAT32 ROW_MAJOR tensor serialization (API limitation: dump_tensor_flatbuffer "
-                        "requires TILE layout for FLOAT32)";
-    }
-
     const ttnn::Shape test_shape({1, 1, 32, 64});
 
     ttml::serialization::FlatBufferFile serializer;

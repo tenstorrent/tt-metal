@@ -86,6 +86,7 @@ TEST_F(DropoutTest, TestProb) {
 }
 
 TEST_F(DropoutTest, TestKeepRatioApproximatelyNormal) {
+    // TODO: Enable once RNG is improved.
     GTEST_SKIP() << "Currently random number generator using in the WH is not perfect. This Test show that "
                     "distribution is not normal.";
     // -------------------------------------------------------------------
