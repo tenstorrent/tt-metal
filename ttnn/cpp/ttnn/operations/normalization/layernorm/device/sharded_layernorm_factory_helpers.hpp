@@ -103,6 +103,141 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
 CoreRanges compute_core_ranges(const GridParams& grid, const WorkerDistribution& workers);
 
 //////////////////////////////////////////////////////////////////////////////
+// Kernel paths, defines, and compile-time args helpers
+//////////////////////////////////////////////////////////////////////////////
+
+// Struct to hold kernel file paths based on operation mode
+struct KernelPaths {
+    std::string reader_sender;
+    std::string reader_receiver;
+    std::string writer;
+    std::string compute;
+
+    static KernelPaths get(
+        bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford);
+};
+
+// Struct to hold kernel defines for all kernel types
+struct KernelDefines {
+    KernelDescriptor::Defines reader;
+    KernelDescriptor::Defines writer;
+    KernelDescriptor::Defines compute;
+
+    static KernelDefines build(
+        bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back);
+};
+
+// Parameters needed to compute CB sizes
+struct CBSizeParams {
+    uint32_t block_ht = 0;
+    uint32_t block_wt = 0;
+    uint32_t block_wt_resharded = 0;
+    uint32_t Kt = 0;
+    uint32_t in_single_tile_size = 0;
+    uint32_t single_tile_size = 0;
+    uint32_t out_single_tile_size = 0;
+    uint32_t gamma_single_tile_size = 0;
+    uint32_t beta_single_tile_size = 0;
+    uint32_t bfloat16_tile_size = 0;
+    uint32_t reciprocal_CB_size_bytes = 0;
+    uint32_t num_rows_per_all_to_all_worker = 0;
+    uint32_t num_blocks_first_stage = 0;
+    uint32_t num_blocks_second_stage = 0;
+    uint32_t pre_all_gather_stats_block_tiles = 0;
+    uint32_t post_all_gather_stats_block_tiles = 0;
+    bool is_pre_all_gather = false;
+    bool is_post_all_gather = false;
+    bool use_two_stage_reduce = false;
+    bool use_welford = false;
+    bool skip_write_back = false;
+
+    // Computes all CB sizes and returns them in a struct
+    struct Sizes {
+        uint32_t in0_CB_size = 0;
+        uint32_t in1_CB_size = 0;
+        uint32_t in2_CB_size = 0;
+        uint32_t in3_CB_size = 0;
+        uint32_t in5_CB_size = 0;
+        uint32_t in6_CB_size = 0;
+        uint32_t x_CB_size = 0;
+        uint32_t xmm_CB_size = 0;
+        uint32_t ex_partial_CB_size = 0;
+        uint32_t ex_CB_size = 0;
+        uint32_t ex_external_CB_size = 0;
+        uint32_t ex_global_CB_size = 0;
+        uint32_t ex2pe_CB_size = 0;
+        uint32_t out_CB_size = 0;
+        uint32_t out_reshard_CB_size = 0;
+        uint32_t stats_cb_size = 0;
+        uint32_t stats_reduced_cb_size = 0;
+    };
+
+    Sizes compute() const;
+};
+
+// Context needed to build compile-time args for all kernels
+struct CompileTimeArgsContext {
+    // Semaphore IDs
+    uint32_t reduce_receiver_semaphore_id = 0;
+    uint32_t reduce_sender_semaphore_id = 0;
+    uint32_t reduce_second_stage_semaphore_id = 0;
+
+    // Grid and worker params
+    const GridParams* grid = nullptr;
+    const WorkerDistribution* workers = nullptr;
+    const CoreRanges* core_ranges = nullptr;
+
+    // Block dimensions
+    uint32_t block_ht = 0;
+    uint32_t block_wt = 0;
+    uint32_t subblock_wt = 0;
+    uint32_t single_tile_size = 0;
+    uint32_t out_single_tile_size = 0;
+    uint32_t block_wt_resharded = 0;
+    uint32_t K = 0;
+
+    // Flags
+    bool rms_norm = false;
+    bool use_welford = false;
+    bool has_gamma = false;
+    bool has_beta = false;
+    bool fp32_dest_acc_en = false;
+    bool legacy_reduction = false;
+    bool legacy_rsqrt = false;
+
+    // Data formats
+    tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = tt::DataFormat::Float16_b;
+
+    // Tensor buffers for TensorAccessorArgs
+    Buffer* gamma_buffer = nullptr;
+    Buffer* beta_buffer = nullptr;
+
+    // For row-major gamma/beta
+    bool gamma_is_row_major = false;
+    bool beta_is_row_major = false;
+    uint32_t gamma_stick_size = 0;
+    uint32_t beta_stick_size = 0;
+
+    // Welford-specific
+    float eps = 0.0f;
+    uint32_t per_core_recip_lut_size = 0;
+};
+
+// Result of building compile-time args
+struct CompileTimeArgs {
+    std::vector<uint32_t> reader_sender;
+    std::vector<uint32_t> reader_receiver_all_to_all;
+    std::vector<uint32_t> reader_receiver;
+    std::vector<uint32_t> writer_sender;
+    std::vector<uint32_t> writer_receiver;
+    std::vector<uint32_t> compute_all_to_all;
+    std::vector<uint32_t> compute_not_all_to_all;
+
+    static CompileTimeArgs build(const CompileTimeArgsContext& ctx);
+};
+
+//////////////////////////////////////////////////////////////////////////////
 // Kernel and CB configuration structs
 //////////////////////////////////////////////////////////////////////////////
 

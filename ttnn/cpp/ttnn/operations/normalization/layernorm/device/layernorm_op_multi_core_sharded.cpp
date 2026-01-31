@@ -289,8 +289,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = compute_core_ranges(grid, workers);
 
-    uint32_t num_subblocks_w = block_wt / subblock_wt;
-
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
     bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -307,17 +305,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // get sharded addr
-    // b, gamma, beta addr
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t in0_block_tiles = block_wt * block_ht;
-    // pre_all_gather_stats_block_tiles
     uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
-    // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
     if (is_post_all_gather && stats.has_value()) {
@@ -325,62 +319,39 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
     }
 
-    uint32_t in0_CB_tiles = in0_block_tiles;
-    uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
-    // block size for in1 (tensor b)
-    uint32_t in1_CB_size = in0_CB_size;
-    // in2 - scaler
-    uint32_t in2_CB_size = bfloat16_tile_size;
-    // in3 - eps
-    uint32_t in3_CB_size = bfloat16_tile_size;
-    // gamma
-    uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / block_ht;
-    // beta
-    uint32_t in6_CB_size = in0_block_tiles * beta_single_tile_size / block_ht;
-    // itermediate buffers change later
-    uint32_t x_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    if (is_pre_all_gather || is_post_all_gather) {
-        ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
-    }
-    uint32_t ex_CB_size = ex_partial_CB_size;
-    uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex2pe_CB_size = workers.num_rows_per_all_to_all_worker * single_tile_size;
-    uint32_t stats_cb_size = 0;
-    uint32_t stats_reduced_cb_size = 0;
-    if (is_post_all_gather) {
-        stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
-        stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
-    }
-    // output buffer size
-    uint32_t out_CB_size;
-    if (is_pre_all_gather) {
-        out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
-    } else {
-        out_CB_size = in0_block_tiles * out_single_tile_size;
-    }
-    uint32_t out_reshard_CB_size = out_CB_size;
-    if (is_post_all_gather && !skip_write_back) {
-        out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
-    }
-
-    // Update CB sizes based on configuration
-    if (grid.use_two_stage_reduce) {
-        ex_external_CB_size = (workers.num_blocks_first_stage + workers.num_blocks_second_stage - 1) * single_tile_size;
-    }
-    if (is_pre_all_gather) {
-        ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
-    }
-
+    // Reciprocal LUT for Welford
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
-        // Welford calculates 1 mean tile and 1 var tile per height tile
-        ex_external_CB_size *= 2;
-        ex_partial_CB_size *= 2;
-        ex_CB_size *= 2;
-        ex_global_CB_size *= 2;
+        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        recip_tensor = tensor_args.recip_tensor;
+        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
+
+    // Compute CB sizes using helper
+    CBSizeParams cb_size_params{
+        .block_ht = block_ht,
+        .block_wt = block_wt,
+        .block_wt_resharded = block_wt_resharded,
+        .Kt = Kt,
+        .in_single_tile_size = in_single_tile_size,
+        .single_tile_size = single_tile_size,
+        .out_single_tile_size = out_single_tile_size,
+        .gamma_single_tile_size = gamma_single_tile_size,
+        .beta_single_tile_size = beta_single_tile_size,
+        .bfloat16_tile_size = bfloat16_tile_size,
+        .reciprocal_CB_size_bytes = reciprocal_CB_size_bytes,
+        .num_rows_per_all_to_all_worker = workers.num_rows_per_all_to_all_worker,
+        .num_blocks_first_stage = workers.num_blocks_first_stage,
+        .num_blocks_second_stage = workers.num_blocks_second_stage,
+        .pre_all_gather_stats_block_tiles = pre_all_gather_stats_block_tiles,
+        .post_all_gather_stats_block_tiles = post_all_gather_stats_block_tiles,
+        .is_pre_all_gather = is_pre_all_gather,
+        .is_post_all_gather = is_post_all_gather,
+        .use_two_stage_reduce = grid.use_two_stage_reduce,
+        .use_welford = use_welford,
+        .skip_write_back = skip_write_back};
+    auto cb_sizes = cb_size_params.compute();
 
     // Build ProgramDescriptor
     ProgramDescriptor program_descriptor;
@@ -406,271 +377,67 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .core_ranges = core_ranges.all_cores,
         .initial_value = 0});
 
-    // reader defines
-    KernelDescriptor::Defines reader_mcast_sender_defines;
-    KernelDescriptor::Defines reader_mcast_receiver_defines;
-    if (b) {
-        reader_mcast_sender_defines.emplace_back("FUSE_PRE_ADD", "1");
-        reader_mcast_receiver_defines.emplace_back("FUSE_PRE_ADD", "1");
-    }
-    if (gamma.has_value()) {
-        reader_mcast_sender_defines.emplace_back("FUSE_GAMMA", "1");
-        reader_mcast_receiver_defines.emplace_back("FUSE_GAMMA", "1");
-    }
-    if (beta.has_value()) {
-        reader_mcast_sender_defines.emplace_back("FUSE_BETA", "1");
-        reader_mcast_receiver_defines.emplace_back("FUSE_BETA", "1");
-    }
+    // Get kernel defines using helper
+    auto kernel_defines = KernelDefines::build(
+        b.has_value(), gamma.has_value(), beta.has_value(), rms_norm, use_welford, skip_write_back);
 
-    // reader compile time args
-    std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)grid.num_blocks,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)block_ht * single_tile_size,
-        (std::uint32_t)workers.num_cores_all_to_all_first_stage,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker * single_tile_size,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker_last * single_tile_size,
-        (std::uint32_t)grid.row_wise,
-        (std::uint32_t)core_ranges.num_cores_x_mcast,
-        (std::uint32_t)core_ranges.num_cores_y_mcast,
-        (std::uint32_t)grid.use_two_stage_reduce,
-        (std::uint32_t)workers.num_blocks_first_stage,
-        (std::uint32_t)workers.num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm,
-        (std::uint32_t)use_welford};
-    std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)grid.num_blocks,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)1,
-        (std::uint32_t)workers.num_cores_all_to_all_first_stage,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)grid.row_wise,
-        (std::uint32_t)core_ranges.num_cores_x_mcast,
-        (std::uint32_t)core_ranges.num_cores_y_mcast,
-        (std::uint32_t)grid.use_two_stage_reduce,
-        (std::uint32_t)workers.num_blocks_first_stage,
-        (std::uint32_t)workers.num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm,
-        (std::uint32_t)use_welford};
-    std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)grid.num_blocks,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)0,
-        (std::uint32_t)workers.num_cores_all_to_all_first_stage,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker,
-        (std::uint32_t)workers.num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)grid.row_wise,
-        (std::uint32_t)1,
-        (std::uint32_t)1,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm,
-        (std::uint32_t)use_welford};
+    // Get kernel paths using helper
+    bool use_row_major_kernel = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
+                                (beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR);
+    auto kernel_paths = KernelPaths::get(is_pre_all_gather, is_post_all_gather, use_row_major_kernel, use_welford);
 
+    // NOC selection
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-
     if (is_post_all_gather && !skip_write_back) {
         reader_noc = NOC::NOC_0;
         writer_noc = NOC::NOC_1;
     }
 
-    // reader kernel paths
-    std::string sender_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_ln.cpp";
-    std::string receiver_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_receiver_unary_sharded_ln.cpp";
+    // Build compile-time args using helper
+    CompileTimeArgsContext ct_ctx{
+        .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
+        .reduce_sender_semaphore_id = reduce_sender_semaphore_id,
+        .reduce_second_stage_semaphore_id = reduce_second_stage_semaphore_id,
+        .grid = &grid,
+        .workers = &workers,
+        .core_ranges = &core_ranges,
+        .block_ht = block_ht,
+        .block_wt = block_wt,
+        .subblock_wt = subblock_wt,
+        .single_tile_size = single_tile_size,
+        .out_single_tile_size = out_single_tile_size,
+        .block_wt_resharded = block_wt_resharded,
+        .K = K,
+        .rms_norm = rms_norm,
+        .use_welford = use_welford,
+        .has_gamma = gamma.has_value(),
+        .has_beta = beta.has_value(),
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .legacy_reduction = legacy_reduction,
+        .legacy_rsqrt = legacy_rsqrt,
+        .gamma_cb_data_format = gamma_cb_data_format,
+        .beta_cb_data_format = beta_cb_data_format,
+        .gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr,
+        .beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr,
+        .gamma_is_row_major = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR,
+        .beta_is_row_major = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR,
+        .gamma_stick_size = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR
+                                ? gamma.value().padded_shape()[-1] * gamma.value().element_size()
+                                : 0,
+        .beta_stick_size = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR
+                               ? beta.value().padded_shape()[-1] * beta.value().element_size()
+                               : 0,
+        .eps = eps,
+        .per_core_recip_lut_size = block_w};
+    auto compile_time_args = CompileTimeArgs::build(ct_ctx);
 
-    if (is_pre_all_gather) {
-        sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
-        receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
-    } else if (is_post_all_gather) {
-        sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
-        receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
-    }
-
-    // writer defines
-    KernelDescriptor::Defines writer_defines;
-    if (rms_norm) {
-        writer_defines.emplace_back("RMSNORM", "1");
-    }
-    if (skip_write_back) {
-        writer_defines.emplace_back("SKIP_WRITE_BACK", "1");
-    }
-
-    // writer compile time args
-    std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
-        1,  // is_all_to_all_worker
-        (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt,
-        (std::uint32_t)use_welford};
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(writer_mcast_sender_compile_time_args);
-
-    std::vector<uint32_t> writer_mcast_receiver_compile_time_args = {
-        0,  // is_all_to_all_worker
-        (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt,
-        (std::uint32_t)use_welford};
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
-        .append_to(writer_mcast_receiver_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
-        .append_to(writer_mcast_receiver_compile_time_args);
-
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
-        writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
-        writer_mcast_receiver_compile_time_args.push_back(beta_stick_size);
-    }
-    writer_mcast_sender_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
-    writer_mcast_receiver_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
-
-    // write back compile time args
-    writer_mcast_sender_compile_time_args.push_back(block_wt * out_single_tile_size);
-    writer_mcast_sender_compile_time_args.push_back(block_wt_resharded * out_single_tile_size);
-    writer_mcast_sender_compile_time_args.push_back(block_ht);
-
-    writer_mcast_receiver_compile_time_args.push_back(block_wt * out_single_tile_size);
-    writer_mcast_receiver_compile_time_args.push_back(block_wt_resharded * out_single_tile_size);
-    writer_mcast_receiver_compile_time_args.push_back(block_ht);
-    writer_mcast_receiver_compile_time_args.push_back(use_welford);
-
-    // writer kernel path
-    bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    std::string writer_kernel;
-    if (is_pre_all_gather) {
-        writer_kernel =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-            "writer_unary_sharded_ln_pre_all_gather.cpp";
-    } else {
-        writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
-                                               "dataflow/writer_unary_sharded_ln.cpp";
-    }
-
-    // compute defines
-    KernelDescriptor::Defines compute_defines;
-    if (b) {
-        compute_defines.emplace_back("FUSE_PRE_ADD", "1");
-    }
-    if (rms_norm && !use_welford) {
-        compute_defines.emplace_back("RMSNORM", "1");
-    }
-
-    // Reciprocal LUT
-    uint32_t per_core_recip_lut_size = block_w;
-    std::optional<Tensor> recip_tensor = std::nullopt;
-    uint32_t reciprocal_CB_size_bytes = 0;
-    if (use_welford) {
-        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
-        recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
-    }
-
-    // compute kernel compile time args
-    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
-    std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
-        workers.num_blocks_first_stage,
-        block_ht,
-        block_wt,
-        subblock_wt,
-        num_subblocks_w,
-        1,
-        block_ht * block_wt,
-        fp32_dest_acc_en,
-        float32_reduction,
-        legacy_rsqrt,
-        workers.num_blocks_second_stage};
-    std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
-        0,
-        gamma.has_value(),
-        beta.has_value(),
-        workers.num_blocks_first_stage,
-        block_ht,
-        block_wt,
-        subblock_wt,
-        num_subblocks_w,
-        0,
-        block_ht * block_wt,
-        fp32_dest_acc_en,
-        float32_reduction,
-        legacy_rsqrt,
-        workers.num_blocks_second_stage};
-
-    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
-    uint32_t last_tile_W = K - ((K - tile_width) / tile_width) * tile_width;
+    // Pack eps for later use
     union {
         float f;
         uint32_t u;
     } e{};
     e.f = eps;
-    if (use_welford) {
-        all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
-        all_to_all_except_top_compute_compile_time_args.push_back(last_tile_W);
-        all_to_all_except_top_compute_compile_time_args.push_back(K);
-        all_to_all_except_top_compute_compile_time_args.push_back(e.u);
-        all_to_all_except_top_compute_compile_time_args.push_back(per_core_recip_lut_size);
-        not_all_to_all_compute_compile_time_args.push_back(tile_width);
-        not_all_to_all_compute_compile_time_args.push_back(last_tile_W);
-        not_all_to_all_compute_compile_time_args.push_back(K);
-        not_all_to_all_compute_compile_time_args.push_back(e.u);
-        not_all_to_all_compute_compile_time_args.push_back(per_core_recip_lut_size);
-    }
-
-    // compute kernel path
-    std::string compute_kernel_file;
-    if (is_pre_all_gather) {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-            "layernorm_sharded_pre_allgather.cpp";
-    } else if (is_post_all_gather) {
-        compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-            "layernorm_sharded_post_allgather.cpp";
-    } else {
-        compute_kernel_file =
-            use_welford
-                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                  "layernorm_sharded_welford.cpp"
-                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
-    }
 
     // Build runtime args using helper
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
@@ -728,21 +495,21 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     //                      Build Kernel Descriptors
     ////////////////////////////////////////////////////////////////////////////
     KernelConfig kernel_config;
-    kernel_config.reader_sender_path = sender_reader_kernel_file;
-    kernel_config.reader_receiver_path = receiver_reader_kernel_file;
-    kernel_config.writer_path = writer_kernel;
-    kernel_config.compute_path = compute_kernel_file;
-    kernel_config.reader_sender_ct_args = std::move(reader_mcast_sender_compile_time_args);
-    kernel_config.reader_receiver_all_to_all_ct_args = std::move(reader_mcast_receiver_all_to_all_compile_time_args);
-    kernel_config.reader_receiver_ct_args = std::move(reader_mcast_receiver_compile_time_args);
-    kernel_config.writer_sender_ct_args = std::move(writer_mcast_sender_compile_time_args);
-    kernel_config.writer_receiver_ct_args = std::move(writer_mcast_receiver_compile_time_args);
-    kernel_config.compute_all_to_all_ct_args = std::move(all_to_all_except_top_compute_compile_time_args);
-    kernel_config.compute_not_all_to_all_ct_args = std::move(not_all_to_all_compute_compile_time_args);
-    kernel_config.reader_sender_defines = std::move(reader_mcast_sender_defines);
-    kernel_config.reader_receiver_defines = std::move(reader_mcast_receiver_defines);
-    kernel_config.writer_defines = std::move(writer_defines);
-    kernel_config.compute_defines = std::move(compute_defines);
+    kernel_config.reader_sender_path = kernel_paths.reader_sender;
+    kernel_config.reader_receiver_path = kernel_paths.reader_receiver;
+    kernel_config.writer_path = kernel_paths.writer;
+    kernel_config.compute_path = kernel_paths.compute;
+    kernel_config.reader_sender_ct_args = std::move(compile_time_args.reader_sender);
+    kernel_config.reader_receiver_all_to_all_ct_args = std::move(compile_time_args.reader_receiver_all_to_all);
+    kernel_config.reader_receiver_ct_args = std::move(compile_time_args.reader_receiver);
+    kernel_config.writer_sender_ct_args = std::move(compile_time_args.writer_sender);
+    kernel_config.writer_receiver_ct_args = std::move(compile_time_args.writer_receiver);
+    kernel_config.compute_all_to_all_ct_args = std::move(compile_time_args.compute_all_to_all);
+    kernel_config.compute_not_all_to_all_ct_args = std::move(compile_time_args.compute_not_all_to_all);
+    kernel_config.reader_sender_defines = kernel_defines.reader;
+    kernel_config.reader_receiver_defines = kernel_defines.reader;
+    kernel_config.writer_defines = std::move(kernel_defines.writer);
+    kernel_config.compute_defines = std::move(kernel_defines.compute);
     kernel_config.reader_sender_rt_args = std::move(runtime_args.reader_sender);
     kernel_config.reader_receiver_all_to_all_rt_args = std::move(runtime_args.reader_receiver_all_to_all);
     kernel_config.reader_receiver_rt_args = std::move(runtime_args.reader_receiver);
@@ -767,23 +534,23 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     CBConfig cb_config;
-    cb_config.in0_CB_size = in0_CB_size;
-    cb_config.in1_CB_size = in1_CB_size;
-    cb_config.in2_CB_size = in2_CB_size;
-    cb_config.in3_CB_size = in3_CB_size;
-    cb_config.in5_CB_size = in5_CB_size;
-    cb_config.in6_CB_size = in6_CB_size;
-    cb_config.x_CB_size = x_CB_size;
-    cb_config.xmm_CB_size = xmm_CB_size;
-    cb_config.ex_partial_CB_size = ex_partial_CB_size;
-    cb_config.ex_CB_size = ex_CB_size;
-    cb_config.ex_external_CB_size = ex_external_CB_size;
-    cb_config.ex_global_CB_size = ex_global_CB_size;
-    cb_config.ex2pe_CB_size = ex2pe_CB_size;
-    cb_config.out_CB_size = out_CB_size;
-    cb_config.out_reshard_CB_size = out_reshard_CB_size;
-    cb_config.stats_cb_size = stats_cb_size;
-    cb_config.stats_reduced_cb_size = stats_reduced_cb_size;
+    cb_config.in0_CB_size = cb_sizes.in0_CB_size;
+    cb_config.in1_CB_size = cb_sizes.in1_CB_size;
+    cb_config.in2_CB_size = cb_sizes.in2_CB_size;
+    cb_config.in3_CB_size = cb_sizes.in3_CB_size;
+    cb_config.in5_CB_size = cb_sizes.in5_CB_size;
+    cb_config.in6_CB_size = cb_sizes.in6_CB_size;
+    cb_config.x_CB_size = cb_sizes.x_CB_size;
+    cb_config.xmm_CB_size = cb_sizes.xmm_CB_size;
+    cb_config.ex_partial_CB_size = cb_sizes.ex_partial_CB_size;
+    cb_config.ex_CB_size = cb_sizes.ex_CB_size;
+    cb_config.ex_external_CB_size = cb_sizes.ex_external_CB_size;
+    cb_config.ex_global_CB_size = cb_sizes.ex_global_CB_size;
+    cb_config.ex2pe_CB_size = cb_sizes.ex2pe_CB_size;
+    cb_config.out_CB_size = cb_sizes.out_CB_size;
+    cb_config.out_reshard_CB_size = cb_sizes.out_reshard_CB_size;
+    cb_config.stats_cb_size = cb_sizes.stats_cb_size;
+    cb_config.stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size;
     cb_config.reciprocal_CB_size_bytes = reciprocal_CB_size_bytes;
     cb_config.in_data_format = in_data_format;
     cb_config.cb_data_format = cb_data_format;
