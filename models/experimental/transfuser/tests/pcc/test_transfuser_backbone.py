@@ -1,24 +1,24 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 from collections import OrderedDict
 from typing import Dict, Any, List
-
 import ttnn
 from loguru import logger
-
 from models.experimental.transfuser.reference.config import GlobalConfig
 from models.experimental.transfuser.reference.transfuser_backbone import TransfuserBackbone
 from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
-
-from models.experimental.transfuser.tests.test_gpt import create_gpt_preprocessor
+from ttnn.model_preprocessing import infer_ttnn_module_args as infer_ttnn_module_args_torch
+from models.experimental.transfuser.tests.pcc.test_gpt import create_gpt_preprocessor
 from models.experimental.transfuser.tt.transfuser_backbone import TtTransfuserBackbone
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.experimental.transfuser.resources.transfuser_checkpoint import ensure_transfuser_checkpoint_2022
 
 
 def fix_and_filter_checkpoint_keys(
@@ -81,6 +81,56 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
     return new_state_dict
 
 
+def split_encoder_key(key: str):
+    parts = key.split(".")
+
+    encoder = parts[0]  # image_encoder / lidar_encoder
+    parts = [p for p in parts[1:] if p not in {"features", "_model"}]
+
+    return encoder, parts
+
+
+def normalize_leaf_dict(d):
+    out = {}
+    for k, v in d.items():
+        key = k.split(".")[-1]
+        out[key] = normalize_leaf_dict(v) if isinstance(v, dict) else v
+    return out
+
+
+def insert_nested(d, path, value):
+    cur = d
+    for p in path[:-1]:
+        cur = cur.setdefault(p, {})
+
+    leaf = path[-1]
+
+    if isinstance(value, dict):
+        cur[leaf] = normalize_leaf_dict(value)
+    else:
+        cur[leaf] = value
+
+
+def regroup_model_args(model_args):
+    out = {}
+
+    for k, v in model_args.items():
+        encoder, path = split_encoder_key(k)
+
+        enc_dict = out.setdefault(encoder, {})
+
+        if not path:
+            if isinstance(v, dict):
+                enc_dict.update(normalize_leaf_dict(v))
+            else:
+                raise RuntimeError(f"Unhandled leaf value at encoder root: {k}")
+            continue
+
+        insert_nested(enc_dict, path, v)
+
+    return out
+
+
 class TransfuserBackboneInfra:
     def __init__(
         self,
@@ -93,11 +143,9 @@ class TransfuserBackboneInfra:
         img_input_shape,
         lidar_input_shape,
         model_config,
-        use_fallback,
         use_optimized_self_attn,
     ):
         super().__init__()
-        torch.manual_seed(42)
         self.device = device
         self.n_layer = n_layer
         self.image_arch = image_architecture
@@ -122,11 +170,11 @@ class TransfuserBackboneInfra:
             use_velocity=self.use_velocity,
         )
         torch_model.eval()
-        checkpoint_path = "model_ckpt/models_2022/transfuser/model_seed1_39.pth"
+        checkpoint_path = ensure_transfuser_checkpoint_2022()
         modified_state_dict = fix_and_filter_checkpoint_keys(
             checkpoint_path=checkpoint_path,
-            target_prefix="module._model.",  # This is the prefix to keep and remove
-            state_dict_key=None,  # Adjust this if needed
+            target_prefix="module._model.",
+            state_dict_key=None,
         )
         modified_state_dict = delete_incompatible_keys(modified_state_dict, ["lidar_encoder._model.stem.conv.weight"])
         torch_model.load_state_dict(modified_state_dict, strict=True)
@@ -151,7 +199,7 @@ class TransfuserBackboneInfra:
         parameters["transformer2"] = gpt2_parameters
         gpt3_parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model.transformer3,
-            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, False),
             device=device,
         )
         parameters["transformer3"] = gpt3_parameters
@@ -162,10 +210,19 @@ class TransfuserBackboneInfra:
         )
         parameters["transformer4"] = gpt4_parameters
 
-        inputs = torch.load("transfuser_inputs_final.pt")
-        self.torch_image_input = inputs["image"]  # RGB camera image tensor
-        self.torch_lidar_input = inputs["lidar"]  # LiDAR BEV tensor
-        self.torch_velocity_input = inputs["velocity"]  # Ego velocity tensor
+        B = 1  # batch size
+        self.torch_image_input = torch.randn(B, 3, 160, 704)
+        self.torch_lidar_input = torch.randn(B, 3, 256, 256)
+        self.torch_velocity_input = torch.randn(B, 1)
+
+        model_args = infer_ttnn_module_args_torch(
+            model=torch_model,
+            run_model=lambda model: model(self.torch_image_input, self.torch_lidar_input, self.torch_velocity_input),
+            device=None,
+            absolute_name=True,
+        )
+        model_args = regroup_model_args(model_args)
+
         with torch.no_grad():
             self.torch_features, self.torch_image_grid, self.torch_fused = torch_model(
                 self.torch_image_input,
@@ -202,11 +259,11 @@ class TransfuserBackboneInfra:
         self.ttnn_model = TtTransfuserBackbone(
             device,
             parameters=parameters,
+            model_args=model_args,
             stride=2,
             model_config=model_config,
             config=self.config,
             torch_model=torch_model,
-            use_fallback=use_fallback,
         )
 
         # Run + validate
@@ -231,7 +288,10 @@ class TransfuserBackboneInfra:
 
     def run(self):
         self.output_features, self.output_image_grid, self.output_fused = self.ttnn_model(
-            self.input_image_tensor, self.input_lidar_tensor, self.input_velocity_tensor, self.device
+            self.input_image_tensor,
+            self.input_lidar_tensor,
+            self.input_velocity_tensor,
+            self.device,
         )
         return self.output_features, self.output_image_grid, self.output_fused
 
@@ -313,9 +373,8 @@ model_config = {
     "image_architecture, lidar_architecture, n_layer, use_velocity, use_target_point_image, img_input_shape, lidar_input_shape",
     [("regnety_032", "regnety_032", 4, False, True, (1, 3, 160, 704), (1, 3, 256, 256))],
 )
-@pytest.mark.parametrize("use_fallback", [True])
 @pytest.mark.parametrize("use_optimized_self_attn", [True])
-def test_stem(
+def test_transfuser_backbone(
     device,
     image_architecture,
     lidar_architecture,
@@ -324,7 +383,6 @@ def test_stem(
     use_target_point_image,
     img_input_shape,
     lidar_input_shape,
-    use_fallback,
     use_optimized_self_attn,
 ):
     TransfuserBackboneInfra(
@@ -337,6 +395,5 @@ def test_stem(
         img_input_shape,
         lidar_input_shape,
         model_config,
-        use_fallback,
         use_optimized_self_attn,
     )

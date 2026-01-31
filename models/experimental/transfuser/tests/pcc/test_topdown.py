@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -6,66 +7,45 @@ import ttnn
 import pytest
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.experimental.transfuser.reference.topdown import TopDown
-from models.experimental.transfuser.tt.topdown import TtTopDown
+from ttnn.model_preprocessing import infer_ttnn_module_args as infer_ttnn_module_args_torch
 from ttnn.model_preprocessing import preprocess_model_parameters
-
-
-def create_topdown_preprocessor(device, dtype=ttnn.bfloat16):
-    """Create a custom preprocessor for TopDown model weights."""
-
-    def custom_preprocessor(torch_model, name, ttnn_module_args):
-        parameters = {}
-
-        # Process conv layers - weights need special handling for ttnn.conv2d
-        for conv_name in ["c5_conv", "up_conv5", "up_conv4", "up_conv3"]:
-            if hasattr(torch_model, conv_name):
-                conv_layer = getattr(torch_model, conv_name)
-                parameters[conv_name] = {}
-                # Conv2d expects weights in ROW_MAJOR_LAYOUT (not TILE_LAYOUT)
-                parameters[conv_name]["weight"] = ttnn.from_torch(
-                    conv_layer.weight, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
-                if conv_layer.bias is not None:
-                    # Bias needs to be reshaped for ttnn.conv2d
-                    bias_reshaped = conv_layer.bias.reshape(1, 1, 1, -1)
-                    parameters[conv_name]["bias"] = ttnn.from_torch(
-                        bias_reshaped, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-                    )
-
-        return parameters
-
-    return custom_preprocessor
+from models.experimental.transfuser.reference.topdown import TopDown
+from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.transfuser.tt.topdown import TtTopDown
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_topdown_pcc_comparison(device):
-    # PyTorch model
     torch_model = TopDown(perception_output_features=512, bev_features_chanels=64, bev_upsample_factor=2)
     torch_model.eval()
 
-    # Create input
-    torch_input = torch.randn(1, 512, 8, 8)
+    input_size = (1, 512, 8, 8)
+    model_args = infer_ttnn_module_args_torch(
+        model=torch_model, run_model=lambda model: model(torch.randn(input_size)), device=None
+    )
 
-    # PyTorch forward pass
+    torch_input = torch.randn(input_size)
+
     with torch.no_grad():
         torch_p2, torch_p3, torch_p4, torch_p5 = torch_model(torch_input)
 
-    # Preprocess model parameters to ttnn format
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=create_topdown_preprocessor(device),
-        device=device,
+        custom_preprocessor=create_custom_mesh_preprocessor(mesh_mapper=None),
+        device=None,
     )
 
-    # TT-NN model with preprocessed parameters
-    tt_model = TtTopDown(device, parameters, 512, 64, 2)
+    tt_model = TtTopDown(
+        device=device,
+        parameters=parameters,
+        perception_output_features=512,
+        bev_features_channels=64,
+        bev_upsample_factor=2,
+    )
 
-    # Convert input to TT-NN format (NHWC)
-    ttnn_input = torch_input.permute(0, 2, 3, 1)  # NCHW -> NHWC
+    ttnn_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(ttnn_input, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
-    # TT-NN forward pass
     tt_p2, tt_p3, tt_p4, tt_p5 = tt_model(ttnn_input)
 
     # Convert outputs back to PyTorch format
