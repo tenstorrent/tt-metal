@@ -66,8 +66,8 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
+
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/common_values.hpp"
 
@@ -2758,16 +2758,30 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
     return kernel_handle & 0xffff;
 }
 
-template <typename WorkloadType, typename DeviceType>
+// ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
-    const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
+    ProgramImpl& program, IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    const auto& sub_device_ids = program.determine_sub_device_ids(device);
+    // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
+    // Addresses are not the same across sub-devices
+    TT_FATAL(
+        sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
+    // ProgramImpl always uses the HAL address and does not support CQs
+    return MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+}
+
+// MeshWorkloadImpl version - supports both CQs and not having CQs
+uint32_t program_base_addr_on_core(
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType programmable_core_type) {
+    const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
-    auto cq = workload.get_last_used_command_queue();
+    auto* cq = mesh_workload.get_last_used_command_queue();
     return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
               : MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
@@ -3067,9 +3081,6 @@ void set_core_go_message_mapping_on_device(
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);
-template uint32_t program_base_addr_on_core<distributed::MeshWorkloadImpl, distributed::MeshDevice*>(
-    distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
 
 }  // namespace tt::tt_metal
