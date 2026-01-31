@@ -633,6 +633,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     // Only can launch Fabric if all devices are active
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config) and
         (tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().size() ==
          tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().size())) {
