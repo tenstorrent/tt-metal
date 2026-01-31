@@ -234,6 +234,7 @@ Tensor ToLayout::invoke(
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    ZoneScopedN("ttnn::to_layout");
     return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
 }
 

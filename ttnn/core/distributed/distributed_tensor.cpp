@@ -28,6 +28,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
+#include <tracy/Tracy.hpp>
 
 namespace ttnn::distributed {
 namespace {
@@ -150,6 +151,7 @@ public:
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const {
+        ZoneScopedN("ttnn::distributed::TensorToMesh::Impl::operator()");
         size_t volume = shape.volume();
         TT_FATAL(
             span.size() == volume, "Current buffer size is {} different from shape volume {}", span.size(), volume);
@@ -557,6 +559,7 @@ Tensor create_distributed_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
+    ZoneScopedN("ttnn::distributed::create_distributed_tensor");
     Tensor output = mapper(buffer, global_shape, buffer_pin, shard_layout, pad_value);
     if (mesh_device.has_value()) {
         return output.to_device(&(mesh_device->get()), output.memory_config(), cq_id);
@@ -573,6 +576,7 @@ Tensor create_distributed_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
+    ZoneScopedN("ttnn::distributed::create_distributed_tensor");
     Tensor output =
         mapper.template operator()<const T>(buffer, global_shape, tt::tt_metal::MemoryPin(), shard_layout, pad_value);
     if (mesh_device.has_value()) {

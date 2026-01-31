@@ -23,7 +23,7 @@ auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_d
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
     switch (type) {
-        // case DataType::BFLOAT16:
+        case DataType::BFLOAT16:
         //  https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
@@ -34,7 +34,7 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT16:
             // Tilize doesn't support uint16.
         case DataType::UINT8:
-            // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
+        // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
             // https://github.com/tenstorrent/tt-metal/issues/35048
@@ -85,6 +85,7 @@ Tensor create_tt_tensor_from_host_data(
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values) {
+    ZoneScopedN("ttnn::create_tt_tensor_from_host_data");
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
@@ -219,6 +220,22 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values) {
     ZoneScoped;
+    auto args_str = fmt::format(
+        "convert_python_tensor_to_tt_tensor shape: {}\n dst_dtype: {}\n layout: {}\n optional_tile: {}\n "
+        "memory_config: "
+        "{}\n src_data_type: {}\n device: {}\n cq_id: {}\n  mesh_mapper: {}\n pad_value: {}\n preserve_nan_values: {}",
+        tensor_shape,
+        dst_dtype,
+        layout,
+        optional_tile,
+        memory_config,
+        src_data_type,
+        device,
+        cq_id,
+        mesh_mapper ? "not null" : "null",
+        pad_value,
+        preserve_nan_values);
+    ZoneText(args_str.c_str(), args_str.size());
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");

@@ -249,7 +249,6 @@ void emit_mesh_workload_annotation(
     tt::tt_metal::distributed::MeshWorkload& workload,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args) {
-
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
@@ -524,6 +523,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
+    ZoneScopedN(__PRETTY_FUNCTION__);
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);

@@ -123,6 +123,7 @@ struct PreprocessedPyTensor {
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
+    ZoneScopedN("ttnn::parse_py_tensor(typecast)");
     auto py_tensor_dtype = py_tensor.dtype();
     // handle bool types by changing them to uint8
     // TODO: add proper handling for bool types as a DataType
@@ -138,6 +139,8 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
+    config.ndim = py_tensor.ndim();
+    config.shape = const_cast<int64_t*>(py_tensor.shape_ptr());
 
     TT_FATAL(
         data_type != DataType::INVALID || py_tensor.is_valid(),
@@ -152,6 +155,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         config.dtype.code,
         config.dtype.bits);
 
+    // TODO: Conversion could fail if under tracing
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 

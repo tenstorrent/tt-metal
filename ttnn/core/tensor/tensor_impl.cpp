@@ -56,6 +56,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
 
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    ZoneScopedN("ttnn::tensor_impl::allocate_device_buffer");
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
@@ -571,6 +572,7 @@ DeviceStorage replicate_to_mesh_buffer(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     std::optional<tt::tt_metal::QueueId> cq_id) {
+    ZoneScopedN("ttnn::tensor_impl::replicate_to_mesh_buffer");
     auto* mesh_device = mesh_buffer->device();
     auto data_to_write = buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
@@ -597,6 +599,7 @@ DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     std::optional<tt::tt_metal::QueueId> cq_id) {
+    ZoneScopedN("ttnn::tensor_impl::write_to_mesh_buffer");
     std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
     mesh_buffer->device()->mesh_command_queue(cq_id_int).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
@@ -618,6 +621,7 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const TensorAttributes& host_tensor_attributes,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
+    ZoneScopedN("ttnn::tensor_impl::to_device_mesh_buffer");
     return std::visit(
         tt::stl::overloaded{
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
@@ -909,6 +913,7 @@ std::vector<T> convert_layout_row_major_to_tile(
 
 template <typename T>
 std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
+    ZoneScopedN("ttnn::encode_tensor_data");
     if (logical_data.size() == 0) {
         return {};
     }

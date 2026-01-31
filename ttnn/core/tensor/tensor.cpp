@@ -45,7 +45,7 @@ std::atomic<std::uint64_t> tensor_id_counter{0};
 
 template <typename T>
 Tensor from_buffer(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    ZoneScopedN("ttnn::Tensor::from_span");
+    ZoneScopedN("ttnn::Tensor::from_span_tile");
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec =
@@ -215,7 +215,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    ZoneScopedN("ttnn::Tensor::from_vector");
+    ZoneScopedN("ttnn::Tensor::from_vector&&");
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
