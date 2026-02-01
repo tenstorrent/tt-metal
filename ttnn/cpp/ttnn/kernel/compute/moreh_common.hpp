@@ -29,9 +29,6 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
-
-namespace generic = norm::kernel_util::generic;
 
 // Deprecated
 ALWI void ACQ() { acquire_dst(); }
@@ -1033,7 +1030,7 @@ ALWI void power_tile_to_cb(
     copy_tile(cb_x, 0, dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1128,7 +1125,7 @@ ALWI void power_tile_with_abs_x_to_cb(
     abs_tile(dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();
@@ -1223,7 +1220,7 @@ ALWI void power_and_recip_tile_to_cb(
     copy_tile(cb_x, 0, dst0);
 
     power_iterative_tile_init();
-    power_iterative_tile(dst0, generic::bit_cast<uint32_t>(static_cast<float>(p)));
+    power_iterative_tile(dst0, p);
 
     if (p_is_negative) {
         recip_tile_init();

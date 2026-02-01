@@ -190,25 +190,22 @@ inline void calculate_unary_power(const uint32_t exponent) {
 /**
  * @brief Compute power operation using iterative approach
  *
- * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
+ * @param exponent Non-negative integer exponent value
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
     // iterative approach for positive integer exponents
-    // exponent contains IEEE 754 float bits - convert to integer
-    const float exp_float = Converter::as_float(exponent);
-    const uint exp = (uint)exp_float;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = 1.0f;
-        uint e = exp;
-        while (e > 0) {
-            if (e & 1) {
+        uint exp = exponent;
+        while (exp > 0) {
+            if (exp & 1) {
                 result *= in;
             }
             in *= in;
-            e >>= 1;
+            exp >>= 1;
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
