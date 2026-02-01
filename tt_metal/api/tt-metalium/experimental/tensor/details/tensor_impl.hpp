@@ -37,6 +37,36 @@ std::vector<T> convert_layout_tile_to_row_major(
         transpose_of_faces);
 }
 
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile(
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
+    if (shape.width() * shape.height() == 0) {
+        return std::vector<T>();
+    }
+    TT_FATAL(
+        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
+        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
+        "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
+        tile.get_tile_shape()[0],
+        tile.get_tile_shape()[1],
+        shape);
+
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
+    auto transpose_within_face = tile.get_transpose_within_face();
+    auto transpose_of_faces = tile.get_transpose_of_faces();
+
+    return convert_layout(
+        data_to_convert,
+        shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
+}
+
 // Converts logical data into physical data based on tensor spec
 // - Logical data: Flat container of row major data corresponding to some ND logical shape
 // - Physical data: Flat container of physical data corresponding to tensor spec. It takes into account:

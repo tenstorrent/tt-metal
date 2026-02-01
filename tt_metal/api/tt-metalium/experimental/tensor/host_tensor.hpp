@@ -112,6 +112,10 @@ public:
         impl(std::make_unique<TensorAttributes>(
             Storage(HostStorage(std::move(buffer))), std::move(spec), std::move(topology))) {}
 
+    // TODO: remove this after refactoring.
+    explicit HostTensor(HostStorage storage, TensorSpec spec, TensorTopology topology) :
+        impl(std::make_unique<TensorAttributes>(Storage(std::move(storage)), std::move(spec), std::move(topology))) {}
+
     /**
      * From original Tensor:
      * Converts a buffer of elements of type `T` to a `Tensor`.
@@ -227,12 +231,15 @@ public:
     // TODO: parity with DistributedHostBuffer
     HostBuffer get_host_buffer() const {
         // TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
-        const auto& storage = std::get<HostStorage>(impl->get_storage());
+        const auto& storage = host_storage();
         // Get shard at (0,0) for single-device tensor - always exists for HostTensor
         auto buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
         TT_ASSERT(buffer.has_value(), "HostTensor must have a buffer at coordinate (0, 0)");
         return *buffer;
     }
+
+    // TODO: get rid of this after refactoring.
+    const HostStorage& host_storage() const { return std::get<HostStorage>(impl->get_storage()); }
 
     bool is_sharded() const {
         // TODO: this is technically divergent from ttnn::Tensor
