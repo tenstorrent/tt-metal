@@ -54,3 +54,9 @@ TEST_F(NewDPrintFailuresFixture, MixedPlaceholders) {
         "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/mixed_placeholders.cpp",
         "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");
 }
+
+TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderSyntax) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_syntax.cpp",
+        "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");
+}
