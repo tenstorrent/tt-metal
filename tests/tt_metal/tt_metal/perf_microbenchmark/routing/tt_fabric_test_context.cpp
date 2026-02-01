@@ -161,12 +161,12 @@ void TestContext::setup_latency_test_mode(const TestConfig& config) {
     latency_test_manager_->setup_latency_test_mode(config);
 }
 
-LatencyTestManager::LatencyWorkerLocation TestContext::get_latency_sender_location() {
+LatencyResultsManager::LatencyWorkerLocation TestContext::get_latency_sender_location() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
     return latency_test_manager_->get_latency_sender_location(test_devices_);
 }
 
-LatencyTestManager::LatencyWorkerLocation TestContext::get_latency_receiver_location() {
+LatencyResultsManager::LatencyWorkerLocation TestContext::get_latency_receiver_location() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
     return latency_test_manager_->get_latency_receiver_location(test_devices_);
 }
@@ -214,7 +214,7 @@ void TestContext::init(
 
     bandwidth_profiler_ = std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);
     bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
-    latency_test_manager_ = std::make_unique<LatencyTestManager>(*fixture_, sender_memory_map_);
+    latency_test_manager_ = std::make_unique<LatencyResultsManager>(*fixture_, sender_memory_map_);
 }
 
 void TestContext::prepare_for_test(const TestConfig& config) {

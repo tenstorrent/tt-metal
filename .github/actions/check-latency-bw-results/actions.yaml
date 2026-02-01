@@ -1,0 +1,27 @@
+name: "Check for BW/latency generated files"
+description: "Checks if BW/latency data was created from fabric test"
+inputs:
+  path:
+    description: "Path where data should be located"
+    required: false
+  check_bw:
+    description: "If action should check for BW results"
+  check_latency:
+    description: "If action should check for latency results"
+runs:
+  using: "composite"
+  steps:
+    - name: Check for files
+      shell: bash
+      run: |
+        # Change dir to path if its set
+        # Example: when running in containers the batchfile and data files are located under /work
+        if [ inputs.check_bw ]; then
+          if [ -f "generated/fabric/" ]; then
+          fi
+        fi
+
+        if [ inputs.check_latency ]; then
+          if [ -f "generated/fabric/" ]; then
+          fi
+        fi
