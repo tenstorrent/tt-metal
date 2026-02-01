@@ -105,6 +105,19 @@ void run_dfb_program(
     std::vector<uint32_t> output;
     distributed::ReadShard(mesh_device->mesh_command_queue(), output, out_buffer, zero_coord, true);
 
+    if (input != output) {
+        log_info(tt::LogTest, "Printing input");
+        for (auto i : input) {
+            std::cout << i << " ";
+        }
+        std::cout << std::endl;
+        log_info(tt::LogTest, "Printing output");
+        for (auto i : output) {
+            std::cout << i << " ";
+        }
+        std::cout << std::endl;
+    }
+
     EXPECT_EQ(input, output);
 }
 

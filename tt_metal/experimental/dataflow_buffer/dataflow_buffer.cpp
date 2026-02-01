@@ -125,11 +125,24 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         this->config.num_consumers,
         this->risc_mask);
 
+    log_info(tt::LogMetal, "Entry size: {}", this->entry_size);
+    log_info(tt::LogMetal, "Stride size: {}", this->stride_size);
+    log_info(tt::LogMetal, "Capacity: {}", this->capacity);
+    log_info(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
+    log_info(tt::LogMetal, "Remapper pair index: {}", this->remapper_pair_index);
+    log_info(tt::LogMetal, "Num txn ids: {}", this->num_txn_ids);
+    for (int i = 0; i < 4; i++) {
+        log_info(tt::LogMetal, "Txn id {}: {}", i, this->txn_ids[i]);
+    }
+    log_info(tt::LogMetal, "Num entries per txn id: {}", this->num_entries_per_txn_id);
+    log_info(tt::LogMetal, "Num entries per txn id per tc: {}", this->num_entries_per_txn_id_per_tc);
+
     const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
     data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
 
     // Write one dfb_initializer_per_risc_t per risc
     for (const auto& rc : risc_configs) {
+        log_info(tt::LogMetal, "New risc config");
         ::experimental::dfb_initializer_per_risc_t per_risc = {};
 
         // Copy per-risc arrays
@@ -137,17 +150,14 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
             per_risc.base_addr[i] = rc.config.base_addr[i];
             per_risc.limit[i] = rc.config.limit[i];
             per_risc.packed_tile_counter[i] = rc.config.packed_tile_counter[i];
+            log_info(tt::LogMetal, "Base addr {}: {}", i, per_risc.base_addr[i]);
+            log_info(tt::LogMetal, "Limit {}: {}", i, per_risc.limit[i]);
+            log_info(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
         }
         per_risc.num_tcs_to_rr = rc.config.num_tcs_to_rr;
+        log_info(tt::LogMetal, "Num tcs to rr: {}", per_risc.num_tcs_to_rr);
         per_risc.should_init_tc = rc.config.should_init_tc ? 1 : 0;
-
-        log_info(
-            tt::LogMetal,
-            "\tRisc {}: base_addr[0]={}, limit[0]={}, num_tcs_to_rr={}",
-            rc.risc_id,
-            rc.config.base_addr[0],
-            rc.config.limit[0],
-            rc.config.num_tcs_to_rr);
+        log_info(tt::LogMetal, "Should init tc: {}", per_risc.should_init_tc);
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
@@ -283,6 +293,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
     }
     dfb->capacity = capacity;
+    log_info(tt::LogMetal, "Capacity: {}", capacity);
 
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
@@ -521,11 +532,27 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         uint32_t entry_size = dfb->config.entry_size;
         uint32_t max_prod_cons = std::max(dfb->config.num_producers, dfb->config.num_consumers);
 
+        uint32_t base_addr = static_cast<uint32_t>(computed_addr);
         for (auto& rc : dfb->risc_configs) {
-            for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
-                rc.config.base_addr[tc] = static_cast<uint32_t>(computed_addr) + (tc * entry_size);
-                rc.config.limit[tc] =
-                    rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
+            if (rc.is_producer) {
+                for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
+                    rc.config.base_addr[tc] = base_addr;
+                    rc.config.limit[tc] =
+                        rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
+                    base_addr += entry_size;
+                }
+            }
+        }
+
+        base_addr = static_cast<uint32_t>(computed_addr);
+        for (auto& rc : dfb->risc_configs) {
+            if (!rc.is_producer) {
+                for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
+                    rc.config.base_addr[tc] = base_addr;
+                    rc.config.limit[tc] =
+                        rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
+                    base_addr += entry_size;
+                }
             }
         }
     }
