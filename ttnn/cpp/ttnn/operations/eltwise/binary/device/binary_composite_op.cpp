@@ -843,7 +843,7 @@ Tensor ExecutePower::invoke(
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
-            invoke(input, exponent, output_mem_config, output_tensor);
+            invoke(input, static_cast<uint32_t>(exponent), output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input, exponent, output_mem_config, output_tensor);
