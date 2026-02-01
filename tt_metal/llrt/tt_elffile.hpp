@@ -59,6 +59,11 @@ public:
 
     std::vector<Segment> const& GetSegments() const { return segments_; }
 
+    // Get the contents of a named section. Returns true if found.
+    // content_buffer is cleared and filled with the section contents.
+    bool GetSectionContents(
+        const std::string& section_name, std::vector<std::byte>& content_buffer, uint64_t& virtual_address) const;
+
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.
     void ReleaseImpl();

@@ -97,6 +97,24 @@ PHDRS {
 /* If not defined data is placed per-cpu after TLS.  */
 IF_KERNEL(IF_TLS(PROVIDE_HIDDEN(DATA_START = 0);))
 SECTIONS {
+  /* DPRINT string table – file-only section, VMA = 0x6400000 */
+  .dprint_strings 0x6400000 :
+  {
+    __dprint_strings_start = .;
+    KEEP(*(.dprint_strings))
+    __dprint_strings_end = .;
+    . = ALIGN(4);
+  }
+
+  /* DPRINT strings metadata table – file-only section, VMA = 0x6500000 */
+  .dprint_strings_metadata 0x6500000 :
+  {
+      __dprint_strings_metadata_start = .;
+      KEEP(*(.dprint_strings_metadata))
+      __dprint_strings_metadata_end = .;
+    . = ALIGN(4);
+  }
+
 /* Text-like */
 #if defined(TYPE_KERNEL)
   /DISCARD/ : { *_object.o(.text) }

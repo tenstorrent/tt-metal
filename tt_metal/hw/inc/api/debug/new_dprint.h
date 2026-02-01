@@ -6,14 +6,14 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <type_traits>
 
 #include "new_dprint_structures.h"
 
-#define NEW_DPRINT_STRINGS_SECTION_NAME "dprint_strings"
-#define NEW_DPRINT_STRINGS_METADATA_SECTION_NAME "dprint_strings_metadata"
+#define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
+#define NEW_DPRINT_STRINGS_METADATA_SECTION_NAME ".dprint_strings_metadata"
+#define NEW_DPRINT_MAX_ARGUMENTS 100
 
 #ifdef UCK_CHLKC_UNPACK
 #define NEW_DPRINT_UNPACK(format, ...) NEW_DPRINT(format, __VA_ARGS__)
@@ -47,37 +47,64 @@
 #define NEW_DPRINT_DATA1(format, ...)
 #endif
 
-#define NEW_DPRINT(format, ...)                                                                                       \
-    {                                                                                                                 \
-        /* Validate format string syntax */                                                                           \
-        static_assert(                                                                                                \
-            dprint_detail::is_valid_format_string(format),                                                            \
-            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                         \
-        /* Validate placeholder format */                                                                             \
-        static_assert(                                                                                                \
-            !dprint_detail::has_mixed_placeholders(format),                                                           \
-            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                  \
-        /* For indexed placeholders, validate no index exceeds argument count */                                      \
-        static_assert(                                                                                                \
-            !dprint_detail::has_indexed_placeholders(format) ||                                                       \
-                dprint_detail::get_max_index(format) < static_cast<int>(dprint_detail::count_arguments(__VA_ARGS__)), \
-            "Placeholder index exceeds number of arguments");                                                         \
-        /* For indexed placeholders, validate all arguments are referenced */                                         \
-        static_assert(                                                                                                \
-            !dprint_detail::has_indexed_placeholders(format) ||                                                       \
-                dprint_detail::all_arguments_referenced(format, dprint_detail::count_arguments(__VA_ARGS__)),         \
-            "All arguments must be referenced when using indexed placeholders");                                      \
-        /* For non-indexed placeholders, count must match argument count */                                           \
-        static_assert(                                                                                                \
-            dprint_detail::has_indexed_placeholders(format) ||                                                        \
-                dprint_detail::count_placeholders(format) == dprint_detail::count_arguments(__VA_ARGS__),             \
-            "Number of {} placeholders must match number of arguments");                                              \
-        /* TODO: Validate correctness of format and arguments */                                                      \
-        /* TODO: Update format to include all necessary data and store it into dprint section */                      \
-        /* TODO: Write dprint message to dprint buffer */                                                             \
+#define NEW_DPRINT_GET_STRING_INDEX(variable_name, updated_format)                                           \
+    {                                                                                                        \
+        static const auto allocated_string __attribute__((section(NEW_DPRINT_STRINGS_SECTION_NAME), used)) = \
+            updated_format.to_array();                                                                       \
+        static const auto allocated_file_string                                                              \
+            __attribute__((section(NEW_DPRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
+                dprint_detail::helpers::static_string<sizeof(__FILE__)> file_str;                            \
+                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                         \
+                    file_str.push_back(__FILE__[i]);                                                         \
+                }                                                                                            \
+                return file_str.to_array();                                                                  \
+            }();                                                                                             \
+        static dprint_detail::structures::DPrintStringMetadata allocated_string_metadata                     \
+            __attribute__((section(NEW_DPRINT_STRINGS_METADATA_SECTION_NAME), used)) = {                     \
+                allocated_string.data(), allocated_file_string.data(), __LINE__};                            \
+    }                                                                                                        \
+    constexpr uint32_t variable_name = __COUNTER__;
+
+#define NEW_DPRINT(format, ...)                                                                      \
+    {                                                                                                \
+        /* Validate format string syntax */                                                          \
+        static_assert(                                                                               \
+            dprint_detail::checks::is_valid_format_string(format),                                   \
+            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");        \
+        /* Validate placeholder format */                                                            \
+        static_assert(                                                                               \
+            !dprint_detail::checks::has_mixed_placeholders(format),                                  \
+            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string"); \
+        /* For indexed placeholders, validate no index exceeds argument count */                     \
+        static_assert(                                                                               \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                              \
+                dprint_detail::checks::get_max_index(format) <                                       \
+                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),          \
+            "Placeholder index exceeds number of arguments");                                        \
+        /* For indexed placeholders, validate all arguments are referenced */                        \
+        static_assert(                                                                               \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                              \
+                dprint_detail::checks::all_arguments_referenced(                                     \
+                    format, dprint_detail::helpers::count_arguments(__VA_ARGS__)),                   \
+            "All arguments must be referenced when using indexed placeholders");                     \
+        /* For non-indexed placeholders, count must match argument count */                          \
+        static_assert(                                                                               \
+            dprint_detail::checks::has_indexed_placeholders(format) ||                               \
+                dprint_detail::checks::count_placeholders(format) ==                                 \
+                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                            \
+            "Number of {} placeholders must match number of arguments");                             \
+        /* Update format to include all necessary data */                                            \
+        constexpr auto updated_format =                                                              \
+            dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);        \
+        /* Store updated format string in a special section for dprint */                            \
+        NEW_DPRINT_GET_STRING_INDEX(dprint_metadata_index, updated_format);                          \
+        static_assert(dprint_metadata_index <= 1024, "Too many DPRINT calls, exceeds limit");        \
+        /* TODO: Write dprint message to dprint buffer */                                            \
     }
 
 namespace dprint_detail {
+
+namespace helpers {
 
 template <typename... Args>
 constexpr std::size_t count_arguments(const Args&...) {
@@ -86,6 +113,59 @@ constexpr std::size_t count_arguments(const Args&...) {
 
 // Helper to check if a character is a digit
 constexpr bool is_digit(char c) { return c >= '0' && c <= '9'; }
+
+// Compile-time string class for building the result
+template <std::size_t N>
+struct static_string {
+    char data[N + 1];
+    std::size_t size;
+
+    constexpr static_string() : data{}, size(0) {}
+
+    constexpr void push_back(char c) {
+        if (size < N) {
+            data[size++] = c;
+            data[size] = '\0';  // Ensure null termination
+        }
+    }
+
+    constexpr std::array<char, N + 1> to_array() const {
+        std::array<char, N + 1> arr = {};
+        for (std::size_t i = 0; i < size; ++i) {
+            arr[i] = data[i];
+        }
+        arr[size] = '\0';
+        return arr;
+    }
+
+    // Helper to create a compact array of the actual used size
+    template <std::size_t... Is>
+    constexpr std::array<char, sizeof...(Is)> to_compact_array_impl(std::index_sequence<Is...>) const {
+        return {{data[Is]...}};
+    }
+
+    // Returns an array sized exactly to fit the string content (size + 1 for null terminator)
+    constexpr auto to_compact_array() const { return to_compact_array_impl(std::make_index_sequence<size + 1>{}); }
+
+    template <std::size_t M>
+    constexpr bool check(const char (&expected)[M]) const {
+        if (size != M - 1) {
+            return false;
+        }
+        for (std::size_t i = 0; i < size; ++i) {
+            if (data[i] != expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    constexpr const char* c_str() const { return data; }
+};
+
+}  // namespace helpers
+
+namespace parsing {
 
 // Helper struct to return both parsed value and new position
 struct IndexParseResult {
@@ -98,7 +178,7 @@ struct IndexParseResult {
 constexpr IndexParseResult parse_index(const char* format, std::size_t i, std::size_t format_len) {
     int value = 0;
     std::size_t pos = i;
-    while (pos < format_len && is_digit(format[pos])) {
+    while (pos < format_len && helpers::is_digit(format[pos])) {
         value = value * 10 + (format[pos] - '0');
         ++pos;
     }
@@ -157,7 +237,7 @@ constexpr FormatToken parse_format_token(const char (&format)[N], std::size_t i)
             return FormatToken{TokenType::InvalidPlaceholder, i + 1, -1};
         }
 
-        if (is_digit(format[i + 1])) {
+        if (helpers::is_digit(format[i + 1])) {
             // Indexed placeholder {N}
             IndexParseResult result = parse_index(format, i + 1, format_len);
             if (result.new_pos < format_len && format[result.new_pos] == '}') {
@@ -179,15 +259,19 @@ constexpr FormatToken parse_format_token(const char (&format)[N], std::size_t i)
     return FormatToken{TokenType::RegularChar, i + 1, -1};
 }
 
+}  // namespace parsing
+
+namespace checks {
+
 // Helper to validate format string for invalid brace sequences
 // Returns true if format string is valid, false if it contains errors
 template <std::size_t N>
 constexpr bool is_valid_format_string(const char (&format)[N]) {
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
 
         // Check for invalid placeholder syntax
-        if (token.type == TokenType::InvalidPlaceholder) {
+        if (token.type == parsing::TokenType::InvalidPlaceholder) {
             return false;
         }
 
@@ -204,8 +288,8 @@ constexpr bool has_mixed_placeholders(const char (&format)[N]) {
     bool found_unindexed = false;
 
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
-        if (token.type == TokenType::Placeholder) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder) {
             if (token.is_indexed()) {
                 found_indexed = true;
             } else {
@@ -225,8 +309,8 @@ constexpr bool has_mixed_placeholders(const char (&format)[N]) {
 template <std::size_t N>
 constexpr bool has_indexed_placeholders(const char (&format)[N]) {
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
-        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
             return true;
         }
         i = token.end_pos;
@@ -239,8 +323,8 @@ template <std::size_t N>
 constexpr int get_max_index(const char (&format)[N]) {
     int max_index = -1;
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
-        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
             max_index = std::max(max_index, token.index);
         }
         i = token.end_pos;
@@ -256,15 +340,15 @@ constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg
         return true;
     }
 
-    // Track which arguments are referenced (up to 100 arguments)
-    bool referenced[100] = {};
-    if (arg_count > 100) {
+    // Track which arguments are referenced (up to NEW_DPRINT_MAX_ARGUMENTS arguments)
+    bool referenced[NEW_DPRINT_MAX_ARGUMENTS] = {};
+    if (arg_count > NEW_DPRINT_MAX_ARGUMENTS) {
         return false;  // Limit for simplicity
     }
 
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
-        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
             if (token.index >= 0 && static_cast<std::size_t>(token.index) < arg_count) {
                 referenced[token.index] = true;
             }
@@ -286,13 +370,168 @@ template <std::size_t N>
 constexpr std::size_t count_placeholders(const char (&format)[N]) {
     std::size_t count = 0;
     for (std::size_t i = 0; i < N - 1;) {
-        FormatToken token = parse_format_token(format, i);
-        if (token.type == TokenType::Placeholder) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+        if (token.type == parsing::TokenType::Placeholder) {
             ++count;
         }
         i = token.end_pos;
     }
     return count;
 }
+
+}  // namespace checks
+
+namespace formatting {
+
+// Type-to-character mapping for format strings
+template <typename T>
+struct dprint_type_to_char {
+    static constexpr char value = '#';  // Unknown type default
+};
+
+// Specializations for different types
+template <>
+struct dprint_type_to_char<std::int8_t> {
+    static constexpr char value = 'b';
+};
+template <>
+struct dprint_type_to_char<std::uint8_t> {
+    static constexpr char value = 'B';
+};
+template <>
+struct dprint_type_to_char<std::int16_t> {
+    static constexpr char value = 'h';
+};
+template <>
+struct dprint_type_to_char<std::uint16_t> {
+    static constexpr char value = 'H';
+};
+template <>
+struct dprint_type_to_char<std::int32_t> {
+    static constexpr char value = 'i';
+};
+template <>
+struct dprint_type_to_char<std::uint32_t> {
+    static constexpr char value = 'I';
+};
+template <>
+struct dprint_type_to_char<std::int64_t> {
+    static constexpr char value = 'q';
+};
+template <>
+struct dprint_type_to_char<std::uint64_t> {
+    static constexpr char value = 'Q';
+};
+template <>
+struct dprint_type_to_char<float> {
+    static constexpr char value = 'f';
+};
+template <>
+struct dprint_type_to_char<double> {
+    static constexpr char value = 'd';
+};
+template <>
+struct dprint_type_to_char<bool> {
+    static constexpr char value = '?';
+};
+
+// Pointer types (including strings)
+template <typename T>
+struct dprint_type_to_char<T*> {
+    static constexpr char value = 'p';
+};
+template <>
+struct dprint_type_to_char<char*> {
+    static constexpr char value = 's';
+};
+template <>
+struct dprint_type_to_char<const char*> {
+    static constexpr char value = 's';
+};
+
+// Array types (treat as strings)
+template <std::size_t N>
+struct dprint_type_to_char<char[N]> {
+    static constexpr char value = 's';
+};
+template <std::size_t N>
+struct dprint_type_to_char<const char[N]> {
+    static constexpr char value = 's';
+};
+
+// Helper to get type character for a single type, removing cv-qualifiers and references
+template <typename T>
+constexpr char get_type_char() {
+    using base_type = std::remove_cv_t<std::remove_reference_t<T>>;
+    return dprint_type_to_char<base_type>::value;
+}
+
+// Main function to update format string with type information
+// Supports both {} and {N} placeholder styles (fmtlib-compatible)
+template <std::size_t N, typename... Args>
+constexpr auto update_format_string(const char (&format)[N]) {
+    constexpr std::size_t format_len = N - 1;  // Exclude null terminator
+
+    // Calculate maximum result length:
+    // - Original format length
+    // - Each {} or {N} can add at most 2 extra characters (":X")
+    // - Assuming worst case of format_len/2 placeholders (every other char is {)
+    // Use a reasonable upper bound
+    constexpr std::size_t result_len = format_len + (format_len / 2 + 1) * 2;
+
+    helpers::static_string<result_len> result;
+
+    constexpr char type_chars[] = {get_type_char<Args>()...};
+    std::size_t type_index = 0;
+
+    for (std::size_t i = 0; i < format_len;) {
+        parsing::FormatToken token = parsing::parse_format_token(format, i);
+
+        if (token.type == parsing::TokenType::EscapedOpenBrace) {
+            // Preserve escaped opening brace: {{
+            result.push_back('{');
+            result.push_back('{');
+        } else if (token.type == parsing::TokenType::EscapedCloseBrace) {
+            // Preserve escaped closing brace: }}
+            result.push_back('}');
+            result.push_back('}');
+        } else if (token.type == parsing::TokenType::Placeholder) {
+            // Determine the argument index for this placeholder
+            int arg_index = token.is_indexed() ? token.index : type_index++;
+
+            // Unified handling for both indexed and non-indexed: output {index:type}
+            result.push_back('{');
+
+            // Output the index
+            static_assert(NEW_DPRINT_MAX_ARGUMENTS <= 100, "Adjust index output code for larger max arguments");
+            if (arg_index >= 10) {
+                result.push_back('0' + (arg_index / 10));
+            }
+            result.push_back('0' + (arg_index % 10));
+
+            // Add colon and type character
+            result.push_back(':');
+            result.push_back(type_chars[arg_index]);
+            result.push_back('}');
+        } else {
+            // Regular character
+            result.push_back(format[i]);
+        }
+
+        i = token.end_pos;
+    }
+
+    return result;
+}
+
+// New function that returns constexpr updated format string from arguments
+// This allows calling with actual arguments: update_format_string_from_args("format {}", arg1, arg2, ...)
+template <std::size_t N, typename... Args>
+constexpr auto update_format_string_from_args(const char (&format)[N], const Args&... args) {
+    (void)((void)args, ...);  // Suppress unused parameter warnings for all args
+    return update_format_string<N, Args...>(format);
+}
+
+}  // namespace formatting
 
 }  // namespace dprint_detail

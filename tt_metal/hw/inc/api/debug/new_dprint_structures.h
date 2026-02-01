@@ -4,4 +4,18 @@
 
 #pragma once
 
-/* TODO: Add structures that are used to serialize dprint messages to host */
+#include <cstdint>
+
+namespace dprint_detail {
+
+namespace structures {
+
+struct DPrintStringMetadata {
+    const char* format_string_ptr;
+    const char* file;
+    std::uint32_t line;
+};
+
+}  // namespace structures
+
+}  // namespace dprint_detail

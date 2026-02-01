@@ -11,6 +11,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_config_register.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/new_dprint/test_compilation_failures.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/new_dprint/test_format_updates.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize_delays.cpp
