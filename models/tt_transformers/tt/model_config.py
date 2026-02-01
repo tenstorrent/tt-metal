@@ -735,6 +735,7 @@ class ModelArgs:
             # TODO: Migrate these to use getter methods after TTTv2 migration
             # These configs are used by mixtral_moe.py and mixtral_mlp.py
             # ============================================================================
+            n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
             self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
             self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
@@ -1339,14 +1340,10 @@ class ModelArgs:
     def get_mlp_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
-                norm_core_range_set = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7)),
-                    ]
-                )
+                num_mlp_output_cores = 32 if self.num_devices == 4 else 16
                 return ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 32, self.dim // self.cluster_shape[1] // norm_core_range_set.num_cores()),
-                    core_grid=norm_core_range_set,
+                    shape=(1, 1, 32, self.dim // self.cluster_shape[1] // num_mlp_output_cores),
+                    core_grid=prefetcher.dynamic_worker_core_grid(num_mlp_output_cores),
                     strategy=ttnn.ShardStrategy.WIDTH,
                     use_height_and_width_as_shard_shape=True,
                 )
