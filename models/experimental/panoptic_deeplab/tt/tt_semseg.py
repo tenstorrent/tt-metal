@@ -11,6 +11,7 @@ from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
+from tracy import signpost
 
 
 class TtDeepLabV3PlusHead(LightweightModule):
@@ -175,7 +176,9 @@ class TtDeepLabV3PlusHead(LightweightModule):
         logger.debug("TtDeepLabV3PlusHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
+        signpost("DECODER_START")
         y = self.layers(features)
+        signpost("DECODER_END")
         return y
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
@@ -585,7 +588,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             y = ttnn.reshape(y, (y.shape[0], current_h, current_w, y.shape[3]))
             logger.debug(f"After reshape: {y.shape}")
 
-        # Convert to interleaved DRAM if sharded
+        # Convert to interleaved L1 if sharded
         if y.is_sharded():
             y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
         else:
@@ -604,7 +607,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Matmul based upsample
         logger.debug(f"y shape: {y.shape}")
         y = ttnn.reshape(y, (y.shape[0], 128, 256, y.shape[3]))
+        signpost("FINAL_UPSAMPLE_SEMSEG_START")
         y = self.final_upsample(y)
+        signpost("FINAL_UPSAMPLE_SEMSEG_END")
 
         # Check allocation after final upsample
         if not y.is_allocated():
@@ -638,7 +643,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             return self.layers_110_cores(features)
 
     def layers_20_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        signpost("SEMSEG_HEAD_DECODER_START")
         y = super().layers_20_cores(features)
+        signpost("SEMSEG_HEAD_DECODER_END")
 
         # Save spatial dimensions right after super().layers() before any head convs
         # (these are the actual dimensions for this head, not decoder output)
@@ -646,6 +653,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         self._actual_head_w = y.shape[2]
         logger.debug(f"Actual head input dimensions: H={self._actual_head_h}, W={self._actual_head_w}")
 
+        signpost("SEMSEG_HEAD_PREDICTION_START")
         logger.info(f"🔷 Executing conv: semantic_head.head.0")
         y = self.head_0(y)
 
@@ -666,11 +674,13 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         logger.info(f"🔷 Executing conv: semantic_head.predictor")
         y = self.predictor(y)
-
+        signpost("SEMSEG_HEAD_PREDICTION_END")
         return y
 
     def layers_110_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        signpost("SEMSEG_HEAD_DECODER_START")
         y = super().layers_110_cores(features)
+        signpost("SEMSEG_HEAD_DECODER_END")
 
         # Save spatial dimensions right after super().layers() before any head convs
         # (these are the actual dimensions for this head, not decoder output)
@@ -678,13 +688,20 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         self._actual_head_w = y.shape[2]
         logger.debug(f"Actual head input dimensions: H={self._actual_head_h}, W={self._actual_head_w}")
 
+        signpost("SEMSEG_HEAD_PREDICTION_START")
         logger.info(f"🔷 Executing conv: semantic_head.head.0")
         y = self.head_0(y)
+
+        if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
+            y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
 
         logger.info(f"🔷 Executing conv: semantic_head.head.1")
         y = self.head_1(y)
 
+        if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
+            y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
+
         logger.info(f"🔷 Executing conv: semantic_head.predictor")
         y = self.predictor(y)
-
+        signpost("SEMSEG_HEAD_PREDICTION_END")
         return y

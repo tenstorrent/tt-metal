@@ -9,6 +9,7 @@ from loguru import logger
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
+from tracy import signpost
 
 
 class TtASPP(LightweightModule):
@@ -104,10 +105,13 @@ class TtASPP(LightweightModule):
         return TtConv2d(final_config, self.device)
 
     def forward(self, x):
+        signpost("ASPP_START")
         if self.is_20_core:
-            return self.forward_20_cores(x)
+            ret = self.forward_20_cores(x)
         else:
-            return self.forward_110_cores(x)
+            ret = self.forward_110_cores(x)
+        signpost("ASPP_END")
+        return ret
 
     def forward_20_cores(self, x):
         input_shape = x.shape
