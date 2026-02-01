@@ -79,7 +79,7 @@ def create_replicated_q_shard_spec(device, batch, nh, d, num_cores_per_head=4):
 @pytest.mark.parametrize(
     "seq_len",
     [
-        512,  # Long sequence length
+        2048,  # Long sequence length
     ],
 )
 @pytest.mark.parametrize(

@@ -301,6 +301,16 @@ void kernel_main() {
         }
     }
 
+    DPRINT << "k_chunk_tiles: " << k_chunk_tiles << ENDL();
+    DPRINT << "Sk_chunk_t_dynamic: " << Sk_chunk_t_dynamic << ENDL();
+    DPRINT << "DHt: " << DHt << ENDL();
+    DPRINT << "k_tile_bytes: " << k_tile_bytes << ENDL();
+    DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
+    DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
+    DPRINT << "window_start_unaligned: " << window_start_unaligned << ENDL();
+    DPRINT << "window_start_chunk: " << window_start_chunk << ENDL();
+    DPRINT << "PSt: " << PSt << ENDL();
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -369,7 +379,7 @@ void kernel_main() {
                             dst_mcast_addr,
                             row_tile_bytes,  // Only this row (DHt tiles)
                             num_dests,
-                            /*linked=*/false);
+                            false);
 
                         DPRINT << "finished writing k chunk mcaster (streaming)" << ENDL();
 
@@ -391,6 +401,8 @@ void kernel_main() {
                         // Push DHt tiles (one K^T column) - allows compute to start immediately
                         cb_push_back(cb_k_in, DHt);
                         DPRINT << "finished pushing back k chunk (streaming)" << ENDL();
+
+                        noc_async_write_barrier();
                     }
 
                 } else {
@@ -438,16 +450,16 @@ void kernel_main() {
 
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        uint64_t k_read_ptr_base = k_base_read_ptr;
+                        uint64_t k_read_ptr = k_base_read_ptr;
 
                         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
-                            DPRINT << "reading v chunk (streaming)" << ENDL();
+                            k_read_ptr = k_base_read_ptr + row * k_tile_bytes;     // Increment across K's Col
+
                             for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
-                                // V[row, col] = K^T[col, row]
-                                // K^T[col, row] is at position row*DHt + col in column-major K^T layout
-                                uint64_t k_read_ptr = k_read_ptr_base + (row * DHt + col) * k_tile_bytes;
                                 noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+
                                 v_write_ptr += v_tile_bytes;
+                                k_read_ptr += Sk_chunk_t_dynamic * k_tile_bytes;  // Strid across K's width
                             }
                         }
                     } else {

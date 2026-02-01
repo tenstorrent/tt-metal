@@ -360,7 +360,7 @@ void MAIN {
                         add_mask_fusion,
                         mask_cb_to_use,
                         cb_zero_in,
-                        false,
+                        true,
                         k_chunk_tiles_dynamic);
                     DPRINT << "finished matmul blocking" << ENDL();
 #endif
