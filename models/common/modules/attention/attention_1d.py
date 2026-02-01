@@ -46,7 +46,6 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import is_blackhole, nearest_32
-from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
 # =============================================================================
 # Constants
@@ -576,8 +575,10 @@ class Attention1D(LightweightModule):
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
-        # --- STAGE 3: All-Reduce QKV ---
-        xqkv_fused = self._all_reduce_qkv_prefill(xqkv_fused)
+        # --- STAGE 3: No all-reduce for 1D topologies ---
+        # For 1D meshes (1xN), QKV weights are sharded only on axis 1 (columns).
+        # After matmul, each device has complete rows - no partial sums to reduce.
+        # TTTv1's tt_all_reduce with cluster_axis=1 is a no-op for 1D meshes.
 
         # Reshape back
         if seq_len > MAX_QKV_MM_SEQ_LEN:
@@ -790,67 +791,75 @@ class Attention1D(LightweightModule):
         # bfloat16 is required by nlp_create_qkv_heads_decode
         return ttnn.sharded_to_interleaved(xqkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
 
-    def _all_reduce_qkv_prefill(self, xqkv: ttnn.Tensor) -> ttnn.Tensor:
-        """All-reduce QKV for prefill mode (no-op for 1D topology)."""
-        # For 1D non-TG topology, no cluster_axis=1 all-reduce needed
-        return xqkv
-
     def _all_reduce_output_decode(self, output: ttnn.Tensor) -> ttnn.Tensor:
-        """Final all-reduce for decode output."""
+        """
+        Final all-reduce for decode output.
+
+        For 1D topologies (1xN), this is reduce_scatter only.
+        """
         cfg = self.config
 
         # Single device: no all-reduce needed
         if cfg.mesh_device.get_num_devices() == 1:
             return output
 
-        # Use tt_all_reduce which handles all topologies correctly:
-        # - 1D topologies (1xN): does reduce_scatter only
-        # - TG topologies: does all_gather + reduce or reduce_scatter + all_gather
-        reduced = tt_all_reduce(
-            output,
-            cfg.mesh_device,
-            cfg.tt_ccl,
-            cluster_axis=0,
-            dim=3,  # For 1D non-TG (matches TTTv1)
-            num_reduce_scatter_links=cfg.num_reduce_scatter_links,
-            num_all_gather_links=cfg.num_all_gather_links,
-            topology=cfg.topology,
-            memory_config=cfg.decode_residual_memcfg,
-            sharded=True,
-            dtype=ttnn.bfloat16,
-            use_composite=False,
-        )
+        # For 1D topologies: reduce_scatter across devices on axis 1
+        # Convert sharded to interleaved first if needed
+        if output.is_sharded():
+            output_interleaved = ttnn.sharded_to_interleaved(output, ttnn.L1_MEMORY_CONFIG)
+            output.deallocate(True)
+        else:
+            output_interleaved = output
 
-        # Ensure output is in correct memory config (matches TTTv1)
-        reduced = ttnn.to_memory_config(reduced, cfg.decode_residual_memcfg)
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+            output_interleaved,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=cfg.num_reduce_scatter_links,
+            memory_config=cfg.decode_residual_memcfg,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=cfg.topology,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        output_interleaved.deallocate(True)
 
         return reduced
 
     def _all_reduce_output_prefill(self, output: ttnn.Tensor) -> ttnn.Tensor:
-        """Final all-reduce for prefill output."""
+        """
+        Final all-reduce for prefill output.
+
+        For 1D topologies (1xN), this is reduce_scatter only.
+        """
         cfg = self.config
 
         # Single device: no all-reduce needed
         if cfg.mesh_device.get_num_devices() == 1:
             return output
 
-        # Use tt_all_reduce which handles all topologies correctly:
-        # - 1D topologies (1xN): does reduce_scatter only
-        # - TG topologies: does all_gather + reduce or reduce_scatter + all_gather
-        reduced = tt_all_reduce(
+        # For 1D topologies: reduce_scatter across devices
+        # Prefill uses interleaved memory, ensure we're in DRAM
+        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
             output,
-            cfg.mesh_device,
-            cfg.tt_ccl,
-            cluster_axis=0,
-            dim=3,  # For 1D non-TG (matches TTTv1)
-            num_reduce_scatter_links=cfg.num_reduce_scatter_links,
-            num_all_gather_links=cfg.num_all_gather_links,
-            topology=cfg.topology,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=cfg.num_reduce_scatter_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            sharded=False,  # Prefill uses interleaved (not sharded)
-            dtype=ttnn.bfloat16,
-            use_composite=False,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=cfg.topology,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
+        output.deallocate(True)
 
         return reduced
 
@@ -881,38 +890,26 @@ class Attention1D(LightweightModule):
         return ttnn.to_memory_config(dense_out, cfg.decode_residual_memcfg)
 
     def _separate_all_gather_wo_decode(self, attn_output_cat: ttnn.Tensor) -> ttnn.Tensor:
-        """Separate all-gather then WO matmul (non-Ring or when fused not available)."""
+        """
+        Separate all-gather then WO matmul (non-Ring or when fused not available).
+
+        For 1D topologies with cluster_axis=1, all-gather is a no-op since there's only
+        1 device on axis 0. The attention heads are already local to each device.
+        """
         cfg = self.config
 
-        # Step 1: All-gather attention outputs across devices (for multi-device)
-        # For 1D topologies with cluster_axis=1, tt_all_gather returns input unchanged (no-op)
-        # but we call it for consistency with TTTv1 and future-proofing
-        if cfg.mesh_device.get_num_devices() > 1:
-            attn_output = tt_all_gather(
-                attn_output_cat,
-                cfg.mesh_device,
-                cfg.tt_ccl,
-                dim=2,
-                cluster_axis=1,
-                num_links=cfg.num_all_gather_links,
-                memory_config=cfg.decode_gather_users_memcfg,
-                sharded=True,
-            )
-        else:
-            attn_output = attn_output_cat
+        # For 1D topologies (1xN mesh), all-gather with cluster_axis=1 is a no-op
+        # because axis 0 has only 1 device. Skip the CCL call entirely.
+        # This matches TTTv1 behavior where tt_all_gather returns input unchanged.
 
-        # Step 2: WO matmul
+        # WO matmul
         dense_out = ttnn.linear(
-            attn_output,
+            attn_output_cat,
             self.wo,
             program_config=cfg.decode_attn_output_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
         )
-
-        # Deallocate input if we gathered (attn_output != attn_output_cat)
-        if cfg.mesh_device.get_num_devices() > 1:
-            attn_output_cat.deallocate(True)
 
         return dense_out
 

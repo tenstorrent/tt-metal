@@ -8,6 +8,12 @@ This test suite verifies:
 1. Unit tests for config dataclasses (no device needed)
 2. Attention1D class matches HuggingFace/Meta reference model
 3. Attention1D correctly rejects TG/Galaxy devices
+4. Sliding window attention works correctly (seq_len > window_size)
+
+Test coverage notes:
+- Paged attention: Tested via (paged_attention, chunked_prefill) parameter combinations.
+- Chunked prefill: Tested via paged-chunked variant. Requires paged=True and mode="prefill".
+- Variants: non-paged, paged, paged-chunked (3 combinations per test case).
 """
 
 import os
@@ -583,6 +589,15 @@ def _list_test_cases() -> list[pytest.param]:
     "mesh_shape,seq_len,mode,act_dtype,wqkv_dtype,hf_model_name,pcc",
     _list_test_cases(),
 )
+@pytest.mark.parametrize(
+    "paged_attention,chunked_prefill",
+    [
+        (False, False),  # non-paged, non-chunked
+        (True, False),  # paged, non-chunked
+        (True, True),  # paged + chunked (chunked requires paged)
+    ],
+    ids=["non-paged", "paged", "paged-chunked"],
+)
 def test_attention_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
@@ -592,6 +607,8 @@ def test_attention_1d_vs_reference(
     wqkv_dtype,
     hf_model_name,
     pcc,
+    paged_attention,
+    chunked_prefill,
 ):
     """
     Test Attention1D constructed via from_config (direct API) executes successfully.
@@ -616,6 +633,15 @@ def test_attention_1d_vs_reference(
     device_shape = (ttnn_mesh_device.shape[0], ttnn_mesh_device.shape[1])
     if device_shape != mesh_shape:
         pytest.skip(f"Test requires {mesh_shape} mesh, got {device_shape}")
+
+    # Chunked prefill only applies to prefill mode
+    if chunked_prefill and mode != "prefill":
+        pytest.skip("Chunked prefill only applies to prefill mode")
+
+    # Chunked prefill requires seq_len > chunk_size (128 minimum)
+    chunk_size = 128  # Fixed chunk size for testing
+    if chunked_prefill and seq_len <= chunk_size:
+        pytest.skip(f"Chunked prefill requires seq_len > chunk_size ({chunk_size})")
 
     # For decode mode, use batch_size=1 for simpler HF reference comparison
     # For prefill mode, batch_size=1 and seq_len is the sequence length
@@ -781,11 +807,36 @@ def test_attention_1d_vs_reference(
     freqs_cis = torch.complex(cos, sin)
     transformation_mats = rope_setup.get_both_trans_mats()
 
+    # Setup paged attention config and page table if enabled
+    paged_attention_config = None
+    page_table_tt = None
+    page_table = None
+
+    if paged_attention:
+        from models.tt_transformers.tt.common import PagedAttentionConfig
+
+        # Paged attention parameters
+        block_size = 64
+        max_num_blocks = max(128, (max_seq_len // block_size) * batch_size * 2)  # Ensure enough blocks
+
+        paged_attention_config = PagedAttentionConfig(
+            block_size=block_size,
+            max_num_blocks=max_num_blocks,
+        )
+
+        # Create page table: random permutation simulates block allocation
+        permutation = torch.randperm(max_num_blocks)
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(batch_size, max_num_blocks // batch_size)
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=ttnn_mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        )
+
     # Build Attention1DConfig with explicit parameters
-    # todo)) need to test kv_cache and no kv_cache both!
-    # fill_cache has an upper limit on the sequence length because of tile capacity on L1
-    # paged_fill_cache is the preferred way to bring up the models
-    # todo)) the point is that we need to test both!
     config = Attention1DConfig(
         wqkv=lazy_wqkv,
         wo=lazy_wo,
@@ -804,7 +855,8 @@ def test_attention_1d_vs_reference(
         scale=head_dim**-0.5,
         sliding_window=sliding_window,
         use_qk_fused=False,
-        use_paged_kv_cache=False,  # Use non-paged for simpler KV cache handling
+        use_paged_kv_cache=paged_attention,
+        paged_attention_config=paged_attention_config,
         wqkv_dtype=wqkv_dtype,
         wo_dtype=wqkv_dtype,
         activation_dtype=act_dtype,
@@ -838,26 +890,111 @@ def test_attention_1d_vs_reference(
         )
 
         # Get rot_mats for prefill (cos/sin matrices)
-        rot_mats = get_rot_mats(
-            head_dim=head_dim,
-            device=ttnn_mesh_device,
-            seq_len=seq_len,
-            theta=rope_theta,
-            rope_scaling=rope_scaling,
-        )
+        if chunked_prefill:
+            # Chunked prefill: process sequence in chunks
+            # Compute full rotation matrices once (covering all positions 0 to seq_len)
+            from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
-        # Run TT model - verify forward pass executes without error
-        tt_out = tt_model.forward(
-            tt_input,
-            None,  # current_pos not used in prefill
-            rot_mats,
-            transformation_mats.get("prefill"),  # transformation_mat
-            mode="prefill",
-        )
+            full_cos, full_sin = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=2 * seq_len,
+                theta=rope_theta,
+                rope_scaling=rope_scaling,
+            )
 
-        # Convert output to torch and verify shape
-        tt_out = to_torch_auto_compose(tt_out)
-        tt_output_torch = tt_out[:, 0:1, :seq_len, :dim].view(batch_size, seq_len, dim)
+            num_chunks = seq_len // chunk_size
+            tt_outputs_chunked = []
+
+            for chunk_idx in range(num_chunks):
+                chunk_start = chunk_idx * chunk_size
+                chunk_end = chunk_start + chunk_size
+
+                # Extract chunk input
+                pt_chunk = pt_attention_input[:, chunk_start:chunk_end, :]
+
+                # Prepare TT input for this chunk
+                tt_chunk = ttnn.from_torch(
+                    pt_chunk.unsqueeze(0),
+                    device=ttnn_mesh_device,
+                    dtype=act_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+                )
+
+                # Chunk page table: subset of pages for this chunk
+                block_size = paged_attention_config.block_size
+                chunk_page_table_pt = page_table[:, chunk_start // block_size : chunk_end // block_size]
+                chunk_page_table_tt = ttnn.from_torch(
+                    chunk_page_table_pt,
+                    device=ttnn_mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+                )
+
+                # Slice rotation matrices for this chunk's positions
+                chunk_cos = full_cos[:, :, chunk_start:chunk_end, :]
+                chunk_sin = full_sin[:, :, chunk_start:chunk_end, :]
+
+                chunk_cos_tt = ttnn.from_torch(
+                    chunk_cos,
+                    device=ttnn_mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=act_dtype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_mesh_device),
+                )
+                chunk_sin_tt = ttnn.from_torch(
+                    chunk_sin,
+                    device=ttnn_mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=act_dtype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_mesh_device),
+                )
+                chunk_rot_mats = [chunk_cos_tt, chunk_sin_tt]
+
+                # Run chunked prefill
+                tt_chunk_out = tt_model.forward(
+                    tt_chunk,
+                    None,
+                    chunk_rot_mats,
+                    transformation_mats.get("prefill"),
+                    mode="prefill",
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                )
+
+                # Collect output
+                tt_chunk_out_torch = to_torch_auto_compose(tt_chunk_out)
+                tt_chunk_output = tt_chunk_out_torch[:, 0:1, :chunk_size, :dim].view(batch_size, chunk_size, dim)
+                tt_outputs_chunked.append(tt_chunk_output)
+
+            # Concatenate all chunk outputs
+            tt_output_torch = torch.cat(tt_outputs_chunked, dim=1)
+        else:
+            # Standard prefill: single forward pass
+            rot_mats = get_rot_mats(
+                head_dim=head_dim,
+                device=ttnn_mesh_device,
+                seq_len=seq_len,
+                theta=rope_theta,
+                rope_scaling=rope_scaling,
+            )
+
+            # Run TT model - verify forward pass executes without error
+            tt_out = tt_model.forward(
+                tt_input,
+                None,  # current_pos not used in prefill
+                rot_mats,
+                transformation_mats.get("prefill"),  # transformation_mat
+                mode="prefill",
+                page_table=page_table_tt,
+            )
+
+            # Convert output to torch and verify shape
+            tt_out = to_torch_auto_compose(tt_out)
+            tt_output_torch = tt_out[:, 0:1, :seq_len, :dim].view(batch_size, seq_len, dim)
         ttnn.SetDefaultDevice(None)
 
         # Verify output shape and content
@@ -882,7 +1019,11 @@ def test_attention_1d_vs_reference(
         logger.info(comp_allclose(reference_output, tt_output_torch.to(reference_output.dtype)))
         assert passing, f"Prefill PCC failed: {pcc_message} (expected >= {pcc})"
 
-        logger.info(f"test_attention_1d_vs_reference (from_config): PASSED for mode={mode}, seq_len={seq_len}")
+        paged_str = "paged" if paged_attention else "non-paged"
+        chunked_str = "chunked" if chunked_prefill else "non-chunked"
+        logger.info(
+            f"test_attention_1d_vs_reference (from_config): PASSED for mode={mode}, seq_len={seq_len}, {paged_str}, {chunked_str}"
+        )
         logger.info(f"  Config: dim={dim}, n_heads={n_heads}, n_kv_heads={n_kv_heads}, head_dim={head_dim}")
         logger.info(f"  Output shape: {tt_output_torch.shape}, dtype: {tt_output_torch.dtype}")
 
@@ -920,6 +1061,7 @@ def test_attention_1d_vs_reference(
             transformation_mats.get("prefill"),
             user_id=0,
             mode="prefill",
+            page_table=page_table_tt,
         )
 
         # Run HuggingFace prefill to populate its KV cache (using wrapper)
@@ -973,6 +1115,7 @@ def test_attention_1d_vs_reference(
             decode_rot_mats,
             decode_transformation_mats.get("decode"),
             mode="decode",
+            page_table=page_table_tt,
         )
 
         # Convert output to torch
@@ -1000,8 +1143,9 @@ def test_attention_1d_vs_reference(
         logger.info(comp_allclose(reference_output, tt_output_torch.to(reference_output.dtype)))
         assert passing, f"Decode PCC failed: {pcc_message} (expected >= {pcc})"
 
+        paged_str = "paged" if paged_attention else "non-paged"
         logger.info(
-            f"test_attention_1d_vs_reference (from_config): PASSED for mode={mode}, decode_batch_size={decode_batch_size}"
+            f"test_attention_1d_vs_reference (from_config): PASSED for mode={mode}, decode_batch_size={decode_batch_size}, {paged_str}"
         )
         logger.info(f"  Config: dim={dim}, n_heads={n_heads}, n_kv_heads={n_kv_heads}, head_dim={head_dim}")
         logger.info(f"  Output shape: {tt_output_torch.shape}, dtype: {tt_output_torch.dtype}")
@@ -1463,3 +1607,205 @@ def test_attention_1d_decode_only(ttnn_mesh_device: ttnn.MeshDevice, hf_model_na
 
     assert min_pcc >= pcc, f"Decode-only min PCC {min_pcc:.4f} < threshold {pcc}"
     logger.info(f"test_attention_1d_decode_only: PASSED for {hf_model_name}")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "sliding_window,seq_len,pcc",
+    [
+        pytest.param(64, 128, 0.99, id="sw64-seq128"),
+        pytest.param(64, 256, 0.99, id="sw64-seq256"),
+        pytest.param(128, 256, 0.99, id="sw128-seq256"),
+    ],
+)
+def test_attention_1d_sliding_window(
+    ttnn_mesh_device: ttnn.MeshDevice,
+    sliding_window: int,
+    seq_len: int,
+    pcc: float,
+):
+    """
+    Test Attention1D with sliding window attention.
+
+    This test explicitly verifies that sliding window masking works correctly by:
+    1. Using seq_len > sliding_window to ensure the window is actually applied
+    2. Creating a reference implementation with sliding window causal mask
+    3. Comparing TT output against the masked reference
+
+    The sliding window limits attention to the last `sliding_window` tokens,
+    which affects which KV entries are attended to during SDPA.
+    """
+    from models.common.auto_compose import to_torch_auto_compose
+    from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
+    from models.common.modules.lazy_weight import LazyWeight
+    from models.tt_transformers.tt.common import precompute_freqs
+    from models.tt_transformers.tt.rope import RotarySetup
+
+    # Use Llama-3.2-1B as base model (fast to load, no sliding window by default)
+    hf_model_name = LLAMA_1B
+
+    mesh_shape = tuple(ttnn_mesh_device.shape)
+    num_devices = ttnn_mesh_device.get_num_devices()
+    batch_size = 1
+    max_seq_len = max(512, seq_len * 2)
+
+    torch.manual_seed(42)
+
+    # Load HuggingFace model
+    hf_config = AutoConfig.from_pretrained(hf_model_name)
+    hf_model = AutoModelForCausalLM.from_pretrained(hf_model_name, torch_dtype=torch.bfloat16)
+    reference_attn = hf_model.model.layers[0].self_attn
+    rotary_emb = getattr(hf_model.model, "rotary_emb", None)
+
+    dim = hf_config.hidden_size
+    n_heads = hf_config.num_attention_heads
+    n_kv_heads = hf_config.num_key_value_heads
+    head_dim = dim // n_heads
+    rope_theta = getattr(hf_config, "rope_theta", 10000.0)
+
+    # Get weights from reference model
+    wqkv_torch, wo_torch, _, _, _ = get_attention_weights_from_ref_model(reference_attn, num_devices)
+
+    # Create TT model with sliding window
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    lazy_wqkv = LazyWeight(source=wqkv_torch, dtype=ttnn.bfloat8_b, cache_dir_weight_name=None)
+    lazy_wo = LazyWeight(source=wo_torch, dtype=ttnn.bfloat8_b, cache_dir_weight_name=None)
+
+    config = Attention1DConfig(
+        wqkv=lazy_wqkv,
+        wo=lazy_wo,
+        mesh_device=ttnn_mesh_device,
+        dim=dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        head_dim=head_dim,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        scale=head_dim**-0.5,
+        sliding_window=sliding_window,  # Enable sliding window
+        use_paged_kv_cache=False,
+        activation_dtype=ttnn.bfloat16,
+    )
+
+    tt_model = Attention1D.from_config(config)
+    tt_model.init_kv_cache()
+
+    # Setup RoPE
+    rope_setup = RotarySetup(ttnn_mesh_device, batch_size, head_dim, max_seq_len, rope_theta, None, use_qk_fused=False)
+    from models.tt_transformers.tt.rope import get_rot_mats
+
+    rot_mats = get_rot_mats(
+        head_dim=head_dim,
+        device=ttnn_mesh_device,
+        seq_len=seq_len,
+        theta=rope_theta,
+        rope_scaling=None,
+    )
+    transformation_mats = rope_setup.get_both_trans_mats()
+
+    # Prepare input
+    pt_input = torch.randn(batch_size, seq_len, dim, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        pt_input.unsqueeze(0),  # [1, batch, seq_len, dim]
+        device=ttnn_mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+
+    # Run TT model with sliding window
+    tt_out = tt_model.forward(
+        tt_input,
+        None,  # current_pos not used in prefill
+        rot_mats,
+        transformation_mats.get("prefill"),
+        mode="prefill",
+    )
+
+    tt_out_torch = to_torch_auto_compose(tt_out)
+    tt_output = tt_out_torch[:, 0:1, :seq_len, :dim].view(batch_size, seq_len, dim)
+
+    # Create reference with sliding window causal mask
+    # Sliding window mask: position i can only attend to positions max(0, i - sliding_window + 1) to i
+    def create_sliding_window_mask(seq_len: int, sliding_window: int) -> torch.Tensor:
+        """Create a sliding window causal attention mask for HuggingFace attention."""
+        # HF expects mask shape: (batch, 1, seq_len, seq_len) where 0 = attend, -inf = mask
+        mask = torch.zeros(seq_len, seq_len, dtype=torch.bfloat16)
+
+        for i in range(seq_len):
+            # Position i can attend to [max(0, i - sliding_window + 1), i]
+            for j in range(seq_len):
+                if j > i:
+                    # Causal: can't attend to future
+                    mask[i, j] = torch.finfo(torch.bfloat16).min
+                elif j < i - sliding_window + 1:
+                    # Sliding window: can't attend beyond window
+                    mask[i, j] = torch.finfo(torch.bfloat16).min
+
+        return mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
+    sliding_mask = create_sliding_window_mask(seq_len, sliding_window)
+
+    # Setup reference attention
+    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, rope_theta, None, None, "llama3")
+    freqs_cis = torch.complex(cos, sin)[:seq_len]
+
+    from models.tt_transformers.tt.model_config import HfAttentionWrapper
+
+    reference_wrapper = HfAttentionWrapper(reference_attn, head_dim, rotary_emb)
+
+    # Run reference WITH sliding window mask
+    ref_output_sw = reference_wrapper(pt_input, start_pos=0, freqs_cis_i=freqs_cis, mask=sliding_mask)
+
+    # Also run reference WITHOUT sliding window (full attention) for comparison
+    # Need a fresh wrapper since it caches KV
+    reference_wrapper_full = HfAttentionWrapper(reference_attn, head_dim, rotary_emb)
+    ref_output_full = reference_wrapper_full(pt_input, start_pos=0, freqs_cis_i=freqs_cis, mask=None)
+
+    ttnn.SetDefaultDevice(None)
+
+    # Basic sanity checks
+    assert not torch.isnan(tt_output).any(), "TT output contains NaN"
+    assert not torch.isinf(tt_output).any(), "TT output contains Inf"
+    assert tt_output.shape == (batch_size, seq_len, dim), f"Shape mismatch: {tt_output.shape}"
+
+    logger.info(f"Sliding window test: sw={sliding_window}, seq_len={seq_len}")
+
+    # Compare TT output (with sliding window) against HF reference (with sliding window mask)
+    passing_sw, pcc_sw = comp_pcc(ref_output_sw, tt_output.to(ref_output_sw.dtype), pcc)
+    logger.info(f"  PCC TT vs HF (both with sliding window): {pcc_sw}")
+    assert passing_sw, f"Sliding window PCC failed: {pcc_sw} (expected >= {pcc})"
+
+    # Verify sliding window actually has an effect by comparing to full attention
+    if seq_len > sliding_window:
+        # The sliding window reference should differ from full attention
+        ref_diff = (ref_output_sw - ref_output_full).abs().mean()
+        logger.info(f"  HF sliding window vs full attention diff: {ref_diff:.6f}")
+        assert ref_diff > 1e-4, "HF sliding window mask had no effect on reference"
+
+        # TT output should also differ from full attention
+        tt_diff = (tt_output - ref_output_full).abs().mean()
+        logger.info(f"  TT sliding window vs HF full attention diff: {tt_diff:.6f}")
+        assert tt_diff > 1e-4, "TT sliding window had no effect"
+
+        # The TT-vs-reference-sliding-window PCC should be higher than TT-vs-full-attention
+        _, pcc_full = comp_pcc(ref_output_full, tt_output.to(ref_output_full.dtype), 0.0)
+        logger.info(f"  PCC TT (sliding) vs HF (full): {pcc_full}")
+
+        # Compare PCC values
+        pcc_sw_val = float(pcc_sw)
+        pcc_full_val = float(pcc_full)
+        assert pcc_sw_val > pcc_full_val, (
+            f"TT sliding window should match HF sliding window better than HF full attention. "
+            f"PCC(TT,HF_sw)={pcc_sw_val:.4f} should be > PCC(TT,HF_full)={pcc_full_val:.4f}"
+        )
+
+    logger.info(f"test_attention_1d_sliding_window: PASSED (sw={sliding_window}, seq_len={seq_len})")
