@@ -22,15 +22,23 @@ void kernel_main() {
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << hartid) - 1u)));
 
+    DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer << ENDL();
+
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
+        // DPRINT << "rbw" << ENDL();
         dfb.reserve_back(1);
+        // DPRINT << "rbd" << ENDL();
+        // DPRINT << "rdi" << ENDL();
+        DPRINT << "producer tile id " << tile_id << ENDL();
         noc.async_read(
             tensor_accessor, dfb, entry_size, {.page_id = producer_idx * num_entries_per_producer + tile_id}, {});
         noc.async_read_barrier();
+        // DPRINT << "rdd" << ENDL();
         dfb.push_back(1);
+        // DPRINT << "pbd" << ENDL();
     }
     dfb.finish();
 }
