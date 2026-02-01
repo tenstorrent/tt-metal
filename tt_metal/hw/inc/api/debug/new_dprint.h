@@ -62,6 +62,11 @@
             !dprint_detail::has_indexed_placeholders(format) ||                                                       \
                 dprint_detail::get_max_index(format) < static_cast<int>(dprint_detail::count_arguments(__VA_ARGS__)), \
             "Placeholder index exceeds number of arguments");                                                         \
+        /* For indexed placeholders, validate all arguments are referenced */                                         \
+        static_assert(                                                                                                \
+            !dprint_detail::has_indexed_placeholders(format) ||                                                       \
+                dprint_detail::all_arguments_referenced(format, dprint_detail::count_arguments(__VA_ARGS__)),         \
+            "All arguments must be referenced when using indexed placeholders");                                      \
         /* TODO: Validate correctness of format and arguments */                                                      \
         /* TODO: Update format to include all necessary data and store it into dprint section */                      \
         /* TODO: Write dprint message to dprint buffer */                                                             \
@@ -236,6 +241,39 @@ constexpr int get_max_index(const char (&format)[N]) {
         i = token.end_pos;
     }
     return max_index;
+}
+
+// Helper to validate that all arguments are referenced in indexed format
+// Returns true if all argument indices from 0 to arg_count-1 are used at least once
+template <std::size_t N>
+constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg_count) {
+    if (arg_count == 0) {
+        return true;
+    }
+
+    // Track which arguments are referenced (up to 100 arguments)
+    bool referenced[100] = {};
+    if (arg_count > 100) {
+        return false;  // Limit for simplicity
+    }
+
+    for (std::size_t i = 0; i < N - 1;) {
+        FormatToken token = parse_format_token(format, i);
+        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+            if (token.index >= 0 && static_cast<std::size_t>(token.index) < arg_count) {
+                referenced[token.index] = true;
+            }
+        }
+        i = token.end_pos;
+    }
+
+    // Check that all arguments from 0 to arg_count-1 are referenced
+    for (std::size_t i = 0; i < arg_count; ++i) {
+        if (!referenced[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace dprint_detail

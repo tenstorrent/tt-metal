@@ -67,3 +67,9 @@ TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderIndex) {
         "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_index.cpp",
         "Placeholder index exceeds number of arguments");
 }
+
+TEST_F(NewDPrintFailuresFixture, NotAllArgumentsReferenced) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/not_all_arguments_referenced.cpp",
+        "All arguments must be referenced when using indexed placeholders");
+}
