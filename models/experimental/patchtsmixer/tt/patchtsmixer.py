@@ -292,7 +292,7 @@ class TtPatchTSMixerMLP:
                 out_subblock_h=1,
                 out_subblock_w=1,
             ),
-            fused_activation="gelu",
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         )
 
         # y_gelu = ttnn.gelu(y)
