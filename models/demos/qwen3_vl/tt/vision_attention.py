@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -83,7 +84,7 @@ class VisionAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-
+        self.configuration = configuration
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
@@ -469,7 +470,9 @@ class VisionAttention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
+                program_config=self.configuration.get_attn_sdpa_program_config(
+                    Mode.PREFILL, seq_len, chunk_start_idx, None
+                ),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
@@ -479,7 +482,7 @@ class VisionAttention(LightweightModule):
                 is_causal=False,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
 
         # deallocate keys and values

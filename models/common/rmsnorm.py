@@ -127,8 +127,11 @@ class RMSNorm(LightweightModule):
         out_sharded=False,
         norm_config=None,
     ) -> ttnn.Tensor:
-        if isinstance(mode, str) and mode in Mode.__members__:
-            mode = Mode[mode]
+        if isinstance(mode, str):
+            try:
+                mode = Mode(mode)
+            except ValueError:
+                raise ValueError(f"Invalid mode: {mode}")
         elif not isinstance(mode, Mode):
             raise ValueError(f"Invalid mode: {mode}")
 
