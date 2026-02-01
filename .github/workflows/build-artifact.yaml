@@ -597,15 +597,18 @@ jobs:
           echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
 
   build-wheel:
-    if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python 3.10)
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
+    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: build-docker-image
+    needs: [parse-platform, build-docker-image, determine-python-version]
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type }}
-      python-version: '3.10'
-      docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      python-version: ${{ needs.determine-python-version.outputs.python-version }}
+      docker-image: >-
+        ${{ inputs.manylinux-docker-image ||
+            needs.build-docker-image.outputs.manylinux-tag ||
+            'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
