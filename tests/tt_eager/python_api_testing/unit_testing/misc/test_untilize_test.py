@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import untilize, comp_pcc
-from models.common.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(
