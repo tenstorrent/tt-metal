@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
+    const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
 
     experimental::DataflowBuffer dfb(0);
     experimental::Noc noc;
@@ -32,9 +33,8 @@ void kernel_main() {
         dfb.reserve_back(1);
         // DPRINT << "rbd" << ENDL();
         // DPRINT << "rdi" << ENDL();
-        DPRINT << "producer tile id " << tile_id << ENDL();
-        noc.async_read(
-            tensor_accessor, dfb, entry_size, {.page_id = producer_idx * num_entries_per_producer + tile_id}, {});
+        DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
+        noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
         noc.async_read_barrier();
         // DPRINT << "rdd" << ENDL();
         dfb.push_back(1);

@@ -528,14 +528,22 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         }
         dfb->allocated_address = computed_addr;
 
-        // Populate base_addr[] and limit[] arrays for each risc config
+        // Populate base_addr[] and limit[] arrays for each risc config.
+        // Layout is column-major by (tile_counter, producer/consumer): all producers' tc0 first, then all tc1, etc.
         uint32_t entry_size = dfb->config.entry_size;
         uint32_t max_prod_cons = std::max(dfb->config.num_producers, dfb->config.num_consumers);
 
-        uint32_t base_addr = static_cast<uint32_t>(computed_addr);
-        for (auto& rc : dfb->risc_configs) {
+        uint8_t num_producer_tcs = 0;
+        for (const auto& rc : dfb->risc_configs) {
             if (rc.is_producer) {
-                for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
+                num_producer_tcs = rc.config.num_tcs_to_rr;
+                break;
+            }
+        }
+        uint32_t base_addr = static_cast<uint32_t>(computed_addr);
+        for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
+            for (auto& rc : dfb->risc_configs) {
+                if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
                     rc.config.base_addr[tc] = base_addr;
                     rc.config.limit[tc] =
                         rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
@@ -544,10 +552,17 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             }
         }
 
-        base_addr = static_cast<uint32_t>(computed_addr);
-        for (auto& rc : dfb->risc_configs) {
+        uint8_t num_consumer_tcs = 0;
+        for (const auto& rc : dfb->risc_configs) {
             if (!rc.is_producer) {
-                for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
+                num_consumer_tcs = rc.config.num_tcs_to_rr;
+                break;
+            }
+        }
+        base_addr = static_cast<uint32_t>(computed_addr);
+        for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
+            for (auto& rc : dfb->risc_configs) {
+                if (!rc.is_producer && tc < rc.config.num_tcs_to_rr) {
                     rc.config.base_addr[tc] = base_addr;
                     rc.config.limit[tc] =
                         rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
