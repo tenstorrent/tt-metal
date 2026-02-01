@@ -1079,7 +1079,8 @@ jobs:
               # Find all groups that own this specific file
               file_owners=""
               for check_key in "${GROUP_KEYS[@]}"; do
-                if echo "${GROUP_FILES[$check_key]}" | tr ',' '\n' | grep -q "^$file$"; then
+                # Use -F for fixed string matching to handle filenames with regex metacharacters
+                if echo "${GROUP_FILES[$check_key]}" | tr ',' '\n' | grep -Fqx -- "$file"; then
                   check_members="${GROUP_MEMBERS_LIST[$check_key]}"
                   [ -n "$check_members" ] && file_owners="$file_owners,$check_members"
                 fi
