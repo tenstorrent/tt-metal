@@ -275,9 +275,10 @@ void test_h2d_socket(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
+    H2DMode h2d_mode,
     uint32_t num_iterations = 10,
     const MeshCoreCoord& recv_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
-    auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size);
+    auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
     input_socket.set_page_size(page_size);
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
@@ -298,7 +299,8 @@ void test_h2d_socket(
     auto recv_program = CreateProgram();
     CreateKernel(
         recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        h2d_mode == H2DMode::DEVICE_PULL ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_receiver.cpp"
+                                         : "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
         recv_core.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -2252,12 +2254,14 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
 // ========= Single Device Data Movement Tests =========
 
 TEST_F(MeshDevice1x2Fixture, H2DSocket) {
-    // No wrap
-    test_h2d_socket(mesh_device_, 1024, 64, 1024, 10, {MeshCoordinate(0, 0), CoreCoord(0, 0)});
-    // Even wrap
-    test_h2d_socket(mesh_device_, 1024, 64, 32768, 10, {MeshCoordinate(0, 0), CoreCoord(1, 1)});
-    // Uneven wrap
-    test_h2d_socket(mesh_device_, 4096, 1088, 78336, 10, {MeshCoordinate(0, 0), CoreCoord(0, 1)});
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+        // No wrap
+        test_h2d_socket(mesh_device_, 1024, 64, 1024, h2d_mode, 10, {MeshCoordinate(0, 0), CoreCoord(0, 0)});
+        // Even wrap
+        test_h2d_socket(mesh_device_, 1024, 64, 32768, h2d_mode, 10, {MeshCoordinate(0, 0), CoreCoord(1, 1)});
+        // Uneven wrap
+        test_h2d_socket(mesh_device_, 4096, 1088, 78336, h2d_mode, 10, {MeshCoordinate(0, 0), CoreCoord(0, 1)});
+    }
 }
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {

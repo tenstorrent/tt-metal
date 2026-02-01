@@ -149,13 +149,15 @@ H2DSocket::H2DSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& recv_core,
     BufferType buffer_type,
-    uint32_t fifo_size) :
+    uint32_t fifo_size,
+    H2DMode h2d_mode) :
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
     page_size_(0),
     bytes_acked_pinned_memory_(nullptr),
-    data_pinned_memory_(nullptr) {
+    data_pinned_memory_(nullptr),
+    h2d_mode_(h2d_mode) {
     // Allocate memory for the config buffer
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -164,39 +166,43 @@ H2DSocket::H2DSocket(
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
 
     bytes_acked_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
-    host_data_buffer_ = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, 64>>>(
-        fifo_size_ / sizeof(uint32_t), 0);
-
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(bytes_acked_buffer_->data(), bytes_acked_buffer_->size()),
         tt::tt_metal::MemoryPin(bytes_acked_buffer_));
-    tt::tt_metal::HostBuffer host_data_buffer_view(
-        tt::stl::Span<uint32_t>(host_data_buffer_->data(), host_data_buffer_->size()),
-        tt::tt_metal::MemoryPin(host_data_buffer_));
-
     bytes_acked_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
         *mesh_device, recv_device_range_set, bytes_acked_buffer_view, true);
-    data_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
-        *mesh_device, recv_device_range_set, host_data_buffer_view, true);
+
     const auto& bytes_acked_noc_addr =
         bytes_acked_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
-    const auto& data_noc_addr =
-        data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
     TT_FATAL(bytes_acked_noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
-    TT_FATAL(data_noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
     uint32_t bytes_acked_pcie_xy_enc = bytes_acked_noc_addr.value().pcie_xy_enc;
-    uint32_t data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
-    TT_FATAL(
-        bytes_acked_pcie_xy_enc == data_pcie_xy_enc,
-        "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
-
     uint32_t bytes_acked_addr_lo = static_cast<uint32_t>(bytes_acked_noc_addr.value().addr & 0xFFFFFFFFull);
     uint32_t bytes_acked_addr_hi = static_cast<uint32_t>(bytes_acked_noc_addr.value().addr >> 32);
-    uint32_t data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
-    uint32_t data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
-    uint32_t config_buffer_size = sizeof(receiver_socket_md);
 
+    uint32_t data_pcie_xy_enc = 0;
+    uint32_t data_addr_lo = 0;
+    uint32_t data_addr_hi = 0;
+    if (h2d_mode_ == H2DMode::DEVICE_PULL) {
+        host_data_buffer_ = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, 64>>>(
+            fifo_size_ / sizeof(uint32_t), 0);
+        tt::tt_metal::HostBuffer host_data_buffer_view(
+            tt::stl::Span<uint32_t>(host_data_buffer_->data(), host_data_buffer_->size()),
+            tt::tt_metal::MemoryPin(host_data_buffer_));
+        data_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device, recv_device_range_set, host_data_buffer_view, true);
+        const auto& data_noc_addr =
+            data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+        TT_FATAL(data_noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
+        data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
+        data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
+        data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
+        TT_FATAL(
+            bytes_acked_pcie_xy_enc == data_pcie_xy_enc,
+            "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
+    }
+
+    uint32_t config_buffer_size = sizeof(receiver_socket_md);
     auto num_cores = 1;
     auto total_config_buffer_size = config_buffer_size;
     auto shard_params = ShardSpecBuffer(
@@ -234,7 +240,6 @@ H2DSocket::H2DSocket(
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    std::cout << "Data buffer address: " << data_buffer_->address() << std::endl;
     aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
     write_ptr_ = 0;
     const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
@@ -259,19 +264,15 @@ H2DSocket::H2DSocket(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
     auto recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
     receiver_core_tlb_ = cluster.get_driver()
                              ->get_chip(recv_device_id)
                              ->get_tlb_manager()
                              ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
 }
 
-void H2DSocket::reserve_pages(uint32_t num_pages) {
-    TT_FATAL(page_size_ > 0, "Page size must be set before reserving pages.");
-    uint32_t num_bytes = num_pages * page_size_;
-    TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
-
+void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
         volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
@@ -280,11 +281,7 @@ void H2DSocket::reserve_pages(uint32_t num_pages) {
     }
 }
 
-void H2DSocket::push_pages(uint32_t num_pages) {
-    TT_FATAL(page_size_ > 0, "Page size must be set before pushing pages.");
-    uint32_t num_bytes = num_pages * page_size_;
-    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot push more pages than the socket FIFO size.");
-
+void H2DSocket::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
         bytes_sent_ += num_bytes + fifo_size_ - fifo_curr_size_;
@@ -297,6 +294,7 @@ void H2DSocket::push_pages(uint32_t num_pages) {
 void H2DSocket::notify_receiver() {
     uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
     receiver_core_tlb_->write_block(bytes_sent_addr, &bytes_sent_, sizeof(bytes_sent_));
+    tt_driver_atomics::sfence();
 }
 
 void H2DSocket::set_page_size(uint32_t page_size) {
@@ -324,14 +322,21 @@ void H2DSocket::barrier() {
 }
 
 void H2DSocket::write(void* data, uint32_t num_pages) {
-    TT_FATAL(num_pages * page_size_ <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
+    TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
-    this->reserve_pages(num_pages);
-    receiver_core_tlb_->write_block(data_addr, data, num_pages * page_size_);
-    _mm_sfence();
-    this->push_pages(num_pages);
+    this->reserve_bytes(num_bytes);
+
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        receiver_core_tlb_->write_block(data_addr, data, num_bytes);
+        tt_driver_atomics::sfence();
+    } else {
+        uint32_t* data_ptr = host_data_buffer_->data() + (write_ptr_ / sizeof(uint32_t));
+        std::memcpy(data_ptr, data, num_bytes);
+    }
+    this->push_bytes(num_bytes);
     this->notify_receiver();
-    _mm_sfence();
 }
 
 }  // namespace tt::tt_metal::distributed
