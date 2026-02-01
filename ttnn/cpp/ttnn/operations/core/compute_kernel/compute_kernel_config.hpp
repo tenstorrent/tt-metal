@@ -14,7 +14,6 @@
 namespace ttnn {
 
 // Unified compute kernel configuration for all supported architectures.
-// Note: Grayskull architecture is deprecated and no longer supported.
 struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::LoFi;
     bool math_approx_mode = true;

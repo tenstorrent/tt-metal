@@ -414,8 +414,6 @@ TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {
         .field_values = field_values_alu_config,
         .register_name = ALU_CONFIG};
 
-    // Grayskull is no longer supported
-
     // Run the test on the device
     this->RunTestOnDevice(
         [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -453,7 +451,6 @@ TEST_F(DPrintMeshFixture, ConfigRegUnpackTestPrint) {
     std::vector<std::string> field_names_unpack_config;
     std::vector<uint32_t> field_values_unpack_config;
 
-    // Grayskull is no longer supported
     field_names_unpack_config = field_names_unpack_config_wormhole_or_blackhole;
     field_values_unpack_config = field_values_unpack_config_wormhole_or_blackhole;
 
@@ -478,7 +475,6 @@ TEST_F(DPrintMeshFixture, ConfigRegPackTestPrint) {
     std::vector<std::string> field_names_pack_config;
     std::vector<uint32_t> field_values_pack_config;
 
-    // Grayskull is no longer supported
     if (this->arch_ == ARCH::WORMHOLE_B0) {
         field_names_pack_config = field_names_pack_config_wormhole;
         field_values_pack_config = field_values_pack_config_wormhole;
