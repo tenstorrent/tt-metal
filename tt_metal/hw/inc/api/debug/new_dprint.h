@@ -67,6 +67,11 @@
             !dprint_detail::has_indexed_placeholders(format) ||                                                       \
                 dprint_detail::all_arguments_referenced(format, dprint_detail::count_arguments(__VA_ARGS__)),         \
             "All arguments must be referenced when using indexed placeholders");                                      \
+        /* For non-indexed placeholders, count must match argument count */                                           \
+        static_assert(                                                                                                \
+            dprint_detail::has_indexed_placeholders(format) ||                                                        \
+                dprint_detail::count_placeholders(format) == dprint_detail::count_arguments(__VA_ARGS__),             \
+            "Number of {} placeholders must match number of arguments");                                              \
         /* TODO: Validate correctness of format and arguments */                                                      \
         /* TODO: Update format to include all necessary data and store it into dprint section */                      \
         /* TODO: Write dprint message to dprint buffer */                                                             \
@@ -274,6 +279,20 @@ constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg
         }
     }
     return true;
+}
+
+// Helper to count placeholders in format string at compile time
+template <std::size_t N>
+constexpr std::size_t count_placeholders(const char (&format)[N]) {
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < N - 1;) {
+        FormatToken token = parse_format_token(format, i);
+        if (token.type == TokenType::Placeholder) {
+            ++count;
+        }
+        i = token.end_pos;
+    }
+    return count;
 }
 
 }  // namespace dprint_detail

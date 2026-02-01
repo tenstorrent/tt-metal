@@ -73,3 +73,15 @@ TEST_F(NewDPrintFailuresFixture, NotAllArgumentsReferenced) {
         "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/not_all_arguments_referenced.cpp",
         "All arguments must be referenced when using indexed placeholders");
 }
+
+TEST_F(NewDPrintFailuresFixture, TooManyArguments) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/too_many_arguments.cpp",
+        "Number of {} placeholders must match number of arguments");
+}
+
+TEST_F(NewDPrintFailuresFixture, NotEnoughArguments) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/not_enough_arguments.cpp",
+        "Number of {} placeholders must match number of arguments");
+}
