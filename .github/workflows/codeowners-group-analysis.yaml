@@ -1092,23 +1092,24 @@ jobs:
                 IFS=',' read -ra FILE_OWNERS_ARRAY <<< "$file_owners"
                 for owner in "${FILE_OWNERS_ARRAY[@]}"; do
                   [ -z "$owner" ] && continue
-                  if echo "$APPROVED_REVIEWERS" | grep -q "$owner"; then
+                  # Use exact match to avoid substring issues (e.g., "bob" vs "bobby")
+                  if echo "$APPROVED_REVIEWERS" | tr ',' '\n' | grep -qx "$owner"; then
                     file_approved=true
                     # Determine if this is a direct member or shared member of current group
-                    if echo "$members" | grep -q "$owner"; then
-                      # Direct member - add to direct approvers
-                      if ! echo "$direct_approvers_set" | grep -q "$owner"; then
+                    if echo "$members" | tr ',' '\n' | grep -qx "$owner"; then
+                      # Direct member - add to direct approvers if not already present
+                      if ! echo "$direct_approvers_set" | tr ',' '\n' | grep -qx "$owner"; then
                         [ -n "$direct_approvers_set" ] && direct_approvers_set="$direct_approvers_set,"
                         direct_approvers_set="$direct_approvers_set$owner"
                       fi
                     else
-                      # Shared member - add to shared approvers
-                      if ! echo "$shared_approvers_set" | grep -q "$owner"; then
+                      # Shared member - add to shared approvers if not already present
+                      if ! echo "$shared_approvers_set" | tr ',' '\n' | grep -qx "$owner"; then
                         [ -n "$shared_approvers_set" ] && shared_approvers_set="$shared_approvers_set,"
                         shared_approvers_set="$shared_approvers_set$owner"
                       fi
                     fi
-                    break
+                    # Don't break - continue checking to collect all approvers for this file
                   fi
                 done
               fi
