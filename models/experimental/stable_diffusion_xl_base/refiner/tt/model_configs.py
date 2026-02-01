@@ -707,24 +707,26 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                "1D_RESNET_CONV_1152_384": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                "1D_RESNET_CONV_1152_384": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
-                    per_core_M=64,
-                    per_core_N=3,
+                    in0_block_w=3,
+                    per_core_M=13,
+                    per_core_N=12,
                     out_subblock_h=1,
-                    out_subblock_w=3,
-                    transpose_mcast=False,
+                    out_subblock_w=6,
+                    mcast_in0=False,
+                    fuse_batch=False,
                     fused_activation=None,
                 ),
-                "1D_RESNET_CONV_768_384": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                "1D_RESNET_CONV_768_384": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=1,
-                    per_core_M=64,
-                    per_core_N=3,
+                    in0_block_w=3,
+                    per_core_M=13,
+                    per_core_N=12,
                     out_subblock_h=1,
-                    out_subblock_w=3,
-                    transpose_mcast=False,
+                    out_subblock_w=6,
+                    mcast_in0=False,
+                    fuse_batch=False,
                     fused_activation=None,
                 ),
             },
@@ -941,7 +943,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             else:
                 return ttnn.L1_MEMORY_CONFIG
         if "resnets" in module_path and "time_emb_proj" in module_path:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return ttnn.L1_MEMORY_CONFIG  # TODO: This is not used
         if "resnets" in module_path and "conv_shortcut" in module_path:
             if "up_blocks.3" in module_path:
                 return ttnn.L1_MEMORY_CONFIG

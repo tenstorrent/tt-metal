@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 import tracy
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtGEGLU(LightweightModule):
@@ -16,6 +17,8 @@ class TtGEGLU(LightweightModule):
         self.device = device
 
         self.module_path = module_path
+
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]
