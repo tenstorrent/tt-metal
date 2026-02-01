@@ -120,14 +120,14 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.read_ptr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(recv_config.fifo_addr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
-    EXPECT_EQ(recv_config.c2c.upstream_mesh_id, 0);
-    EXPECT_EQ(recv_config.c2c.upstream_chip_id, upstream_device_id);
-    EXPECT_EQ(recv_config.c2c.upstream_noc_y, sender_virtual_coord.y);
-    EXPECT_EQ(recv_config.c2c.upstream_noc_x, sender_virtual_coord.x);
+    EXPECT_EQ(recv_config.d2d.upstream_mesh_id, 0);
+    EXPECT_EQ(recv_config.d2d.upstream_chip_id, upstream_device_id);
+    EXPECT_EQ(recv_config.d2d.upstream_noc_y, sender_virtual_coord.y);
+    EXPECT_EQ(recv_config.d2d.upstream_noc_x, sender_virtual_coord.x);
     EXPECT_EQ(
-        recv_config.c2c.upstream_bytes_acked_addr,
+        recv_config.d2d.upstream_bytes_acked_addr,
         send_socket.get_config_buffer()->address() + tt::align(sizeof(sender_socket_md), l1_alignment));
-    EXPECT_EQ(recv_config.c2c.upstream_bytes_acked_addr % l1_alignment, 0);
+    EXPECT_EQ(recv_config.d2d.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
 void test_single_connection_single_device_socket(
@@ -274,10 +274,10 @@ void test_h2d_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
-    std::size_t data_size) {
-    std::vector<MeshCoreCoord> recv_cores = {{MeshCoordinate(0, 0), CoreCoord(0, 0)}};
-
-    auto input_socket = H2DSocket(mesh_device, recv_cores, BufferType::L1, socket_fifo_size);
+    std::size_t data_size,
+    uint32_t num_iterations = 10,
+    const MeshCoreCoord& recv_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
+    auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size);
     input_socket.set_page_size(page_size);
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
@@ -285,7 +285,7 @@ void test_h2d_socket(
     // Create recv data buffer to drain data into
     const ReplicatedBufferConfig buffer_config{.size = data_size};
     auto recv_data_shard_params =
-        ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
 
     const DeviceLocalBufferConfig recv_device_local_config{
         .page_size = data_size,
@@ -294,13 +294,12 @@ void test_h2d_socket(
         .bottom_up = false,
     };
     auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
-    const uint32_t num_iterations = 1;
     // Create Recv MeshWorkload
     auto recv_program = CreateProgram();
     CreateKernel(
         recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
-        CoreCoord(0, 0),
+        recv_core.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
@@ -313,46 +312,30 @@ void test_h2d_socket(
             }});
 
     auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
     mesh_workload.add_program(devices, std::move(recv_program));
-    std::cout << "Device: " << mesh_device->get_device(MeshCoordinate(0, 0))->id() << std::endl;
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
     uint32_t num_writes = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    auto recv_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
+    auto recv_core_virtual = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
     uint32_t page_size_words = page_size / sizeof(uint32_t);
 
-    // auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     // Write a single page at a time
     const auto& cluster = MetalContext::instance().get_cluster();
     for (int i = 0; i < num_iterations; i++) {
+        std::iota(src_vec.begin(), src_vec.end(), i);
         for (uint32_t j = 0; j < num_writes; j++) {
-            input_socket.reserve_pages(1);
-            // Write data to input socket at write ptr
-            // DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
-            std::memcpy(input_socket.get_write_ptr(), src_vec.data() + j * page_size_words, page_size);
-            // cluster.write_core(
-            //     src_vec.data() + j * page_size_words,
-            //     page_size,
-            //     tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
-            //     input_socket.get_write_ptr());
-            // mesh_cq.enqueue_write_shard_to_core(
-            //     core_addr, src_vec.data() + j * page_size_words, page_size, false, {}, false);
-
-            input_socket.push_pages(1);
-            input_socket.notify_receiver();
+            input_socket.write(src_vec.data() + j * page_size_words, 1);
         }
         input_socket.barrier();
         std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
         cluster.read_core(
             recv_data_readback.data(),
             data_size,
-            tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
+            tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
             recv_data_buffer->address());
-        // ReadShard(mesh_device->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
         EXPECT_EQ(src_vec, recv_data_readback);
     }
 }
@@ -2270,11 +2253,11 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
 
 TEST_F(MeshDevice1x2Fixture, H2DSocket) {
     // No wrap
-    test_h2d_socket(mesh_device_, 1024, 64, 1024);
+    test_h2d_socket(mesh_device_, 1024, 64, 1024, 10, {MeshCoordinate(0, 0), CoreCoord(0, 0)});
     // Even wrap
-    test_h2d_socket(mesh_device_, 1024, 64, 32768);
+    test_h2d_socket(mesh_device_, 1024, 64, 32768, 10, {MeshCoordinate(0, 0), CoreCoord(1, 1)});
     // Uneven wrap
-    test_h2d_socket(mesh_device_, 4096, 1088, 78336);
+    test_h2d_socket(mesh_device_, 4096, 1088, 78336, 10, {MeshCoordinate(0, 0), CoreCoord(0, 1)});
 }
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {

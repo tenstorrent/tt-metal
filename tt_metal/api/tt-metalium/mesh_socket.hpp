@@ -12,6 +12,10 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include <utility>
 
+namespace tt::umd {
+class TlbWindow;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
@@ -41,7 +45,7 @@ class H2DSocket {
 public:
     H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
-        const std::vector<MeshCoreCoord>& recv_cores,
+        const MeshCoreCoord& recv_core,
         BufferType buffer_type,
         uint32_t fifo_size);
 
@@ -52,6 +56,7 @@ public:
     uint32_t* get_write_ptr() const { return host_data_buffer_->data() + (write_ptr_ / sizeof(uint32_t)); }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
     void set_page_size(uint32_t page_size);
+    void write(void* data, uint32_t num_pages);
     void barrier();
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> get_bytes_acked_buffer() const {
         return bytes_acked_buffer_;
@@ -60,14 +65,17 @@ public:
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
-    std::vector<MeshCoreCoord> recv_cores_ = {};
+    MeshCoreCoord recv_core_;
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
     uint32_t bytes_sent_ = 0;
-    std::unordered_map<MeshCoreCoord, uint32_t> bytes_acked_ = {};
+    uint32_t bytes_acked_ = 0;
     uint32_t write_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
+    uint32_t aligned_data_buf_start_ = 0;
+
+    tt::umd::TlbWindow* receiver_core_tlb_ = nullptr;
     std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> bytes_acked_pinned_memory_ = nullptr;
     std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> data_pinned_memory_ = nullptr;
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_acked_buffer_ = nullptr;

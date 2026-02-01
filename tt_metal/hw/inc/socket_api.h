@@ -30,7 +30,7 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
             fabric_set_unicast_route(fabric_header_addr, socket.downstream_chip_id, socket.downstream_mesh_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route(fabric_header_addr, socket.c2c.upstream_chip_id, socket.c2c.upstream_mesh_id);
+            fabric_set_unicast_route(fabric_header_addr, socket.d2d.upstream_chip_id, socket.d2d.upstream_mesh_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
         }
@@ -38,7 +38,7 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
             fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.downstream_chip_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.c2c.upstream_chip_id);
+            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.d2d.upstream_chip_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to fabric_set_unicast_route");
         }
@@ -194,11 +194,11 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
         socket.h2d.data_addr_hi = socket_config->h2d.data_addr_hi;
         socket.h2d.pcie_xy_enc = socket_config->h2d.pcie_xy_enc;
     } else {
-        socket.c2c.upstream_mesh_id = socket_config->c2c.upstream_mesh_id;
-        socket.c2c.upstream_chip_id = socket_config->c2c.upstream_chip_id;
-        socket.c2c.upstream_noc_y = socket_config->c2c.upstream_noc_y;
-        socket.c2c.upstream_noc_x = socket_config->c2c.upstream_noc_x;
-        socket.c2c.upstream_bytes_acked_addr = socket_config->c2c.upstream_bytes_acked_addr;
+        socket.d2d.upstream_mesh_id = socket_config->d2d.upstream_mesh_id;
+        socket.d2d.upstream_chip_id = socket_config->d2d.upstream_chip_id;
+        socket.d2d.upstream_noc_y = socket_config->d2d.upstream_noc_y;
+        socket.d2d.upstream_noc_x = socket_config->d2d.upstream_noc_x;
+        socket.d2d.upstream_bytes_acked_addr = socket_config->d2d.upstream_bytes_acked_addr;
     }
 #endif
     return socket;
@@ -285,7 +285,7 @@ void fabric_socket_notify_sender(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto upstream_bytes_acked_noc_addr =
-        get_noc_addr(socket.c2c.upstream_noc_x, socket.c2c.upstream_noc_y, socket.c2c.upstream_bytes_acked_addr);
+        get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
     fabric_set_unicast_route(fabric_header_addr, socket);
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
@@ -307,7 +307,7 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
             NOC_0, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, 4, 1);
     } else {
         auto upstream_bytes_acked_noc_addr =
-            get_noc_addr(socket.c2c.upstream_noc_x, socket.c2c.upstream_noc_y, socket.c2c.upstream_bytes_acked_addr);
+            get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
         noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
     }
 }

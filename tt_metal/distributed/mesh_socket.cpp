@@ -9,6 +9,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include <umd/device/chip_helpers/tlb_manager.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -146,10 +147,10 @@ std::unordered_map<MeshCoordinate, std::unordered_set<CoreCoord>> group_recv_cor
 
 H2DSocket::H2DSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
-    const std::vector<MeshCoreCoord>& recv_cores,
+    const MeshCoreCoord& recv_core,
     BufferType buffer_type,
     uint32_t fifo_size) :
-    recv_cores_(recv_cores),
+    recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
     page_size_(0),
@@ -157,9 +158,7 @@ H2DSocket::H2DSocket(
     data_pinned_memory_(nullptr) {
     // Allocate memory for the config buffer
     MeshCoordinateRangeSet recv_device_range_set;
-    for (const auto& recv_core : recv_cores_) {
-        recv_device_range_set.merge(MeshCoordinateRange(recv_core.device_coord));
-    }
+    recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
     const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
@@ -180,9 +179,9 @@ H2DSocket::H2DSocket(
     data_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
         *mesh_device, recv_device_range_set, host_data_buffer_view, true);
     const auto& bytes_acked_noc_addr =
-        bytes_acked_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
+        bytes_acked_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
     const auto& data_noc_addr =
-        data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
+        data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
     TT_FATAL(bytes_acked_noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
     TT_FATAL(data_noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
@@ -197,23 +196,11 @@ H2DSocket::H2DSocket(
     uint32_t data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
     uint32_t data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
-    std::set<CoreRange> all_cores_set;
-    std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
 
-    for (const auto& recv_core : recv_cores_) {
-        const auto& socket_device = recv_core.device_coord;
-        const auto& socket_core = recv_core.core_coord;
-        TT_FATAL(
-            socket_cores_per_device[socket_device].insert(socket_core).second,
-            "Cannot reuse receiver cores in a single socket.");
-        all_cores_set.insert(socket_core);
-    }
-
-    auto all_cores = CoreRangeSet(all_cores_set);
-    auto num_cores = all_cores_set.size();
-    auto total_config_buffer_size = num_cores * config_buffer_size;
-
-    auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto num_cores = 1;
+    auto total_config_buffer_size = config_buffer_size;
+    auto shard_params = ShardSpecBuffer(
+        CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
     DeviceLocalBufferConfig config_buffer_specs = {
         .page_size = config_buffer_size,
@@ -228,9 +215,10 @@ H2DSocket::H2DSocket(
     };
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
 
-    auto sub_device_id = SubDeviceId{0};
-    auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
+    auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
+
+    // Allocate buffer at a PCIe aligned address. This requires extra memory to be allocated.
     auto total_data_buffer_size = num_data_cores * (fifo_size_ + pcie_alignment);
 
     DeviceLocalBufferConfig data_buffer_specs = {
@@ -247,47 +235,48 @@ H2DSocket::H2DSocket(
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
     std::cout << "Data buffer address: " << data_buffer_->address() << std::endl;
-    write_ptr_ = 0;  // data_buffer_->address();
+    aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
+    write_ptr_ = 0;
     const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     std::vector<receiver_socket_md> config_data(
         config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
-    const auto& grouped_cores = group_recv_cores(recv_cores_);
+    auto& md = config_data[core_to_core_id.at(recv_core_.core_coord)];
+    md.bytes_sent = 0;
+    md.bytes_acked = 0;
+    md.read_ptr = aligned_data_buf_start_;
+    md.fifo_addr = aligned_data_buf_start_;
+    md.fifo_total_size = fifo_size_;
+    md.is_h2d = 1;
+    md.h2d.bytes_acked_addr_lo = bytes_acked_addr_lo;
+    md.h2d.bytes_acked_addr_hi = bytes_acked_addr_hi;
+    md.h2d.data_addr_lo = data_addr_lo;
+    md.h2d.data_addr_hi = data_addr_hi;
+    md.h2d.pcie_xy_enc = bytes_acked_pcie_xy_enc;
 
-    for (const auto& [device_coord, cores_set] : grouped_cores) {
-        for (const auto& core_coord : cores_set) {
-            uint32_t idx = core_to_core_id.at(core_coord);
-            auto& md = config_data[idx];
-            md.bytes_sent = 0;
-            md.bytes_acked = 0;
-            md.read_ptr = tt::align(data_buffer_->address(), pcie_alignment);
-            md.fifo_addr = tt::align(data_buffer_->address(), pcie_alignment);
-            md.fifo_total_size = fifo_size_;
-            md.is_h2d = 1;
-            md.h2d.bytes_acked_addr_lo = bytes_acked_addr_lo;
-            md.h2d.bytes_acked_addr_hi = bytes_acked_addr_hi;
-            md.h2d.data_addr_lo = data_addr_lo;
-            md.h2d.data_addr_hi = data_addr_hi;
-            md.h2d.pcie_xy_enc = bytes_acked_pcie_xy_enc;
-        }
-        distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer_, config_data, device_coord, true);
-    }
+    distributed::WriteShard(
+        mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
+    auto recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+    receiver_core_tlb_ = cluster.get_driver()
+                             ->get_chip(recv_device_id)
+                             ->get_tlb_manager()
+                             ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
 }
 
 void H2DSocket::reserve_pages(uint32_t num_pages) {
     TT_FATAL(page_size_ > 0, "Page size must be set before reserving pages.");
-    // const auto& cluster = MetalContext::instance().get_cluster();
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
 
-    for (const auto& recv_core : recv_cores_) {
-        uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_[recv_core]);
-        while (bytes_free < num_bytes) {
-            volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
-            bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
-            bytes_acked_[recv_core] = bytes_acked_value;
-        }
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    while (bytes_free < num_bytes) {
+        volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
+        bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+        bytes_acked_ = bytes_acked_value;
     }
 }
 
@@ -306,15 +295,8 @@ void H2DSocket::push_pages(uint32_t num_pages) {
 }
 
 void H2DSocket::notify_receiver() {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& mesh_device = config_buffer_->device();
     uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
-    for (const auto& recv_core : recv_cores_) {
-        auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
-        auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
-        cluster.write_core(
-            &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(recv_device_id, recv_virtual_core), bytes_sent_addr);
-    }
+    receiver_core_tlb_->write_block(bytes_sent_addr, &bytes_sent_, sizeof(bytes_sent_));
 }
 
 void H2DSocket::set_page_size(uint32_t page_size) {
@@ -339,6 +321,17 @@ void H2DSocket::barrier() {
     while (bytes_sent_ - bytes_acked_value != 0) {
         bytes_acked_value = bytes_acked_buffer_->at(0);
     }
+}
+
+void H2DSocket::write(void* data, uint32_t num_pages) {
+    TT_FATAL(num_pages * page_size_ <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
+    auto data_addr = aligned_data_buf_start_ + write_ptr_;
+    this->reserve_pages(num_pages);
+    receiver_core_tlb_->write_block(data_addr, data, num_pages * page_size_);
+    _mm_sfence();
+    this->push_pages(num_pages);
+    this->notify_receiver();
+    _mm_sfence();
 }
 
 }  // namespace tt::tt_metal::distributed

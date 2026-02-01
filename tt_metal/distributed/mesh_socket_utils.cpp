@@ -362,11 +362,11 @@ void write_socket_configs(
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;
                 md.is_h2d = 0;
-                md.c2c.upstream_mesh_id = *upstream_mesh_id;
-                md.c2c.upstream_chip_id = upstream_chip_id;
-                md.c2c.upstream_noc_y = sender_virtual_core.y;
-                md.c2c.upstream_noc_x = sender_virtual_core.x;
-                md.c2c.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
+                md.d2d.upstream_mesh_id = *upstream_mesh_id;
+                md.d2d.upstream_chip_id = upstream_chip_id;
+                md.d2d.upstream_noc_y = sender_virtual_core.y;
+                md.d2d.upstream_noc_x = sender_virtual_core.x;
+                md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                    sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);

@@ -33,21 +33,23 @@ void kernel_main() {
     //  - In this case, an additional CB would be needed to synchronize the receiver and
     //    compute kernels (socket_notify_sender cannot be called until compute is done with
     //    pages in the local CB)
-    uint64_t pcie_data_addr = (static_cast<uint64_t>(receiver_socket.h2d.data_addr_hi) << 32) |
-                              (static_cast<uint64_t>(receiver_socket.h2d.data_addr_lo));
-    uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
+    // uint64_t pcie_data_addr = (static_cast<uint64_t>(receiver_socket.h2d.data_addr_hi) << 32) |
+    //                           (static_cast<uint64_t>(receiver_socket.h2d.data_addr_lo));
+    // uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
+    // Disable L1 data cache to ensure stores go directly to L1 SRAM
+
     for (uint32_t i = 0; i < num_iterations; i++) {
         uint32_t outstanding_data_size = data_size;
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
         while (outstanding_data_size) {
             socket_wait_for_pages(receiver_socket, 1);
-            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                NOC_INDEX,
-                pcie_xy_enc,
-                pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
-                receiver_socket.read_ptr,
-                page_size);
-            noc_async_read_barrier();
+            // noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+            //     NOC_INDEX,
+            //     pcie_xy_enc,
+            //     pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
+            //     receiver_socket.read_ptr,
+            //     page_size);
+            // noc_async_read_barrier();
 
             noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
             dst_noc_addr += page_size;
