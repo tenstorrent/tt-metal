@@ -106,12 +106,12 @@ SECTIONS {
     . = ALIGN(4);
   }
 
-  /* DPRINT strings metadata table – file-only section, VMA = 0x6500000 */
-  .dprint_strings_metadata 0x6500000 :
+  /* DPRINT strings info table – file-only section, VMA = 0x6500000 */
+  .dprint_strings_info 0x6500000 :
   {
-      __dprint_strings_metadata_start = .;
-      KEEP(*(.dprint_strings_metadata))
-      __dprint_strings_metadata_end = .;
+      __dprint_strings_info_start = .;
+      KEEP(*(.dprint_strings_info))
+      __dprint_strings_info_end = .;
     . = ALIGN(4);
   }
 

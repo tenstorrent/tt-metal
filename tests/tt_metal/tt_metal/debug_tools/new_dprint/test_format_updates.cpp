@@ -14,7 +14,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace ll_api;
 
-struct DPrintStringMetadata {
+struct DPrintStringInfo {
     std::uint32_t format_string_ptr;
     std::uint32_t file;
     std::uint32_t line;
@@ -34,26 +34,25 @@ public:
 
         const auto& segments = elf.GetSegments();
         ASSERT_FALSE(segments.empty());
-        std::vector<std::byte> format_strings_metadata_bytes;
-        uint64_t format_strings_metadata_address = 0;
-        ASSERT_TRUE(elf.GetSectionContents(
-            ".dprint_strings_metadata", format_strings_metadata_bytes, format_strings_metadata_address));
+        std::vector<std::byte> format_strings_info_bytes;
+        uint64_t format_strings_info_address = 0;
+        ASSERT_TRUE(
+            elf.GetSectionContents(".dprint_strings_info", format_strings_info_bytes, format_strings_info_address));
         std::vector<std::byte> format_strings_bytes;
         uint64_t format_strings_address = 0;
         ASSERT_TRUE(elf.GetSectionContents(".dprint_strings", format_strings_bytes, format_strings_address));
 
         // Extract strings from sections
-        DPrintStringMetadata* metadata_ptr =
-            reinterpret_cast<DPrintStringMetadata*>(format_strings_metadata_bytes.data());
-        size_t num_messages = format_strings_metadata_bytes.size() / sizeof(DPrintStringMetadata);
+        DPrintStringInfo* info_ptr = reinterpret_cast<DPrintStringInfo*>(format_strings_info_bytes.data());
+        size_t num_messages = format_strings_info_bytes.size() / sizeof(DPrintStringInfo);
 
         for (size_t i = 0; i < num_messages; ++i) {
-            const DPrintStringMetadata& metadata = metadata_ptr[i];
+            const DPrintStringInfo& info = info_ptr[i];
             const char* format_string = reinterpret_cast<const char*>(
-                format_strings_bytes.data() + (metadata.format_string_ptr - format_strings_address));
+                format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
             std::string format_str(format_string);
             const char* file_string =
-                reinterpret_cast<const char*>(format_strings_bytes.data() + (metadata.file - format_strings_address));
+                reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
             std::string file_str(file_string);
             if (format_str == expected_format_message && file_str.ends_with(kernel_path)) {
                 // Found expected format string

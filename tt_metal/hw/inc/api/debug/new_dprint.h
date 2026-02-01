@@ -12,7 +12,7 @@
 #include "new_dprint_structures.h"
 
 #define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
-#define NEW_DPRINT_STRINGS_METADATA_SECTION_NAME ".dprint_strings_metadata"
+#define NEW_DPRINT_STRINGS_INFO_SECTION_NAME ".dprint_strings_info"
 #define NEW_DPRINT_MAX_ARGUMENTS 100
 
 #ifdef UCK_CHLKC_UNPACK
@@ -59,8 +59,8 @@
                 }                                                                                            \
                 return file_str.to_array();                                                                  \
             }();                                                                                             \
-        static dprint_detail::structures::DPrintStringMetadata allocated_string_metadata                     \
-            __attribute__((section(NEW_DPRINT_STRINGS_METADATA_SECTION_NAME), used)) = {                     \
+        static dprint_detail::structures::DPrintStringInfo allocated_string_info                             \
+            __attribute__((section(NEW_DPRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
                 allocated_string.data(), allocated_file_string.data(), __LINE__};                            \
     }                                                                                                        \
     constexpr uint32_t variable_name = __COUNTER__;
@@ -97,8 +97,8 @@
         constexpr auto updated_format =                                                              \
             dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);        \
         /* Store updated format string in a special section for dprint */                            \
-        NEW_DPRINT_GET_STRING_INDEX(dprint_metadata_index, updated_format);                          \
-        static_assert(dprint_metadata_index <= 1024, "Too many DPRINT calls, exceeds limit");        \
+        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                              \
+        static_assert(dprint_info_index <= 1024, "Too many DPRINT calls, exceeds limit");            \
         /* TODO: Write dprint message to dprint buffer */                                            \
     }
 

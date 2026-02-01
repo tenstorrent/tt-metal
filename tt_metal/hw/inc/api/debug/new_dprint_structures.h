@@ -10,7 +10,7 @@ namespace dprint_detail {
 
 namespace structures {
 
-struct DPrintStringMetadata {
+struct DPrintStringInfo {
     const char* format_string_ptr;
     const char* file;
     std::uint32_t line;
