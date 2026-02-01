@@ -1139,7 +1139,7 @@ __attribute__((optimize("Os"))) void logsigmoid_sub(
     cb_push_back(out_cb, num_tiles);
 }
 
-__attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = in0_cb - in1_cb
 
     cb_wait_front(in0_cb, num_tiles);
