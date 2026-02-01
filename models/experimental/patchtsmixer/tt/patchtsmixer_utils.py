@@ -285,7 +285,7 @@ def make_1d_mcast_prog_config_for_height_sharded(
     # The safest is to set grid_size to (WORMHOLE_GRID[0], WORMHOLE_GRID[1]) or (nc,1) if supported.
     # Start with full chip grid and let corerangeset handle selection.
 
-    compute_grid = ttnn.CoreCoord(y=WORMHOLE_GRID[0], x=WORMHOLE_GRID[1])
+    compute_grid = ttnn.CoreCoord(WORMHOLE_GRID[0], WORMHOLE_GRID[1])
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=compute_grid,
