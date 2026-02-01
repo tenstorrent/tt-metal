@@ -46,7 +46,7 @@ jobs:
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} performance batch-1"
             arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-1" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
             arch: blackhole

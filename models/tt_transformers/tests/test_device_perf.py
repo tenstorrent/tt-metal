@@ -44,7 +44,7 @@ def test_device_perf_one_iter(
     max_generated_tokens,
     export_measurements,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"
