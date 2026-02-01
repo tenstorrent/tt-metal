@@ -40,7 +40,9 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
         }
         case AllGatherAsyncVersion::MINIMAL_DEFAULT:
         default: {
-            return DefaultMeshWorkloadFactory{};
+            printf("via broadcast factory\n");
+            return AllGatherViaBroadcastFactory{};
+            // return DefaultMeshWorkloadFactory{};
         }
     }
 }
