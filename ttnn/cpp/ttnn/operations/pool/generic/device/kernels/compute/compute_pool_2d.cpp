@@ -237,7 +237,7 @@ void kernel_main() {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
                 }
-                // cb_pop_front(curr_in_cb_id, 1);
+                cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
