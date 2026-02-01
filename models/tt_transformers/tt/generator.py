@@ -81,7 +81,8 @@ def _apply_prefill_sampling_state(
     sampling_module = getattr(model_instance, "sampling", None)
     assert sampling_module is not None, "Sampling module not found in model for sampling on device."
     sampling_module.reset_sampling_params(sampling_params)
-    sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+    if sampling_params.seed is not None:
+        sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
     sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
