@@ -38,7 +38,7 @@ def run_sdpa_test(
     from ttnn.operations.transformer import SDPAProgramConfig
 
     program_config = SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # Tested and working with 8x8 grid
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),  # Use full device grid
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         enable_kv_chain_forwarding=enable_kv_chain_forwarding,
@@ -162,7 +162,7 @@ class TestSDPAKVChainForward:
         V = torch.randn(B, NH, S, DH)
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # Tested and working with 8x8 grid
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),  # Use full device grid
             q_chunk_size=64,
             k_chunk_size=128,
             exp_approx_mode=True,

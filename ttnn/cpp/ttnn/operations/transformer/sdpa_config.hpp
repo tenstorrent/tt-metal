@@ -16,6 +16,8 @@ struct SDPAProgramConfig {
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
     uint32_t max_cores_per_head_batch = 16;
+    bool enable_kv_chain_forwarding =
+        false;  // Enable store-and-forward chain optimization for KV (disabled by default, opt-in)
 };
 
 }  // namespace ttnn::operations::transformer
