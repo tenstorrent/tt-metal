@@ -1136,7 +1136,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            use_broadcast=True,
+            use_broadcast=False,
         )
 
         return {
