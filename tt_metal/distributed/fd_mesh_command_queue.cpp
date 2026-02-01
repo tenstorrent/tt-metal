@@ -573,6 +573,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
+    // Call low-level buffer dispatch to create DMA commands
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
         src, *shard_view, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);

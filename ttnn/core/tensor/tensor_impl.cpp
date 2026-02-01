@@ -54,22 +54,41 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     return os;
 }
 
+// ================================================================================
+// PHASE 5: allocate_device_buffer() - Size Calculation and Buffer Config
+// ================================================================================
+// Prepares buffer configuration - no actual memory allocation happens here
+// Actual allocation occurs in MeshBuffer::create() -> Buffer::create()
+// ================================================================================
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    
+    // KEY OPERATION 1: Extract Memory Config
+    // Gets buffer_type (DRAM/L1/L1_SMALL/TRACE) and buffer_layout (INTERLEAVED/SHARDED)
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
+    // KEY OPERATION 2-4: Create Device Local Buffer Config
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
+        // KEY OPERATION 2: Compute Page Size
+        // TILE_LAYOUT: 32×32×sizeof(element), ROW_MAJOR: row_width×sizeof(element)
         .page_size = tensor_spec.compute_page_size_bytes(),
+        
+        // Buffer Type: DRAM (large, slow), L1 (fast, small), L1_SMALL, TRACE
         .buffer_type = memory_config.buffer_type(),
+        
+        // KEY OPERATION 3: Get Sharding Args
+        // SHARDED: shard_spec (cores, shape), INTERLEAVED: empty (spread across banks)
         .sharding_args = tensor_spec.compute_buffer_sharding_args(),
     };
 
-    // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
-    // This is required for the time being, as TTNN has rich multi-device sharding implementation.
+    // KEY OPERATION 5: Compute Total Buffer Size
+    // Accounts for: data type size, padding, layout requirements, total elements
     const distributed::ReplicatedBufferConfig replicated_buffer_config{
         .size = tensor_spec.compute_packed_buffer_size_bytes(),
     };
 
+    // KEY OPERATION 6: Create MeshBuffer
+    // Validates buffer fits, creates backing buffer (actual allocation), initializes device views
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
@@ -582,7 +601,7 @@ DeviceStorage replicate_to_mesh_buffer(
         expected_packed_buffer_size_bytes);
 
     std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
-    mesh_device->mesh_command_queue(cq_id_int).enqueue_write_mesh_buffer(
+    mesh_device->mesh_command_queue(cq_id_int).enqueue_writfe_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
 
     std::vector<distributed::MeshCoordinate> coords;
@@ -611,6 +630,10 @@ DeviceStorage write_to_mesh_buffer(
 
 }  // namespace
 
+// ================================================================================
+// to_device_mesh_buffer() - Transfer host data to device buffer
+// Routes to replicate_to_mesh_buffer() OR write_to_mesh_buffer()
+// ================================================================================
 std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
@@ -624,14 +647,17 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
                 const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
+                
+                // PATH A: Replicate 1x1 host to larger device mesh (e.g., 1x1 → 2x2)
                 if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
                     host_storage_shape == distributed::MeshShape(1, 1)) {
-                    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
                     const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
                     return {
                         replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
                         TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
                 }
+                
+                // PATH B: Matching mesh shapes (1x1 → 1x1, or 2x2 → 2x2, etc.) 
                 TT_FATAL(
                     host_storage_shape == mesh_device_shape,
                     "Distributed host buffer has different shape {} than the mesh device {}",
@@ -664,7 +690,9 @@ Tensor to_device(
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
+    // Allocation starts here
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
+    // transfer starts here
     auto [mesh_storage, topology] = to_device_mesh_buffer(
         tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);

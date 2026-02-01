@@ -306,6 +306,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     tt::tt_metal::MemoryPin pydata_pin(
         std::make_shared<nb::ndarray<nb::array_api>>(preprocessed_py_tensor.contiguous_py_tensor));
 
+    
+    // CREATE THE ACTUAL TT TENSOR
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.contiguous_py_tensor,
         shape,

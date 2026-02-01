@@ -578,7 +578,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
     }
 }
 
-// Issue dispatch commands for writing buffer data
+// Build dispatch command with data, write to command queue, notify dispatch core
 template <typename T>
 void issue_buffer_dispatch_command_sequence(
     const void* src,
@@ -624,10 +624,10 @@ void issue_buffer_dispatch_command_sequence(
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);  // → 🔴 UMD call inside
 }
 
-// Top level helper functions to write buffer data
+// Loop to issue dispatch commands for all pages, wrapping command queue as needed
 void write_interleaved_buffer_to_device(
     const void* src,
     InterleavedBufferWriteDispatchParams& dispatch_params,
@@ -704,7 +704,7 @@ void write_sharded_buffer_to_core(
     }
 }
 
-// Main API to write buffer data
+// Create dispatch commands for DMA transfer: host → device buffer
 void write_to_device_buffer(
     const void* src,
     Buffer& buffer,
@@ -712,22 +712,25 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    // Get command queue memory manager
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
 
+    // Calculate command queue limits and capacities
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
     // TODO: When writing to L1, modify this function to use enqueue_write_to_core
 
+    // Route based on buffer layout
     if (is_sharded(buffer.buffer_layout())) {
+        // PATH A: SHARDED - data on specific cores
         ShardedBufferWriteDispatchParams dispatch_params(
             &buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed, sub_device_ids);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
-        // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
@@ -744,8 +747,11 @@ void write_to_device_buffer(
             }
         }
     } else {
+        // PATH B: INTERLEAVED - data spread across memory banks (YOUR TEST)
         auto root_buffer = buffer.root_buffer();
         auto region = buffer.root_buffer_region();
+        
+        // Initialize dispatch parameters (page size, address, bank info)
         InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
             initialize_interleaved_buf_dispatch_params(
                 *root_buffer, cq_id, expected_num_workers_completed, region, sub_device_ids);
@@ -759,6 +765,7 @@ void write_to_device_buffer(
             dispatch_params_variant);
         TT_ASSERT(dispatch_params != nullptr);
 
+        // Create dispatch commands and write to command queue → triggers UMD
         write_interleaved_buffer_to_device(
             src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     }

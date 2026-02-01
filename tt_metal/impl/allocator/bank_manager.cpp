@@ -381,6 +381,12 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     return updated_available_ranges;
 }
 
+// ================================================================================
+// PHASE 10: BankManager::allocate_buffer() - ACTUAL MEMORY ALLOCATION 🎯
+// ================================================================================
+// This is where physical memory addresses are assigned!
+// Manages free lists, finds available memory regions, returns device address
+// ================================================================================
 uint64_t BankManager::allocate_buffer(
     DeviceAddr size,
     DeviceAddr page_size,
@@ -388,11 +394,19 @@ uint64_t BankManager::allocate_buffer(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
     BankManager::AllocatorDependencies::AllocatorID allocator_id) {
+    
+    // Get the allocator for this memory type (DRAM, L1, etc.)
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
+    // =============================================================================
+    // KEY OPERATION 1: Determine Bank Count and Allocation Strategy
+    // =============================================================================
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
+    
+    // SHARDED: Allocate on specific cores
+    // INTERLEAVED: Spread across all memory banks round-robin
     if (num_shards.has_value()) {
         auto num_compute_banks = compute_grid.num_cores();
         is_sharded = true;
@@ -403,13 +417,24 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
+    
+    // =============================================================================
+    // KEY OPERATION 2: Calculate Size Per Bank
+    // =============================================================================
+    // For INTERLEAVED: total_size / num_banks (spread data across banks)
+    // For SHARDED: size for each shard's core
+    // Accounts for page_size and alignment
     DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
 
+    // =============================================================================
+    // KEY OPERATION 3: Single Allocator Path (Simple Case)
+    // =============================================================================
     // If there are no dependent allocators, fall back to allocator's single allocator strategy
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
 
@@ -417,6 +442,8 @@ uint64_t BankManager::allocate_buffer(
     // with top-down allocation. Otherwise, address limit is used to clamp the available ranges regardless of bottom_up
     // vs. top-down allocation
     if (dependent_allocators.empty()) {
+        // Simple allocation: find free space and allocate
+        // Uses first-fit or best-fit algorithm internally
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         if (!address.has_value()) {
             auto mem_stats = alloc->get_statistics();
@@ -433,20 +460,30 @@ uint64_t BankManager::allocate_buffer(
                 mem_stats.total_free_bytes,
                 mem_stats.largest_free_block_bytes);
         }
+        // Track this allocation
         allocated_buffers_[allocator_id.get()].insert(address.value());
         // No neighbors, nothing to invalidate
-        return address.value();
+        return address.value();  // ← RETURNS PHYSICAL MEMORY ADDRESS
     }
 
+    // =============================================================================
+    // KEY OPERATION 4: Multi-Allocator Path (Complex Case with Dependencies)
+    // =============================================================================
     // Get available address ranges after subtracting dependencies
     // The pair represents (start, end) of the available address range(s)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
         this->compute_available_addresses(allocator_id, size_per_bank, address_limit);
 
+    // =============================================================================
+    // KEY OPERATION 5: Choose Address Based on Direction
+    // =============================================================================
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
     std::optional<DeviceAddr> chosen;
+    
     if (bottom_up) {
+        // BOTTOM-UP: Start from lowest address (e.g., 0x0 upward)
+        // Used typically for DRAM
         for (const auto& r : available_ranges) {
             DeviceAddr s = r.first;
             if (s + size_per_bank <= r.second) {
@@ -455,6 +492,8 @@ uint64_t BankManager::allocate_buffer(
             }
         }
     } else {
+        // TOP-DOWN: Start from highest address downward
+        // Used typically for L1 in some configurations
         for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
             const auto& r = available_ranges[static_cast<size_t>(i)];
             DeviceAddr s = r.second - size_per_bank;
@@ -480,18 +519,35 @@ uint64_t BankManager::allocate_buffer(
             mem_stats.total_free_bytes,
             mem_stats.largest_free_block_bytes);
     }
+    
+    // =============================================================================
+    // KEY OPERATION 6: Validate Alignment
+    // =============================================================================
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
         "Chosen address {} is not aligned to {} B",
         chosen.value(),
         alignment_bytes_);
 
+    // =============================================================================
+    // KEY OPERATION 7: Allocate at Chosen Address
+    // =============================================================================
+    // Mark the chosen address as allocated in the free list
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
-    allocated_buffers_[allocator_id.get()].insert(address.value());
+    
+    // =============================================================================
+    // KEY OPERATION 8: Update Tracking Structures
+    // =============================================================================
+    allocated_buffers_[allocator_id.get()].insert(address.value());  // Track allocation
+    
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
-    return address.value();
+    
+    // =============================================================================
+    // RETURN: Physical Memory Address on Device
+    // =============================================================================
+    return address.value();  // ← THIS IS THE FINAL MEMORY ADDRESS (e.g., 0x80000000)
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {

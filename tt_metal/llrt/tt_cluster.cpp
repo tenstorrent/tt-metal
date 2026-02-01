@@ -220,25 +220,35 @@ bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
+    // 1. Log: "Opening user mode device driver"
     log_info(tt::LogDevice, "Opening user mode device driver");
 
+    // 2. Detect chip architecture (WORMHOLE_B0)
     this->detect_arch_and_target();
 
+    // 3. Get ethernet routing address
     routing_info_addr_ = hal_.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
 
+    // 4. Initialize device drivers ← UMD/KMD boundary
     this->initialize_device_drivers();
 
+    // 5. Disable bad ethernet cores
     this->disable_ethernet_cores_with_retrain();
 
+    // 6. Configure ethernet for routing
     this->initialize_ethernet_cores_router_mode();
 
+    // 7. Set up ethernet sockets
     this->initialize_ethernet_sockets();
 
+    // 8. Verify UMD driver is ready
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
+    // 9. Discover chip tunnels (multi-chip)
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
     if (this->target_type_ != tt::TargetDevice::Mock) {
+        // 10. Reset all RISC cores
         this->assert_risc_reset();
     }
 }

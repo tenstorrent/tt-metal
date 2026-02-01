@@ -451,6 +451,8 @@ def device(request, device_params):
     original_default_device = ttnn.GetDefaultDevice()
 
     updated_device_params = get_updated_device_params(device_params)
+    
+    # main call to create the device
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 

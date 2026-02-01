@@ -303,6 +303,11 @@ Buffer::Buffer(
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
+// ================================================================================
+// PHASE 7: Buffer::create() - Buffer Object Creation
+// ================================================================================
+// Creates buffer object and gets allocator, triggers allocation in allocate_impl()
+// ================================================================================
 std::shared_ptr<Buffer> Buffer::create(
     IDevice* device,
     DeviceAddr size,
@@ -313,6 +318,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
+    // Constructor: stores parameters, gets allocator, validates, assigns unique ID
     auto buffer = std::make_shared<Buffer>(
         device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
 
@@ -321,6 +327,7 @@ std::shared_ptr<Buffer> Buffer::create(
         return buffer;
     }
 
+    // PHASE 8: Trigger actual allocation
     buffer->allocate_impl();
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
@@ -411,13 +418,20 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
 Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
+// ================================================================================
+// PHASE 8: Buffer::allocate_impl() - Allocation Trigger
+// ================================================================================
+// Calls allocator to get memory address, updates status
+// ================================================================================
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {
+        // Trace capture mode: skip actual allocation, used for graph optimization
         address_ = 0;
         hooked_allocation_ = true;
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
+        // PHASE 9: Call allocator - THIS GETS THE MEMORY ADDRESS
         address_ = allocator_->allocate_buffer(this);
 
         // Assertion here because buffer class returns a u32 when address is queried

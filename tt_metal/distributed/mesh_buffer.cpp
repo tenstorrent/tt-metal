@@ -74,13 +74,21 @@ Shape2D ShardedBufferConfig::physical_shard_shape() const {
     return Shape2D(shard_height == 0 ? global_height : shard_height, shard_width == 0 ? global_width : shard_width);
 }
 
+// ================================================================================
+// PHASE 6: MeshBuffer::create() - Mesh Coordination
+// ================================================================================
+// Coordinates buffer allocation across mesh devices
+// ================================================================================
 std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
+    
+    // Validate buffer fits on mesh (shard count ≤ device count)
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
 
+    // Compute device-local size: replicated (full size) or sharded (shard size only)
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
@@ -92,8 +100,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
     std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
-        // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
-        // The address provided to the backing buffer is used as the address for the MeshBuffer object.
+        // PHASE 7: Create backing buffer - THE ONE ACTUAL ALLOCATION
+        // All devices share this address
         std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
             device_local_size,
@@ -110,6 +118,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
     }
 
+    // Create buffer views for each device
     mesh_buffer->initialize_device_buffers();
 
     return mesh_buffer;

@@ -281,6 +281,9 @@ def from_torch(
     if tensor is None:
         return None
 
+    
+    # Validates Input Parameters
+    
     if spec is not None:
         if spec.shape != tensor.shape:
             raise RuntimeError(
@@ -304,6 +307,9 @@ def from_torch(
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
+    
+    # Calls Tensor Constructor
+    
     return ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,

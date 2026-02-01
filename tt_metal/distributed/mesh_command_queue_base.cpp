@@ -258,9 +258,10 @@ void MeshCommandQueueBase::enqueue_write_shards(
 void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
     auto lock = lock_api_function_();
-    // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
+    
+    // Extract each shard: coord + data pointer + size
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
-    for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
+    for (const auto& host_buffer_coord : host_buffer.shard_coords()) { //single iteration
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
             shard_data_transfers.push_back(distributed::ShardDataTransfer{MeshCoordinate(host_buffer_coord)}

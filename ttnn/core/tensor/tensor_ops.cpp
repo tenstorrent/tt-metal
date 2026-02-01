@@ -24,13 +24,46 @@ namespace {
 tt::tt_metal::Tensor allocate_tensor_on_device(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
+    
+    // ============================================================================
+    // KEY OPERATION 1: Allocate Buffer
+    // ============================================================================
+    // This is where buffer allocation starts!
+    // - Computes buffer size (pages, total bytes)
+    // - Creates MeshBuffer (multi-device buffer management object)
+    // - Eventually calls into allocator to get physical memory address
+    // - Returns std::shared_ptr<distributed::MeshBuffer>
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
+    
+    // ============================================================================
+    // KEY OPERATION 2: Create Mesh Coordinates
+    // ============================================================================
+    // Generates coordinates for each device in the mesh topology
+    // Example: 
+    //   - Single device: [(0,0)]
+    //   - 2x2 mesh: [(0,0), (0,1), (1,0), (1,1)]
+    //   - 2x4 mesh: [(0,0), (0,1), (0,2), (0,3), (1,0), (1,1), (1,2), (1,3)]
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
+    
+    // ============================================================================
+    // KEY OPERATION 3: Create Device Storage
+    // ============================================================================
+    // Wraps mesh_buffer with device coordinates
+    // DeviceStorage indicates this tensor lives on device memory (not host memory)
+    // This is different from HostStorage which would indicate CPU memory
     DeviceStorage device_storage(std::move(mesh_buffer), coords);
+    
+    // ============================================================================
+    // KEY OPERATION 4: Define Tensor Topology
+    // ============================================================================
+    // Defines how the tensor is distributed/mapped across mesh devices
+    // Placement strategies:
+    //   - Replicate: Copy the entire tensor to all devices (default here)
+    //   - Shard: Split tensor across devices
     // TODO (#25340): Implement correct logic and add test for this
     ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
     for (size_t i = 0; i < device->shape().dims(); i++) {
@@ -38,6 +71,14 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     }
 
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    
+    // ============================================================================
+    // KEY OPERATION 5: Construct and Return Tensor
+    // ============================================================================
+    // Combines:
+    //   - device_storage: Where the data lives (device memory with mesh buffer)
+    //   - tensor_spec: Shape, layout, data type, memory config
+    //   - tensor_topology: How data is distributed across mesh
     return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 }  // namespace
@@ -62,7 +103,20 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
 }
 
+// ================================================================================
+// PHASE 3: create_device_tensor() - Tensor Creation Orchestrator
+// ================================================================================
+// Entry point for device tensor creation from C++
+// Called from Python via nanobind bindings after ttnn.from_torch() / ttnn.Tensor()
+// This function orchestrates the entire tensor allocation process
+// ================================================================================
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
+    // ============================================================================
+    // KEY OPERATION 1: Start Operation Tracking
+    // ============================================================================
+    // Records this operation for graph capture/replay and profiling
+    // Logs: operation name, shape, dtype, layout, device, memory config
+    // Used for optimization, debugging, and trace capture
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -71,11 +125,35 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         device,
         tensor_spec.tensor_layout().get_memory_config());
 
+    // ============================================================================
+    // KEY OPERATION 2: Cast Device to MeshDevice
+    // ============================================================================
+    // Converts generic IDevice interface to MeshDevice
+    // MeshDevice handles multi-device mesh topology (single device is 1x1 mesh)
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    
+    // ============================================================================
+    // KEY OPERATION 3: Allocate Tensor on Device
+    // ============================================================================
+    // Main allocation call - this is where buffer allocation actually happens!
+    // Creates tensor with:
+    //   - Allocated mesh buffer (physical device memory)
+    //   - Device storage wrapper
+    //   - Tensor topology (replication/sharding strategy)
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    
+    // ============================================================================
+    // KEY OPERATION 4: Assign Unique Tensor ID
+    // ============================================================================
+    // Assigns globally unique identifier for tracking and debugging
+    // Used to track tensor through operations and memory management
     output = tt::tt_metal::set_tensor_id(output);
 
+    // ============================================================================
+    // KEY OPERATION 5: End Operation Tracking
+    // ============================================================================
+    // Records operation completion for graph tracking
     GraphTracker::instance().track_function_end(output);
 
     return output;

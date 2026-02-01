@@ -107,18 +107,28 @@ void AllocatorImpl::verify_safe_allocation() const {
     }
 }
 
+// ================================================================================
+// PHASE 9: AllocatorImpl::allocate_buffer() - Routing Layer
+// ================================================================================
+// Routes to correct memory manager (DRAM/L1/L1_SMALL/TRACE) based on buffer type
+// ================================================================================
 DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);  // Thread-safe allocation
     DeviceAddr address = 0;
+    
+    // Extract buffer properties
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_cores = buffer->num_cores();
+    
     this->verify_safe_allocation();
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
+    
+    // Route to appropriate memory manager - PHASE 10 happens in these calls
     switch (buffer_type) {
         case BufferType::DRAM:
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
@@ -139,8 +149,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             TT_THROW("Unsupported buffer type!");
         }
     }
-    allocated_buffers_.insert(buffer);
-    return address;
+    
+    allocated_buffers_.insert(buffer);  // Track allocated buffer
+    return address;  // Returns physical memory address from PHASE 10
 }
 
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
