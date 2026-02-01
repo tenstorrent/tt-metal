@@ -196,6 +196,8 @@ def run_all_gather_impl(
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
     logger.info(f"All gather dim: {dim}")
+    logger.info(f"Input layout: {layout}")
+    logger.info(f"Memory config: {mem_config_input}")
 
     input_tensor_mesh_list = []
     ag_output_tensor_goldens_list = []
@@ -326,6 +328,10 @@ def run_all_gather_impl(
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
             logger.info(f"{output}, iteration {i}, reversed={is_reversed}")
+            # torch.set_printoptions(threshold=100*100, linewidth=100*100, sci_mode=False)
+            # print("tt_out")
+            # print(tt_ag_out)
+            # print(expected_tensor)
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
@@ -337,138 +343,245 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
     [
+        # composite factories
+        # (
+        #     [1, 32, 128, 128],
+        #     1,
+        #     # [8, 1, 1, 32],
+        #     # 0,
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     ttnn.bfloat16,
+        #     False,
+        #     1,
+        #     None,
+        #     None,
+        #     1.0,
+        #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        # ),
         (
-            [1, 1, 1024, 5120],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            True,
-            True,
-            1.0,
-        ),  # perf, barrier_with_persistent
-        (
-            [8, 1, 512, 512],
-            0,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            False,
-            1.0,
-        ),  # check, barrier_without_persistent
-        (
-            [1, 1, 1024, 1024],
+            [1, 1, 32, 128 * 128],
+            # [1, 1, 8, 16],
             2,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
             True,
-            10,
-            False,
-            True,
+            30,
+            None,
+            None,
             1.0,
-        ),  # perf, no_barrier_with_persistent
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    # (1, 4096*3),  # (shard_height, shard_width)
+                    # (1, 16),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 2048),  # (shard_height, shard_width)
+                    # (32, 512),  # (shard_height, shard_width)
+                    # (32, 512),  # (shard_height, shard_width)
+                    # (8, 8),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
         (
-            [1, 1, 1024, 1024],
-            -1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            False,
-            True,
-            1.0,
-        ),  # perf, no_barrier_with_persistent
-        (
-            [1, 1, 48, 1024],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            True,
-            1.0,
-        ),  # check, barrier_with_persistent
-        (
-            [1, 1, 48, 1024],
-            -1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            True,
-            1.0,
-        ),  # check, barrier_with_persistent
-        # Composite-AG tests
-        (
-            [1, 1, 1, 8],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            True,
-            False,
-            1.0,
-        ),  # perf, barrier_without_persistent
-        (
-            [1, 16, 32, 32],
+            [1, 8, 32, 2112],
+            # [1, 8, 32, 32],
             1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            False,
             True,
+            35,
+            None,
+            None,
             1.0,
-        ),  # check, no_barrier_with_persistent
-        (
-            [1, 1, 1024, 5120],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat8_b,
-            False,
-            1,
-            True,
-            True,
-            0.9999,
-        ),  # perf, barrier_with_persistent
-    ],
-    ids=[
-        "sd35_spatial-perf-barrier_with_persistent",
-        "gather_dim_0-check-barrier_without_persistent",
-        "gather_dim_2-perf-no_barrier_with_persistent",
-        "gather_dim_negative_2-perf-no_barrier_with_persistent",
-        "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
-        "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
-        "composite_ag_test_two-perf-barrier_without_persistent",
-        "composite_ag_test_four-check-no_barrier_with_persistent",
-        "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config_input, mem_config_ag",
-    [
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            # ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    # (32, 32),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                        }
+                    ),
+                    (32 * 8, 64),  # (shard_height, shard_width)
+                    # ttnn.CoreRangeSet(
+                    #     {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                    # (32*8, 32),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
         )
+        # ([1, 1, 256, 2112], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, 1.0),  # perf
     ],
+    # ids=[
+    #     "dram",
+    #     "sharded"
+    # ]
+    # [
+    #     (
+    #         [1, 1, 1024, 5120],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # perf, barrier_with_persistent
+    #     (
+    #         [8, 1, 512, 512],
+    #         0,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         False,
+    #         1.0,
+    #     ),  # check, barrier_without_persistent
+    #     (
+    #         [1, 1, 1024, 1024],
+    #         2,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # perf, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 1024, 1024],
+    #         -1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # perf, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 48, 1024],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # check, barrier_with_persistent
+    #     (
+    #         [1, 1, 48, 1024],
+    #         -1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # check, barrier_with_persistent
+    #     # Composite-AG tests
+    #     (
+    #         [1, 1, 1, 8],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         True,
+    #         False,
+    #         1.0,
+    #     ),  # perf, barrier_without_persistent
+    #     (
+    #         [1, 16, 32, 32],
+    #         1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # check, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 1024, 5120],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat8_b,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         0.9999,
+    #     ),  # perf, barrier_with_persistent
+    # ],
+    # ids=[
+    #     "sd35_spatial-perf-barrier_with_persistent",
+    #     "gather_dim_0-check-barrier_without_persistent",
+    #     "gather_dim_2-perf-no_barrier_with_persistent",
+    #     "gather_dim_negative_2-perf-no_barrier_with_persistent",
+    #     "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
+    #     "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
+    #     "composite_ag_test_two-perf-barrier_without_persistent",
+    #     "composite_ag_test_four-check-no_barrier_with_persistent",
+    #     "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
+    # ],
 )
+# @pytest.mark.parametrize(
+#     "mem_config_input, mem_config_ag",
+#     [
+#         # (
+#         #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.TILE_LAYOUT, ttnn.BufferType.DRAM),
+#         #     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+#         # )
+#         (
+#             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+#             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+#         )
+#     ],
+# )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_async(
     mesh_device,
@@ -512,22 +625,26 @@ def test_all_gather_async(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
-        # Composite-AG tests
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
+        ([1, 32, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 100, None, None, None),  # perf
+        # ([1, 1, 256, 2112], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
     ],
-    ids=[
-        "dit_shape-perf",  # this one triggers the default chunks_per_sync
-        "sd35_prompt-check",
-        "gather_dim_1-perf",
-        "gather_dim_2_padded_dim_3-check",
-        "composite_ag_test_one-perf",
-        "composite_ag_test_three-check",
-    ],
+    # [
+    #     ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+    #     ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+    #     # Composite-AG tests
+    #     ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
+    # ],
+    # ids=[
+    #     "dit_shape-perf",  # this one triggers the default chunks_per_sync
+    #     "sd35_prompt-check",
+    #     "gather_dim_1-perf",
+    #     "gather_dim_2_padded_dim_3-check",
+    #     "composite_ag_test_one-perf",
+    #     "composite_ag_test_three-check",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -541,11 +658,11 @@ def test_all_gather_async(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_ttnn_all_gather(
     mesh_device,

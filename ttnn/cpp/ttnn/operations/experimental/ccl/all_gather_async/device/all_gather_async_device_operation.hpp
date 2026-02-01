@@ -7,6 +7,7 @@
 #include "all_gather_async_device_operation_types.hpp"
 #include "all_gather_async_default_program_factory.hpp"
 #include "all_gather_async_llama_sharded_program_factory.hpp"
+#include "all_gather_via_broadcast_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -18,7 +19,8 @@ struct AllGatherAsyncDeviceOperation {
     using tensor_args_t = AllGatherAsyncInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory>;
+    using program_factory_t =
+        std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory, AllGatherViaBroadcastFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
