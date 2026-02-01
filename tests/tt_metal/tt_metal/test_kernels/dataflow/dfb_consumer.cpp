@@ -41,7 +41,7 @@ void kernel_main() {
         // DPRINT << "wfw" << ENDL();
         dfb.wait_front(1);
         // DPRINT << "wfd" << ENDL();
-        DPRINT << "consumer tile id " << tile_id << ENDL();
+        DPRINT << "consumer tile id " << tile_id << " page id " << ((tile_id * num_consumers) + consumer_idx) << ENDL();
         noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = tile_id * num_consumers + consumer_idx});
         // DPRINT << "pfw" << ENDL();
         dfb.pop_front(1);

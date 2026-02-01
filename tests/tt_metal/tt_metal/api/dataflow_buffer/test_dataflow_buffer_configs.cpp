@@ -154,7 +154,73 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4S) {
     run_dfb_program(this->devices_.at(0), config);
 }
 
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 2,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 2,
+        .cap = ::experimental::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+//
 // just config -- add actual checks
+//
 TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -337,8 +403,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 }
 
-TEST_F(
-    MeshDeviceFixture, TensixTest1xDFB2Sx4BConfig) {  // get rid of num producers/consumers and use risc mask for counts
+TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4BConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
