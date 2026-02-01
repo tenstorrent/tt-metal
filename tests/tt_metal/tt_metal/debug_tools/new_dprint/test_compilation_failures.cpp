@@ -46,6 +46,7 @@ public:
             }
             throw;
         }
+        throw std::runtime_error("Expected kernel compilation to fail, but it succeeded.");
     }
 };
 
@@ -59,4 +60,10 @@ TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderSyntax) {
     TestCompileKernelFailure(
         "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_syntax.cpp",
         "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");
+}
+
+TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderIndex) {
+    TestCompileKernelFailure(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_index.cpp",
+        "Placeholder index exceeds number of arguments");
 }

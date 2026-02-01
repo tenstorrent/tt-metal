@@ -47,22 +47,32 @@
 #define NEW_DPRINT_DATA1(format, ...)
 #endif
 
-#define NEW_DPRINT(format, ...)                                                                      \
-    {                                                                                                \
-        /* Validate format string syntax */                                                          \
-        static_assert(                                                                               \
-            dprint_detail::is_valid_format_string(format),                                           \
-            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");        \
-        /* Validate placeholder format */                                                            \
-        static_assert(                                                                               \
-            !dprint_detail::has_mixed_placeholders(format),                                          \
-            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string"); \
-        /* TODO: Validate correctness of format and arguments */                                     \
-        /* TODO: Update format to include all necessary data and store it into dprint section */     \
-        /* TODO: Write dprint message to dprint buffer */                                            \
+#define NEW_DPRINT(format, ...)                                                                                       \
+    {                                                                                                                 \
+        /* Validate format string syntax */                                                                           \
+        static_assert(                                                                                                \
+            dprint_detail::is_valid_format_string(format),                                                            \
+            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                         \
+        /* Validate placeholder format */                                                                             \
+        static_assert(                                                                                                \
+            !dprint_detail::has_mixed_placeholders(format),                                                           \
+            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                  \
+        /* For indexed placeholders, validate no index exceeds argument count */                                      \
+        static_assert(                                                                                                \
+            !dprint_detail::has_indexed_placeholders(format) ||                                                       \
+                dprint_detail::get_max_index(format) < static_cast<int>(dprint_detail::count_arguments(__VA_ARGS__)), \
+            "Placeholder index exceeds number of arguments");                                                         \
+        /* TODO: Validate correctness of format and arguments */                                                      \
+        /* TODO: Update format to include all necessary data and store it into dprint section */                      \
+        /* TODO: Write dprint message to dprint buffer */                                                             \
     }
 
 namespace dprint_detail {
+
+template <typename... Args>
+constexpr std::size_t count_arguments(const Args&...) {
+    return sizeof...(Args);
+}
 
 // Helper to check if a character is a digit
 constexpr bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -198,6 +208,34 @@ constexpr bool has_mixed_placeholders(const char (&format)[N]) {
         i = token.end_pos;
     }
     return false;
+}
+
+// Helper to detect if format string uses indexed placeholders ({0}, {1}, etc.)
+// Returns true if ANY placeholder has an index
+template <std::size_t N>
+constexpr bool has_indexed_placeholders(const char (&format)[N]) {
+    for (std::size_t i = 0; i < N - 1;) {
+        FormatToken token = parse_format_token(format, i);
+        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+            return true;
+        }
+        i = token.end_pos;
+    }
+    return false;
+}
+
+// Helper to find the maximum index used in format string
+template <std::size_t N>
+constexpr int get_max_index(const char (&format)[N]) {
+    int max_index = -1;
+    for (std::size_t i = 0; i < N - 1;) {
+        FormatToken token = parse_format_token(format, i);
+        if (token.type == TokenType::Placeholder && token.is_indexed()) {
+            max_index = std::max(max_index, token.index);
+        }
+        i = token.end_pos;
+    }
+    return max_index;
 }
 
 }  // namespace dprint_detail
