@@ -1,0 +1,8 @@
+﻿ttnn.cosh\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cosh_bw:
+
+.. autooperation:: ttnn.cosh_bw

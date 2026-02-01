@@ -1,0 +1,8 @@
+﻿ttnn.layer\_norm\_pre\_all\_gather
+==================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.layer_norm_pre_all_gather:
+
+.. autooperation:: ttnn.layer_norm_pre_all_gather

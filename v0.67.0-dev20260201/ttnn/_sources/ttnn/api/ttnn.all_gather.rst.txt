@@ -1,0 +1,8 @@
+﻿ttnn.all\_gather
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.all_gather:
+
+.. autooperation:: ttnn.all_gather
