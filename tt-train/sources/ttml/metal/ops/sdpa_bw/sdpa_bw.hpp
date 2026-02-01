@@ -17,8 +17,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     const ttnn::Tensor& key,                                      // input K (needed for gradients)
     const ttnn::Tensor& value,                                    // input V (needed for gradients)
     const ttnn::Tensor& intermediates,                            // From forward pass (max_val, 1/sum_exp values)
-    AttentionMaskType mask_type = AttentionMaskType::Arbitrary,   // Causal not yet supported
-    const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,  // only used when mask_type == Arbitrary
+    AttentionMaskType mask_type = AttentionMaskType::Arbitrary,   // Mask type (None, Causal, or Arbitrary)
+    const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,  // attention mask (only for Arbitrary)
     const float dropout_probability = 0.0F);
 
 }  // namespace ttml::metal
