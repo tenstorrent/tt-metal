@@ -67,16 +67,6 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
-    "device_params",
-    [
-        {
-            "worker_l1_size": 1481384,
-            "fabric_config": True,
-        }
-    ],
-    indirect=True,
-)
 def test_model_inference(
     weights,
     layers,

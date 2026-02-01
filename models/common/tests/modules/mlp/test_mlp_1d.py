@@ -778,7 +778,7 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     reference_output = reference_model(torch_input)
 
     # Run TT model
-    input_mem_config = model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+    input_mem_config = model_args.get_mlp_input_mem_config(mode, None)
 
     tt_input = ttnn.from_torch(
         torch_input,

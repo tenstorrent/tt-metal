@@ -504,7 +504,7 @@ class Transformer(TTTransformer):
         rot_mats_global=None,
         rot_mats_local=None,
         user_id=0,
-        mode="decode",
+        mode=Mode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -515,11 +515,9 @@ class Transformer(TTTransformer):
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
-            activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-                decoder_id=i, tensor=TensorGroup.ACTIVATION
-            )
-            if mode == "decode" and not self.args.is_galaxy:
-                x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
+            activation_dtype = self.decoders_optimizations.get_tensor_dtype(decoder_id=i, tensor=TensorGroup.ACTIVATION)
+            if mode == Mode.DECODE and not self.args.is_galaxy:
+                x = ttnn.to_memory_config(x, self.args.get_residual_mem_config(mode, None), activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
@@ -538,7 +536,7 @@ class Transformer(TTTransformer):
             if deepstack_visual_embeds is not None and i in range(len(deepstack_visual_embeds)):
                 x = self.deepstack_process(x, deepstack_visual_embeds[i])
 
-        if mode == "prefill" and get_last_token == -1:
+        if mode == Mode.PREFILL and get_last_token == -1:
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -548,12 +546,12 @@ class Transformer(TTTransformer):
         # Output norm
         x = self.norm(x, mode=mode)
 
-        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-            x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        if mode == Mode.PREFILL and self.args.get_lm_head_input_mem_config(mode, None).is_sharded():
+            x = ttnn.interleaved_to_sharded(x, self.args.get_lm_head_input_mem_config(mode, None))
 
         x = self.lm_head(x)
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
