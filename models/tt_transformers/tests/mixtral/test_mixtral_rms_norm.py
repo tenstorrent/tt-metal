@@ -80,7 +80,7 @@ def test_rms_norm_inference(
     )
 
     norm_config = model_args.get_norm_config("ff", mode, None)
-    tt_output = tt_inner_norm(tt_input, mode - Mode.PREFILL, norm_config=norm_config)
+    tt_output = tt_inner_norm(tt_input, mode=mode, norm_config=norm_config)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

@@ -474,7 +474,7 @@ class VisionAttention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
+                program_config=self.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
             )
         else:
             attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
@@ -484,7 +484,7 @@ class VisionAttention(LightweightModule):
                 cu_seqlens,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
 
         # deallocate keys and values

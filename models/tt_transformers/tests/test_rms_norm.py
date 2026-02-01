@@ -90,7 +90,7 @@ def test_rms_norm_inference(
         memory_config=(model_args.get_residual_mem_config(mode)),
     )
 
-    norm_config = model_args.get_norm_config("attention_norm", mode, None)
+    norm_config = model_args.get_norm_config("attn", mode, None)
     tt_output = tt_model(tt_input, mode=mode, norm_config=norm_config)
 
     # DistributedNorm outputs are replicated across devices

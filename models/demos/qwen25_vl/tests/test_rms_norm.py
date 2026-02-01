@@ -82,7 +82,7 @@ def test_rms_norm_inference(
         memory_config=(ttnn.DRAM_MEMORY_CONFIG),
     )
 
-    tt_output = tt_model(tt_input, mode="prefill")
+    tt_output = tt_model(tt_input, mode=Mode.PREFILL)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(
