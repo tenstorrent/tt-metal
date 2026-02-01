@@ -169,8 +169,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::POWER_ITERATIVE:
             // For exponents 0, 1, 2, 3: use iterative approach
             return {
-                "power_iterative_tile_init();",
-                fmt::format("power_iterative_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                "power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {}u);", idst, (uint32_t)param0)};
         case UnaryOpType::LEAKY_RELU:
             return {
                 "leaky_relu_tile_init();",
