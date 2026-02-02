@@ -180,6 +180,8 @@ void kernel_main() {
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                         DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                         if (do_reduce) {
+                            DPRINT << "Waiting for the semaphore" << ENDL();
+                            DPRINT << "sem_target: " << sem_target << ENDL();
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                             sem_target++;
@@ -274,6 +276,8 @@ void kernel_main() {
                     }
 
                     if (do_reduce && (i == (ring_size - 1))) {
+                        DPRINT << "Resetting the semaphore before the next chunk" << ENDL();
+                        DPRINT << "sem_target: " << sem_target << ENDL();
                         // Reset the semaphore before the next batch
                         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                         sem_target = 0;

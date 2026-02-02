@@ -365,6 +365,7 @@ void kernel_main() {
                                         l1_read_addr += page_size;
                                     }
                                 }
+                                noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, tile_granularity);
                             }
 
