@@ -162,7 +162,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     // Format: hostname: X
                     //         mesh:
                     //           - mesh: 0
-                    //           - chips:
+                    //             chips:
                     //               - umd_chip_id: 0
                     auto mesh_list = host_node["mesh"];
                     uint32_t current_mesh_id = 0;
@@ -435,7 +435,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 }
 
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name) {
-    std::string golden_file_name = golden_name.empty() ? test_name : golden_name;
+    std::string golden_base_name = golden_name.empty() ? test_name : golden_name;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
@@ -449,7 +449,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     // Ranks are 0-based in distributed_context, but files use 1-based indexing
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
-    std::string golden_filename = golden_file_name + ".yaml";
+    std::string golden_filename = golden_base_name + ".yaml";
 
     std::filesystem::path generated_file = generated_dir / generated_filename;
     std::filesystem::path golden_file = golden_dir / golden_filename;
@@ -466,7 +466,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
 
     bool comparison_result = compare_asic_mapping_files(generated_file, golden_file);
     EXPECT_TRUE(comparison_result) << "ASIC mapping file mismatch for test " << test_name
-                                   << " (golden: " << golden_file_name << ") on rank " << rank;
+                                   << " (golden: " << golden_base_name << ") on rank " << rank;
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";
