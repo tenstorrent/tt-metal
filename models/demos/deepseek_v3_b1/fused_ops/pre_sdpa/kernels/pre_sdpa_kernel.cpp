@@ -255,8 +255,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<float>(1),     // scalar (1/sqrt(7168))
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -282,8 +282,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_arg_val<uint32_t>(0),                              // epsilon (same as rmsnorm1)
-        get_arg_val<float>(2),                                 // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
