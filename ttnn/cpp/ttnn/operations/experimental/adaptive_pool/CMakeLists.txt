@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_adaptive_pool ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::AdaptivePool ALIAS ttnn_op_experimental_adaptive_pool)
 
-target_precompile_headers(ttnn_op_experimental_adaptive_pool REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_adaptive_pool REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_adaptive_pool)
 
 target_sources(

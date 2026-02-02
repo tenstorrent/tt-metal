@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_copy ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Copy ALIAS ttnn_op_experimental_copy)
 
-target_precompile_headers(ttnn_op_experimental_copy REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_copy REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_copy)
 
 target_sources(ttnn_op_experimental_copy PRIVATE typecast/typecast.cpp)

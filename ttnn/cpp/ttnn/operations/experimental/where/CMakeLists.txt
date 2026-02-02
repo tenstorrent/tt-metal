@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_where ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Where ALIAS ttnn_op_experimental_where)
 
-target_precompile_headers(ttnn_op_experimental_where REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_where REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_where)
 
 set_target_properties(
