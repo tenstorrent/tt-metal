@@ -298,19 +298,15 @@ void UntilizeMultiCoreNDShardInputProgramFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
-    // Reader
+    // Reader and Writer update buffer addresses
     auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
-    for (const CoreCoord& core : cores_with_runtime_args) {
-        auto& runtime_args = runtime_args_by_core_reader[core.x][core.y];
-        runtime_args[0] = src_buffer->address();
-    }
-
-    // Writer
     auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     for (const CoreCoord& core : cores_with_runtime_args) {
-        auto& runtime_args = runtime_args_by_core_writer[core.x][core.y];
-        runtime_args[0] = dst_buffer->address();
-        runtime_args[1] = src_buffer->address();
+        auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
+        runtime_args_reader[0] = src_buffer->address();
+        auto& runtime_args_writer = runtime_args_by_core_writer[core.x][core.y];
+        runtime_args_writer[0] = dst_buffer->address();
+        runtime_args_writer[1] = src_buffer->address();
     }
 }
 }  // namespace ttnn::prim
