@@ -437,7 +437,7 @@ jobs:
           TT_CACHE_PATH: /localdev/wormhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
-            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
+            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL \
             -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.wh-config.image-name }}
   # calculate-to-publish:
   #   if: ${{ !cancelled() }}
