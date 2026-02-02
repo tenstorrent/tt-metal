@@ -515,7 +515,7 @@ git add -A && git commit -m "$(cat <<'EOF'
 [ttnn-kernel-designer] design: reduce_avg_w_rm
 
 - Created kernel design document
-- Helpers: tilize(), reduce<SUM, REDUCE_ROW, STREAMING>(), untilize()
+- Helpers: tilize<cb_in, cb_tilized>(), reduce<SUM, REDUCE_ROW, STREAMING>(), untilize<W, cb_out, cb_out_rm>()
 - Raw phases: reader (NOC reads), writer (NOC writes)
 
 operation: reduce_avg_w_rm
