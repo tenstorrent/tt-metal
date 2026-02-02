@@ -1,7 +1,7 @@
 add_library(ttnn_op_rand ${LIB_TYPE})
 add_library(TTNN::Ops::Rand ALIAS ttnn_op_rand)
 
-target_precompile_headers(ttnn_op_rand REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_rand REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_rand)
 
 # Verify only the api FILE_SET

@@ -52,6 +52,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
