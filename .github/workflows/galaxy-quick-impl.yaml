@@ -89,7 +89,7 @@ jobs:
       - name: Check for benchmark and latency data
         id: check-data
         if: ${{ !cancelled() && (github.ref_name == 'main' || github.ref_name == 'nzhao/latency-result-superset-export') }}
-        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@main
+        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@nzhao/latency-result-superset-export
         with:
           path: /work
           arch: wormhole_b0
@@ -256,7 +256,7 @@ jobs:
       - name: Check for benchmark and latency data
         id: check-data
         if: ${{ !cancelled() && (github.ref_name == 'main' || github.ref_name == 'nzhao/latency-result-superset-export') }}
-        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@main
+        uses: tenstorrent/tt-metal/.github/actions/check-latency-bw-results@nzhao/latency-result-superset-export
         with:
           path: /work
           arch: blackhole
