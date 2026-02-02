@@ -199,7 +199,8 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const LayerNormProgramConfig& program_config) {
+    const LayerNormProgramConfig& program_config,
+    const std::optional<uint32_t>& num_elements_per_device) {
     using OperationType = LayerNormPostAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -210,6 +211,7 @@ Tensor layer_norm_post_all_gather(
             .dtype = dtype,
             .use_2d_core_grid = use_2d_core_grid,
             .program_config = program_config,
+            .num_elements_per_device = num_elements_per_device,
         },
         OperationType::tensor_args_t{
             .input = input,

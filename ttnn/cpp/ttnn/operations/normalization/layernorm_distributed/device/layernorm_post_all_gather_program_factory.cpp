@@ -430,7 +430,11 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / (W * num_devices);  // bcast-w scaler
+    // Compute normalization factor: 1 / (elements_per_device * num_devices)
+    // If num_elements_per_device is specified (for non-tile-aligned sizes), use it
+    // Otherwise, use the tensor width W (which may be padded to tile alignment)
+    uint32_t actual_width_per_device = operation_attributes.num_elements_per_device.value_or(W);
+    float winv = 1.0f / (actual_width_per_device * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {

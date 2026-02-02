@@ -1065,7 +1065,9 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;
+    // Use logical width for mean scaling; for pre-all-gather produce sums.
+    const uint32_t logical_width = a.logical_shape()[-1];
+    float winv = is_pre_all_gather ? 1.0f : (1.0f / logical_width);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / num_blocks);  // bcast-cores scaler
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);

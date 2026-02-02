@@ -50,6 +50,7 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const LayerNormProgramConfig& program_config);
+    const LayerNormProgramConfig& program_config,
+    const std::optional<uint32_t>& num_elements_per_device = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -118,6 +118,10 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
                   program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
                   dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to None.
                   use_2d_core_grid (bool, optional): the 2D core grid. Defaults to None.
+                  num_elements_per_device (int, optional): the actual number of elements per device before padding.
+                    Use this for non-tile-aligned hidden sizes (where hidden_size_per_device % 32 != 0).
+                    When specified, this overrides the tensor width for computing the normalization factor,
+                    allowing distributed norm to work correctly with padded tensors. Defaults to None.
 
                 Returns:
                   ttnn.Tensor: the output tensor.
@@ -168,7 +172,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
-            nb::arg("use_2d_core_grid") = nb::none()});
+            nb::arg("use_2d_core_grid") = nb::none(),
+            nb::arg("num_elements_per_device") = nb::none()});
 }
 
 void bind_normalization_rms_norm_distributed(nb::module_& mod) {
