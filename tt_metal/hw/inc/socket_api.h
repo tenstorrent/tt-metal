@@ -11,7 +11,7 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
-#include "debug/dprint.h"
+
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
