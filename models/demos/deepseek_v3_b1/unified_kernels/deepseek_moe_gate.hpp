@@ -40,11 +40,13 @@ struct DeepseekMoeGate {
     // ========================================================================
 
     // Reader CTArgs (NCRISC)
-    template <uint32_t input_cb_, uint32_t bias_cb_, uint32_t input_indices_cb_>
+    // skip_input_signal: set to true when input CB is already pushed by another op (e.g., gather)
+    template <uint32_t input_cb_, uint32_t bias_cb_, uint32_t input_indices_cb_, bool skip_input_signal_ = false>
     struct ReaderCTArgs {
         static constexpr uint32_t input_cb = input_cb_;
         static constexpr uint32_t bias_cb = bias_cb_;
         static constexpr uint32_t input_indices_cb = input_indices_cb_;
+        static constexpr bool skip_input_signal = skip_input_signal_;
     };
 
     // Writer CTArgs (BRISC)
@@ -98,8 +100,11 @@ struct DeepseekMoeGate {
             cb_push_back(CTArgs::bias_cb, 1);
             cb_reserve_back(CTArgs::input_indices_cb, 1);
             cb_push_back(CTArgs::input_indices_cb, 1);
-            cb_reserve_back(CTArgs::input_cb, 1);
-            cb_push_back(CTArgs::input_cb, 1);
+            // Skip input CB signaling if already pushed by another op (e.g., gather)
+            if constexpr (!CTArgs::skip_input_signal) {
+                cb_reserve_back(CTArgs::input_cb, 1);
+                cb_push_back(CTArgs::input_cb, 1);
+            }
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================

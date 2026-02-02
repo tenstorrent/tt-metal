@@ -4,21 +4,22 @@
 // MoE Routed Expert fused kernel
 // Single kernel file, compiles correctly for all RISC cores
 //
-// Implements: Mcast -> Matmul+Activation -> Gather
-// - Sender core: Mcast sender, Gather receiver (outside compute grid)
+// Implements: Mcast -> Matmul+Activation -> Gather -> Gate
+// - Sender core: Mcast sender, Gather receiver, Gate compute (outside compute grid)
 // - Compute cores: Mcast receiver, Matmul+Activation compute, Gather sender
 // - Mcast grid: Rectangle encompassing sender and compute cores
 //
 // RISC assignments:
-// - BRISC: Mcast sender (sender core), Gather receiver (sender core)
-// - NCRISC: Mcast receiver, setup sharded buffers, Gather sender (compute cores)
-// - TRISC: Matmul+Activation compute (compute cores only)
+// - BRISC: Mcast sender (sender core), Gather receiver (sender core), Gate writer (sender core)
+// - NCRISC: Mcast receiver, setup sharded buffers, Gather sender (compute cores), Gate reader (sender core)
+// - TRISC: Matmul+Activation compute (compute cores), Gate compute (sender core)
 
 #include "../../unified_kernels/kernel_op_api.hpp"
 #include "../../unified_kernels/kernel_utils.hpp"
 #include "../../unified_kernels/mcast.hpp"
 #include "../../unified_kernels/matmul.hpp"
 #include "../../unified_kernels/gather.hpp"
+#include "../../unified_kernels/deepseek_moe_gate.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -60,11 +61,21 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_receiver_data_addr"),
     };
 
+    // Gate CTArgs (NCRISC: reader on sender core)
+    // skip_input_signal=true because gather already pushed to gate_input_cb
+    using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs<
+        get_named_compile_time_arg_val("gate_input_cb"),
+        get_named_compile_time_arg_val("gate_bias_cb"),
+        get_named_compile_time_arg_val("gate_input_indices_cb"),
+        true>;
+
     // Setup sharded persistent buffers
     if constexpr (Core::is_sender_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
+        // Note: gate_bias_cb and gate_input_indices_cb are tensor-backed CBs
+        // The gate reader handles signaling them (skip_input_signal only skips gate_input_cb)
     }
     if constexpr (Core::is_matmul_core) {
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
@@ -110,6 +121,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };
 
+    // Gate CTArgs (BRISC: writer on sender core)
+    using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::WriterCTArgs<
+        get_named_compile_time_arg_val("gate_output_cb"),
+        get_named_compile_time_arg_val("gate_output_indices_cb")>;
+
 #elif defined(COMPILE_FOR_TRISC)
     // Mcast CTArgs and args (no-op for TRISC)
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -128,6 +144,17 @@ void kernel_main() {
 
     // Gather args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
+
+    // Gate CTArgs (TRISC: compute on sender core)
+    using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ComputeCTArgs<
+        get_named_compile_time_arg_val("gate_input_cb"),
+        get_named_compile_time_arg_val("gate_bias_cb"),
+        get_named_compile_time_arg_val("gate_input_indices_cb"),
+        get_named_compile_time_arg_val("gate_output_cb"),
+        get_named_compile_time_arg_val("gate_output_indices_cb"),
+        get_named_compile_time_arg_val("gate_eps"),
+        get_named_compile_time_arg_val("gate_scaling_factor"),
+        get_named_compile_time_arg_val("gate_enable_sigmoid")>;
 #endif
 
     // ========================================================================
@@ -161,4 +188,18 @@ void kernel_main() {
         deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_sender_core, true> gather;
         gather(gather_args);
     }
+
+    // ========================================================================
+    // Gate: Top-8 expert selection with normalized scores (on sender core only)
+    // ========================================================================
+    {
+        DeviceZoneScopedN("GATE");
+        deepseek_b1_ops::DeepseekMoeGate::Op<GateCTArgs, Core::is_sender_core> gate;
+        gate();
+    }
+
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+#endif
 }
