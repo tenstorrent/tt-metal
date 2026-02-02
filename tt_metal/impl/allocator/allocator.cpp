@@ -178,7 +178,7 @@ size_t AllocatorImpl::get_num_allocated_buffers() const {
 }
 
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Don't lock mutex_ because the number of banks is a constant and does not change.
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->num_banks();
         case BufferType::L1: return l1_manager_->num_banks();
