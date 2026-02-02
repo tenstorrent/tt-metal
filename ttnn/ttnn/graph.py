@@ -12,6 +12,9 @@ from ttnn._ttnn.graph import (
     RunMode,
     begin_graph_capture,
     end_graph_capture,
+    end_graph_capture_to_file,
+    get_current_report,
+    REPORT_VERSION,
     extract_calltrace,
     extract_levelized_graph,
     TensorInfo,
@@ -20,6 +23,18 @@ from ttnn._ttnn.graph import (
     extract_output_info,
     extract_output_tensors,
     extract_resource_usage_per_core,
+    enable_stack_traces,
+    disable_stack_traces,
+    is_stack_trace_enabled,
+    enable_buffer_pages,
+    disable_buffer_pages,
+    is_buffer_pages_enabled,
+)
+
+from ttnn.graph_report import (
+    import_report,
+    extract_total_duration_from_graph,
+    extract_operation_durations,
 )
 
 
