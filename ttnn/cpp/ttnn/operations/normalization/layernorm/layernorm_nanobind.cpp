@@ -76,6 +76,21 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 }
 
 void bind_normalization_layernorm_operation(nb::module_& mod) {
+    // Bind layernorm_default_compute_config function
+    mod.def(
+        "layernorm_default_compute_config",
+        &ttnn::layernorm_default_compute_config,
+        nb::arg("arch"),
+        R"doc(
+        Returns the default compute kernel config for layernorm.
+
+        Args:
+            arch (tt.ARCH): The device architecture.
+
+        Returns:
+            ttnn.DeviceComputeKernelConfig: The default compute config for layer norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
+        )doc");
+
     const auto* doc = R"doc(
         Computes layer norm over :attr:`input_tensor`.
         See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
