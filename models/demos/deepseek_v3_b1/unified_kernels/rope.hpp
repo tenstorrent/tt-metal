@@ -109,7 +109,8 @@ struct Rope {
             cb_wait_front(args.cos_cb, Wt);       // Cos: Wt tiles (reused for all heads)
             // ================================================================
             // Initialize matmul and binary ops
-            // In fused kernels (SkipFullInit=true), because multiple full inits are unsafe.
+            // In fused kernels (SkipFullInit=true), skip full init because multiple full
+            // inits are unsafe (can interfere with other matmul operations on the same core).
             // Use mm_init_short in the loop to reconfigure CB pointers as needed.
             // ================================================================
             if constexpr (!SkipFullInit) {

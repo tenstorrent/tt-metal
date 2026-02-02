@@ -233,7 +233,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         memory_config=matmul3_mem_config,
     )
 
-    # SDPA output tensor - height sharded on SDPA grid (col 12, rows 0-7)
+    # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # Each SDPA Input core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
     # SDPA Input grid: 4×2 rectangle at logical (0,1)-(3,2)
     SDPA_INPUT_GRID_COLS = 4
