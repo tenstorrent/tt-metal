@@ -100,12 +100,15 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
-MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
+MeshGraph::MeshGraph(
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<FabricConfig> fabric_config,
+    bool mgd_backward_compatible) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         mesh_graph_desc_file_path_ = filepath;
-        mesh_graph_descriptor_.emplace(filepath, true);
+        mesh_graph_descriptor_.emplace(filepath, mgd_backward_compatible);
         this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config);
     } else {
         TT_THROW(

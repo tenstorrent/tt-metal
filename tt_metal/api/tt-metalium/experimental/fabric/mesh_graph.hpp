@@ -101,7 +101,9 @@ using RequestedIntermeshPorts =
 class MeshGraph {
 public:
     explicit MeshGraph(
-        const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<FabricConfig> fabric_config = std::nullopt,
+        bool mgd_backward_compatible = true);
     ~MeshGraph() = default;
 
     void print_connectivity() const;
