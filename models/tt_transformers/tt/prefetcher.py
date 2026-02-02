@@ -204,7 +204,7 @@ class Prefetcher(LightweightModule):
         ### Device, Global CB, Parameters
         assert (
             is_blackhole()
-        ), "DRAM Prefetcher is currently only supported on Tenstorrent Blackhole devices on BH QB 2 (4 devices) and BH LB 1 (8 devices). Model support is available for Llama-3.1-8B under the TT-transformers framework. Support for wormhole devices and other models is WIP."
+        ), "DRAM Prefetcher is currently only supported on Tenstorrent Blackhole devices on BH QB 2 (4 devices) and BH LB (8 devices). Model support is available for Llama-3.1-8B under the TT-transformers framework. Support for wormhole devices and other models is WIP."
         self.global_cb = None
         self.mesh_device = mesh_device
         self.num_tensors = num_tensors
@@ -301,6 +301,8 @@ class Prefetcher(LightweightModule):
         Initializes the prefetcher sub devices
         Args:
             mode: The mode to run the prefetcher in, either "decode" or "prefill"
+        NOTE: All DRAM prefetcher APIs can only be called after init() is called for the given mode
+        NOTE: Calling init() again for the same mode is a no-op
         """
         # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
         if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
@@ -377,6 +379,8 @@ class Prefetcher(LightweightModule):
     def insert_tensor(self, tensor: ttnn.Tensor):
         """
         Populates the tensor addresses that need to be prefetched
+        Args:
+            tensor: The tensor to insert into the prefetcher queue
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
@@ -405,6 +409,7 @@ class Prefetcher(LightweightModule):
         Inserts the tensors to be prefetched in a queue
         The tensors are prefetched in the order of the registration of the callbacks
         NOTE: This only needs to be called if a callback is registered for inserting tensors
+        NOTE: prefetch() only needs to be called once and in decode mode, subsequent calls are no-ops
         """
         if self.mode == Mode.DECODE:
             assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot prefetch tensors"

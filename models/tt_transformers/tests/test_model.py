@@ -67,6 +67,7 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     weights,
     layers,

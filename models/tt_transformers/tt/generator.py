@@ -694,7 +694,7 @@ class Generator:
             self.mode = Mode.DECODE
             mode_switched = True
 
-        # Switch to prefill mode for prefetcher to reintialize sub devices for decode
+        # Switch to decode mode for prefetcher to reintialize sub devices
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 

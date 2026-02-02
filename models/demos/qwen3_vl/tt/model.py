@@ -488,7 +488,7 @@ class Transformer(TTTransformer):
             rot_mats_global=rot_mats_global,
             rot_mats_local=rot_mats_local,
             user_id=user_id,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
