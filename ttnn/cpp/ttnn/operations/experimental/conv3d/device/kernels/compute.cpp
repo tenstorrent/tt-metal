@@ -161,16 +161,6 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
 
-    // Config for tilizing row-major input patches to tile format for matmul
-    using TilizeInputPatches = TilizeConfig<InputCB<cb_vol2col_rm>, OutputCB<cb_vol2col_tiled>>;
-
-    // Config for untilizing matmul result back to row-major for output
-    using UntilizeConvResult = UntilizeConfig<
-        WidthInTiles<matmul_N_t>,
-        InputCB<cb_matmul_interm_tiled>,
-        OutputCB<cb_matmul_result_rm>,
-        UntilizeFlags::WAIT_UPFRONT>;
-
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
     // Load range parameters
@@ -206,8 +196,13 @@ void kernel_main() {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                            // Tilize row-major patches for matmul input
-                            compute_kernel_lib::tilize<TilizeInputPatches>(matmul_K_t, matmul_M_t, 1, 0, num_patches);
+                            // Tilize row-major patches with variable row alignment
+                            // Reader produces row pages, which may not be tile aligned
+                            compute_kernel_lib::tilize<cb_vol2col_rm, cb_vol2col_tiled>(
+                                matmul_K_t,
+                                matmul_M_t,
+                                compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::total_batched(
+                                    num_patches));
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
@@ -262,8 +257,13 @@ void kernel_main() {
                                     add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
 
-                                // After reduction (if any), untilize result for row-major output
-                                compute_kernel_lib::untilize<UntilizeConvResult>(matmul_M_t, 1, output_tiles);
+                                // After reduction (if any), untilize result using helper
+                                compute_kernel_lib::untilize<
+                                    matmul_N_t,
+                                    cb_matmul_interm_tiled,
+                                    cb_matmul_result_rm,
+                                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(matmul_M_t);
                             }
                         }
                     }
